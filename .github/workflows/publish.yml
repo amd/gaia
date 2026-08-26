@@ -530,10 +530,15 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           PKG=github.com/amd/gaia/tui/internal/cli
           mkdir -p ../release-assets
-          go build -ldflags="-s -w \
+          # The COMMIT's timestamp, never `now` — this is the third workflow that
+          # builds these same targets, and a wall-clock stamp guarantees all
+          # three disagree byte-for-byte on one version. -trimpath keeps the
+          # runner's absolute paths out of the binary.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+          go build -trimpath -ldflags="-s -w \
             -X ${PKG}.version=${{ needs.validate.outputs.tag_name }} \
             -X ${PKG}.commit=${{ github.sha }} \
-            -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -X ${PKG}.date=${DATE}" \
             -o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
 
@@ -566,7 +571,7 @@ jobs:
           path: dist/
 
       - name: Sign with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.4.0
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
         with:
           inputs: >-
             ./dist/*.tar.gz

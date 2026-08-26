@@ -3,13 +3,11 @@
 
 # Runs the test suites that ship inside hub agent packages which have no
 # dedicated test_*_agent.yml workflow (#1992). Packages with their own
-# workflow (analyst, browser, chat, code, docqa, email, routing, mcp-server)
-# are intentionally NOT in this matrix.
+# workflow (chat, email, gaia, mcp-server) are intentionally NOT in this
+# matrix; connectors-demo also has its own workflow (test_connectors_demo.yml).
 #
-# LLM-integration tests inside these suites (summarize's `lemonade`-marked
-# tests, blender's `integration`-marked tests) skip cleanly on hosted
-# runners — the remaining tests run for real, and every suite is at least
-# imported and collected so bit-rot fails loudly.
+# Only the teaching-template scaffolds remain here — every suite is at
+# least imported and collected so bit-rot fails loudly.
 
 name: Hub Agent Package Tests
 
@@ -18,14 +16,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/blender/python/**'
-      - 'hub/agents/doc-search/python/**'
-      - 'hub/agents/docker/python/**'
-      - 'hub/agents/emr/python/**'
-      - 'hub/agents/fileio/python/**'
       - 'hub/agents/hello-world/python/**'
-      - 'hub/agents/sd/python/**'
-      - 'hub/agents/summarize/python/**'
       - 'hub/agents/word-count/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -35,14 +26,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/blender/python/**'
-      - 'hub/agents/doc-search/python/**'
-      - 'hub/agents/docker/python/**'
-      - 'hub/agents/emr/python/**'
-      - 'hub/agents/fileio/python/**'
       - 'hub/agents/hello-world/python/**'
-      - 'hub/agents/sd/python/**'
-      - 'hub/agents/summarize/python/**'
       - 'hub/agents/word-count/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -67,14 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         package:
-          - blender
-          - doc-search
-          - docker
-          - emr
-          - fileio
           - hello-world
-          - sd
-          - summarize
           - word-count
 
     steps:

@@ -22,11 +22,18 @@
 # vocabulary with it (severity scale, dedup-key pattern, weekly-audit label,
 # bug-label auto-fix promotion) but files its OWN parent issue.
 #
-# MODEL SPLIT: Sonnet executes (cheap, high tool-call volume, grinding
-# sequential work); Opus (WALKTHROUGH_JUDGE_MODEL) judges (low volume -- one
-# pass per guide -- and never rubber-stamps the executor's own summary, same
-# principle the gaia-testing skill states explicitly). See design doc "Job
-# structure".
+# EXECUTOR / JUDGE SPLIT: the executor walks each guide (high tool-call volume,
+# grinding sequential work); a SEPARATE judge pass scores the transcript (low
+# volume -- one pass per guide -- and never rubber-stamps the executor's own
+# summary, same principle the gaia-testing skill states explicitly). See design
+# doc "Job structure".
+#
+# Both now run claude-opus-5. This used to be a cost split (Sonnet executes,
+# Opus judges); the repo standardised every Claude workflow on Opus 5. The split
+# that matters is STRUCTURAL, not model-tier -- the judge must be a fresh context
+# that never sees the executor's self-assessment. Keep the two roles separate even
+# if the models are ever unified further; if you re-introduce a cheaper executor,
+# change only WALKTHROUGH_EXECUTOR_MODEL and leave the judge on the stronger model.
 #
 # PORT ISOLATION: runs its own Lemonade Server on a dedicated, non-13305 port
 # so it never collides with the six other workflows issue #2122 documents
@@ -56,8 +63,12 @@ name: Claude Weekly Doc Walkthrough
 
 on:
   schedule:
-    # 12:00 UTC every Monday -- offset 6h from claude-weekly-audit.yml's 06:00
-    # UTC run so the two don't compete for runner time or review attention.
+    # 12:00 UTC every Monday. This one stays WEEKLY on purpose while its two static
+    # siblings went nightly: it drives a real Lemonade instance on the self-hosted
+    # Windows/STX box for hours, so it is hardware-bound rather than just token-bound
+    # and a nightly cadence would monopolise that runner.
+    # Ordering on a Monday: security audit 09:13 UTC -> static audit 10:37 UTC -> this
+    # at 12:00 UTC, so the three never compete for runner time or review attention.
     - cron: "0 12 * * 1"
   workflow_dispatch:
     inputs:
@@ -78,8 +89,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  WALKTHROUGH_EXECUTOR_MODEL: claude-sonnet-4-6
-  WALKTHROUGH_JUDGE_MODEL: claude-opus-4-8
+  WALKTHROUGH_EXECUTOR_MODEL: claude-opus-5
+  WALKTHROUGH_JUDGE_MODEL: claude-opus-5
   # Dedicated port for this workflow's own Lemonade instance -- never touches
   # the shared 13305 port the other self-hosted-runner workflows use.
   WALKTHROUGH_LEMONADE_PORT: 13405
@@ -197,6 +208,26 @@ jobs:
           "" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           "- **Start:** $(Get-Date -Format o), clean run dir: ``$runDir``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
+      # FOUND ON A LIVE RUN (2026-08-10, run 31387768076): this runner has no
+      # `python` on PATH, so the venv step below died with CommandNotFound before
+      # any doc was walked. Every other STX workflow gets its interpreter through
+      # uv (see .github/actions/setup-venv), so do the same here rather than
+      # depending on a system Python that isn't there.
+      - name: Ensure uv is on PATH (provides the interpreter for the venv below)
+        shell: powershell
+        run: |
+          $uvBin = "$env:USERPROFILE\.local\bin"
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "uv not present -- installing."
+            irm https://astral.sh/uv/install.ps1 | iex
+          }
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "::error::uv install did not produce $uvBin\uv.exe -- cannot create the walkthrough venv."
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $uvBin
+          Write-Host "uv on PATH at $uvBin"
+
       - name: Fresh venv, real-user install (no -e install, no hub packages)
         shell: powershell
         run: |
@@ -207,8 +238,10 @@ jobs:
           # hub/agents/*/python package alongside it. This is the property
           # that would have caught #2260 -- do not "fix" a resulting
           # ImportError by installing a hub package here; that IS the bug.
+          # uv only supplies the interpreter; --seed puts real pip in the venv so
+          # the install below is still a plain `pip install <wheel>`.
           Write-Host "Creating venv at $env:RUN_DIR\venv ..."
-          python -m venv "$env:RUN_DIR\venv"
+          uv venv --seed --python 3.12 "$env:RUN_DIR\venv"
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip build
           Write-Host "Building wheel from the checkout ..."
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m build --wheel --outdir "$env:RUN_DIR\dist" .
@@ -270,14 +303,18 @@ jobs:
             "- **Lemonade:** ✅ started fresh (pid=$env:LEMONADE_PROCESS_ID), healthy on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
 
-      - name: "Executor (Sonnet): walk ${{ matrix.doc.path }}"
+      - name: "Executor: walk ${{ matrix.doc.path }}"
         id: executor
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — always
+          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
             to run commands and capture their raw output -- judging correctness is a
@@ -380,24 +417,26 @@ jobs:
           $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
           if ($ok -and $transcriptExists) {
             Write-Host "✅ Executor completed and wrote a transcript."
-            "- **Executor (Sonnet):** ✅ completed, transcript written" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "- **Executor:** ✅ completed, transcript written" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } elseif ($ok -and -not $transcriptExists) {
             Write-Host "::warning::Executor step reported success but no transcript.md was written -- the judge will file a crash finding for this."
-            "- **Executor (Sonnet):** ⚠️ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "- **Executor:** ⚠️ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } else {
             Write-Host "::warning title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
-            "- **Executor (Sonnet):** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "- **Executor:** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
 
       - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
         id: judge
         if: always()
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
@@ -596,11 +635,13 @@ jobs:
       - name: Synthesize and file the triage issue
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
             execution-based sibling of the static weekly-audit -- see
@@ -638,14 +679,22 @@ jobs:
             🟡 (low) findings get NO child issue -- list them in the parent only. For each
             NEW, verified 🔴/🟠 finding, write the body to a temp file, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
-            WITHOUT the `bug` label. Body format:
+            WITHOUT the `bug` label. Body format — follow CLAUDE.md → "How You Communicate":
+            a human triages this, so the title and opening line say what broke and who it
+            hurts in plain words, and the location/evidence rows go in a collapsed
+            `<details>` underneath. Say each point once. The blank line after `</summary>`
+            is REQUIRED or GitHub renders the block as literal text.
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
 
-            **Where:** `path` · `symbol`
+            <details>
+            <summary>🔍 Evidence and location</summary>
+
+            **Where:** `path` · `symbol`   (the finding carries no line number — do not invent one)
             **Evidence:** <the finding's `evidence` -- the concrete transcript/doc excerpt>
             **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will
             never re-file it. Applying `bug` instead hands it to the existing auto-fix job.
@@ -698,5 +747,8 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            # Hard-fail for the same reason as claude-weekly-audit.yml: a green run that
+            # synthesised nothing is indistinguishable from one that found nothing.
+            echo "::error title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            exit 1
           fi

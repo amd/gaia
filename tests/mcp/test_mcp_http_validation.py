@@ -109,32 +109,9 @@ def test_list_tools():
 
     # Check for required tools
     tool_names = [t.get("name") for t in tools if isinstance(t, dict)]
-    assert "gaia.jira" in tool_names, "Jira tool not found"
     assert "gaia.query" in tool_names, "Query tool not found"
 
     print(f"   📋 Found {len(tools)} tools: {', '.join(tool_names[:5])}")
-    return True
-
-
-@test("Direct Jira Endpoint", "Test direct Jira operations via /jira")
-def test_direct_jira():
-    # Skip in CI environment as it requires authentication
-    import os
-
-    if os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true":
-        print("   ⏭️  SKIPPED (CI environment - requires auth)")
-        return True
-
-    data = {"query": "show issues in project MDP limit 3"}
-    response = make_request("/jira", method="POST", data=data)
-
-    assert "success" in response, "Missing success field"
-    assert response["success"] is True, f"Operation failed: {response.get('error')}"
-    assert "steps_taken" in response, "Missing steps_taken field"
-
-    print(f"   📊 Steps taken: {response['steps_taken']}")
-    if response.get("result"):
-        print(f"   📝 Result preview: {response['result'][:100]}...")
     return True
 
 
@@ -179,40 +156,6 @@ def test_jsonrpc_tool_list():
         assert "description" in tool, "Tool missing description"
 
     print(f"   🛠️ {len(tools)} tools available via JSON-RPC")
-    return True
-
-
-@test("JSON-RPC Jira Call", "Test Jira operations via JSON-RPC tools/call")
-def test_jsonrpc_jira_call():
-    # Skip in CI environment as it requires authentication
-    import os
-
-    if os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true":
-        print("   ⏭️  SKIPPED (CI environment - requires auth)")
-        return True
-
-    data = {
-        "jsonrpc": "2.0",
-        "id": "test-jira",
-        "method": "tools/call",
-        "params": {
-            "name": "gaia.jira",
-            "arguments": {"query": "show my assigned issues", "operation": "query"},
-        },
-    }
-    response = make_request("/", method="POST", data=data)
-
-    assert "result" in response, f"Missing result: {response}"
-    result = response["result"]
-    assert "content" in result, "Missing content in result"
-    assert len(result["content"]) > 0, "Empty content"
-
-    content = json.loads(result["content"][0]["text"])
-    assert "success" in content, "Missing success field in content"
-
-    print(f"   ✨ Jira call successful via JSON-RPC")
-    if content.get("steps_taken"):
-        print(f"   📊 Steps: {content['steps_taken']}")
     return True
 
 
@@ -300,14 +243,6 @@ def test_performance():
     # More reasonable threshold: 3 seconds for health check
     assert elapsed < 3.0, f"Health check too slow: {elapsed:.2f}s"
     print(f"   ⚡ Health check: {elapsed*1000:.0f}ms (after warm-up)")
-
-    # Test Jira endpoint
-    start = time.time()
-    data = {"query": "show 1 issue"}
-    response = make_request("/jira", method="POST", data=data)
-    elapsed = time.time() - start
-
-    print(f"   ⚡ Jira query: {elapsed:.2f}s")
     return True
 
 
@@ -322,10 +257,8 @@ def run_all_tests():
     # Run tests
     test_health()
     test_list_tools()
-    test_direct_jira()
     test_jsonrpc_initialize()
     test_jsonrpc_tool_list()
-    test_jsonrpc_jira_call()
     test_error_404()
     test_error_invalid_jsonrpc()
     test_error_unknown_tool()

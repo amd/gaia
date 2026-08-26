@@ -66,6 +66,50 @@ SENSITIVE_EXTENSIONS: Set[str] = {
 }
 
 
+# Subdirectories of GAIA's state tree that hold user content rather than
+# configuration. The Agent UI puts browser uploads here and makes them the
+# session's allowed path, so blanket-blocking the tree would break "save this
+# file" in a drag-and-drop session.
+GAIA_STATE_USER_CONTENT_SUBDIRS: Set[str] = {
+    "documents",
+    "chat",
+    "screenshots",
+    "eval",
+}
+
+
+def _gaia_state_dirs() -> Set[str]:
+    """Return every normalized path GAIA keeps its own state in.
+
+    Returns:
+        Set of normalized directory paths (``~/.gaia`` plus any relocation
+        set via ``GAIA_CONFIG_DIR`` or ``GAIA_HOME``).
+    """
+    candidates = [Path.home() / ".gaia"]
+    for env_var in ("GAIA_CONFIG_DIR", "GAIA_HOME"):
+        override = os.environ.get(env_var)
+        if override:
+            candidates.append(Path(os.path.expandvars(os.path.expanduser(override))))
+    return {os.path.normpath(str(c)) for c in candidates}
+
+
+def _is_gaia_user_content(norm_path: str, state_dir: str) -> bool:
+    """Whether *norm_path* is user content inside GAIA's state dir, not config.
+
+    Args:
+        norm_path: Normalized, symlink-resolved path being written to.
+        state_dir: Normalized GAIA state directory containing it.
+
+    Returns:
+        True if the first path segment below *state_dir* is user content.
+    """
+    relative = norm_path[len(state_dir) :].lstrip("\\/")
+    if not relative:
+        return False
+    first_segment = relative.replace("\\", "/").split("/", 1)[0].lower()
+    return first_segment in GAIA_STATE_USER_CONTENT_SUBDIRS
+
+
 def _get_blocked_directories() -> Set[str]:
     """Get platform-specific directories that should never be written to.
 
@@ -132,6 +176,12 @@ def _get_blocked_directories() -> Set[str]:
             ]
         )
 
+    # GAIA's own state directories. Agent file tools must never rewrite the
+    # config that decides which binaries GAIA launches (e.g. mcp_servers.json)
+    # or which paths it trusts; GAIA's internals write here directly, not
+    # through this class. GAIA_CONFIG_DIR / GAIA_HOME relocate the tree.
+    blocked.update(str(d) for d in _gaia_state_dirs())
+
     # Remove empty strings from env var failures
     blocked.discard("")
     blocked.discard(os.path.normpath(""))
@@ -141,6 +191,7 @@ def _get_blocked_directories() -> Set[str]:
 
 # Pre-compute once at module load
 BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
+GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
 
 
 def _normalize_macos_symlinks(path_str: str) -> str:
@@ -439,7 +490,7 @@ class PathValidator:
         """Check if a path is blocked for write operations.
 
         Checks against:
-        1. System/blocked directories (Windows, /etc, .ssh, etc.)
+        1. System/blocked directories (Windows, /etc, .ssh, ~/.gaia, etc.)
         2. Sensitive file names (.env, credentials, keys, etc.)
         3. Sensitive file extensions (.pem, .key, .crt, etc.)
 
@@ -473,10 +524,14 @@ class PathValidator:
                     normalized_blocked.lower() if is_windows else normalized_blocked
                 )
                 if cmp_norm.startswith(cmp_blocked + os.sep) or cmp_norm == cmp_blocked:
+                    if normalized_blocked in GAIA_STATE_DIRECTORIES and (
+                        _is_gaia_user_content(norm_path, normalized_blocked)
+                    ):
+                        continue
                     return (
                         True,
                         f"Write blocked: '{real_path}' is inside protected "
-                        f"system directory '{blocked_dir}'",
+                        f"directory '{blocked_dir}'",
                     )
 
             # Check sensitive file names

@@ -388,6 +388,44 @@ Before adding an MCP server:
 3. **Limit scope** — When connecting filesystem servers, restrict to specific directories rather than `/`
 4. **Audit environment variables** — Never pass secrets (API keys, tokens) to servers you haven't reviewed
 
+### Tool Confirmation
+
+Connecting a server is not the same as approving every call it can make. GAIA
+asks you to confirm each MCP tool call before it runs, because the *caller* may
+be untrusted even when the server is: a prompt injection hidden in a document,
+email, or web page you asked GAIA to read can make the model emit a tool call
+you never intended. The confirmation prompt is the backstop against that.
+
+The gate fails closed. An MCP tool skips confirmation **only** when its server
+proves the tool is read-only:
+
+| Server declares | Tool name | Confirmation |
+| --- | --- | --- |
+| `annotations.readOnlyHint: true` | no mutating verb (`search`, `get_time`) | Skipped |
+| `annotations.readOnlyHint: true` | mutating verb (`delete_file`) | **Required** |
+| `readOnlyHint: false`, or no annotations at all | anything | **Required** |
+
+Servers that ship no [tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+get no benefit of the doubt — every one of their tools prompts.
+
+<Warning>
+The MCP specification is explicit that clients "**MUST** consider tool
+annotations to be untrusted unless they come from trusted servers." GAIA's name
+check enforces that for servers which annotate *incorrectly* — a `readOnlyHint:
+true` on a tool named `delete_file` is ignored. It is **not** a defence against
+a malicious server, which would simply give its write tool an innocuous name.
+Vetting the server (above) remains the control for that; the confirmation gate
+protects you from the untrusted *content* your agent reads, not from a server
+you chose to install.
+</Warning>
+
+<Note>
+The Agent UI shows a permission modal, where **Always allow** stops the
+prompting for a specific tool. The CLI asks on the terminal and defaults to no.
+A run with no terminal to ask — piped, CI, or otherwise unattended — refuses the
+tool rather than approving it.
+</Note>
+
 ## Complete Examples
 
 Working examples are available in the GAIA repository:
@@ -575,7 +613,7 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
     Browse official MCP servers from Anthropic
   </Card>
 
-  <Card title="Build a Custom Agent" icon="robot" href="/guides/code">
+  <Card title="Build a Custom Agent" icon="robot" href="/guides/custom-agent">
     Learn how to create agents that leverage MCP tools
   </Card>
 

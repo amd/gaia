@@ -3,7 +3,8 @@
 """Read tools mixin for ``EmailTriageAgent``.
 
 Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``summarize_thread``,
-``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
+``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``,
+``check_suspicious_mail``.
 
 Each tool returns a JSON string with the canonical envelope::
 
@@ -31,14 +32,17 @@ from gaia_agent_email.body_normalize import (
 )
 from gaia_agent_email.config import (
     DEFAULT_INBOX_SCAN_MESSAGES,
+    ConfigurationError,
     default_inbox_scan_ceiling,
 )
 from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
     envelope_budget_tokens,
     estimate_tokens_json,
+    skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.gmail_query import DURATION_OP_RE, parse_gmail_duration_value
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -64,6 +68,7 @@ from gaia_agent_email.tools.triage_heuristics import (
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
+    log_search_effective_query,
     log_tool_call,
     log_triage_decision,
     log_triage_dispatch,
@@ -169,6 +174,38 @@ def _format_message_for_llm(
         "body_truncated": body_chars_dropped > 0,
         "body_chars_dropped": body_chars_dropped,
         "attachments": attachments,
+    }
+
+
+def _format_message_metadata_for_llm(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a metadata-format Gmail message (no body) to fields the LLM
+    can act on for a counting/listing question (#2763).
+
+    Companion to ``_format_message_for_llm``: that one decodes and wraps a
+    body, which costs up to ``DEFAULT_BODY_LIMIT_CHARS`` per message and is
+    the entire payload cost for a question like "how many emails from X"
+    that never reads message content. This formatter never touches
+    ``payload.body``/``payload.parts`` — a ``format="metadata"`` fetch
+    doesn't populate them (see ``GmailBackend.get_message``'s docstring),
+    so there is nothing to decode. No per-message or envelope budget check
+    is needed here: at the tool's 100-message ceiling, a metadata row (a
+    handful of headers + a ~200-char snippet) stays orders of magnitude
+    below any device profile's context budget.
+    """
+    payload = msg.get("payload") or {}
+    headers = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in payload.get("headers", [])
+    }
+    return {
+        "id": msg.get("id"),
+        "thread_id": msg.get("threadId"),
+        "subject": headers.get("subject", ""),
+        "from": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "date": headers.get("date", ""),
+        "label_ids": list(msg.get("labelIds", [])),
+        "snippet": msg.get("snippet", ""),
     }
 
 
@@ -334,6 +371,42 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
             "bodies_clipped": bodies_clipped,
         }
         return {"thread_id": thread_id, "messages": out}
+
+
+def _thread_table_card(thread_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Project ``get_thread_impl``'s output into a ``table`` render card (#2765).
+
+    #2765: a real 8-message thread came back from the agent with a
+    duplicated message, another message replaced by a repeat of an earlier
+    one, a misattributed sender, and a timestamp (``11:40 AM +0000``) that
+    existed nowhere in the mailbox or the tool's own trace -- i.e. the raw
+    ``get_thread_impl`` payload (already ordered/numbered/labeled per
+    #2531) was correct, and the fabrication happened in the model's own
+    free-composed prose reply, upstream of any formatting layer.
+
+    A docstring instruction alone cannot fix that -- the payload was
+    already complete and correct and the model invented anyway. So this
+    hands the chat surface a card it renders DIRECTLY from tool data
+    (``kind: "table"``, the pre-existing generic render primitive --
+    ``docs/spec/agent-ui-query-sse-contract.md`` Sec 4.3 -- no new client
+    code) instead of from the model's prose. Every cell is copied verbatim
+    from the SAME ``from``/``date``/``index`` fields the model itself
+    reads (no reformatting, no timezone conversion), so what renders on
+    screen cannot diverge from what the tool actually returned, regardless
+    of anything the model goes on to say.
+    """
+    messages = thread_result.get("messages", [])
+    subject = (messages[0].get("subject") if messages else "") or "Thread"
+    count = len(messages)
+    title = f"{subject} — {count} message{'s' if count != 1 else ''}"
+    return {
+        "kind": "table",
+        "title": title,
+        "columns": ["#", "From", "Date"],
+        "rows": [
+            [m.get("index"), m.get("from", ""), m.get("date", "")] for m in messages
+        ],
+    }
 
 
 def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
@@ -774,13 +847,17 @@ _RELATIVE_DAY_WINDOWS = {"today": "1d", "yesterday": "2d"}
 
 
 def normalize_gmail_date_operators(query: str) -> str:
-    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
+    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``,
+    and duration-operator (``newer_than:``/``older_than:``) values to a unit
+    Gmail accepts.
 
     Relative recency words (``after:today`` / ``newer:yesterday``) are rewritten
     to the timezone-robust ``newer_than:`` window so a present same-day message
     is reliably matched. Raises ``ValueError`` on an otherwise-unparseable value
     — a loud error beats passing it through as free text and returning a false
-    zero-result.
+    zero-result. The two operator families never overlap (``_DATE_OP_RE``
+    excludes the ``_than`` forms), so applying both substitutions in sequence
+    is safe.
     """
 
     def _sub(m: "re.Match[str]") -> str:
@@ -790,7 +867,12 @@ def normalize_gmail_date_operators(query: str) -> str:
             return f"newer_than:{_RELATIVE_DAY_WINDOWS[bare]}"
         return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
 
-    return _DATE_OP_RE.sub(_sub, query)
+    def _duration_sub(m: "re.Match[str]") -> str:
+        op = m.group("op")
+        return f"{op}:{parse_gmail_duration_value(m.group('val'), op=op)}"
+
+    query = _DATE_OP_RE.sub(_sub, query)
+    return DURATION_OP_RE.sub(_duration_sub, query)
 
 
 # Gmail search operators (a leading ``token:`` in the query). If a query
@@ -850,34 +932,77 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
+    include_bodies: bool = False,
 ) -> Dict[str, Any]:
+    """``include_bodies`` defaults to ``False`` (#2763): metadata-only (no
+    body decode, no per-message/envelope budget check needed -- see
+    ``_format_message_metadata_for_llm``). Live-hardware evidence showed a
+    docstring-only opt-IN (default ``True``, model sets ``False`` for a
+    counting question) is not reliable enough: a 4B-class local model did
+    not choose it on the very probe this issue is about, reproducing the
+    original overflow byte-for-byte (measured ``n_prompt_tokens`` within 1%
+    of the pre-fix run). Defaulting to the cheap, safe path and requiring an
+    explicit ``include_bodies=True`` opt-in for the expensive one means the
+    fix does not depend on the model reliably choosing a new parameter on
+    the failure path that actually destroys the conversation -- the
+    asymmetry matters: a content question that forgets to opt in gets a
+    recoverable "no body available" rather than a context-ending overflow.
+    Full bodies via ``_format_messages_within_budget`` are still available
+    with ``include_bodies=True``.
+    """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
         "search_messages",
-        {"query": query, "max_results": max_results},
+        {
+            "query": query,
+            "max_results": max_results,
+            "include_bodies": include_bodies,
+        },
         debug=debug,
     ) as st:
-        listing = gmail.list_messages(query=query, max_results=max_results)
-        stubs = listing.get("messages", [])
         retried_query = None
-        # A literal-phrase query with zero hits is the #2114 failure mode:
-        # retry once as an operator query before giving up. Only when the
-        # user's query carried no operator of its own (else we'd second-guess
-        # an intentional ``from:`` search).
-        if not stubs and operator_retry and not has_gmail_operator(query):
-            retried_query = operatorize_query(query)
-            if retried_query != query:
-                listing = gmail.list_messages(
-                    query=retried_query, max_results=max_results
-                )
-                stubs = listing.get("messages", [])
-        full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
-        out = _format_messages_within_budget(
-            full_msgs,
-            tool_name="search_messages",
-            max_results=max_results,
-            budget_tokens=budget_tokens,
-        )
+        # ``finally`` so the effective query still reaches the log when the
+        # backend raises -- that is the reproduce-from-a-diagnostics-bundle
+        # case this line exists for.
+        try:
+            listing = gmail.list_messages(query=query, max_results=max_results)
+            stubs = listing.get("messages", [])
+            # A literal-phrase query with zero hits is the #2114 failure mode:
+            # retry once as an operator query before giving up. Only when the
+            # user's query carried no operator of its own (else we'd
+            # second-guess an intentional ``from:`` search).
+            if not stubs and operator_retry and not has_gmail_operator(query):
+                retried_query = operatorize_query(query)
+                if retried_query != query:
+                    listing = gmail.list_messages(
+                        query=retried_query, max_results=max_results
+                    )
+                    stubs = listing.get("messages", [])
+        finally:
+            log_search_effective_query(query=query, retried_query=retried_query)
+        if include_bodies:
+            full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
+            out = _format_messages_within_budget(
+                full_msgs,
+                tool_name="search_messages",
+                max_results=max_results,
+                budget_tokens=budget_tokens,
+            )
+        else:
+            # Metadata-only: fetch in as few round-trips as the backend
+            # supports (batch when available), then re-walk ``stubs`` to
+            # preserve the backend's own ordering -- _fetch_messages returns
+            # an id-keyed dict, not a list (mirrors triage_inbox_impl's
+            # phase-1 pattern, read_tools.py:~1264).
+            stub_ids = [stub["id"] for stub in stubs]
+            metadata_by_id, _dropped_ids = _fetch_messages(
+                gmail, stub_ids, format="metadata"
+            )
+            out = [
+                _format_message_metadata_for_llm(metadata_by_id[sid])
+                for sid in stub_ids
+                if sid in metadata_by_id
+            ]
         # Real cursor only -- never len(stubs) == max_results (see
         # _list_all_stubs's scan_truncated docstring above for why that
         # heuristic is wrong the moment a mailbox's true size matches the ask).
@@ -925,15 +1050,21 @@ def _apply_session_preferences(
 
     Mutates a copy of ``decision`` and returns it.
 
-    Resolution rule (#2632): a priority-sender match never overrides
-    ``category`` — content (the heuristic or the LLM) decides severity,
-    a sender preference only raises salience. "I care about this sender"
-    is not "this message is urgent": a newsletter from a priority sender
-    stays exactly as low-signal as its content says, tagged with
-    ``preference_applied`` so a caller can still surface/order it earlier.
-    The low-priority-sender branch is unchanged — it still commits
-    PROMOTIONAL, since that is an explicit user request to downrank a
-    sender rather than an inferred one.
+    Resolution rule (#2632, #2666): neither a priority- nor a
+    low-priority-sender match ever overrides ``category`` — content (the
+    heuristic or the LLM) decides severity in both directions.
+    "I care about this sender" is not "this message is urgent", and
+    "I don't care about most of this sender's mail" is not "this specific
+    message is never urgent": a newsletter from a priority sender stays
+    exactly as low-signal as its content says, and a genuinely urgent
+    message from a muted sender stays exactly as urgent as its content
+    says. Both branches only tag ``preference_applied`` — today that tag
+    has no reader anywhere in this codebase (#2777); it does not reorder
+    or highlight anything in the rendered triage card. ``low_priority_senders``
+    separately has a real effect outside this function, in the autonomy
+    loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
+    raw set directly to auto-archive without confirmation. ``priority_senders``
+    has no reader anywhere outside this function.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -967,11 +1098,14 @@ def _apply_session_preferences(
             f"From a priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     elif sender_addr and sender_addr in low_priority_senders:
-        out["category"] = CATEGORY_PROMOTIONAL
-        out["confident"] = True
         out["preference_applied"] = "low_priority_sender"
+        # #2666: category stays whatever content decided, so a genuinely
+        # urgent message from a muted sender no longer becomes an
+        # autonomy archive candidate (agent.py's _autonomy_candidate keys
+        # off category) just because the sender is muted. Same rule,
+        # stated explicitly, as the priority-sender branch above.
         out["rationale"] = (
-            f"From a low-priority sender · {decision.get('rationale', '')}"
+            f"From a low-priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     return out
 
@@ -1472,9 +1606,16 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
-# #2743 — the "one card" worklist. Capped small on purpose: a triage card
-# listing 30 rows is a report, not a worklist a person can act on today.
-NEEDS_YOU_CAP = 5
+# #2900 — messages flagged is_phishing/is_spam, captured BEFORE
+# PRE_SCAN_ACTIONABLE_CAP is applied (see pre_scan_inbox_impl) so a flagged
+# message ranked past that cap is never silently dropped from the count.
+PRE_SCAN_SUSPICIOUS_CAP = 10
+
+# #2743 — the "one card" worklist. Still capped well below the inbox: a
+# worklist of 30 rows is a report nobody acts on. Raised from 5 so the
+# needs-a-look bucket carries a ``ref`` too — an item the user can see but
+# not name is one they cannot ask the agent to act on.
+NEEDS_YOU_CAP = 10
 
 # Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
 # (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps
@@ -1790,13 +1931,16 @@ def _build_needs_you_view(
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in actionable:
-        kind = (
-            "meeting_request" if item.get("is_meeting_request") else "needs_response"
-        )
+        kind = "meeting_request" if item.get("is_meeting_request") else "needs_response"
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in needs_review:
-        candidates.append({**item, "kind": "needs_review"})
+        # #2580: a meeting-flagged item must keep that kind even when it
+        # reaches needs_you via needs_review, same as the urgent/actionable
+        # loops above — otherwise the TUI renders a generic "check this"
+        # instead of naming the proposed time.
+        kind = "meeting_request" if item.get("is_meeting_request") else "needs_review"
+        candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
 
     for w in waiting_on_you or []:
@@ -1862,6 +2006,7 @@ def pre_scan_inbox_impl(
     actionable_cap: int = PRE_SCAN_ACTIONABLE_CAP,
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
     needs_review_cap: int = PRE_SCAN_NEEDS_REVIEW_CAP,
+    suspicious_cap: int = PRE_SCAN_SUSPICIOUS_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
@@ -1874,12 +2019,17 @@ def pre_scan_inbox_impl(
 
     Reshapes ``triage_inbox_impl`` output into a typed envelope optimized
     for a daily-driver triage card: top-N urgent, top-N actionable,
-    informational count, suggested archives derived from the low-priority
-    bucket and (when configured) from category defaults, and a needs-review
-    bucket for messages the heuristic was not confident about (#2584). The
-    caller is expected to set ``kind`` in the rendered output to
-    ``email_pre_scan`` so the chat surface can detect and render the
-    structured card component.
+    informational count, suggested archives derived from a confident
+    PROMOTIONAL classification and (when configured) from category
+    defaults, and a needs-review bucket for messages the heuristic was not
+    confident about (#2584). A low-priority-sender match does not by
+    itself route a message into suggested_archives (#2666) — only content
+    does. The ``preference_applied`` tag it carries instead has no reader
+    in this envelope today (#2777); it does not reorder or highlight
+    anything rendered here. The caller is expected to set ``kind`` in the
+    rendered output to ``email_pre_scan``
+    so the chat surface can detect and render the structured card
+    component.
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
@@ -1925,6 +2075,13 @@ def pre_scan_inbox_impl(
     handle (see ``gaia_agent_email.task_store``) whose open tasks are folded
     in too; omit it and the action_item signal is simply absent — this
     function never fails because the task store wasn't wired in.
+
+    ``suspicious``/``suspicious_total`` (#2900) is a VIEW over the rows in
+    ``actionable`` that carry ``is_phishing``/``is_spam`` — captured before
+    ``actionable_cap`` is applied, so a flagged message ranked past that cap
+    is never silently dropped from ``suspicious_total``. Lets a narrow
+    "anything suspicious?" caller (``check_suspicious_mail``) get an honest
+    count without receiving the other, unrelated pre-scan sections.
     """
     prefs = session_preferences or {}
     category_defaults = prefs.get("category_defaults") or {}
@@ -1949,6 +2106,12 @@ def pre_scan_inbox_impl(
         informational: List[Dict[str, Any]] = []
         suggested_archives: List[Dict[str, Any]] = []
         needs_review_ranked: List[tuple] = []
+        # #2900 — the is_phishing/is_spam subset of actionable, captured
+        # HERE (before actionable's own cap is applied below) so a flagged
+        # message ranked past PRE_SCAN_ACTIONABLE_CAP is never silently
+        # dropped from the count. Never a second classification pass —
+        # every row here is also, unchanged, in actionable.
+        suspicious: List[Dict[str, Any]] = []
         # Ids of the filter tests actually applied this run (#2743) — feeds
         # ``bulk.filter_tests``. A set, not a list: the same routing branch
         # firing on 50 messages names its test once, not 50 times.
@@ -1961,6 +2124,14 @@ def pre_scan_inbox_impl(
                 "sender": r.get("from", ""),
                 "subject": r.get("subject", ""),
                 "is_meeting_request": bool(r.get("is_meeting_request", False)),
+                # #2900 — structural flags, threaded through so a caller
+                # never has to re-parse them out of the ``why`` prose
+                # below. Always False outside the spam/phishing branch:
+                # that branch is the only place either can be True (the
+                # single shared classifier's own safety override runs
+                # first and always wins — see its own docstring).
+                "is_phishing": bool(r.get("is_phishing", False)),
+                "is_spam": bool(r.get("is_spam", False)),
                 # Epoch-millis string, carried through so #2743's needs_you
                 # view can order oldest-first and compute age_seconds —
                 # never part of the public PreScanItem shape.
@@ -1974,21 +2145,23 @@ def pre_scan_inbox_impl(
                 # pre-scan suggestion. The user must see them. Surface as
                 # actionable with a strong reason so the user reviews
                 # before any automated action.
-                actionable.append(
-                    {
-                        **base,
-                        "why": (
-                            (
-                                "flagged as phishing"
-                                if r.get("is_phishing")
-                                else "flagged as spam"
-                            )
-                            + f" — {why}"
-                            if why
-                            else ""
-                        ),
-                    }
-                )
+                flagged_item = {
+                    **base,
+                    "why": (
+                        (
+                            "flagged as phishing"
+                            if r.get("is_phishing")
+                            else "flagged as spam"
+                        )
+                        + f" — {why}"
+                        if why
+                        else ""
+                    ),
+                }
+                actionable.append(flagged_item)
+                # #2900 — same row, own accumulator, captured pre-cap (see
+                # comment on the ``suspicious`` declaration above).
+                suspicious.append(flagged_item)
                 continue
 
             # confident=False only overrides routing into the two LOW-SIGNAL
@@ -2003,7 +2176,13 @@ def pre_scan_inbox_impl(
             elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
             elif category == CATEGORY_PROMOTIONAL:
-                if needs_review_decision(r):
+                # is_meeting_request is an additional veto (#2580) — a
+                # genuine time proposal must not be silently archived just
+                # because the category heuristic is confident about
+                # PROMOTIONAL. Mirrors attention_tools._scan_one_backend,
+                # which already checks is_meeting_request independent of
+                # category.
+                if needs_review_decision(r) or base["is_meeting_request"]:
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
@@ -2017,7 +2196,11 @@ def pre_scan_inbox_impl(
                 # to the terminal FYI-placeholder fallback). Routed through
                 # needs_review_decision (shared with the attention-view
                 # aggregator, #2582) rather than a local confidence check.
-                if needs_review_decision(r):
+                # is_meeting_request is an additional veto (#2580) — a
+                # confident FYI/PERSONAL message can still be a real ask,
+                # and letting it through would make FILTER_TEST_NO_MEETING_
+                # PROPOSAL below a false claim about the message it tags.
+                if needs_review_decision(r) or base["is_meeting_request"]:
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
@@ -2099,7 +2282,10 @@ def pre_scan_inbox_impl(
         def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # ``internal_date`` is a needs_you-only working field (#2743) —
             # never part of the public PreScanItem shape (extra="forbid").
-            return [{k: v for k, v in item.items() if k != "internal_date"} for item in items]
+            return [
+                {k: v for k, v in item.items() if k != "internal_date"}
+                for item in items
+            ]
 
         scanned = len(triage["results"])
         inbox_counts = _fetch_inbox_counts(gmail)
@@ -2118,7 +2304,9 @@ def pre_scan_inbox_impl(
                 suggested_archives[: max(0, archive_cap)]
             ),
             "suggested_drafts": [],
-            "needs_review": _drop_internal_date(needs_review[: max(0, needs_review_cap)]),
+            "needs_review": _drop_internal_date(
+                needs_review[: max(0, needs_review_cap)]
+            ),
             "preferences_applied": {
                 "priority_senders": sorted(prefs.get("priority_senders") or []),
                 "low_priority_senders": sorted(prefs.get("low_priority_senders") or []),
@@ -2146,6 +2334,12 @@ def pre_scan_inbox_impl(
             "needs_you": needs_you_view["needs_you"],
             "needs_you_total": needs_you_view["needs_you_total"],
             "bulk": bulk_view,
+            # #2900 — captured pre-cap above; suspicious_total is NOT folded
+            # into ``scanned`` (every flagged row is already counted once
+            # via ``actionable``'s own total — adding it again here would
+            # double-count the same message in the coverage figure).
+            "suspicious": _drop_internal_date(suspicious[: max(0, suspicious_cap)]),
+            "suspicious_total": len(suspicious),
         }
         st["result_summary"] = {
             "urgent": out["totals"]["urgent"],
@@ -2202,6 +2396,14 @@ def merge_pre_scan_backends(
     mailbox-scoped, so passing it to every backend would fold the SAME open
     tasks into the merge N times. It is queried exactly once, after the
     loop, mirroring ``build_attention_view_impl``'s own post-loop union.
+
+    ``suspicious``/``suspicious_total`` (#2900) merge the same way as every
+    other section, tagged with ``mailbox`` in the same loop — never a
+    separate pass — and re-capped post-merge (unlike ``informational``,
+    which stays uncapped) since each backend already capped its own
+    contribution. ``suspicious_total`` is NOT folded into the merged
+    ``scanned`` figure: every flagged row is already counted once via
+    ``actionable``'s own total.
     """
     prefs = session_preferences
     provider_backends = list(backends.items())
@@ -2212,6 +2414,11 @@ def merge_pre_scan_backends(
     needs_review: List[Dict[str, Any]] = []
     informational: List[Dict[str, Any]] = []
     informational_count = 0
+    # #2900 — merged across backends like every other section; NOT summed
+    # into ``scanned`` below (each flagged row is already counted once via
+    # ``actionable``'s own total, so adding it again would double-count).
+    suspicious: List[Dict[str, Any]] = []
+    suspicious_total = 0
     scanned = 0
     total_unread = 0
     total_unread_unknown = False
@@ -2268,6 +2475,7 @@ def merge_pre_scan_backends(
             ("suggested_archives", suggested_archives),
             ("needs_review", needs_review),
             ("informational", informational),
+            ("suspicious", suspicious),
         ):
             for item in out.get(section, []):
                 item["mailbox"] = provider
@@ -2275,6 +2483,10 @@ def merge_pre_scan_backends(
                     remember_mailbox(item.get("message_id"), provider)
                     remember_mailbox(item.get("thread_id"), provider)
                 dest.append(item)
+        # #2900 — the TRUE pre-cap count from this backend, not
+        # len(out["suspicious"]) (which is already capped per-backend) —
+        # mirrors needs_you_total just below.
+        suspicious_total += int(out.get("suspicious_total", 0))
         for item in out.get("needs_you", []):
             item["mailbox"] = provider
             needs_you_candidates.append(item)
@@ -2349,6 +2561,12 @@ def merge_pre_scan_backends(
         "needs_you": _merge_needs_you_candidates(needs_you_candidates),
         "needs_you_total": needs_you_total,
         "bulk": {"count": bulk_count, "filter_tests": sorted(bulk_filter_test_ids)},
+        # #2900 — re-capped post-merge like urgent/actionable/etc above (NOT
+        # left uncapped like informational): each backend already capped its
+        # own contribution to PRE_SCAN_SUSPICIOUS_CAP, so an uncapped merge
+        # here could still return up to N-backends x that cap.
+        "suspicious": suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)],
+        "suspicious_total": suspicious_total,
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):
         # Every connected mailbox failed — surface it loudly rather than
@@ -2513,6 +2731,9 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
+            Use this to catch the user up on, recap, or answer a question
+            about one email conversation.
+
             Messages are returned sorted chronologically (oldest first) and
             each carries ``index``/``of_total`` (its 1-based position in the
             thread) — use these, not the raw list order, when listing or
@@ -2521,12 +2742,24 @@ class ReadToolsMixin:
             ``...[truncated]`` marker; messages are never dropped.
             ``mailbox`` (optional) routes when multiple mailboxes are
             connected.
+
+            The chat surface renders a table card straight from this result
+            (``kind: "table"``) showing every message's real sender and
+            timestamp, in order — do NOT re-list, re-serialize, or
+            paraphrase that list into your reply; it is already visible to
+            the user (#2765). Answer what the user actually asked — what
+            was decided, what's still open, where the conversation landed —
+            by reading each message's body, not by reciting the thread.
+            Any sender or timestamp you DO mention in your own prose must
+            be copied VERBATIM from that message's ``from``/``date``
+            field — never estimate, convert, average, or reconstruct one
+            from memory; if you are not quoting one of those fields
+            directly, do not state a sender or a time at all.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
-                return _envelope_ok(
-                    get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
-                )
+                result = get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
+                return _envelope_ok({**result, **_thread_table_card(result)})
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -2582,7 +2815,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def search_messages(query: str, max_results: int = 25) -> str:
+        def search_messages(
+            query: str, max_results: int = 25, include_bodies: bool = False
+        ) -> str:
             """Search across ALL connected mailboxes.
 
             When multiple mailboxes are connected, searches both with a shared
@@ -2610,13 +2845,25 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            A large ``max_results`` may shrink every hit's body TOGETHER (never
-            independently, never dropping a hit) so the whole result stays
-            within the model's context window — shrunk messages report
-            ``body_truncated: true``. If even the smallest usable body can't fit
-            every requested hit, the tool returns an actionable error instead of
-            silently returning fewer hits than asked for — retry with a smaller
-            ``max_results``.
+            By DEFAULT this returns METADATA ONLY — id/subject/from/to/date/
+            label_ids/snippet, no body text — which is all a counting or
+            listing question needs ("how many emails from X", "list the
+            emails from Y this week", "do I have anything from Z"), at a
+            small fraction of the cost of a full search, so a large or
+            long-bodied result set never risks the model's context window.
+            Set ``include_bodies=True`` ONLY when the question needs what a
+            message actually SAYS — summarizing, quoting, or answering about
+            body content — since fetching bodies costs far more context and
+            can force the tool to shrink or refuse a large request.
+
+            When ``include_bodies=True``, a large ``max_results`` may shrink
+            every hit's body TOGETHER (never independently, never dropping a
+            hit) so the whole result stays within the model's context window
+            — shrunk messages report ``body_truncated: true``. If even the
+            smallest usable body can't fit every requested hit, the tool
+            returns an actionable error instead of silently returning fewer
+            hits than asked for — retry with a smaller ``max_results`` or
+            drop back to the metadata-only default.
 
             Returns:
                 JSON envelope with ``{"messages": [...]}`` plus ``count`` (the
@@ -2626,7 +2873,11 @@ class ReadToolsMixin:
                 ``max_results`` — say "at least N", never present N as the
                 total). REPORT EVERY ENTRY in ``messages`` individually — do
                 not summarize, merge, or quietly drop entries from a long
-                list. If ``operator_retry`` is present, the literal query you
+                list. With ``include_bodies=False`` each entry has no ``body``
+                field at all — never claim to quote or summarize content from
+                a metadata-only result; re-call with ``include_bodies=True``
+                (narrowing the query first) if content is actually needed.
+                If ``operator_retry`` is present, the literal query you
                 passed found nothing and this is the broadened operator query
                 that was retried instead — say the search was broadened
                 before stating the count, since it may include hits (e.g. a
@@ -2663,6 +2914,7 @@ class ReadToolsMixin:
                             query=query,
                             max_results=per_backend,
                             debug=debug_flag,
+                            include_bodies=include_bodies,
                         )
                     except ConnectorsError as exc:
                         msg = format_connector_error(exc)
@@ -2754,7 +3006,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
 
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
@@ -2790,7 +3043,13 @@ class ReadToolsMixin:
                     log.debug("triage: host signature unreadable (%s)", exc)
 
                 return _envelope_ok(
-                    condense_triage_result(agent._triage_all_backends(**kwargs))
+                    condense_triage_result(
+                        agent._triage_all_backends(**kwargs),
+                        # Loaded skill bodies are prompt text the agent re-reads
+                        # on the post-tool turn (#2466) — give the envelope back
+                        # what they cost, or the turn overflows the window.
+                        extra_fixed_tokens=skill_prompt_tokens(agent),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -2877,7 +3136,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
@@ -2897,3 +3157,108 @@ class ReadToolsMixin:
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def check_suspicious_mail(max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES) -> str:
+            """Check the inbox for anything suspicious: mail flagged phishing
+            or spam by the shared classifier.
+
+            Use this — NOT ``pre_scan_inbox`` — when the user asks if
+            anything in the inbox looks suspicious, whether there's
+            anything to worry about or watch out for, or otherwise wants
+            flagged/risky mail specifically, rather than a general triage.
+            ``pre_scan_inbox`` always renders its full four-section card
+            (waiting on your reply, needs a response, meetings to decide,
+            needs a manual look); this tool returns ONLY the flagged rows,
+            so there is nothing else to describe.
+
+            Read-only — reports only, never quarantines or archives
+            anything. To quarantine a flagged message, call
+            ``quarantine_phishing_message(message_id)`` (requires user
+            confirmation).
+
+            Detection itself is unchanged — the SAME phishing/spam
+            classifier every triage tool already uses; this tool never
+            re-classifies anything, it only surfaces what that classifier
+            already flagged, precomputed and counted.
+
+            Returns ``{"suspicious": [...], "suspicious_total": N, "scanned":
+            M, "total_inbox": ..., ...}``. Each row carries ``message_id``,
+            ``sender``, ``subject``, ``why``, ``is_phishing``, ``is_spam``,
+            ``mailbox``. ``suspicious_total`` is the exact count, captured
+            before ``suspicious``'s own cap — state it verbatim and never
+            report a count you arrived at by counting the list yourself.
+            List every entry ``suspicious`` actually carries, individually,
+            never summarized or merged; if ``suspicious_total`` is larger
+            than the list you were given, say so explicitly (e.g. "14
+            flagged messages this scan — showing 10") instead of implying
+            those are the only ones found. When the count is zero, say so
+            plainly (e.g.
+            "nothing flagged this scan") rather than describing unrelated
+            mail — a zero count here means nothing was flagged in what was
+            scanned, not that the inbox is otherwise clear.
+
+            Args:
+                max_messages: How many INBOX messages (read + unread) to
+                    scan (default 50, max 100).
+            """
+            # This tool has no ``_impl`` of its own — it composes its result
+            # straight from ``pre_scan_inbox_impl`` (via
+            # ``_pre_scan_all_backends``), which logs its OWN call under the
+            # literal name "pre_scan_inbox". Without this wrapper, a
+            # successful ``check_suspicious_mail`` invocation was
+            # indistinguishable from ``pre_scan_inbox`` in the tool trace —
+            # this is the one place that logs under this tool's actual name.
+            with log_tool_call(
+                "check_suspicious_mail", {"max_messages": max_messages}, debug=debug_flag
+            ) as st:
+                try:
+                    # Re-resolve first — ``_backends`` is stale on a
+                    # long-lived agent whose mailbox connected after __init__.
+                    try:
+                        agent._refresh_mail_backends()
+                    except (ConfigurationError, ConnectorsError):
+                        pass
+                    if not agent._backends:
+                        st["ok"] = False
+                        st["error"] = NO_MAILBOX_CONNECTED_MESSAGE
+                        return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
+                    max_messages_clamped = max(
+                        1,
+                        min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
+                    )
+                    # Reuses the exact same shared pre-scan pass every other
+                    # pre-scan-derived tool uses (mailbox fan-out, SLM wiring,
+                    # budget split) — no new classification code, no new
+                    # mailbox plumbing. Deliberately NOT named "pre_scan_inbox":
+                    # rewrite_triage_answer (answer_grounding.py) keys its
+                    # four-bucket rewrite on that literal tool name, so a call
+                    # to THIS tool can never trigger it.
+                    envelope = agent._pre_scan_all_backends(
+                        max_messages=max_messages_clamped, include_informational=False
+                    )
+                    out: Dict[str, Any] = {
+                        "kind": "email_suspicious_scan",
+                        "suspicious": envelope.get("suspicious", []),
+                        "suspicious_total": envelope.get("suspicious_total", 0),
+                        "scanned": envelope.get("scanned", 0),
+                        "total_inbox": envelope.get("total_inbox"),
+                    }
+                    if envelope.get("degraded"):
+                        out["degraded"] = True
+                        out["mailbox_errors"] = envelope.get("mailbox_errors", [])
+                    st["result_summary"] = {"suspicious_total": out["suspicious_total"]}
+                    # Deliberately never touches agent._last_needs_you_card
+                    # (#2745) — that positional-reference card is exclusive to
+                    # pre_scan_inbox; this tool's rows carry no ``ref`` and must
+                    # never be resolved by number.
+                    return _envelope_ok(out)
+                except ConnectorsError as exc:
+                    st["ok"] = False
+                    st["error"] = repr(exc)
+                    return _envelope_err(format_connector_error(exc))
+                except Exception as exc:
+                    st["ok"] = False
+                    st["error"] = repr(exc)
+                    log.exception("email tool error: %s", type(exc).__name__)
+                    return _envelope_err(f"{type(exc).__name__}: {exc}")

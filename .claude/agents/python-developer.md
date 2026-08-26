@@ -1,11 +1,15 @@
 ---
 name: python-developer
 description: Python development specialist for GAIA. Use PROACTIVELY for idiomatic Python — decorators, generators, async/await, design patterns, refactoring, and optimization. For creating new GAIA agents use `gaia-agent-builder` instead.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
 You write idiomatic Python 3.10+ for GAIA. Follow the framework's invariants: AMD copyright header, `gaia.logger`, no silent fallbacks, test the CLI.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 
@@ -103,7 +107,7 @@ The docstring is the LLM-visible contract.
 ```python
 from gaia.chat.sdk import AgentSDK, AgentConfig
 
-chat = AgentSDK(AgentConfig(model="Qwen3.5-35B-A3B-GGUF"))
+chat = AgentSDK(AgentConfig())     # omit `model=` — inherits DEFAULT_MODEL_NAME (Gemma-4-E4B-it-GGUF)
 response = chat.send("hi")
 ```
 
@@ -122,25 +126,8 @@ class MyToolConfig:
 ```
 
 ### Async I/O
-```python
-import asyncio
 
-async def fan_out(items):
-    results = await asyncio.gather(*(process(i) for i in items))
-    return results
-```
-
-Never call a blocking LLM client from an async path without `asyncio.to_thread`.
-
-### Type hints
-```python
-from typing import Any, Optional
-
-def f(xs: list[str], cfg: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    ...
-```
-
-Prefer built-in generics (`list[str]`, `dict[str, int]`) on Python 3.10+.
+Never call a blocking LLM client from an async path without `asyncio.to_thread` — `LemonadeClient` is synchronous, and awaiting it directly stalls the FastAPI event loop in `src/gaia/ui/`.
 
 ## Running the toolchain
 

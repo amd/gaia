@@ -14,11 +14,65 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 
 ## How You Communicate
 
-Applies to **every response** — interactive chat in a local session and GitHub issue/PR replies alike. Lead with the finding (the [Issue Response Guidelines](#issue-response-guidelines) cover that and the GitHub-specific detail); the rules below add the conciseness bar that holds everywhere.
+**Canonical output-style rule — Claude's one voice.** If a developer reads it, this
+governs it: chat, PR reviews, PR bodies, issue replies, issues Claude files itself,
+commit bodies, release notes, subagent reports, workflow comments. No surface gets its
+own dialect.
 
-- **Write for the human reading it, not an engineer auditing the code.** Plain language; the shortest response that fully answers. If one line suffices, send one line.
-- **Cite `file.py:line`, symbols, module paths, or flags ONLY when the reader needs them to act** — never to show your work. Cut internal implementation detail (import paths, subparser/flag mechanics, class names) the reader doesn't need to make a decision.
-- **Don't pad.** Skip restating the question, "what I changed" walls the diff already shows, and exhaustive option dumps when one recommendation will do.
+Every other file (`REVIEW.md`, `.claude/**`, `.github/workflows/claude*.yml`) **links
+here, never restates** — a second copy is a second thing to drift. `REVIEW.md` differs
+in scope, not voice: it owns review severity, the nit cap, and length caps.
+
+### The rule
+
+1. **Open with the finding.** One or two sentences a non-author gets without reading the
+   diff. No preamble, no `In plain English:` label, no restating the question.
+2. **Layer detail underneath** — a sub-bullet, a trailing clause, or on GitHub a
+   collapsed `<details>` block. Never in front of the finding.
+3. **Stop when the reader can act.** One line is a complete answer.
+
+**Cite `file.py:line` and symbols only when the reader needs them to act** — never to
+show your work.
+
+**Every sentence must earn its place.** Cut what the reader already knows: restating
+what you just did, narrating the implementation, listing every file when three matter,
+summaries of summaries. Say each point exactly once. Prefer few important bullets over
+many complete ones.
+
+### On GitHub
+
+Part 1 is visible: the finding in plain words, and the next step. No `file.py:line`,
+symbol names, or ```suggestion blocks. Part 2 is everything mechanical, wrapped exactly
+like this — the blank line after `</summary>` is required or GitHub renders the contents
+as raw text:
+
+```
+<details>
+<summary>🔍 Technical details</summary>
+
+...refs, suggestions, reasoning...
+</details>
+```
+
+Omit part 2 when there's nothing mechanical to say. Never restate part 1 inside it. Two
+things are never collapsed: a 🔒 security finding with the @kovtcharov-amd tag, and a
+PR's Test plan.
+
+### The shape
+
+❌ **Technical-first:**
+> The `_ensure_model_loaded()` call in `chat_completion()` was absent from the
+> non-streaming branch, so when `RAGSDK._load_embedder` evicted the resident model,
+> Lemonade auto-loaded Gemma at its default 32K ctx.
+
+✅ **Plain-language-first:**
+> Document Q&A silently capped out at 32K context, so long PDFs got truncated answers.
+>
+> - The embedder warm-up evicted the chat model, and the non-streaming path skipped the
+>   reload check (`_ensure_model_loaded` in `lemonade_client.py`).
+
+Same information; the second says what happened before it says where. **When in doubt:
+shorter, plainer, outcome first.**
 
 ## Version Control Guidelines
 
@@ -44,6 +98,10 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 **Still prohibited without explicit user instruction:** pushing to remote, force-pushing anywhere, amending existing commits, touching release/publishing branches, committing anything that looks like a secret. When in doubt, ask — the cost of a 10-second confirmation is trivial; the cost of an unwanted commit can be hours of cleanup.
 
 ### IMPORTANT: PR Descriptions — Tight and Value-Focused
+
+A PR description is developer-facing output, so [How You Communicate](#how-you-communicate)
+governs it like everything else: plain language first, technical detail underneath, each
+point made once. This section adds only the PR-specific *shape*.
 
 **Keep PR descriptions short. Lead with *why* and *impact*, not *what*.** Reviewers skim; long walls of text get ignored. A PR description is a sales pitch for the change, not a changelog.
 
@@ -159,7 +217,7 @@ across several **bundled** docs. Update them **together** in the same change, or
 package ships documentation that contradicts itself — and the contradiction goes
 live the moment that version publishes.
 
-For a hub agent package (`hub/agents/{npm,python}/<id>/`), the doc surfaces that
+For a hub agent package (`hub/agents/<id>/{npm,python}/`), the doc surfaces that
 must stay in sync are:
 
 - **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
@@ -408,7 +466,6 @@ lemonade-server serve              # Start LLM backend
 gaia llm "Hello"                   # Test LLM
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
-gaia-code                          # Code agent
 ```
 
 ### Agent UI Development
@@ -432,15 +489,13 @@ gaia/
 │   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/chat/python/)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
-│   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/<id>/python/.
+│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship),
+│   │   #   chat (its base class), email. Per-task agents were collapsed into
+│   │   #   skills under hub/skills/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
-│   │   ├── jira/       # Jira standalone app
 │   │   ├── llm/        # LLM standalone app
-│   │   ├── summarize/  # Document summarization app
-│   │   ├── docker/     # Docker standalone app
 │   │   ├── example/    # Reference/starter app
 │   │   └── _shared/    # Shared assets for apps
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
@@ -478,7 +533,6 @@ gaia/
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── scripts/            # Build, install, and launch scripts
 ├── docs/               # Documentation (MDX format)
-├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
 
@@ -491,9 +545,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 
-The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/emr/python/`), not the core wheel.
-
-`gaia-code` is no longer a core `console_scripts` entry — it ships with the standalone `gaia-agent-code` wheel (`hub/agents/code/python/`, entry point `gaia_agent_code.cli:main`).
+`gaia` and `gaia-mcp` are the only console scripts the core wheel ships.
 
 ## Architecture
 
@@ -527,24 +579,18 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 
 | Agent | Description |
 |-------|-------------|
-| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — hub (`chat/`) |
+| **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
+| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG; the flagship's base class — hub (`chat/`) |
+| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) — hub (`email/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
-| **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
-| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
-| **CodeAgent** | Code generation with orchestration |
-| **AnalystAgent** | Structured data analysis (CSV/Excel, scratchpad SQL) |
-| **BrowserAgent** | Web research — search, fetch pages, download |
-| **FileIOAgent** | File read/write/edit operations |
-| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) |
-| **SummarizerAgent** | Document/text summarization |
-| **JiraAgent** | Jira issue management |
-| **BlenderAgent** | 3D scene automation |
-| **DockerAgent** | Container management |
-| **SDAgent** | Stable Diffusion image generation |
-| **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/emr/python/` |
-| **ConnectorsDemoAgent** | Per-agent connector activation demo |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/`).
+Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
+docker, blender, sd, emr, routing) were **deleted**: their capability is the flagship's
+tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/). Adding a capability
+means writing a skill, not shipping an agent. `hub/agents/{hello-world,word-count,
+connectors-demo}` remain as teaching templates and are not catalog agents.
+
+`gaia telegram` is a messaging adapter, not an agent.
 
 ### Agent Registry & Tool Mixins
 
@@ -563,14 +609,14 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
+| `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
-- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA/Blender/doc-search/connectors-demo. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
+- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
 - Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so exactly one `(model, ctx_size)` pair is ever resident.
-- Summarizer: `Qwen3-4B-Instruct-2507-GGUF`
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
@@ -585,19 +631,14 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
-- `gaia browse` - Web research (search, fetch pages, download)
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia analyze` - Structured data analysis with scratchpad tables
 - `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
-- `gaia summarize` - Document summarization
-- `gaia blender` - Blender 3D agent
-- `gaia sd` - Stable Diffusion image generation
-- `gaia jira` - Jira integration
-- `gaia docker` - Docker management
 
 **Servers & infrastructure:**
+- `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|docker|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
@@ -605,6 +646,10 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
 - `gaia install` - Install helper (e.g. Lemonade on first run)
+- `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
+- `gaia config {get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia hub` - Browse, install, and uninstall agents from the Agent Hub
+- `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
 - `gaia test` - Smoke tests
@@ -620,8 +665,6 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
-- `gaia-code` - CodeAgent entry, from the `gaia-agent-code` wheel (`hub/agents/code/python/gaia_agent_code/cli.py`)
-- `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/emr/python/gaia_agent_emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 
 ## Documentation Index
@@ -629,7 +672,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 All docs are `.mdx` (Mintlify). [`docs/docs.json`](docs/docs.json) is the authoritative
 navigation — consult it rather than a hand-maintained copy here. Where things live:
 
-- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, browse, analyze, email, talk, code, blender, jira, docker, routing, emr, memory, install, custom-agent, hardware-advisor, npu.
+- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, email, talk, memory, install, custom-agent, hardware-advisor, npu.
 - **SDK** (`docs/sdk/`) — `core/` (agent-system, tools, console), `sdks/` (chat, agent-ui, rag, llm, vlm, audio), `infrastructure/` (mcp, api-server).
 - **Reference** (`docs/reference/`) — cli, dev, faq, troubleshooting, eval.
 - **Specs** (`docs/spec/`), **Deployment** (`docs/deployment/`), **Integrations** (`docs/integrations/`).
@@ -652,208 +695,29 @@ Browse the directory rather than a partial list here.
 
 ## Issue Response Guidelines
 
-When responding to GitHub issues and pull requests, follow these guidelines:
+Writing anything that gets posted to GitHub — an issue reply, PR comment, discussion
+response, or review? Use the **`github-issue-response` skill**
+(`.claude/skills/github-issue-response/SKILL.md`). It carries the security-escalation
+protocol, when to escalate to @kovtcharov-amd, per-response-type length caps, the
+doc-link map, and worked good/bad examples.
 
-**Automated PR-review policy lives in [`REVIEW.md`](REVIEW.md)** (the tunable review rubric:
-correctness-first severity, the nit cap, skip rules, and length caps). This section sets the
-shared tone/format the rubric builds on; keep the two consistent when editing either.
+Two rules are important enough to restate here:
 
-### Documentation Structure
+- **Never discuss vulnerability details publicly.** Point the reporter at a private
+  advisory (https://github.com/amd/gaia/security/advisories/new) and tag
+  @kovtcharov-amd. No exploit steps, no proof-of-concept, in any public thread. A
+  `🔒 SECURITY CONCERN` line and the maintainer tag always stay visible — never
+  collapsed inside a `<details>` block.
+- **Output style comes from [How You Communicate](#how-you-communicate)**, same as
+  everywhere else. Plain language first, technical depth underneath.
 
-**External Site:** https://amd-gaia.ai
-- [Quickstart](https://amd-gaia.ai/quickstart) - Build your first agent in 10 minutes
-- [SDK Reference](https://amd-gaia.ai/sdk) - Complete API documentation
-- [Guides](https://amd-gaia.ai/guides) - Chat, Code, Talk, Blender, Jira, and more
-- [FAQ](https://amd-gaia.ai/reference/faq) - Frequently asked questions
-
-The documentation is organized in [`docs/docs.json`](docs/docs.json) with the following structure:
-- **SDK**: `docs/sdk/` - Agent system, tools, core SDKs (chat, llm, rag, vlm, audio)
-- **User Guides** (`docs/guides/`): Feature-specific guides (chat, browse, analyze, email, talk, code, blender, jira, docker, routing, emr, telegram-adapter, memory)
-- **Playbooks** (`docs/playbooks/`): Step-by-step tutorials for building agents
-- **SDK Reference** (`docs/sdk/`): Core concepts, SDKs, infrastructure, mixins, agents
-- **Specifications** (`docs/spec/`): Technical specs for all components
-- **Reference** (`docs/reference/`): CLI, API, features, FAQ, development
-- **Integrations**: `docs/integrations/` - MCP, n8n, VSCode
-- **Deployment** (`docs/deployment/`): Packaging, UI
-
-### Response Protocol
-
-1. **Check documentation first:** Always search `docs/` folder before suggesting solutions
-   - See [`docs/docs.json`](docs/docs.json) for the complete documentation structure
-
-2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
-
-3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, builder/, code_index/, registry.py) and `hub/agents/<id>/python/` (packaged agents: chat, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
-   - CLI commands: `src/gaia/cli.py`
-   - MCP integration: `src/gaia/mcp/`
-   - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
-   - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
-   - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
-   - Evaluation: `src/gaia/eval/` (runner.py, scorecard.py, audit.py)
-   - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/, example/, _shared/)
-   - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
-   - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)
-   - Agent UI frontend: `src/gaia/apps/webui/` (React/TypeScript/Vite/Electron)
-   - API Server: `src/gaia/api/`
-   - SD/VLM tool mixins: `src/gaia/sd/mixin.py`, `src/gaia/vlm/mixin.py`
-
-4. **Link to relevant documentation:**
-   - **Getting Started:** [`docs/setup.mdx`](docs/setup.mdx), [`docs/quickstart.mdx`](docs/quickstart.mdx)
-   - **User Guides:** [`docs/guides/chat.mdx`](docs/guides/chat.mdx), [`docs/guides/talk.mdx`](docs/guides/talk.mdx), [`docs/guides/code.mdx`](docs/guides/code.mdx), [`docs/guides/blender.mdx`](docs/guides/blender.mdx), [`docs/guides/jira.mdx`](docs/guides/jira.mdx)
-   - **SDK Reference:** [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx), [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx), [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx), [`docs/sdk/infrastructure/mcp.mdx`](docs/sdk/infrastructure/mcp.mdx)
-   - **CLI Reference:** [`docs/reference/cli.mdx`](docs/reference/cli.mdx), [`docs/reference/features.mdx`](docs/reference/features.mdx)
-   - **Development:** [`docs/reference/dev.mdx`](docs/reference/dev.mdx), [`docs/sdk/testing.mdx`](docs/sdk/testing.mdx), [`docs/sdk/best-practices.mdx`](docs/sdk/best-practices.mdx)
-   - **FAQ & Help:** [`docs/reference/faq.mdx`](docs/reference/faq.mdx), [`docs/glossary.mdx`](docs/glossary.mdx)
-
-5. **For bugs:**
-   - Search `src/gaia/` for related code
-   - Check `tests/` for related test cases that might reveal the issue or need updating
-   - Reference [`docs/sdk/troubleshooting.mdx`](docs/sdk/troubleshooting.mdx)
-   - Check security implications using [`docs/sdk/security.mdx`](docs/sdk/security.mdx)
-
-6. **For feature requests:**
-   - Check if similar functionality exists in `src/gaia/agents/` or `src/gaia/apps/`
-   - Reference [`docs/sdk/examples.mdx`](docs/sdk/examples.mdx) and [`docs/sdk/advanced-patterns.mdx`](docs/sdk/advanced-patterns.mdx)
-   - Suggest approaches following [`docs/sdk/best-practices.mdx`](docs/sdk/best-practices.mdx)
-
-7. **Follow contribution guidelines:**
-   - Reference [`CONTRIBUTING.md`](CONTRIBUTING.md) for code standards
-   - Point to [`docs/reference/dev.mdx`](docs/reference/dev.mdx) for development workflow
-
-### Response Quality Guidelines
-
-#### Tone & Style
-- **Lead with the finding:** open every response with one sentence stating the diagnosis, the answer, or what you need from the author. No labelled "In plain English:" preamble — just the finding. (`TL;DR:` is fine if a long review genuinely warrants one; `In plain English:` reads as performative plain-talk and is forbidden.)
-- **Professional but friendly:** Welcome contributors warmly while maintaining technical accuracy
-- **Concise:** 1–3 paragraphs for simple questions; expand only when the issue actually warrants it
-- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the finding, not before it
-- **Helpful:** Provide next steps, code examples, or links to documentation
-- **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
-
-#### Comment Format — Lead Human, Add Technical Depth When It Helps
-
-PR reviews and issue/PR replies serve two readers at once: a **human** skimming for the verdict, and an **AI agent / engineer** who needs `file:line`-level depth to act on it. Lead with a plain-language summary for the human; put the technical depth below for whoever has to act. This mirrors the `claude.yml` bot prompts. The aim is whatever is most effective and actionable for both readers — not a fixed template.
-
-- **Human summary (lead with this):** plain language, minimal jargon — the verdict / answer / diagnosis, the bottom line, and the headline issues in plain words (what's wrong + what to do, not how). Keep it short.
-- **Technical details (add when there is real depth):** `file.py:line` refs, symbols, ```suggestion blocks, reasoning. When that depth runs more than a couple of lines, collapse it under a `<details>` block so the summary stays scannable — the blank line after `</summary>` is required for GitHub to render the markdown inside:
-
-   ```
-   <details>
-   <summary>🔍 Technical details</summary>
-
-   …depth here…
-   </details>
-   ```
-
-Use discretion — this is a guide, not a ritual. Many comments are a single plain-language part with no technical block at all; adding an empty `<details>`, a boilerplate test plan, or a security note where none is warranted is just noise. Add each section only where it genuinely helps. The one firm rule: when a 🔒 security concern or an auto-fix **Test plan** *does* apply, keep it visible — never bury it inside `<details>`.
-
-#### Security Handling Protocol (CRITICAL)
-
-**For security issues reported in public issues:**
-1. **DO NOT** discuss specific vulnerability details publicly
-2. **Immediately** respond with: "Thank you for reporting this. This appears to be a security concern. Please open a private security advisory instead: [GitHub Security Advisories](https://github.com/amd/gaia/security/advisories/new)"
-3. **Tag** @kovtcharov-amd in your response
-4. **Do not** provide exploit details, proof-of-concept code, or technical analysis in public
-
-**For security issues found in PR reviews:**
-1. Comment with: "🔒 SECURITY CONCERN"
-2. Tag @kovtcharov-amd immediately
-3. Describe the issue type (e.g., "Potential command injection") but not exploitation details
-4. Suggest the PR author discuss privately with maintainers
-
-#### Escalation Protocol
-
-**Escalate to @kovtcharov-amd for:**
-- Security vulnerabilities
-- Architecture or design decisions
-- Roadmap or timeline questions
-- Breaking changes or deprecations
-- Issues you cannot resolve with available documentation
-- External integration or partnership requests
-- Questions about AMD hardware specifics or roadmap
-
-**Do not escalate for:**
-- Questions answered in existing documentation
-- Simple usage questions
-- Duplicate issues (just link to the original)
-- Feature requests that need community discussion first
-
-#### Response Length Guidelines
-
-- **Quick answers:** 2–4 sentences. One doc link if relevant. No code unless it directly answers the question.
-- **How-to questions:** One short paragraph of context, then the minimum viable code example, then one doc link. Cap at ~150 words.
-- **Bug reports:** Open with "I think this is X" or "I need more info to tell." Ask for specific reproduction steps. Reference `file.py:line` only when you've actually identified the location — never guess. Cap at ~200 words.
-- **Feature requests:** Open with one sentence on whether the feature is in scope. Then 2–4 bullets on feasibility / existing patterns / next steps. Cap at ~200 words.
-- **Complex technical discussions:** Allowed, but open with a 1–2 sentence framing of the conclusion before diving into the technical detail.
-
-**Never:**
-- Write walls of text without structure
-- Repeat information already in the issue
-- Provide generic advice not specific to GAIA
-- **Lead with a code reference.** `Looking at src/gaia/foo.py:123, ...` makes the response feel like a diff review; the reader wants the finding before the line number.
-
-#### Examples
-
-**Good Response (Bug Report):**
-```
-Looks like RAG initialization didn't complete — the symptom you're hitting is what happens
-when GAIA can't find a loaded embedding model. Two quick checks:
-
-1. Did you run `gaia init --profile chat` first?
-2. Could you share the output of `gaia diagnostics`?
-
-If both look right, paste the output of `gaia chat --debug` and I can dig in further. Setup
-walkthrough lives at docs/guides/chat.mdx.
-```
-
-**Bad Response (Too Generic):**
-```
-This looks like a configuration issue. Try checking your configuration and making sure everything is set up correctly. Let me know if that helps!
-```
-
-**Good Response (Feature Request):**
-```
-Interesting idea! GAIA doesn't currently have built-in Slack integration, but you could build this using:
-
-1. The Agent SDK (docs/sdk/sdks/chat.mdx) for message handling
-2. The MCP protocol (docs/sdk/infrastructure/mcp.mdx) for Slack connectivity
-3. Similar pattern to our Jira agent (hub/agents/jira/python/)
-
-For AMD optimization: Consider using the local LLM backend (src/gaia/llm/) to keep conversations private and leverage Ryzen AI NPU acceleration.
-
-Would you be interested in contributing this? See CONTRIBUTING.md for how to get started.
-```
-
-**Bad Response (Security Issue):**
-```
-Looking at your code, the issue is on line 45 where you're using subprocess.call() with user input. Here's how an attacker could exploit it: [detailed exploit]. You should use shlex.quote() like this: [code example].
-```
-*This is bad because it discusses exploit details publicly. Should escalate privately instead.*
-
-**Bad Response (Excessively Technical):**
-```
-The error originates in `src/gaia/rag/sdk.py:145` where `RAGSDK.__init__` invokes
-`_load_embedder` which raises if `self.config.embedding_model` cannot be resolved by
-the Lemonade `/api/v1/models` endpoint. The traceback at line 178 indicates that
-`httpx.ConnectError` was raised because the `LemonadeManager` discovery probe failed
-to bind on the canonical port (13305) due to an upstream proxy collision with `gaia mcp docker`.
-```
-*This is bad because it leads with file paths and framework internals; a user filing a bug
-shouldn't have to decode it. Lead with the diagnosis ("looks like RAG can't reach the
-Lemonade server"), then drop the file references for the contributor who follows up.*
-
-#### Community & Contributor Management
-
-- **Welcome first-time contributors:** Acknowledge their effort and guide them gently
-- **Assume good intent:** Even for unclear or duplicate issues
-- **Be patient:** External contributors may not know GAIA conventions yet
-- **Recognize contributions:** Thank people for bug reports, feature ideas, and PRs
-- **AMD's commitment:** Remind users that GAIA is AMD's open-source commitment to accessible AI
+Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
+lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review
+scoring. Don't fork it into another file.
 
 ## Claude Agents
 
-Specialized agents live in `.claude/agents/` (23 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
+Specialized agents live in `.claude/agents/` (20 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
 
 ### Development
 - **gaia-agent-builder** — Creating a new GAIA agent (Python class). Not for tuning an existing agent's prompt or adding a single tool.
@@ -871,15 +735,12 @@ Specialized agents live in `.claude/agents/` (23 total). Each agent file is the 
 
 ### Specialists
 - **rag-specialist** — `src/gaia/rag/` and the `rag` tool mixin: chunking, embeddings, retrieval quality.
-- **jira-specialist** — `JiraAgent`, JQL templates, Atlassian integration.
-- **blender-specialist** — `BlenderAgent` and the Blender MCP server/client pair.
 - **voice-engineer** — Whisper ASR, Kokoro TTS, Talk SDK, real-time audio.
 - **lemonade-specialist** — Lemonade Server / provider adapter, NPU/GPU optimisation, model selection.
 - **prompt-engineer** — System prompts, tool docstrings, eval-judge prompts inside GAIA.
 
 ### Infrastructure
 - **frontend-developer** — React/Vite/Electron Agent UI and standalone apps.
-- **docker-specialist** — Dockerfiles, compose, and the `DockerAgent`.
 - **github-actions-specialist** — `.github/workflows/` authoring and debugging.
 - **github-issues-specialist** — Agent-ready issues/PRs, `AGENTS.md`, repo setup for AI agents.
 - **release-manager** — Version bumps, changelog, publish/PyPI/installer workflows.
@@ -903,11 +764,16 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 
 ## Learned Skills
 
-**Read the matching skill before starting related work.** `.claude/skills/` is the
-authoritative set (run `ls .claude/skills/`); invoke them with the `Skill` tool. Current:
+**Read the matching skill before starting related work.** Every skill under
+`.claude/skills/<name>/SKILL.md` is auto-discovered by its `description` and invoked with
+the `Skill` tool — run `ls .claude/skills/` to see the current set. They cover releases,
+testing, hub-agent porting and integration, eval scorecards, the weekly audit workflow,
+LemonadeClient changes, GitHub responses, and presentations.
 
-- `lemonade-client-patterns` — modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base): deferred-import patch targets, assertLogs child-logger levels, SSE test-hang prevention, 401 error safety, `openai.AuthenticationError` ordering.
-- `gaia-release` — cut a GAIA core release end-to-end (draft notes, release PR, pre-tag verification, push the tag, monitor the publish pipeline).
-- `gaia-testing` — GAIA testing workflows, fixtures, and conventions.
-- `weekly-audit-patterns` — the proactive weekly Claude audit (`.github/workflows/claude-weekly-audit.yml`): the stable dedup-key scheme, the private channel for security findings, the five dimensions (and which one owns the Fail-Loudly check), and the `bug`→`auto-fix` promotion path. Read before editing that workflow or how findings are filed/deduped.
-- `porting-agent-to-hub` — taking an existing in-repo agent to a published, day-one-usable hub package: the Phase 0 PORT/MERGE/DISCARD verdict, the capability-truth audit, the generalize-before-documenting rule, the email parity kit, and the catalog→install→launch→use gate. Read before porting any agent under `hub/agents/<id>/` or before claiming one is ready to publish.
+This list is deliberately not enumerated here — a hand-maintained copy drifts the moment
+someone adds a skill. If a skill exists, Claude already sees its description.
+
+**Adding one?** It must be a directory with a `SKILL.md` inside
+(`.claude/skills/<name>/SKILL.md`). A bare `.md` at the skills root is silently ignored —
+it never loads and the `Skill` tool can't invoke it. (`gaia-presentation-assets/` has no
+`SKILL.md` on purpose — it is a shared asset directory for the two presentation skills.)

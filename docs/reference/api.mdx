@@ -20,10 +20,12 @@ The GAIA API Server exposes GAIA agents as "models" through an OpenAI-compatible
 
 ## Quick Start
 
+<Note>
+The server exposes one model, `gaia` — the flagship agent. Capability that used to mean picking a different agent is now a skill it loads on demand. Register more in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/api/agent_registry.py)); see [Adding New Agents](/reference/api-spec#adding-new-agents).
+</Note>
+
 <Steps>
   <Step title="Start Lemonade Server">
-    Start with extended context for Code agent:
-
     ```bash
     lemonade-server serve --ctx-size 32768
     ```
@@ -49,7 +51,7 @@ The GAIA API Server exposes GAIA agents as "models" through an OpenAI-compatible
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [{"role": "user", "content": "Write a hello world function"}]
       }'
     ```
@@ -164,16 +166,14 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gaia-code",
+    model="your-agent-id",
     messages=[{"role": "user", "content": "Create a REST API with Express and SQLite"}]
 )
 
 print(response.choices[0].message.content)
 ```
 
-TypeScript/Express backend (routing detects "Express" → TypeScript)
-
-```python Python Backend
+```python Second Request
 from openai import OpenAI
 
 client = OpenAI(
@@ -182,14 +182,12 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gaia-code",
+    model="your-agent-id",
     messages=[{"role": "user", "content": "Create a Django REST API with authentication"}]
 )
 
 print(response.choices[0].message.content)
 ```
-
-Python backend (routing detects "Django" → Python)
 
 ```python Streaming
 from openai import OpenAI
@@ -200,7 +198,7 @@ client = OpenAI(
 )
 
 stream = client.chat.completions.create(
-    model="gaia-code",
+    model="your-agent-id",
     messages=[{"role": "user", "content": "Write a calculator class"}],
     stream=True
 )
@@ -223,7 +221,7 @@ async function chat(message) {
     const response = await axios.post(
         'http://localhost:8080/v1/chat/completions',
         {
-            model: 'gaia-code',
+            model: 'your-agent-id',
             messages: [{ role: 'user', content: message }]
         }
     );
@@ -235,17 +233,13 @@ chat('Build me a todo app using nextjs').then(console.log);
 chat('Write a Python function to calculate factorial').then(console.log);
 ```
 
-TypeScript/React frontend (routing detects "React" → TypeScript frontend)
-
-Python script (routing detects Python for generic functions)
-
 ```javascript Fetch
 async function chat(message) {
     const response = await fetch('http://localhost:8080/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            model: 'gaia-code',
+            model: 'your-agent-id',
             messages: [{ role: 'user', content: message }]
         })
     });
@@ -265,7 +259,7 @@ async function chat(message) {
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [{"role": "user", "content": "Write a function"}]
       }'
     ```
@@ -276,7 +270,7 @@ async function chat(message) {
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [{"role": "user", "content": "Write a function"}],
         "stream": true
       }'
@@ -288,24 +282,13 @@ async function chat(message) {
 
 ## Available Models
 
-<Card title="gaia-code" icon="code">
-  Autonomous Python/TypeScript development agent with intelligent routing
-</Card>
+| Model | Agent | What it does |
+|-------|-------|--------------|
+| `gaia` | `GaiaAgent` | Conversation, document Q&A, data analysis, web research, memory, and skills |
 
-| Property | Value |
-|----------|-------|
-| **Model ID** | `gaia-code` |
-| **Context** | 32K input / 8K output |
-| **Requirements** | Lemonade with `--ctx-size 32768` |
-| **Description** | Autonomous development agent with planning, generation, and testing |
+Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/api/agent_registry.py)) to expose them as selectable models.
 
-<Tip>
-**Intelligent Routing:** The `gaia-code` model uses GAIA's Routing Agent to automatically detect your target programming language (Python or TypeScript) and project type based on framework mentions.
-
-[→ Learn about Routing](/guides/routing)
-</Tip>
-
-**Full specifications:** [API Server Specification](/reference/api-spec#available-models)
+**How to add one:** [API Server Specification → Adding New Agents](/reference/api-spec#adding-new-agents)
 
 ---
 
@@ -370,7 +353,7 @@ async function chat(message) {
 
 | Issue | Solution |
 |-------|----------|
-| "Model not found" | Use correct model ID: `gaia-code` |
+| "Model not found" | Confirm the model id is registered in `AGENT_MODELS` — `GET /v1/models` lists what's actually available |
 | "Agent processing failed" | Ensure Lemonade is running with `--ctx-size 32768` |
 | "Port already in use" | Stop existing server or use `--port` flag |
 | Streaming not working | Ensure `"stream": true` in request |
@@ -382,7 +365,7 @@ async function chat(message) {
 ## VSCode Integration
 
 <Card title="VSCode Extension" icon="code" href="/integrations/vscode">
-  Use GAIA Code directly in Visual Studio Code with the Language Model Provider extension
+  Use a registered GAIA agent directly in Visual Studio Code with the Language Model Provider extension
 </Card>
 
 **Quick Setup:**
@@ -420,12 +403,6 @@ async function chat(message) {
 <CardGroup cols={2}>
   <Card title="API Specification" icon="book" href="/reference/api-spec">
     Complete API reference with request/response formats
-  </Card>
-  <Card title="Routing Guide" icon="route" href="/guides/routing">
-    Intelligent language/framework detection
-  </Card>
-  <Card title="Code Agent" icon="code" href="/guides/code">
-    Code agent capabilities and usage
   </Card>
   <Card title="Development Guide" icon="wrench" href="/reference/dev">
     Development and contribution guidelines

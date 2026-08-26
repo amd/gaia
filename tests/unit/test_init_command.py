@@ -7,6 +7,7 @@ Unit tests for the gaia init command.
 These tests use mocking to avoid actual network calls and installations.
 """
 
+import io
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,7 @@ from gaia.installer.lemonade_installer import (
     LemonadeInfo,
     LemonadeInstaller,
 )
+from gaia.ui.build import WebuiBuildResult, WebuiBuildStatus
 from gaia.version import LEMONADE_VERSION
 
 
@@ -282,7 +284,7 @@ class TestInitCommand(unittest.TestCase):
         """Test that valid profiles are accepted."""
         from gaia.installer.init_command import InitCommand
 
-        valid_profiles = ["minimal", "chat", "code", "rag", "all"]
+        valid_profiles = ["minimal", "chat", "rag", "all"]
         for profile in valid_profiles:
             cmd = InitCommand(profile=profile, yes=True)
             self.assertEqual(cmd.profile, profile)
@@ -573,7 +575,7 @@ class TestInitProfiles(unittest.TestCase):
         """Test that expected profiles are defined."""
         from gaia.installer.init_command import INIT_PROFILES
 
-        expected = ["minimal", "chat", "code", "rag", "all"]
+        expected = ["minimal", "chat", "rag", "all"]
         for profile in expected:
             self.assertIn(profile, INIT_PROFILES)
 
@@ -786,6 +788,166 @@ class TestDownloadModels(unittest.TestCase):
             self.assertEqual(pulled, {"gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"})
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
+
+
+class TestSkipChatModel(unittest.TestCase):
+    """skip_chat_model (the TUI's --use-claude path) must skip the chat LLM
+    while still pulling the embedder RAG/memory need — and this must be true
+    of the REAL `_download_models()` filtering, not a stub that only proves
+    the method was invoked (see CLAUDE.md's hidden-state/mock-validity note
+    and the #1655 case it cites)."""
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_without_skip_chat_model_downloads_both(self, mock_installer_class):
+        """Control case: the chat profile's normal behavior pulls the chat
+        LLM AND the embedder, so the skip test below is a real change in
+        behavior, not just an assertion that happens to always pass."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True)
+        self.assertFalse(cmd.skip_chat_model)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            pulled = {
+                c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
+            }
+            self.assertEqual(
+                pulled, {"Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"}
+            )
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_downloads_only_the_embedder(self, mock_installer_class):
+        """A Claude-backed session never calls the local chat LLM — pulling
+        it would waste several GB of bandwidth/disk for a model that is
+        never loaded. The embedder is still required: RAG/memory/code-index
+        embeddings have no Claude equivalent (Anthropic has no embeddings
+        API — see hub/agents/gaia/python/gaia_agent/stdio.py)."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            pulled = {
+                c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
+            }
+            self.assertEqual(pulled, {"user.embeddinggemma-300m-GGUF"})
+            # Never even asked about the chat LLM's availability, let alone
+            # downloaded it.
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertNotIn("Gemma-4-E4B-it-GGUF", checked)
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_verify_only_checks_the_embedder(
+        self, mock_installer_class
+    ):
+        """_verify_setup must apply the same filter, or a Claude session
+        reports the chat LLM as "not downloaded" for a model it deliberately
+        never pulled."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ):
+                result = cmd._verify_setup()
+            self.assertTrue(result)
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
+
+
+class TestCheckSetupStatus(unittest.TestCase):
+    """gaia init --check: a read-only readiness probe the TUI polls on every
+    launch instead of trusting a marker file the user cannot see or clear."""
+
+    def test_invalid_profile_raises(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self.assertRaises(ValueError):
+            check_setup_status(profile="not-a-real-profile")
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_server_unreachable_reports_not_ready_without_probing_models(
+        self, mock_installer_class
+    ):
+        from gaia.installer.init_command import check_setup_status
+
+        mock_installer_class.return_value.check_installation.return_value = (
+            LemonadeInfo(installed=False, version=None, path=None)
+        )
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = False
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat")
+            self.assertFalse(status.ready)
+            self.assertTrue(status.reasons)
+            mock_client.check_model_available.assert_not_called()
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_ready_when_server_up_and_required_models_present(
+        self, mock_installer_class
+    ):
+        from gaia.installer.init_command import check_setup_status
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = True
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat")
+            self.assertTrue(status.ready)
+            self.assertEqual(status.reasons, [])
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_never_asks_about_the_chat_llm(self, mock_installer_class):
+        """Same real-state check the TUI's --use-claude launch makes before
+        deciding whether to auto-run setup: the chat LLM must not even be
+        probed, let alone reported missing."""
+        from gaia.installer.init_command import check_setup_status
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat", skip_chat_model=True)
+            self.assertFalse(status.ready)
+            self.assertEqual(
+                status.reasons,
+                ["Model 'user.embeddinggemma-300m-GGUF' is not downloaded"],
+            )
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
 
 
 class TestInstallPipExtras(unittest.TestCase):
@@ -1869,7 +2031,10 @@ class _HubInstallWiringTestBase(unittest.TestCase):
             patch.object(
                 cmd, "_install_backend", side_effect=_tracked("install_backend")
             ),
-            patch("gaia.ui.build.ensure_webui_built", return_value=True),
+            patch(
+                "gaia.ui.build.ensure_webui_built",
+                return_value=WebuiBuildResult(status=WebuiBuildStatus.OK),
+            ),
             # Never touch the real user's ~/.gaia/config.json during a test.
             patch("gaia.config.GaiaConfig"),
         ]
@@ -2041,7 +2206,7 @@ class TestHubInstallWiringChatOnlyScope(_HubInstallWiringTestBase):
     ``TestHubInstallWiringNpuProfile`` for the positive case.
     """
 
-    NON_CHAT_PROFILES = ("sd", "code", "rag", "vlm", "minimal", "all")
+    NON_CHAT_PROFILES = ("sd", "rag", "vlm", "minimal", "all")
 
     def test_non_chat_profiles_never_call_hub_install_and_still_exit_zero(self):
         for profile in self.NON_CHAT_PROFILES:
@@ -2081,6 +2246,488 @@ class TestHubInstallWiringNpuProfile(_HubInstallWiringTestBase):
 
         self.assertEqual(rc, 0)
         mock_install.assert_called_once()
+
+
+class TestWebuiBuildGatesInitCompletion(_HubInstallWiringTestBase):
+    """AC4/4b/5 (#2880): a hard Agent UI build failure (too-old Node, or a
+    build failure with no usable dist/) must not let `gaia init` report
+    plain success -- but verify_setup and config persistence, which don't
+    depend on the frontend build, must still run unconditionally. A merely
+    absent toolchain (no node/npm at all) stays a warn-and-continue outcome,
+    since a backend-only dev install is legitimate.
+
+    Uses the "minimal" profile so only the webui-build step's own
+    `gaia.ui.build.ensure_webui_built` patch (installed by
+    `_patch_common_steps`, overridden per test below) is in play --
+    "minimal" doesn't trigger the hub-agent-install or device/backend
+    branches, which need their own separate patches.
+    """
+
+    def _run_with_webui_result(self, result):
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        # Override the "OK" stub _patch_common_steps installed above.
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+        rc = cmd.run()
+        return cmd, rc
+
+    def test_node_too_old_does_not_report_plain_success(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.NODE_TOO_OLD,
+            message="Agent UI frontend requires Node >=20.19.0, but "
+            "/usr/bin/node reports v18.19.0.",
+            found_version="18.19.0",
+            required_range=">=20.19.0",
+            node_path="/usr/bin/node",
+        )
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+
+        with patch.object(cmd, "_print_completion") as mock_completion:
+            rc = cmd.run()
+
+        self.assertNotEqual(rc, 0, "NODE_TOO_OLD must not exit 0")
+        mock_completion.assert_not_called()
+
+    def test_build_failed_with_no_dist_does_not_report_plain_success(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.BUILD_FAILED,
+            message="Warning: Frontend build failed (exit code 1).",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertNotEqual(rc, 0, "BUILD_FAILED (no usable dist) must not exit 0")
+
+    def test_node_too_old_still_runs_verify_and_persists_config(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.NODE_TOO_OLD, message="too old"
+        )
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+
+        mock_config_cls = MagicMock()
+        with (
+            patch.object(cmd, "_verify_setup", return_value=True) as mock_verify,
+            patch("gaia.config.GaiaConfig", mock_config_cls),
+        ):
+            rc = cmd.run()
+
+        mock_verify.assert_called_once()
+        mock_config_cls.load.return_value.save.assert_called_once()
+        self.assertNotEqual(rc, 0)
+
+    def test_toolchain_absent_still_returns_zero(self):
+        """node/npm missing entirely is tolerable -- a backend-only dev
+        install is legitimate, so this must stay a warn-and-continue exit 0,
+        unlike NODE_TOO_OLD/BUILD_FAILED above."""
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.TOOLCHAIN_ABSENT,
+            message="Warning: Node.js not found. Cannot auto-rebuild Agent UI frontend.",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertEqual(rc, 0)
+
+    def test_stale_dist_still_usable_returns_zero(self):
+        """A build failure with a stale-but-working dist/ is status OK (the
+        5th outcome) -- it must not fail init."""
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.OK,
+            message="Warning: npm install failed: ERR",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertEqual(rc, 0)
+
+
+# ---------------------------------------------------------------------------
+# #2882: `gaia init` must not report success it did not deliver. Covers the
+# non-interactive pre-flight refusal (AC1/AC2/AC3/AC5b), the Ctrl-C exit-130
+# contract (AC4/AC4b/AC4c/AC5), and the profile-scoped completion-banner gate
+# (AC6/AC7/AC7b/AC8). See the issue for the full acceptance-criteria list.
+# ---------------------------------------------------------------------------
+
+
+def _assert_refusal_message_shape(testcase, message, profile):
+    """Shared AC1/AC5b assertions for the D2a-mandated refusal message: it
+    must name the profile, both flags that unblock it, and (per D2a) that
+    --yes also authorizes an unattended Lemonade upgrade that uninstalls
+    the current install."""
+    testcase.assertIn(profile, message)
+    testcase.assertIn("--yes", message)
+    testcase.assertIn("--skip-models", message)
+    testcase.assertIn("uninstall", message.lower())
+
+
+class TestInitPreflightRefusal(unittest.TestCase):
+    """AC1/AC2/AC3/AC5b: `gaia init` must refuse to run non-interactively
+    without --yes -- on stderr, before Step 1 -- and must do so cleanly
+    even when sys.stdin.isatty() itself raises (closed stdin).
+
+    Every test that drives run() here defensively neutralizes the two real
+    side effects run() unconditionally reaches once it falls through to
+    completion (a live Hub-catalog network call and a real `tsc && vite
+    build` that writes ~/.gaia/config.json): required regardless of
+    whether THIS test expects the refusal to fire, because prior to the
+    fix `run()` has no gate at all and genuinely falls through to doing
+    that work.
+    """
+
+    def _make_cmd(self, yes: bool, profile: str = "minimal"):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile=profile, yes=yes)
+        return cmd
+
+    def test_ac1_non_tty_no_yes_refuses_before_step1(self):
+        """Non-TTY + no --yes -> refuse before Step 1; the three real-work
+        methods are never called; exit 1; message lands on stderr."""
+        cmd = self._make_cmd(yes=False)
+
+        with (
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch.object(cmd, "_ensure_lemonade_installed") as mock_lemonade,
+            patch.object(cmd, "_ensure_server_running") as mock_server,
+            patch.object(cmd, "_download_models") as mock_download,
+            patch.object(cmd, "_verify_setup", return_value=True),
+            patch("gaia.ui.build.ensure_webui_built", return_value=False),
+            patch("gaia.config.GaiaConfig"),
+            patch("sys.stderr", new_callable=io.StringIO) as mock_stderr,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+
+        mock_lemonade.assert_not_called()
+        mock_server.assert_not_called()
+        mock_download.assert_not_called()
+        self.assertEqual(rc, 1)
+        self.assertEqual(mock_stdout.getvalue(), "", "refusal must not print to stdout")
+        _assert_refusal_message_shape(self, mock_stderr.getvalue(), cmd.profile)
+
+    def test_ac2_non_tty_with_yes_gate_noops(self):
+        """Non-TTY + --yes -> the gate no-ops; Step 1 is genuinely reached.
+
+        Isolated: does NOT replay a full successful run() end to end --
+        tests/installer/test_installer_scenarios.py:167 already covers that.
+        """
+        cmd = self._make_cmd(yes=True)
+        cmd.console = MagicMock()
+
+        with (
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch.object(cmd, "_print_header") as mock_header,
+            patch.object(
+                cmd, "_ensure_lemonade_installed", return_value=False
+            ) as mock_lemonade,
+        ):
+            rc = cmd.run()
+
+        mock_header.assert_called_once()
+        mock_lemonade.assert_called_once()
+        self.assertEqual(rc, 1)
+
+    def test_ac3_tty_no_yes_no_refusal(self):
+        """TTY + no --yes -> no refusal; Step 1 is genuinely reached
+        (prompts render as today)."""
+        cmd = self._make_cmd(yes=False)
+        cmd.console = MagicMock()
+
+        with (
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch.object(cmd, "_print_header") as mock_header,
+            patch.object(
+                cmd, "_ensure_lemonade_installed", return_value=False
+            ) as mock_lemonade,
+        ):
+            rc = cmd.run()
+
+        mock_header.assert_called_once()
+        mock_lemonade.assert_called_once()
+        self.assertEqual(rc, 1)
+
+    def test_ac5b_closed_stdin_isatty_raises_still_refuses_cleanly(self):
+        """sys.stdin.isatty() raising ValueError (closed stdin -- the
+        literal scenario in the issue title) must not escape as a
+        traceback; run() still returns 1 with the AC1-shaped message."""
+        cmd = self._make_cmd(yes=False)
+
+        with (
+            patch.object(
+                sys.stdin,
+                "isatty",
+                side_effect=ValueError("I/O operation on closed file"),
+            ),
+            patch.object(cmd, "_ensure_lemonade_installed") as mock_lemonade,
+            patch.object(cmd, "_ensure_server_running") as mock_server,
+            patch.object(cmd, "_download_models") as mock_download,
+            patch.object(cmd, "_verify_setup", return_value=True),
+            patch("gaia.ui.build.ensure_webui_built", return_value=False),
+            patch("gaia.config.GaiaConfig"),
+            patch("sys.stderr", new_callable=io.StringIO) as mock_stderr,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+
+        mock_lemonade.assert_not_called()
+        mock_server.assert_not_called()
+        mock_download.assert_not_called()
+        self.assertEqual(rc, 1)
+        self.assertEqual(mock_stdout.getvalue(), "", "refusal must not print to stdout")
+        _assert_refusal_message_shape(self, mock_stderr.getvalue(), cmd.profile)
+
+
+class TestPromptYesNoKeyboardInterrupt(unittest.TestCase):
+    """AC4b/AC5: `_prompt_yes_no` in isolation, with no run() plumbing --
+    KeyboardInterrupt must propagate uncaught (D4's core edit) while
+    EOFError must still return False (unchanged; pins that D4 touched
+    only the KeyboardInterrupt half of the old combined handler)."""
+
+    def _make_cmd(self):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile="minimal", yes=False)
+        cmd.console = MagicMock()
+        return cmd
+
+    def test_ac4b_keyboard_interrupt_propagates(self):
+        cmd = self._make_cmd()
+        with patch("builtins.input", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                cmd._prompt_yes_no("Continue?", default=True)
+
+    def test_ac5_eof_error_still_returns_false(self):
+        cmd = self._make_cmd()
+        with patch("builtins.input", side_effect=EOFError):
+            result = cmd._prompt_yes_no("Continue?", default=True)
+        self.assertFalse(result)
+
+
+class TestRunKeyboardInterruptExitCode(unittest.TestCase):
+    """AC4/AC4c: a KeyboardInterrupt raised while run() is mid-flight must
+    reach run()'s own top-level `except KeyboardInterrupt` handler and
+    produce the SAME end-to-end contract everywhere it can fire: exit 130
+    and "Initialization cancelled by user." on stdout -- and, critically
+    for AC4c, NOT the "GAIA initialization complete!" banner (today's
+    second instance of the issue's headline bug, fact 4).
+
+    Both tests defensively neutralize the Agent UI build and config-persist
+    side effects (see TestInitPreflightRefusal's docstring) since today's
+    unfixed code falls all the way through to them.
+    """
+
+    def _make_cmd(self, yes: bool = False, **kwargs):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile="minimal", yes=yes, skip_lemonade=True, **kwargs)
+        return cmd
+
+    def test_ac4_ctrl_c_at_download_prompt_returns_130(self):
+        """Ctrl-C at Step 5's 'Continue?' download-confirmation prompt.
+
+        Uses yes=False + isatty->True (mechanics item 2): yes=True would
+        make _prompt_yes_no return before input() is ever called, and the
+        new AC1 refusal would fire first -- either way silently proving
+        nothing.
+        """
+        cmd = self._make_cmd(yes=False)
+
+        with (
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch.object(cmd, "_ensure_server_running", return_value=True),
+            patch.object(cmd, "_verify_setup", return_value=True),
+            patch("gaia.ui.build.ensure_webui_built", return_value=False),
+            patch("gaia.config.GaiaConfig"),
+            patch("gaia.llm.lemonade_client.LemonadeClient"),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 130)
+        self.assertIn("Initialization cancelled by user.", mock_stdout.getvalue())
+
+    def test_ac4c_ctrl_c_during_verification_loop_returns_130_no_banner(self):
+        """Ctrl-C during Step 8's per-model verification loop.
+
+        Today (fact 4) this is swallowed by _verify_setup's own
+        KeyboardInterrupt handler, which falls through to `return True` --
+        the fix must not let either that or the completion banner happen.
+        Uses yes=True to sail past _verify_setup's OWN "Run model
+        verification?" prompt without a real input() call; the interrupt
+        under test fires inside the loop itself, not at a prompt, so
+        mechanics item 2 does not apply to this particular call site.
+        """
+        cmd = self._make_cmd(yes=True)
+
+        mock_client = MagicMock()
+        mock_client.health_check.return_value = {"status": "ok"}
+        mock_client.check_model_available.return_value = True
+
+        with (
+            patch.object(cmd, "_ensure_server_running", return_value=True),
+            patch.object(cmd, "_download_models", return_value=True),
+            patch.object(cmd, "_test_model_inference", side_effect=KeyboardInterrupt),
+            patch(
+                "gaia.ui.build.ensure_webui_built",
+                return_value=WebuiBuildResult(status=WebuiBuildStatus.SKIPPED),
+            ),
+            patch("gaia.config.GaiaConfig"),
+            patch(
+                "gaia.llm.lemonade_client.LemonadeClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+
+        out = mock_stdout.getvalue()
+        self.assertEqual(rc, 130)
+        self.assertIn("Initialization cancelled by user.", out)
+        self.assertNotIn("GAIA initialization complete!", out)
+
+
+class TestPrintCompletionHeadlineGate(unittest.TestCase):
+    """AC6/AC7/AC7b/AC8: the pre-branch "GAIA initialization complete!"
+    headline (fact 5 -- printed BEFORE any profile branching, in two
+    independent Rich/non-Rich copies) must be suppressed exactly when the
+    profile's declared agent is "chat" (covers both the `chat` and `npu`
+    profiles) AND the standalone chat wheel isn't importable -- and must
+    stay byte-identical to today in every other case. Each scenario is
+    exercised against BOTH _print_completion code paths per AC8, since a
+    fix applied to only one copy is the obvious regression.
+    """
+
+    def _make_cmd(self, profile, chat_available):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile=profile, yes=True)
+        cmd._chat_agent_available = MagicMock(return_value=chat_available)
+        return cmd
+
+    # -- AC6: chat/npu profile, chat agent unavailable -> no headline --
+
+    def test_ac6_chat_profile_unavailable_rich_suppresses_headline(self):
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        cmd = self._make_cmd("chat", chat_available=False)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+        cmd._print_completion()
+
+        out = buf.getvalue()
+        self.assertNotIn("GAIA initialization complete!", out)
+        self.assertIn("Chat agent not installed yet -- run:", out)
+
+    def test_ac6_npu_profile_unavailable_rich_suppresses_headline(self):
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        cmd = self._make_cmd("npu", chat_available=False)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+        cmd._print_completion()
+
+        out = buf.getvalue()
+        self.assertNotIn("GAIA initialization complete!", out)
+        self.assertIn("Chat agent not installed yet -- run:", out)
+
+    def test_ac6_chat_profile_unavailable_non_rich_suppresses_headline(self):
+        cmd = self._make_cmd("chat", chat_available=False)
+
+        with (
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            cmd._print_completion()
+
+        out = mock_stdout.getvalue()
+        self.assertNotIn("GAIA initialization complete!", out)
+        self.assertIn("Chat agent not installed yet -- run:", out)
+
+    # -- AC7: chat/npu profile, chat agent available -> unchanged --
+
+    def test_ac7_chat_profile_available_rich_unchanged(self):
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        cmd = self._make_cmd("chat", chat_available=True)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+        cmd._print_completion()
+
+        out = buf.getvalue()
+        self.assertIn("GAIA initialization complete!", out)
+        self.assertNotIn("Chat agent not installed yet -- run:", out)
+
+    def test_ac7_chat_profile_available_non_rich_unchanged(self):
+        cmd = self._make_cmd("chat", chat_available=True)
+
+        with (
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            cmd._print_completion()
+
+        out = mock_stdout.getvalue()
+        self.assertIn("GAIA initialization complete!", out)
+        self.assertNotIn("Chat agent not installed yet -- run:", out)
+
+    # -- AC7b: non-chat profile (sd) -> headline always present --
+
+    def test_ac7b_sd_profile_rich_headline_present_regardless_of_availability(
+        self,
+    ):
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        for chat_available in (False, True):
+            with self.subTest(chat_available=chat_available):
+                cmd = self._make_cmd("sd", chat_available=chat_available)
+                buf = io.StringIO()
+                cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+                cmd._print_completion()
+
+                self.assertIn("GAIA initialization complete!", buf.getvalue())
+
+    def test_ac7b_sd_profile_non_rich_headline_present_regardless_of_availability(
+        self,
+    ):
+        for chat_available in (False, True):
+            with self.subTest(chat_available=chat_available):
+                cmd = self._make_cmd("sd", chat_available=chat_available)
+
+                with (
+                    patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+                    patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+                ):
+                    cmd._print_completion()
+
+                self.assertIn("GAIA initialization complete!", mock_stdout.getvalue())
 
 
 if __name__ == "__main__":

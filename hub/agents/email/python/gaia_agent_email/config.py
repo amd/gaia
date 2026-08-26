@@ -20,8 +20,19 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from gaia_agent_email.mailbox_state import (
+    MICROSOFT_CONNECTOR_IDS,
+    PROVIDERS,
+    backend_family,
+)
+
 from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
+from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConfigurationError(ValueError):
@@ -131,6 +142,41 @@ def default_inbox_scan_ceiling() -> int:
     return value
 
 
+SKILL_SET_ENV = "GAIA_EMAIL_SKILL_SET"
+ACCOUNT_TYPE_ENV = "GAIA_EMAIL_ACCOUNT_TYPE"
+
+
+def default_skill_set() -> Optional[str]:
+    """Read an explicit skill-set override from ``GAIA_EMAIL_SKILL_SET``.
+
+    ``None`` (unset) means "let the agent resolve one" — the account-type
+    selector, then the manifest's ``default_skill_set``. The name itself is
+    validated by the framework against the manifest's declared sets, so a typo
+    fails at startup naming the valid names rather than here with less context.
+    """
+    return os.environ.get(SKILL_SET_ENV, "").strip() or None
+
+
+def default_account_type() -> Optional[str]:
+    """Read an explicit account kind from ``GAIA_EMAIL_ACCOUNT_TYPE``.
+
+    ``personal`` or ``work``; unset means "derive it from the connected
+    mailbox". A malformed value raises rather than being ignored — an operator
+    who set it meant to pin the behaviour, and silently discarding the value
+    would activate the wrong skill set.
+    """
+    raw = os.environ.get(ACCOUNT_TYPE_ENV, "").strip().lower()
+    if not raw:
+        return None
+    if raw not in ACCOUNT_TYPES:
+        raise ConfigurationError(
+            f"{ACCOUNT_TYPE_ENV}={raw!r} is not a valid account type. Use one "
+            f"of: {', '.join(ACCOUNT_TYPES)}, or unset it to derive the kind "
+            "from the connected mailbox."
+        )
+    return raw
+
+
 # The SLM layer is experimental and off by default (see ``use_slm`` below).
 # ``GAIA_EMAIL_USE_SLM`` is how it gets turned on without editing source —
 # matching GAIA_EMAIL_BRIEFING_ENABLED / GAIA_EMAIL_AUTONOMY_ENABLED.
@@ -196,10 +242,11 @@ class EmailAgentConfig:
       ``tmp_path``-derived path so concurrent live + eval runs don't
       race on the same SQLite file.
     - ``mail_provider``: a FILTER over the connected mailboxes (#1603 Phase 2).
-      ``None`` (the default) means "every connected mailbox" — a both-connected
-      user triages Gmail and Outlook together. ``"google"`` / ``"microsoft"``
-      restricts to that one provider (and only when it is connected). The
-      plural ``resolve_mail_backends`` reads the connected set; the singular
+      ``None`` (the default) means "every connected mailbox" — a user with
+      several connected mailboxes triages all of them together.
+      ``"google"`` / ``"microsoft"`` / ``"microsoft_work"`` restricts to that
+      one provider (and only when it is connected). The plural
+      ``resolve_mail_backends`` reads the connected set; the singular
       ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
       the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —
@@ -292,6 +339,14 @@ class EmailAgentConfig:
     autonomy_level: str = "off"
     autonomy_trust_min_samples: int = 5
     autonomy_trust_threshold: float = 0.85
+    # Agent Skills (#2466). ``skill_set`` is the explicit override (the
+    # ``--skill-set`` flag / GAIA_EMAIL_SKILL_SET) and beats everything.
+    # ``account_type`` pins the mailbox kind the selector maps to a set; unset
+    # means "derive it from the connected mailbox" — the Microsoft id_token
+    # ``tid`` claim recorded at connect time. Gmail has no equivalent claim, so a
+    # Gmail-only mailbox resolves through the manifest's ``default_skill_set``.
+    skill_set: Optional[str] = field(default_factory=default_skill_set)
+    account_type: Optional[str] = field(default_factory=default_account_type)
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -377,6 +432,58 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.autonomy_trust_threshold must be in (0, 1], "
                 f"got {self.autonomy_trust_threshold!r}."
             )
+        if self.account_type is not None and self.account_type not in ACCOUNT_TYPES:
+            raise ConfigurationError(
+                f"EmailAgentConfig.account_type must be one of "
+                f"{list(ACCOUNT_TYPES)} or None, got {self.account_type!r}. "
+                "Leave it None to derive the kind from the connected mailbox."
+            )
+
+    def resolve_account_type(self) -> Optional[str]:
+        """The mailbox kind that keys skill-set selection (#2466).
+
+        Resolution order:
+          1. An explicit ``account_type`` (config field / ``GAIA_EMAIL_ACCOUNT_TYPE``).
+          2. The kind recorded on a connected Microsoft mailbox, derived from the
+             id_token ``tid`` claim at connect time. Both Microsoft connectors are
+             consulted in registry order (#2628 split ``microsoft`` — personal,
+             ``consumers`` authority — from ``microsoft_work``); the first with a
+             recorded kind wins. Today only ``microsoft`` is in this agent's
+             ``REQUIRED_CONNECTORS``, so ``microsoft_work`` is checked purely so
+             this keeps working when #2629 wires it up.
+          3. ``None`` — unknown.
+
+        ``None`` is a real answer, not a failure: a Gmail-only mailbox has no
+        Microsoft tenant to inspect, so there is nothing to classify. The caller
+        then resolves through the manifest's ``default_skill_set`` — a declared
+        default, reached explicitly and logged, rather than a kind inferred from
+        the mailbox.
+
+        Note this reads the Microsoft connection regardless of ``mail_provider``:
+        the account kind describes the *user*, not which mailbox this run happens
+        to read, so a Gmail-filtered run on a machine with a work Microsoft
+        account still resolves ``work``. Set ``account_type`` explicitly if that
+        is not what you want.
+        """
+        if self.account_type:
+            return self.account_type
+        try:
+            for connector_id in MICROSOFT_CONNECTOR_IDS:
+                recorded = (get_connection(connector_id) or {}).get("account_type")
+                if recorded:
+                    return recorded
+            return None
+        except ConnectorsError as e:
+            # The connection store is unreadable (no keyring backend, corrupt
+            # blob). The kind is unknown, which the caller handles explicitly.
+            logger.warning(
+                "Could not read the Microsoft connection to derive the account "
+                "type (%s) — the mailbox kind is unknown, so the manifest's "
+                "default skill set applies. Set GAIA_EMAIL_ACCOUNT_TYPE to pin "
+                "it.",
+                e,
+            )
+            return None
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.
@@ -423,7 +530,14 @@ class EmailAgentConfig:
         the ``connectors`` dependency chain at ``config`` import time.
         """
         provider = (self.mail_provider or "google").strip().lower()
-        if provider == "google":
+        try:
+            family = backend_family(provider)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"EmailAgentConfig.mail_provider {self.mail_provider!r} is not "
+                f"supported. Use one of: {', '.join(PROVIDERS)}."
+            ) from exc
+        if family == "gmail":
             if self.gmail_backend is not None:
                 return self.gmail_backend
             from gaia_agent_email.gmail_backend import (
@@ -432,29 +546,35 @@ class EmailAgentConfig:
             )
 
             return LiveGmailBackend(_get_gmail_token)
-        if provider == "microsoft":
-            if self.outlook_backend is not None:
-                return self.outlook_backend
-            from gaia_agent_email.outlook_backend import (
-                LiveOutlookBackend,
-                _get_outlook_token,
-            )
+        if self.outlook_backend is not None:
+            return self.outlook_backend
+        import functools
 
-            return LiveOutlookBackend(_get_outlook_token)
-        raise ConfigurationError(
-            f"EmailAgentConfig.mail_provider {self.mail_provider!r} is not "
-            "supported. Use 'google' (Gmail) or 'microsoft' (Outlook.com / "
-            "Hotmail / Live)."
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
         )
+
+        return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
     def _build_mail_backend(self, provider: str) -> Any:
-        """Build (or return the injected) live backend for one provider.
+        """Build (or return the injected) live backend for one connector id.
 
         Honors the per-provider eval seam: ``gmail_backend`` for ``google`` and
-        ``outlook_backend`` for ``microsoft``. An unknown provider raises
-        ``ConfigurationError`` (fail loudly).
+        ``outlook_backend`` for either Microsoft connector (``microsoft`` /
+        ``microsoft_work``). An unknown provider raises ``ConfigurationError``
+        (fail loudly). Both Microsoft ids build the SAME ``LiveOutlookBackend``
+        class, bound to a token resolver closed over THIS connector id
+        (#2629 Decision 0) — never the other Microsoft account's token.
         """
-        if provider == "google":
+        try:
+            family = backend_family(provider)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"Connected mailbox provider {provider!r} has no backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ) from exc
+        if family == "gmail":
             if self.gmail_backend is not None:
                 return self.gmail_backend
             from gaia_agent_email.gmail_backend import (
@@ -463,19 +583,16 @@ class EmailAgentConfig:
             )
 
             return LiveGmailBackend(_get_gmail_token)
-        if provider == "microsoft":
-            if self.outlook_backend is not None:
-                return self.outlook_backend
-            from gaia_agent_email.outlook_backend import (
-                LiveOutlookBackend,
-                _get_outlook_token,
-            )
+        if self.outlook_backend is not None:
+            return self.outlook_backend
+        import functools
 
-            return LiveOutlookBackend(_get_outlook_token)
-        raise ConfigurationError(
-            f"Connected mailbox provider {provider!r} has no backend. "
-            "Expected 'google' or 'microsoft'."
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
         )
+
+        return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
     def available_mailbox_providers(self) -> List[str]:
         """Return the UNFILTERED available mailbox providers, registry order.
@@ -495,9 +612,11 @@ class EmailAgentConfig:
         if self.outlook_backend is not None:
             injected.add("microsoft")
         available = injected if injected else set(connected_mailbox_providers())
-        # Canonical registry order (google before microsoft) — deterministic
-        # regardless of keyring vs injection ordering.
-        return [p for p in ("google", "microsoft") if p in available]
+        # Canonical registry order — deterministic regardless of keyring vs
+        # injection ordering. Iterates PROVIDERS (all three connector ids), not
+        # a hardcoded pair, or a connected microsoft_work mailbox would never
+        # surface here (#2629).
+        return [p for p in PROVIDERS if p in available]
 
     def resolve_mail_backends(self) -> List[Tuple[str, Any]]:
         """Return ``[(provider, backend), ...]`` for every admitted mailbox.
@@ -536,19 +655,27 @@ class EmailAgentConfig:
         if selected_filter:
             selected = [p for p in connected if p == selected_filter]
             if not selected:
-                connected_desc = ", ".join(connected) if connected else "none"
+                from gaia_agent_email.mailbox_state import provider_label
+
+                label = provider_label(selected_filter)
+                if connected:
+                    connected_desc = ", ".join(
+                        f"{provider_label(p)} ({p})" for p in connected
+                    )
+                else:
+                    connected_desc = "none"
                 raise ConfigurationError(
-                    f"Session selected mailbox {selected_filter!r} but it is "
-                    f"not connected. Connected: {connected_desc}. Connect it in "
-                    "Settings → Connectors, or clear the selection to use every "
-                    "connected mailbox."
+                    f"Session selected mailbox {label} ({selected_filter}) but "
+                    f"it is not connected. Connected: {connected_desc}. Connect "
+                    f"it with `gaia connectors connect {selected_filter}`, or "
+                    "clear the selection to use every connected mailbox."
                 )
         else:
             selected = list(connected)
         if not selected:
             raise ConfigurationError(
-                "No mailbox connected — connect Google or Microsoft in "
-                "Settings → Connectors before triaging."
+                "No mailbox connected — connect Gmail, Outlook, or Microsoft "
+                "365 in Settings → Connectors before triaging."
             )
         return [(provider, self._build_mail_backend(provider)) for provider in selected]
 
@@ -603,14 +730,16 @@ class EmailAgentConfig:
             _PROVIDER_CALENDAR_SCOPES = {
                 "google": set(CALENDAR_SCOPES),
                 "microsoft": set(OUTLOOK_CALENDAR_SCOPES),
+                "microsoft_work": set(OUTLOOK_CALENDAR_SCOPES),
             }
 
             connected = connected_mailbox_providers()
             if not connected:
                 raise ConfigurationError(
                     "No calendar provider connected. Connect Google (grant "
-                    "calendar.events / calendar.readonly) or Microsoft (grant "
-                    "Calendars.ReadWrite) in Settings → Connectors, then retry."
+                    "calendar.events / calendar.readonly) or a Microsoft "
+                    "account (grant Calendars.ReadWrite) in Settings → "
+                    "Connectors, then retry."
                 )
 
             # A provider is calendar-scoped iff its stored connection includes one
@@ -635,27 +764,33 @@ class EmailAgentConfig:
                     "in Settings → Connectors, then retry."
                 )
 
-            # First in registry order (google before microsoft) wins when both are scoped.
+            # First in registry order wins when more than one is scoped.
+            scoped.sort(key=PROVIDERS.index)
             provider = scoped[0]
 
-        if provider == "google":
+        try:
+            family = backend_family(provider)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"EmailAgentConfig.calendar_provider {self.calendar_provider!r} "
+                f"is not supported. Use one of: {', '.join(PROVIDERS)}."
+            ) from exc
+        if family == "gmail":
             from gaia_agent_email.calendar_backend import (
                 LiveCalendarBackend,
                 _get_calendar_token,
             )
 
             return LiveCalendarBackend(_get_calendar_token)
-        if provider == "microsoft":
-            from gaia_agent_email.outlook_calendar_backend import (
-                LiveOutlookCalendarBackend,
-                _get_outlook_calendar_token,
-            )
+        import functools
 
-            return LiveOutlookCalendarBackend(_get_outlook_calendar_token)
-        raise ConfigurationError(
-            f"EmailAgentConfig.calendar_provider {self.calendar_provider!r} is "
-            "not supported. Use 'google' or 'microsoft' (Outlook.com / Hotmail "
-            "/ Live)."
+        from gaia_agent_email.outlook_calendar_backend import (
+            LiveOutlookCalendarBackend,
+            _get_outlook_calendar_token,
+        )
+
+        return LiveOutlookCalendarBackend(
+            functools.partial(_get_outlook_calendar_token, provider)
         )
 
 

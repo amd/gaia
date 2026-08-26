@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -329,7 +330,10 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 	// 2. The app bundle, for a machine where the binary is inside it.
 	for _, dir := range macAppDirs(p) {
 		for _, bundle := range macAppBundles {
-			full := filepath.Join(dir, bundle)
+			// path.Join, not filepath.Join: these are macOS paths and are always
+			// POSIX. filepath would emit "\\Applications\\..." when this resolver
+			// runs on a Windows host — which the darwin tests do.
+			full := path.Join(dir, bundle)
 			if p.exists(full) {
 				cmd := "open " + quoteCommand(full)
 				return launcher{
@@ -363,7 +367,7 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 func macAppDirs(p hostProbe) []string {
 	dirs := []string{"/Applications"}
 	if home, err := p.homeDir(); err == nil && home != "" {
-		dirs = append(dirs, filepath.Join(home, "Applications"))
+		dirs = append(dirs, path.Join(home, "Applications"))
 	}
 	return dirs
 }

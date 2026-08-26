@@ -62,7 +62,10 @@ func findBatchedMsg(cmd tea.Cmd, isWanted func(tea.Msg) bool) tea.Msg {
 	return nil
 }
 
-func TestFetchPreScanOnOpenForEmailAgentWithNoInitialQuery(t *testing.T) {
+func TestNoPreScanFetchOnOpenForEmailAgent(t *testing.T) {
+	// Opening the agent must cost nothing: the on-open pre-scan spent a Gmail
+	// scan before the user had asked for anything, and showed a shallower
+	// version of what "triage my inbox" answers a moment later.
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
 	m := newPreScanTestModel(t, c, "email", "")
 
@@ -71,12 +74,11 @@ func TestFetchPreScanOnOpenForEmailAgentWithNoInitialQuery(t *testing.T) {
 		_, ok := msg.(preScanFetchedMsg)
 		return ok
 	})
-	if found == nil {
-		t.Fatal("Init() did not dispatch a pre-scan fetch for the email agent with no initial query")
+	if found != nil {
+		t.Fatal("Init() dispatched a pre-scan fetch on open; the email agent must open with an empty transcript")
 	}
-	fetched := found.(preScanFetchedMsg)
-	if string(fetched.data) != samplePreScanJSON {
-		t.Errorf("fetched data = %s, want %s", fetched.data, samplePreScanJSON)
+	if c.fetchCalls != 0 {
+		t.Errorf("pre-scan fetch was called %d times on open; want 0", c.fetchCalls)
 	}
 }
 
@@ -98,7 +100,7 @@ func TestFetchPreScanSkippedWhenInitialQueryPresent(t *testing.T) {
 // drives the real constructor RunAgent calls, with a display name that
 // differs in case from the id, the way the catalog's real "email"/"Email"
 // entry does.
-func TestFetchPreScanOnOpenViaDirectCLIConstructionUsesCatalogID(t *testing.T) {
+func TestNoPreScanFetchViaDirectCLIConstruction(t *testing.T) {
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
 	m := NewChatModelForCatalogAgent(c, "email", "Email", false)
 	m.width, m.height = 100, 30
@@ -108,8 +110,8 @@ func TestFetchPreScanOnOpenViaDirectCLIConstructionUsesCatalogID(t *testing.T) {
 		_, ok := msg.(preScanFetchedMsg)
 		return ok
 	})
-	if found == nil {
-		t.Fatal("Init() did not dispatch a pre-scan fetch through the direct-CLI construction path (RunAgent)")
+	if found != nil {
+		t.Fatal("the direct-CLI construction path (RunAgent) still fetches a pre-scan on open")
 	}
 }
 
@@ -365,7 +367,9 @@ func TestPendingPreScanDrainedOnErrMsg(t *testing.T) {
 	m = updated.(ChatModel)
 	m.pendingPreScan = json.RawMessage(samplePreScanJSON)
 
-	updated2, _ := m.Update(errMsg{err: errors.New("transport dropped")})
+	// turnSeq must match the live turn's (see errMsg's doc comment) or this
+	// delivery is (correctly) dropped as stale.
+	updated2, _ := m.Update(errMsg{err: errors.New("transport dropped"), turnSeq: m.turnSeq})
 	m = updated2.(ChatModel)
 
 	if !hasPreScanCard(m) {

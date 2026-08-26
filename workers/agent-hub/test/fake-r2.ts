@@ -7,6 +7,9 @@
  * handlers run under plain Vitest without Miniflare or a real bucket.
  */
 
+import { manifestDigest } from "../src/audit";
+import { parseSkillManifest } from "../src/skill-manifest";
+
 interface StoredObject {
   key: string;
   bytes: Uint8Array;
@@ -50,6 +53,13 @@ function makeBody(obj: StoredObject) {
   };
 }
 
+/** hex -> ArrayBuffer, matching how R2 returns stored checksums. */
+function hexToBuffer(hex: string): ArrayBuffer {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out.buffer;
+}
+
 export class FakeR2 {
   private store = new Map<string, StoredObject>();
 
@@ -68,6 +78,10 @@ export class FakeR2 {
       }
     }
     const obj: StoredObject = { key, bytes, contentType, uploaded: new Date() };
+    // R2 records a whole-object SHA-256 only when one was supplied (binding
+    // `sha256` option, or x-amz-checksum-sha256 on a single-part S3 PUT). A
+    // multipart upload has none — modelled by simply not setting it.
+    if (options?.sha256) (obj as StoredObject & { sha256?: string }).sha256 = options.sha256;
     this.store.set(key, obj);
     return makeBody(obj);
   }
@@ -83,7 +97,15 @@ export class FakeR2 {
     const obj = this.store.get(key);
     if (!obj) return null;
     const body = makeBody(obj);
-    return { key: body.key, size: body.size, httpEtag: body.httpEtag, uploaded: body.uploaded };
+    const sha = (obj as StoredObject & { sha256?: string }).sha256;
+    return {
+      key: body.key,
+      size: body.size,
+      httpEtag: body.httpEtag,
+      uploaded: body.uploaded,
+      // Real R2 hands back raw bytes, not hex — the Worker hex-encodes them.
+      checksums: sha ? { sha256: hexToBuffer(sha) } : {},
+    };
   }
 
   async delete(key: string): Promise<void> {
@@ -149,6 +171,41 @@ export function makeEnv(overrides?: { tokens?: unknown; maxBytes?: string }): {
 }
 
 /** Build a POST /publish multipart request. */
+/**
+ * A by-reference publish: CI has already PUT the bytes into R2 over the S3 API,
+ * and the Worker is only asked to verify and record them.
+ */
+export function publishByRefRequest(opts: {
+  token?: string;
+  manifestYaml: string;
+  filename: string;
+  sha256: string;
+  size: number;
+  contentType?: string;
+  readme?: string;
+  changelog?: string;
+}): Request {
+  const form = new FormData();
+  form.set("manifest", opts.manifestYaml);
+  if (opts.readme !== undefined) form.set("readme", opts.readme);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  form.set("artifact_ref_filename", opts.filename);
+  form.set("artifact_ref_sha256", opts.sha256);
+  form.set("artifact_ref_size", String(opts.size));
+  if (opts.contentType) form.set("artifact_ref_content_type", opts.contentType);
+  return new Request("https://hub.amd-gaia.ai/publish", {
+    method: "POST",
+    headers: { authorization: `Bearer ${opts.token ?? "tok_amd"}` },
+    body: form,
+  });
+}
+
+/** sha256 hex over bytes, for tests that stage an object then publish it. */
+export async function sha256Of(bytes: Uint8Array): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function publishRequest(opts: {
   token?: string;
   manifestYaml: string;
@@ -187,6 +244,143 @@ export function publishRequest(opts: {
     headers,
     body: form,
   });
+}
+
+/** Build a POST /publish/skill multipart request (#2467). */
+export function skillPublishRequest(opts: {
+  token?: string;
+  skillMarkdown: string;
+  artifact: Uint8Array | string;
+  filename: string;
+  contentType?: string;
+  changelog?: string;
+  /** The security-audit report JSON (#2468); omit to publish un-audited. */
+  audit?: string;
+  /** Omit the artifact part entirely (to exercise the missing-part guard). */
+  omitArtifact?: boolean;
+  /** Omit the SKILL.md part entirely (to exercise the missing-part guard). */
+  omitSkill?: boolean;
+}): Request {
+  const form = new FormData();
+  if (!opts.omitSkill) form.set("skill", opts.skillMarkdown);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  if (opts.audit !== undefined) form.set("audit", opts.audit);
+  if (!opts.omitArtifact) {
+    const bytes =
+      typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
+    form.set(
+      "artifact",
+      new Blob([bytes], { type: opts.contentType ?? "application/zip" }),
+      opts.filename
+    );
+  }
+  const headers = new Headers();
+  if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
+  return new Request("https://hub.amd-gaia.ai/publish/skill", {
+    method: "POST",
+    headers,
+    body: form,
+  });
+}
+
+/**
+ * A valid sample SKILL.md for tests: the Agent Skills base plus the
+ * `metadata.gaia` namespace. Pass `frontMatter` to replace the whole front
+ * matter block (for malformed-manifest cases), or override individual fields.
+ */
+export function sampleSkill(
+  overrides: {
+    name?: string;
+    version?: string;
+    description?: string;
+    security_tier?: string;
+    /** Replace the entire front matter (raw YAML text). */
+    frontMatter?: string;
+    /** Drop the `version:` line entirely. */
+    omitVersion?: boolean;
+    /** Emit no `metadata.gaia` block at all (instruction-only skill). */
+    omitGaia?: boolean;
+    body?: string;
+  } = {}
+): string {
+  const body = overrides.body ?? "# Web Research\n\nSearch the web, then summarise.\n";
+  if (overrides.frontMatter !== undefined) {
+    return `---\n${overrides.frontMatter}\n---\n\n${body}`;
+  }
+  const lines = [
+    `name: ${overrides.name ?? "web-research"}`,
+    `description: ${overrides.description ?? '"Search the web for current information"'}`,
+    "license: MIT",
+  ];
+  if (!overrides.omitVersion) lines.push(`version: ${overrides.version ?? "0.1.0"}`);
+  if (!overrides.omitGaia) {
+    lines.push(
+      "metadata:",
+      "  gaia:",
+      `    security_tier: ${overrides.security_tier ?? "experimental"}`,
+      "    permissions:",
+      "      - network:read:*.brave.com",
+      "    requirements:",
+      '      model: ">=7B"',
+      '      python: ">=3.10"',
+      "      dependencies: [requests>=2.31]",
+      "      env_vars: [BRAVE_API_KEY]",
+      "      hardware: { npu: optional }",
+      "    tools:",
+      "      - name: search_web",
+      "        description: Search the web for current information",
+      "    tools_required: [query_documents]"
+    );
+  }
+  return `---\n${lines.join("\n")}\n---\n\n${body}`;
+}
+
+/**
+ * A cleared, correctly-BOUND audit report (#2468) for tests that publish a
+ * gated tier.
+ *
+ * It derives `skill`, `version`, and `manifest_digest` from the SKILL.md being
+ * published, because a gated tier now requires the report to name exactly what
+ * it audited. Overrides exist so a test can break one binding at a time.
+ *
+ * Note this helper can mint a report claiming any `clearedTiers` it likes —
+ * which is precisely the forgery the gate cannot prevent (see the "What this
+ * gate is NOT" section in `src/audit.ts`). These tests exercise the Worker's
+ * enforcement, not the engine's honesty.
+ */
+export async function allowAudit(
+  skillMarkdown: string,
+  overrides: {
+    findings?: number;
+    verdict?: string;
+    skill?: string;
+    version?: string;
+    tier?: string;
+    clearedTiers?: string[];
+    manifestDigest?: string;
+    /** Field names to delete, for the missing-binding cases. */
+    omit?: string[];
+  } = {}
+): Promise<string> {
+  const { manifest } = parseSkillManifest(skillMarkdown);
+  const findings = overrides.findings ?? 0;
+  const report: Record<string, unknown> = {
+    verdict: overrides.verdict ?? "ALLOW",
+    engine: "gaia-skill-audit/0.1.0",
+    audited_at: "2026-07-29T00:00:00.000Z",
+    findings: Array.from({ length: findings }, (_, i) => ({ id: `f${i}` })),
+    skill: overrides.skill ?? manifest.name,
+    version: overrides.version ?? manifest.version,
+    security_tier: overrides.tier ?? manifest.security_tier,
+    cleared_tiers: overrides.clearedTiers ?? [
+      overrides.tier ?? manifest.security_tier,
+    ],
+    content_digest: `sha256:${"00".repeat(32)}`,
+    manifest_digest:
+      overrides.manifestDigest ?? (await manifestDigest(skillMarkdown)),
+  };
+  for (const field of overrides.omit ?? []) delete report[field];
+  return JSON.stringify(report);
 }
 
 /** A valid sample gaia-agent.yaml for tests. */

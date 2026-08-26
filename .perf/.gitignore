@@ -1,0 +1,7 @@
+# Measurement OUTPUT is never committed. A composed system prompt contains the
+# user's memory store verbatim — names, preferences, file paths, and anything
+# else they told the agent to remember.
+*
+!.gitignore
+!offline_prefill.py
+!runtests.sh

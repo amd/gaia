@@ -713,8 +713,8 @@ def make_claude_judge(model: str | None = None) -> Callable[[str, str], bool]:
     """
     from gaia.eval.claude import ClaudeClient
 
-    # Judge determinism: generation is temp-0, the judge must be too (#2094).
-    client = ClaudeClient(model=model, temperature=0.0)
+    # No temperature pin — the judge model rejects sampling params (400).
+    client = ClaudeClient(model=model)
 
     def judge(predicted_desc: str, expected_desc: str) -> bool:
         prompt = build_equivalence_prompt(predicted_desc, expected_desc)

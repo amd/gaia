@@ -42,6 +42,12 @@ def _make_agent_with_tools(tool_names):
             "description": "stub",
             "parameters": {},
             "function": lambda **kwargs: {"status": "success"},
+            # These tests exercise name resolution, not the confirmation gate.
+            # ``mcp_``-prefixed entries fail closed when they carry no verdict,
+            # so stub them the way ``MCPTool.to_gaia_format`` stamps a tool the
+            # server proved read-only; otherwise the call is denied before
+            # resolution is ever reached.
+            "requires_confirmation": False,
         }
         for name in tool_names
     }
@@ -101,7 +107,11 @@ def test_unknown_name_with_no_candidates_uses_generic_message():
     agent = _make_agent_with_tools(["mcp_tool_tool_displaylens_on"])
     result = agent._execute_tool("totally_unrelated", {})
     err = result["error"]
-    assert "AVAILABLE TOOLS" in err
+    # Must NOT name an "AVAILABLE TOOLS section": native tool-calling models
+    # get their schemas via ``tools=`` and no longer receive that block, so
+    # pointing at it would send the model looking for something absent.
+    assert "AVAILABLE TOOLS" not in err
+    assert "Unknown tool name" in err
     # Bad name still NOT quoted
     assert "'totally_unrelated'" not in err
 

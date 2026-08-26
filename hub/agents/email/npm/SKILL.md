@@ -12,6 +12,15 @@ talks to it over local HTTP. There is **no Python** and no separate GAIA install
 
 Follow these steps to wire it into an app.
 
+> **This file is NOT one of the agent's own skills.** It is the integration
+> playbook — how *you* wire this npm package into an app. The sidecar separately
+> bundles six **Agent Skills** at `gaia_agent_email/skills/<name>/SKILL.md`, which
+> are instructions the *email agent itself* would load into its own prompt at
+> runtime — currently **disabled**, so none of them loads. Same filename,
+> different artifact: don't load those into your assistant, and don't ship this
+> one as an agent skill. See
+> [Skill sets](#skill-sets--disabled-in-this-release) below.
+
 ## 1. Install
 
 ```bash
@@ -100,7 +109,7 @@ The interface:
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. Action items also persist to the sidecar's local task list (keyed by `message_id`, de-duplicated on re-triage) — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
-| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`), whose `needs_you` (schema 2.11) is the ONE worklist the card renders — up to 5 things that need you, plus `bulk` for the filtered remainder. No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. `NeedsYouItem.detail` is reserved on the wire but always empty today on every surface — see [`CHANGELOG.md`](./CHANGELOG.md). |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`), whose `needs_you` (schema 2.11) is the ONE worklist the card renders — up to 5 things that need you, plus `bulk` for the filtered remainder. Also carries `suspicious`/`suspicious_total` (schema 2.13): the phishing/spam-flagged subset of `actionable`, each item tagged `is_phishing`/`is_spam`. No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. `NeedsYouItem.detail` is reserved on the wire but always empty today on every surface — see [`CHANGELOG.md`](./CHANGELOG.md). |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
@@ -334,6 +343,26 @@ rather than returning the same 200 shape a real, found-nothing cycle would (#252
 The Python host also ships a thin-client CLI over this same surface:
 `gaia email autonomy {status|set-level|pause|resume|run|trust|kill}` (#2516).
 
+## Skill sets — disabled in this release
+
+The sidecar bundles six Agent Skills (`personal`: `inbox-triage`,
+`newsletter-digest`, `travel-itinerary`; `work`: `inbox-triage`,
+`meeting-scheduling`, `action-item-extraction`, `escalation-routing`), but the
+agent's manifest currently declares **no sets**, so **none of them loads**. A
+personal and a work mailbox get identical behaviour. This is deliberate: the
+skills are held back until an eval run shows they improve triage.
+
+What that means for your integration:
+
+- **Do not pass `--skill-set` or `GAIA_EMAIL_SKILL_SET`.** Any value fails at
+  startup with `... but this agent declares no skill sets — Agent Skills are
+  switched off in this build.` There is no working name. This is fail-loud
+  behaviour, not a bug to work around.
+- `GAIA_EMAIL_ACCOUNT_TYPE` still validates but selects nothing.
+- Nothing in the API changes either way — same endpoints, same tools, same
+  permissions. Re-enabling happens inside the agent's `gaia-agent.yaml`; your
+  code does not change.
+
 ## Running in a server / long-lived app
 
 - **`fetchBinary` is a build step**, not per request (network + SHA verify). Run it
@@ -433,6 +462,9 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   routes for them yet, so don't look for `client.scheduleSend()` /
   `client.snooze()` / a voice, follow-up, or waiting-on-you method — they
   don't exist (and none of these moves `SCHEMA_VERSION`).
+- **`--skill-set` / `GAIA_EMAIL_SKILL_SET` always fail right now.** Agent Skills
+  are disabled in this release, so the agent declares no sets and every name is
+  invalid. Don't wire either into your spawn options.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

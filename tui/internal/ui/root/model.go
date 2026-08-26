@@ -31,11 +31,22 @@ type RootModel struct {
 	chat       *chat.ChatModel
 	chatClient client.AgentClient
 	catalog    *catalog.Catalog
-	showHelp   bool
-	helpCtx    components.HelpContext
+	// help is the shared overlay state machine (components.HelpState) — the
+	// same one the chat view uses on a direct launch, so open/scroll/dismiss
+	// behavior can never diverge between the two paths.
+	help components.HelpState
 	width      int
 	height     int
-	debug      bool
+	dev        bool
+	// bypassPermissions starts agents launched from this session with
+	// confirmation prompts off (--bypass-permissions). Off unless the launch
+	// asked for it.
+	bypassPermissions bool
+	// useClaude starts agents launched from this session against Anthropic's
+	// Claude API instead of the local Lemonade backend (--use-claude).
+	// claudeModel optionally picks the Claude model.
+	useClaude   bool
+	claudeModel string
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -74,32 +85,53 @@ func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) 
 	return m
 }
 
-func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
+// WithBypassPermissions starts agents launched from this session with
+// confirmation prompts off.
+//
+// A builder rather than a constructor parameter, for the same reason
+// WithPreflight is one: the flag is opt-in and rare, and threading it through
+// every caller — including a dozen tests that do not care — would make the
+// default path noisier than the feature.
+func (m RootModel) WithBypassPermissions(enabled bool) RootModel {
+	m.bypassPermissions = enabled
+	return m
+}
+
+// WithClaude starts agents launched from this session against Anthropic's
+// Claude API instead of the local Lemonade backend. A builder for the same
+// reason WithBypassPermissions is one: opt-in and rare.
+func (m RootModel) WithClaude(enabled bool, model string) RootModel {
+	m.useClaude = enabled
+	m.claudeModel = model
+	return m
+}
+
+func NewRootModel(cat *catalog.Catalog, dev bool) RootModel {
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		debug:      debug,
+		dev:        dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
 	// One hub client for the session: it caches the daemon instance whose token
 	// authorized the last call, and that token rotates on every daemon restart.
-	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), debug)
+	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), dev)
 	return m
 }
 
 // NewRootModelWithHub builds a root model against a specific hub client. Tests
 // point it at a fake daemon; a nil client disables install/uninstall, which
 // then fail loudly instead of silently doing nothing.
-func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) RootModel {
+func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) RootModel {
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		debug:      debug,
+		dev:        dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
-	m.hub = hub.NewHubModel(cat, hc, debug)
+	m.hub = hub.NewHubModel(cat, hc, dev)
 	return m
 }
 
@@ -158,19 +190,18 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.returnToHub(msg.AgentID)
 
 	case chat.ToggleHelpMsg:
-		m.showHelp = !m.showHelp
-		m.helpCtx = components.HelpContextChat
+		m.help.Toggle(components.HelpContextChat)
 		return m, nil
 
 	case components.HelpContext:
-		m.showHelp = !m.showHelp
-		m.helpCtx = msg
+		m.help.Toggle(msg)
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.showHelp {
-			// Any key dismisses help overlay
-			m.showHelp = false
+		if m.help.Open {
+			// Navigation keys scroll the open panel; anything else dismisses
+			// it — HelpState owns that vocabulary for every view.
+			m.help.HandleKey(msg, m.width, m.height)
 			return m, nil
 		}
 		// The mailbox hand-off owns every key while it is up, the way the hub's
@@ -229,17 +260,33 @@ func (m RootModel) View() string {
 		}
 	}
 
-	if m.showHelp {
-		return components.RenderHelpOverlay(m.helpCtx, base, m.width, m.height)
+	if m.help.Open {
+		return m.help.Render(base, m.width, m.height)
 	}
 
 	return base
 }
 
-// logf writes transport diagnostics to stderr in debug mode. It must never be
+// helpScrollKey reports how ↑/↓/PgUp/PgDn/Home/End should move the open help
+// panel's scroll offset. delta is a relative line count unless jump is true,
+// in which case delta is an absolute target the caller still has to clamp.
+// Any other key reports handled=false, which is the caller's cue to close
+// the panel instead — the behavior every other key has always had.
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// logf writes transport diagnostics to stderr in dev mode. It must never be
 // given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m RootModel) logf(format string, args ...any) {
-	if !m.debug {
+	if !m.dev {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
@@ -249,7 +296,10 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
-		Debug: m.debug, Logf: m.logf, Interactive: true,
+		Dev: m.dev, Logf: m.logf, Interactive: true,
+		BypassPermissions: m.bypassPermissions,
+		UseClaude:         m.useClaude,
+		ClaudeModel:       m.claudeModel,
 	})
 	if err != nil {
 		// Stay in the hub and say why, rather than opening a chat that cannot talk.
@@ -260,7 +310,7 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 
 	m.catalog.SetStatus(agent.ID, catalog.StatusActive)
 
-	chatModel := chat.NewChatModelFromHub(c, agent.ID, agent.Name, m.debug)
+	chatModel := chat.NewChatModelFromHub(c, agent.ID, agent.Name, m.dev)
 	m.chat = &chatModel
 	m.activeView = viewChat
 

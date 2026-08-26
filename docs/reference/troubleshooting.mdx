@@ -71,6 +71,20 @@ icon: "bug"
 
     The GAIA installer now runs `apt update` automatically, but you may need to run it manually if you see these errors.
   </Accordion>
+
+  <Accordion title="gaia init fails with a Node.js version error (dev/source installs)" icon="node-js">
+    **Cause:** `gaia init` builds the Agent UI frontend from source, which requires a
+    minimum Node.js version. If the `node` on your `PATH` is older than that, `gaia init`
+    now fails with an actionable error naming the required version, the version found, and
+    the exact `node` path in use — instead of silently reporting success with a broken UI.
+
+    **Solution:** Install or switch to a newer Node.js. If you already have one installed
+    via nvm/fnm/volta, make sure it comes first on `PATH` — a system-installed Node can
+    shadow it in non-interactive shells (e.g. `ssh host 'gaia init'`).
+
+    **Workaround:** To skip the Agent UI frontend build entirely (the CLI still works),
+    pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
+  </Accordion>
 </AccordionGroup>
 
 ---
@@ -220,8 +234,7 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Connection refused" icon="plug-circle-xmark">
-    **Ensure server is running** (default port is 8080; also shared by
-    `gaia mcp docker` so check for a collision):
+    **Ensure server is running** (default port is 8080):
     ```bash
     gaia api start --port 8080
     ```
@@ -238,11 +251,12 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Model not found error" icon="circle-question">
-    Use the correct model ID:
+    `AGENT_MODELS` is empty by default, so `/v1/models` returns no models until
+    one is registered:
     ```bash
     curl http://localhost:8080/v1/models
     ```
-    Default model ID is `gaia-code`.
+    See [Adding New Agents](/reference/api-spec#adding-new-agents).
   </Accordion>
 
   <Accordion title="Agent processing failed" icon="triangle-exclamation">
@@ -373,35 +387,6 @@ icon: "bug"
     - Verify documents were indexed successfully at startup
     - Check console output for indexing confirmation
     - Ensure document path is correct
-  </Accordion>
-</AccordionGroup>
-
----
-
-## Routing Agent Issues
-
-<AccordionGroup>
-  <Accordion title="Routing to wrong language" icon="shuffle">
-    The routing agent may misdetect the language/framework.
-
-    **Solutions:**
-    - Be more specific in your query (mention the language)
-    - Check the routing confidence in logs
-    - Adjust routing thresholds if available
-  </Accordion>
-
-  <Accordion title="Too many clarifying questions" icon="circle-question">
-    **Solutions:**
-    - Include framework/language in initial query
-    - Set default routing preferences
-    - Adjust confidence thresholds
-  </Accordion>
-
-  <Accordion title="Routing agent errors or skips detection" icon="forward">
-    **Check:**
-    - Lemonade Server is running
-    - Routing model is loaded
-    - Query format is valid
   </Accordion>
 </AccordionGroup>
 

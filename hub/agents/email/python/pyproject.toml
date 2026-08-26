@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-email"
-version = "0.5.0"
+version = "0.6.0"
 description = "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 authors = [{ name = "AMD" }]
 license = { text = "MIT" }
@@ -56,3 +56,16 @@ test = ["pytest"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent_email*"]
+
+# Bundled Agent Skills (#2466) are data, not modules — without this they are
+# absent from an installed wheel and SKILL_DIRS points at nothing.
+[tool.setuptools.package-data]
+gaia_agent_email = ["skills/*/SKILL.md", "skills/*/*.py", "gaia-agent.yaml"]
+
+# gaia-agent.yaml lives at the package ROOT (the hub artifact), but the agent
+# reads it at runtime and an installed wheel has no directory above
+# gaia_agent_email/ — package-data cannot reach outside its own package. The
+# build_py hook copies it in, so every install path ships it from the single
+# authored file. See _build_hooks.py.
+[tool.setuptools.cmdclass]
+build_py = "_build_hooks.build_py"

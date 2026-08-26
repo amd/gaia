@@ -114,18 +114,20 @@ class TestBuiltinRegistration:
     # gaia-lite were collapsed into a "lite" model TIER of the single base
     # agent. The old IDs survive only as legacy aliases.
 
-    # chat/doc/file (ChatAgent profiles), data (AnalystAgent) and web
-    # (BrowserAgent) all now ship as standalone hub wheels (#1102); their
-    # full+lite tiers are verified in those packages' own tests. The
-    # framework-only suite asserts tiers on chat/doc/file only when the
-    # gaia-agent-chat wheel is installed (importorskip below).
+    # chat/doc/file (ChatAgent profiles) ship as the standalone gaia-agent-chat
+    # hub wheel (#1102); their full+lite tiers are verified in that package's
+    # own tests. The framework-only suite asserts tiers on chat/doc/file only
+    # when the gaia-agent-chat wheel is installed (importorskip below).
+    #
+    # The data (AnalystAgent) and web (BrowserAgent) agents, and their -lite
+    # aliases, were removed outright in the agent-collapse — their capability
+    # lives in the flagship agent's scratchpad/browser tools now, not a
+    # separate registration.
     _BASE_AGENTS = ["chat", "doc", "file"]
     _LEGACY_LITE_IDS = [
         "chat-lite",
         "doc-lite",
         "file-lite",
-        "data-lite",
-        "web-lite",
         "gaia-lite",
     ]
 
@@ -162,8 +164,6 @@ class TestBuiltinRegistration:
             "chat-lite": "chat",
             "doc-lite": "doc",
             "file-lite": "file",
-            "data-lite": "data",
-            "web-lite": "web",
             # gaia-lite historically aliased doc-lite.
             "gaia-lite": "doc",
         }
@@ -171,8 +171,9 @@ class TestBuiltinRegistration:
             # canonical_id is a pure alias mapping — holds whether or not the
             # base agent's wheel is installed.
             assert registry.canonical_id(legacy) == base
-            # data/web ship as standalone wheels (#1102); only assert the
-            # registration resolves when the base agent is actually registered.
+            # chat/doc/file ship as the standalone gaia-agent-chat wheel
+            # (#1102); only assert the registration resolves when the base
+            # agent is actually registered.
             if base in {r.id for r in registry.list()}:
                 reg = registry.get(legacy)
                 assert reg is not None and reg.id == base

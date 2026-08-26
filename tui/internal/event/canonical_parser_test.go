@@ -88,7 +88,7 @@ func TestParseCanonicalNeedsConfirmation(t *testing.T) {
 }
 
 func TestParseCanonicalFinalWithUsage(t *testing.T) {
-	e := ParseCanonicalEvent([]byte(`{"type":"final","answer":"3 urgent emails","usage":{"steps":4,"tools_used":2,"elapsed":8.5}}`))
+	e := ParseCanonicalEvent([]byte(`{"type":"final","answer":"3 urgent emails","usage":{"steps":4,"tools_used":2,"elapsed":8.5,"ttft":1.2}}`))
 	f, ok := e.(CanonicalFinalEvent)
 	if !ok {
 		t.Fatalf("expected CanonicalFinalEvent, got %T", e)
@@ -97,7 +97,7 @@ func TestParseCanonicalFinalWithUsage(t *testing.T) {
 		t.Errorf("answer = %q", f.Answer)
 	}
 	usage := CanonicalUsageOf(f)
-	if usage.Steps != 4 || usage.ToolsUsed != 2 || usage.Elapsed != 8.5 {
+	if usage.Steps != 4 || usage.ToolsUsed != 2 || usage.Elapsed != 8.5 || usage.TTFT != 1.2 {
 		t.Errorf("unexpected usage: %+v", usage)
 	}
 	if CanonicalTerminalType(f) != CanonicalTypeFinal {

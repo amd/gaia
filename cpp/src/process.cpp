@@ -5,10 +5,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -32,6 +39,11 @@
 #   include <sys/types.h>
 #   include <sys/wait.h>
 #   include <unistd.h>
+#   ifdef __APPLE__
+#       include <crt_externs.h>
+#   else
+extern char** environ;
+#   endif
 #endif
 
 namespace gaia {
@@ -399,7 +411,12 @@ ProcessResult runWithTimeout(const std::string& command,
     }
 
     if (pid == 0) {
-        // Child process
+        // Child process.
+        // Its own process group, so a timeout can kill the whole tree. A
+        // build or test command spawns children; killing only the shell
+        // leaves them running and holding the output pipes open.
+        setpgid(0, 0);
+
         close(stdoutPipe[0]);  // close read end
         close(stderrPipe[0]);  // close read end
 
@@ -414,6 +431,7 @@ ProcessResult runWithTimeout(const std::string& command,
     }
 
     // Parent process
+    setpgid(pid, pid);  // race-free: whichever call wins, the group exists
     close(stdoutPipe[1]);  // close write end
     close(stderrPipe[1]);  // close write end
 
@@ -436,7 +454,8 @@ ProcessResult runWithTimeout(const std::string& command,
 
         if (elapsed >= timeoutMs) {
             result.timedOut = true;
-            kill(pid, SIGKILL);
+            kill(-pid, SIGKILL);  // the whole group, not just the shell
+            kill(pid, SIGKILL);   // backstop if setpgid did not take
             waitpid(pid, nullptr, 0);
             break;
         }
@@ -590,6 +609,494 @@ std::string ProcessRunner::runOrThrow(
     }
 
     return result.stdout_output;
+}
+
+// ---------------------------------------------------------------------------
+// ShellSession
+// ---------------------------------------------------------------------------
+
+namespace {
+
+namespace sfs = std::filesystem;
+
+/// Variables that every shell rewrites on its own. Replaying them would make
+/// the session drift a little further from the parent on every command.
+const std::set<std::string>& volatileEnvNames() {
+    static const std::set<std::string> names = {
+        "_", "PWD", "OLDPWD", "SHLVL", "PS1", "PS2", "RANDOM", "SECONDS",
+        "LINENO", "PROMPT", "CD", "ERRORLEVEL", "CMDCMDLINE", "CMDEXTVERSION",
+        "__GAIA_RC", "GAIA_SHELL_STATE",
+    };
+    return names;
+}
+
+bool isValidEnvName(const std::string& name) {
+    if (name.empty()) return false;
+    if (std::isdigit(static_cast<unsigned char>(name[0]))) return false;
+    for (char c : name) {
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Snapshot the calling process's environment — the baseline a session's
+/// overrides are measured against.
+std::map<std::string, std::string> captureProcessEnv() {
+    std::map<std::string, std::string> out;
+#ifdef _WIN32
+    LPCH block = GetEnvironmentStringsA();
+    if (!block) return out;
+    for (LPCH entry = block; *entry != '\0';) {
+        const std::string item(entry);
+        entry += item.size() + 1;
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos || eq == 0) continue;  // "=C:" style entries
+        out[item.substr(0, eq)] = item.substr(eq + 1);
+    }
+    FreeEnvironmentStringsA(block);
+#else
+#   ifdef __APPLE__
+    char** env = *_NSGetEnviron();
+#   else
+    char** env = environ;
+#   endif
+    for (; env && *env; ++env) {
+        const std::string item(*env);
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        out[item.substr(0, eq)] = item.substr(eq + 1);
+    }
+#endif
+    return out;
+}
+
+/// Split one `NAME=VALUE` record. Returns false when the record has no name.
+/// Names are not validated here: `ProgramFiles(x86)` is a real Windows
+/// variable, and mis-parsing it would corrupt the neighbour it sorts next to.
+bool splitEnvRecord(const std::string& record,
+                    std::map<std::string, std::string>& out) {
+    const size_t eq = record.find('=');
+    if (eq == std::string::npos || eq == 0) return false;
+    out[record.substr(0, eq)] = record.substr(eq + 1);
+    return true;
+}
+
+/// Parse the NUL-delimited environment dump the POSIX script emits.
+///
+/// NUL is the one byte an environment value cannot contain, so the record
+/// boundary is unambiguous. Line-delimited `env` output is not: a value
+/// containing a newline followed by `SOMETHING=x` is indistinguishable from a
+/// second variable, which would let a command's *data* become the session's
+/// *configuration*.
+std::map<std::string, std::string> parseEnvRecordsNul(const std::string& text) {
+    std::map<std::string, std::string> out;
+    size_t start = 0;
+    while (start < text.size()) {
+        const size_t end = text.find('\0', start);
+        const size_t stop = (end == std::string::npos) ? text.size() : end;
+        splitEnvRecord(text.substr(start, stop - start), out);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return out;
+}
+
+/// Parse cmd.exe `set` output. Windows environment values cannot contain a
+/// newline, so one line is exactly one variable and an unparseable line is
+/// dropped rather than glued onto its predecessor.
+std::map<std::string, std::string> parseEnvLines(const std::string& text) {
+    std::map<std::string, std::string> out;
+    std::istringstream stream(text);
+    std::string line;
+
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        // cmd.exe lists internal "=C:" / "=ExitCode" entries; not variables.
+        if (line[0] == '=') continue;
+        splitEnvRecord(line, out);
+    }
+    return out;
+}
+
+/// Create a uniquely-named temp file and write `contents` to it.
+/// Exclusive creation on both platforms so a pre-planted symlink or file in a
+/// shared temp directory cannot be written through.
+bool writeTempFile(const std::string& extension,
+                   const std::string& contents,
+                   std::string& outPath) {
+#ifdef _WIN32
+    static std::atomic<unsigned> counter{0};
+
+    char tmpDir[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, tmpDir) == 0) return false;
+
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        std::ostringstream name;
+        name << tmpDir << "gaia_shell_" << GetCurrentProcessId() << "_"
+             << counter.fetch_add(1) << extension;
+        const std::string candidate = name.str();
+
+        HANDLE handle = CreateFileA(candidate.c_str(), GENERIC_WRITE, 0,
+                                    nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) continue;
+
+        DWORD written = 0;
+        BOOL ok = TRUE;
+        if (!contents.empty()) {
+            ok = WriteFile(handle, contents.data(),
+                           static_cast<DWORD>(contents.size()), &written,
+                           nullptr);
+        }
+        CloseHandle(handle);
+        if (!ok) {
+            std::remove(candidate.c_str());
+            return false;
+        }
+        outPath = candidate;
+        return true;
+    }
+    return false;
+#else
+    (void)extension;
+    std::error_code ec;
+    sfs::path dir = sfs::temp_directory_path(ec);
+    if (ec) dir = sfs::path("/tmp");
+
+    std::string tmpl = (dir / "gaia_shell_XXXXXX").string();
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+
+    const int fd = mkstemp(buf.data());
+    if (fd < 0) return false;
+
+    size_t offset = 0;
+    while (offset < contents.size()) {
+        const ssize_t n = write(fd, contents.data() + offset,
+                                contents.size() - offset);
+        if (n <= 0) {
+            close(fd);
+            std::remove(buf.data());
+            return false;
+        }
+        offset += static_cast<size_t>(n);
+    }
+    close(fd);
+    outPath = std::string(buf.data());
+    return true;
+#endif
+}
+
+/// Removes the temp files a command needed, however the call unwinds.
+class TempFileSet {
+public:
+    void add(const std::string& path) { paths_.push_back(path); }
+    ~TempFileSet() {
+        for (const auto& path : paths_) std::remove(path.c_str());
+    }
+
+private:
+    std::vector<std::string> paths_;
+};
+
+std::string readFileContents(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return "";
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+/// Wrap a value in single quotes for POSIX sh.
+std::string posixQuote(const std::string& value) {
+    std::string out = "'";
+    for (char c : value) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+}
+
+/// Escape a value for use inside a batch file.
+///
+/// Only `%` needs escaping. `"` must be left alone: `set "K=V"` takes
+/// everything up to the *last* quote on the line, so doubling a quote is not
+/// undone — and because the session re-captures and re-emits the value, each
+/// command would double it again until the line broke.
+std::string batchQuote(const std::string& value) {
+    std::string out;
+    for (char c : value) {
+        if (c == '%') {
+            out += "%%";
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+/// Forward-slash form, which every POSIX shell — including a Git Bash or MSYS
+/// shell running on Windows — accepts.
+std::string genericPath(const std::string& path) {
+    return sfs::path(path).generic_string();
+}
+
+const char* kEnvMarker = "---GAIA-ENV---";
+
+} // namespace
+
+struct ShellSession::Impl {
+    mutable std::mutex mutex;
+    std::string startCwd;
+    std::string cwd;
+    std::string shell;
+    /// True when commands run through a POSIX shell (always on POSIX; on
+    /// Windows when a bash/sh was detected). False means a cmd.exe batch file.
+    bool posixScript = true;
+    std::map<std::string, std::string> baselineEnv;
+    std::map<std::string, std::string> overrides;   ///< set or changed by the session
+    std::set<std::string> unset;                    ///< removed by the session
+
+    /// Generate the per-command script that restores state, invokes the
+    /// command file, and reports the resulting cwd + environment to
+    /// `stateFile`.
+    ///
+    /// The command lives in its own file and is sourced (`.` / `call`) rather
+    /// than pasted in here. Pasting lets a command ending in a line
+    /// continuation, or an unterminated heredoc, swallow the framework's own
+    /// bookkeeping lines — which both corrupts the reported exit code and
+    /// leaks internals into what the model reads back.
+    ///
+    /// stdin is `/dev/null`: an interactive command (`git commit` opening an
+    /// editor, `sudo`, `npm login`) would otherwise sit until the timeout.
+    std::string buildScript(const std::string& commandFile,
+                            const std::string& stateFile) const {
+        std::ostringstream s;
+        if (posixScript) {
+            s << "cd " << posixQuote(genericPath(cwd)) << " || exit 127\n";
+            for (const auto& name : unset) {
+                if (!isValidEnvName(name)) continue;
+                s << "unset " << name << "\n";
+            }
+            for (const auto& kv : overrides) {
+                if (!isValidEnvName(kv.first)) continue;
+                s << kv.first << "=" << posixQuote(kv.second) << "; export "
+                  << kv.first << "\n";
+            }
+            s << ". " << posixQuote(genericPath(commandFile))
+              << " < /dev/null\n";
+            s << "__gaia_rc=$?\n";
+            // awk's ENVIRON gives NUL-delimited records; `env` output cannot
+            // be parsed unambiguously (see parseEnvRecordsNul).
+            s << "{ pwd; printf '%s\\n' " << posixQuote(kEnvMarker)
+              << "; awk 'BEGIN { for (k in ENVIRON) printf \"%s=%s%c\", k, "
+                 "ENVIRON[k], 0 }'; } > "
+              << posixQuote(genericPath(stateFile)) << " 2>/dev/null\n";
+            s << "exit $__gaia_rc\n";
+        } else {
+            s << "@echo off\r\n";
+            s << "cd /d \"" << batchQuote(cwd) << "\"\r\n";
+            s << "if errorlevel 1 exit /b 127\r\n";
+            for (const auto& name : unset) {
+                if (!isValidEnvName(name)) continue;
+                s << "set \"" << name << "=\"\r\n";
+            }
+            for (const auto& kv : overrides) {
+                if (!isValidEnvName(kv.first)) continue;
+                s << "set \"" << kv.first << "=" << batchQuote(kv.second)
+                  << "\"\r\n";
+            }
+            s << "call \"" << commandFile << "\" <nul\r\n";
+            s << "set __GAIA_RC=%ERRORLEVEL%\r\n";
+            s << "> \"" << stateFile << "\" (\r\n";
+            s << "  cd\r\n";
+            s << "  echo " << kEnvMarker << "\r\n";
+            s << "  set\r\n";
+            s << ")\r\n";
+            s << "exit /b %__GAIA_RC%\r\n";
+        }
+        return s.str();
+    }
+
+    /// Absorb the cwd and environment the command left behind.
+    void absorbState(const std::string& stateText) {
+        const size_t markerPos = stateText.find(kEnvMarker);
+        if (markerPos == std::string::npos) return;
+
+        std::string cwdLine = stateText.substr(0, markerPos);
+        while (!cwdLine.empty() &&
+               (cwdLine.back() == '\n' || cwdLine.back() == '\r')) {
+            cwdLine.pop_back();
+        }
+        // The shell is the authority on where it ended up. On Windows with a
+        // Git Bash shell this is an MSYS path (`/c/...`) that the Win32 API
+        // does not recognise but the next script — run by the same shell —
+        // does, so it is taken as reported rather than validated away.
+        if (!cwdLine.empty()) cwd = cwdLine;
+
+        size_t envStart = markerPos + std::strlen(kEnvMarker);
+        while (envStart < stateText.size() &&
+               (stateText[envStart] == '\n' || stateText[envStart] == '\r')) {
+            ++envStart;
+        }
+        const std::string envText = stateText.substr(envStart);
+        const auto captured = posixScript ? parseEnvRecordsNul(envText)
+                                          : parseEnvLines(envText);
+        if (captured.empty()) return;
+
+        overrides.clear();
+        unset.clear();
+        for (const auto& kv : captured) {
+            if (volatileEnvNames().count(kv.first)) continue;
+            auto base = baselineEnv.find(kv.first);
+            if (base == baselineEnv.end() || base->second != kv.second) {
+                overrides[kv.first] = kv.second;
+            }
+        }
+        for (const auto& kv : baselineEnv) {
+            if (volatileEnvNames().count(kv.first)) continue;
+            if (captured.find(kv.first) == captured.end()) {
+                unset.insert(kv.first);
+            }
+        }
+    }
+};
+
+ShellSession::ShellSession(const std::string& startCwd, const std::string& shell)
+    : impl_(new Impl()) {
+    std::error_code ec;
+    sfs::path start = startCwd.empty() ? sfs::current_path(ec)
+                                       : sfs::path(startCwd);
+    if (!startCwd.empty()) {
+        sfs::path resolved = sfs::weakly_canonical(start, ec);
+        if (!ec) start = resolved;
+    }
+    if (start.empty()) start = sfs::path(".");
+    impl_->cwd = start.string();
+    impl_->startCwd = impl_->cwd;
+    impl_->baselineEnv = captureProcessEnv();
+
+#ifdef _WIN32
+    // A POSIX shell is used when one was named (the bash agent detects Git
+    // Bash / MSYS / WSL); otherwise commands run as a cmd.exe batch script.
+    impl_->shell = shell;
+    impl_->posixScript = !shell.empty();
+#else
+    impl_->shell = shell.empty() ? std::string("/bin/sh") : shell;
+    impl_->posixScript = true;
+#endif
+}
+
+ShellSession::~ShellSession() = default;
+ShellSession::ShellSession(ShellSession&&) noexcept = default;
+ShellSession& ShellSession::operator=(ShellSession&&) noexcept = default;
+
+ShellSession& ShellSession::shared() {
+    static ShellSession session;
+    return session;
+}
+
+ProcessResult ShellSession::run(const std::string& command,
+                                int timeoutMs,
+                                size_t maxOutputBytes) {
+    ProcessResult result;
+
+    if (command.empty()) {
+        result.exitCode = -1;
+        result.stderr_output = "Empty command";
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+
+    // Removed however this function exits, including on a throw.
+    TempFileSet temps;
+
+    const char* scriptExt = impl_->posixScript ? ".sh" : ".cmd";
+    const std::string tempError =
+        "ShellSession: could not create a temporary file in the system temp "
+        "directory. Check that it exists and is writable.";
+
+    std::string stateFile;
+    if (!writeTempFile(".state", "", stateFile)) {
+        result.exitCode = -1;
+        result.stderr_output = tempError;
+        return result;
+    }
+    temps.add(stateFile);
+
+    // The command gets its own file so it cannot splice into the script's
+    // bookkeeping; on Windows it must be a .cmd for `call` to accept it.
+    std::string commandFile;
+    if (!writeTempFile(scriptExt, command + "\n", commandFile)) {
+        result.exitCode = -1;
+        result.stderr_output = tempError;
+        return result;
+    }
+    temps.add(commandFile);
+
+    std::string scriptFile;
+    if (!writeTempFile(scriptExt, impl_->buildScript(commandFile, stateFile),
+                       scriptFile)) {
+        result.exitCode = -1;
+        result.stderr_output = tempError;
+        return result;
+    }
+    temps.add(scriptFile);
+
+    const std::string invocation =
+        impl_->posixScript
+            ? impl_->shell + " " + posixQuote(genericPath(scriptFile))
+            : "\"" + scriptFile + "\"";
+
+    // No cwd/env arguments: the script applies both inside the child, so the
+    // calling process is never mutated and concurrent sessions cannot collide.
+    result = ProcessRunner::run(invocation, timeoutMs, "", {}, maxOutputBytes);
+
+    impl_->absorbState(readFileContents(stateFile));
+
+    return result;
+}
+
+std::string ShellSession::cwd() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->cwd;
+}
+
+bool ShellSession::setCwd(const std::string& dir) {
+    std::error_code ec;
+    sfs::path resolved = sfs::weakly_canonical(sfs::path(dir), ec);
+    if (ec) resolved = sfs::path(dir);
+    if (!sfs::is_directory(resolved, ec)) return false;
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->cwd = resolved.string();
+    return true;
+}
+
+std::map<std::string, std::string> ShellSession::environment() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->overrides;
+}
+
+void ShellSession::setEnv(const std::string& name, const std::string& value) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->overrides[name] = value;
+    impl_->unset.erase(name);
+}
+
+void ShellSession::reset() {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->cwd = impl_->startCwd;
+    impl_->overrides.clear();
+    impl_->unset.clear();
 }
 
 } // namespace gaia

@@ -198,6 +198,11 @@ class TestPrintProcessingStart:
         assert events[0]["type"] == "status"
         assert "LLM" in events[0]["message"]
 
+    def test_model_banner_is_tagged_for_the_debug_channel(self, handler):
+        """'Processing with <model>...' names the harness, not the work (#2804)."""
+        handler.print_processing_start("hello", 10, model_id="qwen")
+        assert _drain(handler)[0]["channel"] == "debug"
+
 
 # ===========================================================================
 # SSEOutputHandler.print_step_header
@@ -220,6 +225,9 @@ class TestPrintStepHeader:
             "step": 2,
             "total": 5,
             "status": "started",
+            # The step counter describes the harness, not the user's work, so it
+            # is tagged for the debug channel and filtered downstream (#2804).
+            "channel": "debug",
         }
 
 
@@ -695,11 +703,22 @@ class TestStartProgress:
         handler.start_progress("Analyzing code...")
         events = _drain(handler)
         assert len(events) == 1
+        # A real progress line is untagged, so it reaches the user (#2804).
         assert events[0] == {
             "type": "status",
             "status": "working",
             "message": "Analyzing code...",
         }
+
+    @pytest.mark.parametrize(
+        "label", ["Thinking", "thinking...", "Working", "PROCESSING"]
+    )
+    def test_harness_progress_labels_are_tagged_for_the_debug_channel(
+        self, handler, label
+    ):
+        """A bare 'Thinking' says the loop is alive, not what it is doing (#2804)."""
+        handler.start_progress(label)
+        assert _drain(handler)[0]["channel"] == "debug"
 
     def test_filters_executing_prefix(self, handler):
         handler.start_progress("Executing search_file")
@@ -785,6 +804,70 @@ class TestPrintFinalAnswer:
         handler.print_final_answer("answer")
         events = _drain(handler)
         assert events[0]["elapsed"] == 0.0
+
+    # ── total_tokens (#2899, #2911 review) ──────────────────────────────
+    #
+    # `_sum_conversation_tokens` (agent.py) always returns an int, 0 when no
+    # per-step stats were collected — it can't tell "really generated zero
+    # tokens" from "no real accounting happened". A real positive count rides
+    # the wire as "tokens"; anything <= 0 is left off entirely rather than
+    # shown as a fake 0.
+
+    def test_positive_tokens_is_emitted(self, handler):
+        handler.print_final_answer("answer", total_tokens=42)
+        events = _drain(handler)
+        assert events[0]["tokens"] == 42
+
+    def test_tokens_omitted_when_zero(self, handler):
+        handler.print_final_answer("answer", total_tokens=0)
+        events = _drain(handler)
+        assert "tokens" not in events[0]
+
+    def test_tokens_omitted_when_none(self, handler):
+        handler.print_final_answer("answer", total_tokens=None)
+        events = _drain(handler)
+        assert "tokens" not in events[0]
+
+    def test_tokens_omitted_when_negative(self, handler):
+        handler.print_final_answer("answer", total_tokens=-1)
+        events = _drain(handler)
+        assert "tokens" not in events[0]
+
+    def test_tokens_omitted_by_default(self, handler):
+        handler.print_final_answer("answer")
+        events = _drain(handler)
+        assert "tokens" not in events[0]
+
+    # ── ttft_seconds (#2899 follow-up) ──────────────────────────────────
+    #
+    # Same omit-don't-fake contract established above for total_tokens: a
+    # real positive value rides the wire as "ttft"; anything else (None, 0,
+    # a negative) is left off entirely rather than shown as a fake 0.0s.
+
+    def test_positive_ttft_is_emitted(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=9.4321)
+        events = _drain(handler)
+        assert events[0]["ttft"] == 9.432  # rounded to 3 decimals
+
+    def test_ttft_omitted_when_none(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=None)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_when_zero(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=0.0)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_when_negative(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=-1.0)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_by_default(self, handler):
+        handler.print_final_answer("answer")
+        events = _drain(handler)
+        assert "ttft" not in events[0]
 
 
 # ===========================================================================

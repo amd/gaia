@@ -80,6 +80,38 @@ def _log_request_parameter_summary(request: ChatCompletionRequest) -> None:
         logger.debug("  %s: %s", field_name, "set" if value is not None else "not set")
 
 
+def _prepend_tool_denials(agent, content: str) -> str:
+    """Prefix ``content`` with any confirmation refusals the agent hit.
+
+    The streaming path relays ``tool_confirm_denied`` events as they happen; the
+    non-streaming path returns only the final answer, so without this the caller
+    is told a tool "was denied by the user" with no user and no explanation.
+    """
+    content = content if isinstance(content, str) else str(content)
+    handler = getattr(agent, "output_handler", None) or getattr(agent, "console", None)
+    queue = getattr(handler, "queue", None)
+    if queue is None:
+        logger.warning(
+            "Output handler %s exposes no event queue; a refused tool would "
+            "reach the caller without its reason.",
+            type(handler).__name__,
+        )
+        return content
+
+    # Read without draining — the queue is not this function's to consume. An
+    # agent re-attempts a denied tool across steps, so dedupe per tool rather
+    # than repeating the same paragraph once per attempt.
+    denials = {}
+    for event in list(queue):
+        if event.get("type") == "tool_confirm_denied":
+            data = event["data"]
+            denials.setdefault(data["tool"], data["message"])
+
+    if not denials:
+        return content
+    return "\n".join(list(denials.values()) + ([content] if content else []))
+
+
 def extract_workspace_root(messages):
     """
     Extract workspace root path from GitHub Copilot messages.
@@ -236,7 +268,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": false
         }
@@ -246,7 +278,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": true
         }
@@ -361,6 +393,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Extract content from result
         content = result.get("result", str(result))
+
+        # Non-streaming drops the event queue, so a refused tool would only
+        # reach the caller as the agent's opaque "denied" tool result. Surface
+        # the actionable reason instead (SWSPLAT-37449).
+        content = _prepend_tool_denials(agent, content)
 
         # Estimate tokens
         if isinstance(agent, ApiAgent):
@@ -613,7 +650,7 @@ async def list_models() -> ModelListResponse:
             "object": "list",
             "data": [
                 {
-                    "id": "gaia-code",
+                    "id": "gaia",
                     "object": "model",
                     "created": 1234567890,
                     "owned_by": "amd-gaia"

@@ -266,9 +266,15 @@ what it's building.
 ### Example 1: Read and Analyze Python File
 
 ```python
-from gaia_agent_code import CodeAgent
+from gaia.agents.base.agent import Agent
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
-agent = CodeAgent()
+class MyAgent(Agent, FileIOToolsMixin):
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_file_io_tools()
+
+agent = MyAgent()
 
 result = agent.read_file("calculator.py")
 
@@ -367,7 +373,7 @@ if not self.path_validator.is_path_allowed(file_path):
 ### Allowed Paths Configuration
 
 ```python
-# Typically configured in CodeAgent
+# Typically configured when the agent is constructed
 path_validator = PathValidator(
     allowed_paths=[
         "/path/to/workspace",

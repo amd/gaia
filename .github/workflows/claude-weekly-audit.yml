@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Proactive weekly Claude audit. Every other Claude job in this repo is REACTIVE —
+# Proactive nightly Claude audit. Every other Claude job in this repo is REACTIVE —
 # it fires on a PR, a comment, or an @claude mention (claude.yml). Nothing looks at
 # the repo proactively, so debt that ships inside a green PR (a feature with no doc
 # page, a code path with no test, a silent `except Exception: pass`, a cli.mdx that
@@ -14,10 +14,12 @@
 # the existing auto-fix job (claude.yml) takes over. No new PR-creation code here.
 #
 # MODES:
-#   normal (weekly)  — reviews the last N days of merged work + the subsystems it touched.
-#   deep   (monthly) — whole-codebase latent-debt sweep. Auto-selected on the first
-#                      Monday of each month; also selectable via workflow_dispatch.
-#   The `auto` dispatch default resolves to deep on day-of-month <= 7, else normal.
+#   normal (6 nights/wk) — reviews the last N days of merged work (window_days, default
+#                      1) + the subsystems it touched. Skips a night with no commits.
+#   deep   (Sundays)  — whole-codebase latent-debt sweep; also selectable via dispatch.
+#   The `auto` default resolves to deep on Sunday (ISO day-of-week 7), else normal.
+#   Keyed on DAY-OF-WEEK deliberately — see the selector comment in preflight for why
+#   the old day-of-month test breaks under a nightly cron.
 #
 # SECURITY is NOT a dimension here — it has its own dedicated workflow,
 # .github/workflows/claude-security-audit.yml (deterministic semgrep + a Claude
@@ -38,33 +40,56 @@
 # A synthesis job collects the four structured outputs, dedupes against already-open
 # `weekly-audit` issues via a stable per-finding key, ranks by severity, and files output.
 #
-# MODEL: claude-opus-4-8 (Claude Opus 4.8) — excellent for static review at half the
-# token burn of Fable ($5/$25 vs $10/$50 per MTok). A measured deep run on Fable cost
-# ~$45 of API-equivalent subscription usage; Opus roughly halves that. Swap AUDIT_MODEL
-# below to claude-fable-5 for maximum depth if you accept ~2x the cost (Fable also
-# auto-routes ~<5% of sessions to Opus 4.8 via its safety classifiers).
+# MODEL: claude-opus-5 (Claude Opus 5) — excellent for static review at half the token
+# burn of Fable ($5/$25 vs $10/$50 per MTok), and priced identically to the Opus 4.8 it
+# replaced. A measured deep run on Fable cost ~$45 of API-equivalent subscription usage;
+# Opus roughly halves that. Swap AUDIT_MODEL below to claude-fable-5 for maximum depth if
+# you accept ~2x the cost.
+#
+# Model support is gated by the pinned claude-code-action version (the action bundles the
+# CLI that resolves model names). Bump the SHA in the same change and prove it first with
+# `gh workflow run claude-auth-canary.yml -f model=<new-id>`.
+#
+# Opus 5 finds real bugs at a higher rate per pass than 4.8 and stays accurate at lower
+# effort, so the lenses now REPORT everything and let synthesis filter. Do NOT reintroduce
+# "be conservative" / "precision beats recall" wording in a lens prompt: Opus 5 follows it
+# literally and silently reports less.
 #
 # AUTH: same OAuth-preferred / API-key-fallback wiring as every claude.yml job
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
 # COST CEILING: 4 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
-# a known per-run ceiling. The dimension matrix runs `max-parallel: 1` (serialized) so
+# a known per-run ceiling, now paid up to 7x/week instead of once since the cadence went
+# nightly. window_days=1 and skip-if-empty are what keep that affordable. This shares one
+# Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
+# PR-review / auto-fix jobs — if those start getting rate-limited, the first lever is
+# trimming the nightly matrix and leaving all four lenses to the Sunday deep run. The dimension matrix runs `max-parallel: 1` (serialized) so
 # the run is a steady drip rather than a 4-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
-# skip-if-empty exits before any Claude call on a no-change week. The concurrency group
+# skip-if-empty exits before any Claude call on a quiet night. The concurrency group
 # prevents two scheduled runs from overlapping.
 #
 # NO REPO-CODE EXECUTION: the jobs read and report only (--allowedTools Read,Grep,Glob,Bash
 # with no Edit/Write) — they never `pip install` / run GAIA / execute checked-out code,
 # same rule as the claude.yml review jobs.
 
-name: Claude Weekly Audit
+name: Claude Nightly Audit
 
 on:
   schedule:
-    # 06:00 UTC every Monday. First Monday of the month → deep whole-codebase sweep.
-    - cron: "0 6 * * 1"
+    # 10:37 UTC nightly = 03:37 PDT / 02:37 PST. GitHub cron is UTC-only with no DST
+    # handling, so one fixed hour cannot be 3am year-round; the 1h winter drift is
+    # accepted. The off-the-hour minute is deliberate — ":00" slots are the busiest on
+    # the shared Actions fleet and get queued.
+    #
+    # Sundays → deep whole-codebase sweep; the other six nights → normal (last-day diff).
+    # See the mode selector in preflight: it keys off DAY-OF-WEEK, not day-of-month.
+    #
+    # Runs ~1.4h AFTER claude-security-audit.yml's nightly 09:13 UTC slot so the two
+    # proactive Claude runs don't stack on the shared subscription rate limit, and
+    # ~1.4h BEFORE claude-weekly-doc-walkthrough.yml's Monday 12:00 UTC slot.
+    - cron: "37 10 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -74,7 +99,9 @@ on:
         default: auto
       window_days:
         description: "Days of history to review in normal mode"
-        default: "7"
+        # 1, not 7: the schedule is nightly, so each run should audit the day that just
+        # passed. Leaving this at 7 would re-audit the same week seven times over.
+        default: "1"
 
 # Least-privilege default. Only the synthesis job files issues, via its own
 # per-job `issues: write`. The dimension jobs are read-only.
@@ -88,12 +115,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Single source of truth for the model. Opus 4.8 by default — half the token burn of
+  # Single source of truth for the model. Opus 5 by default — half the token burn of
   # Fable for comparable static-review quality (see the MODEL note in the file header).
-  AUDIT_MODEL: claude-opus-4-8
+  AUDIT_MODEL: claude-opus-5
 
 jobs:
-  # Resolve mode (auto → deep/normal) and short-circuit a no-change week.
+  # Resolve mode (auto → deep/normal) and short-circuit a night with no commits.
   preflight:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
@@ -111,15 +138,20 @@ jobs:
         id: scope
         env:
           DISPATCH_MODE: ${{ github.event.inputs.mode || 'auto' }}
-          WINDOW_DAYS: ${{ github.event.inputs.window_days || '7' }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '1' }}
         run: |
           set -euo pipefail
           mode="$DISPATCH_MODE"
           if [ "$mode" = "auto" ]; then
-            # cron only fires on Mondays, so day-of-month <= 7 IS the first Monday.
-            # 10# forces base-10 so a leading-zero day (08/09) doesn't parse as octal.
-            dom=$(date -u +%d)
-            if [ "$((10#$dom))" -le 7 ]; then mode="deep"; else mode="normal"; fi
+            # DAY-OF-WEEK, not day-of-month. This selector used to read
+            # `day-of-month <= 7` and relied on the cron firing only on Mondays to make
+            # that mean "first Monday". The cron is now NIGHTLY, so that test would match
+            # on the 1st through the 7th of every month — seven consecutive deep
+            # whole-codebase sweeps instead of one. Keyed off the weekday it is correct
+            # at any cadence: exactly one deep run per week.
+            # %u is ISO day-of-week (1=Mon .. 7=Sun). 10# forces base-10 for safety.
+            dow=$(date -u +%u)
+            if [ "$((10#$dow))" -eq 7 ]; then mode="deep"; else mode="normal"; fi
           fi
           skip=false
           if [ "$mode" = "normal" ]; then
@@ -186,14 +218,18 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — always
+          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue"
           prompt: |
-            You are one lens of GAIA's proactive weekly code audit. YOUR LENS IS: ${{ matrix.dimension }}
+            You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
             Do ONLY that lens — ignore issues that belong to the other four.
 
             REPO: ${{ github.repository }}
@@ -242,7 +278,7 @@ jobs:
               `dedup_key` = `tests:aggregate:untested-modules`. In NORMAL mode, focus on
               new/changed code paths from the scope file.
 
-            ## Published hub agents — HOLD TO THE HIGHEST BAR (explicit double-check)
+            ## Published hub agents — HOLD TO THE HIGHEST BAR
             Published agents are the project's shop window — an integrator installs them and
             judges GAIA by them, so they must be bulletproof. **In BOTH modes, if your lens
             touches a published hub agent, review it against this bar explicitly and bump any
@@ -306,18 +342,42 @@ jobs:
             no design decision) so the `bug`→auto-fix path can land it; false if it needs a human
             (writing a test suite, a refactor, a design call).
 
-            ## Verify before you report — precision beats recall
-            One false finding erodes trust in the whole audit. Before you write a finding:
-            1. **Open the cited file and confirm the problem is actually present** — don't report
-               from a filename or a grep hit alone.
-            2. **Rule out that it's already handled** — the error re-raised two lines down, a test
-               in a different directory, the "missing" doc living under another path. A finding
-               that's already covered is a false positive; drop it.
-            3. Fill `evidence` with what you actually read. If you cannot produce concrete
-               evidence, you have not verified it — **omit the finding.**
-            Skip anything CI's `python util/lint.py --all` already enforces (black/isort/whitespace),
-            and skip anything you are not confident is real. A shorter, fully-substantiated list is
-            the goal — never pad.
+            ## Ground every finding in something you read — then REPORT IT
+            You are the FINDING pass, not the filtering pass. A separate synthesis step
+            dedupes these findings, re-checks their evidence, and drops the weak ones
+            before anything is filed. So your job here is COVERAGE: surface everything you
+            genuinely observed, including findings you are unsure about, and let synthesis
+            decide what survives. Do not self-censor to keep the list short — a finding
+            that synthesis discards costs nothing, a bug you withheld ships.
+
+            Grounding rules (these are about not inventing things, not about holding back):
+            1. **Open the cited file and confirm the problem is actually present** — never
+               report from a filename or a grep hit alone.
+            2. **Rule out that it's already handled** — the error re-raised two lines down,
+               a test in a different directory, the "missing" doc living under another
+               path. Already-covered is not a finding.
+            3. Fill `evidence` with what you actually read. **No evidence, no finding** —
+               this is the one hard filter in this pass, and it is a grounding requirement,
+               not a confidence threshold.
+            Use `severity` to express doubt rather than dropping the item: if it is real but
+            minor or you are unsure of the impact, file it 🟡 with your uncertainty stated
+            in `why`. Skip only what CI's `python util/lint.py --all` already enforces
+            (black/isort/whitespace).
+
+            NOTE FOR FUTURE EDITORS: this section used to read "precision beats recall …
+            skip anything you are not confident is real … never pad". On Claude Opus 5 that
+            wording measurably suppresses real findings — the model follows a
+            be-conservative instruction literally and reports less while investigating just
+            as hard. Filtering belongs in synthesis, which already does it. Do not put
+            conservatism back into a lens prompt.
+
+            ## Budget
+            You have --max-turns 30 and share one rate-limited subscription pool with the
+            sibling lenses (run back-to-back), the nightly security audit, and the
+            interactive PR-review jobs. Delegate to a subagent only for a genuinely wide,
+            parallelizable investigation — not for work you can finish in a handful of tool
+            calls, and never to verify or double-check your own findings. Prefer one
+            subagent over several. Spend turns reading code, not coordinating.
 
             ## Security is out of scope — hand it off, do not file it here
             If you notice a security weakness, do NOT file it in this audit's findings or the
@@ -334,7 +394,9 @@ jobs:
         with:
           name: findings-${{ matrix.dimension }}
           path: findings-${{ matrix.dimension }}.json
-          if-no-files-found: warn
+          # A dimension that ran writes `{"findings": []}` even when clean, so a missing file
+          # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
+          if-no-files-found: error
 
   # Collect the four dimension outputs, dedupe against open weekly-audit issues, rank,
   # and file ONE parent triage issue + per-finding child issues. This is the only job
@@ -374,13 +436,15 @@ jobs:
       - name: Synthesize and file the triage issue
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the dimension job's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
-            You are the synthesis step of GAIA's weekly proactive audit. Four dimension jobs
+            You are the synthesis step of GAIA's nightly proactive audit. Four dimension jobs
             (correctness, docs, tests, features) each wrote a findings JSON file.
             Dedupe them against already-open findings, rank them, and file the output.
 
@@ -401,8 +465,10 @@ jobs:
                Collect their `audit-key` KEYs too. These are permanently dismissed.
             5. Find the **previous parent** to cross-link: parents are never auto-closed, so
                there may now be SEVERAL currently-open issues whose title starts
-               `Weekly audit —`. Pick the MOST RECENTLY CREATED one (highest issue number).
-               Note its number. Do NOT close it.
+               `Nightly audit —` **or** the older `Weekly audit —` (this audit moved from a
+               weekly to a nightly cadence; match BOTH prefixes so the chain is not broken at
+               the changeover). Pick the MOST RECENTLY CREATED one (highest issue number)
+               across both. Note its number. Do NOT close it.
 
             ## Dedup + verify (the single biggest quality risk)
             Reduce the raw findings to the NEW, real set, in this order:
@@ -412,9 +478,20 @@ jobs:
                describe the same root cause (same file + symbol/area), keep the single most-severe
                one, mention the other lens in its body, and file just ONE child. (A stubbed command
                is often flagged by both `docs` and `correctness` — that's one issue, not two.)
-            3. **Evidence gate:** drop any 🔴/🟠 finding whose `evidence` is missing or does not
-               actually substantiate its `title`. If evidence looks thin, spot-check by reading the
-               cited `path`/`symbol` yourself before filing — a false issue erodes the whole audit.
+            3. **Evidence gate — YOU ARE THE ONLY FILTER.** The lenses are instructed to
+               report everything they ground in something they read, including items they
+               are unsure about, precisely so nothing is silently withheld upstream. That
+               makes this step load-bearing: expect more raw findings than the tracker
+               should receive, and cut hard.
+               - Drop any finding at ANY severity whose `evidence` is missing, or does not
+                 actually substantiate its `title`.
+               - For every 🔴/🟠 survivor, open the cited `path`/`symbol` and confirm the
+                 problem is really there before filing. A false 🔴 costs more trust than
+                 ten dropped 🟡s.
+               - Demote rather than delete when a finding is real but overstated: a 🟠
+                 whose impact you cannot substantiate becomes 🟡 (parent-only, no child).
+               - If a lens returns an implausible flood on one file/area, treat it as one
+                 finding about that area rather than filing each line.
             If, after all of the above, there are ZERO new findings, post NOTHING and exit
             cleanly — do not file a parent issue, and never close or comment on a prior parent.
 
@@ -425,14 +502,23 @@ jobs:
             child WITHOUT any auto-fix trigger label (do NOT add `bug`). Write the body to a temp
             file first, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
-            Body format (the audit-key marker is REQUIRED and drives next week's dedup):
+            Body format — follow CLAUDE.md → "How You Communicate": a human triages this, so
+            the title and opening line say what broke and who it hurts in plain words, and the
+            location / evidence / severity rows go in a collapsed `<details>` underneath.
+            Say each point once. The blank line after `</summary>` is REQUIRED or GitHub renders
+            the block as literal text. The audit-key marker is REQUIRED and drives the next
+            run's dedup:
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
 
-            **Where:** `path` · `symbol`
+            <details>
+            <summary>🔍 Evidence and location</summary>
+
+            **Where:** `path` · `symbol`   (the finding carries no line number — do not invent one)
             **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
             **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will never
             re-file it. Applying `bug` instead hands it to the existing auto-fix job.
@@ -443,7 +529,7 @@ jobs:
             issue number to reference from the parent.
 
             ## File ONE parent TRIAGE issue
-            Title: `Weekly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
+            Title: `Nightly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
             Label it `weekly-audit`. **Emit a section for EVERY dimension that has at least one
             finding, in this fixed order: Correctness, Features, Docs, Tests.** Group
             each finding under the dimension IT declares in its JSON — NEVER re-bucket a
@@ -451,7 +537,7 @@ jobs:
             section, order 🔴 → 🟠 → 🟡 and prefix each line with its severity emoji. 🔴/🟠 lines
             link their child issue (`· #<n>`); 🟡 lines have no child (they live only here). Example:
             ```
-            Proactive weekly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
+            Proactive nightly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
             to a PR by applying the `bug` label to its child issue. Severity: 🔴 high · 🟠 medium · 🟡 low.
 
             ## Correctness (2)
@@ -483,6 +569,8 @@ jobs:
             - Never close a parent triage issue — only a human maintainer closes one, after its
               findings are addressed.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
+            - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>` —
+              those stay visible in the summary.
           claude_args: |
             --max-turns 32
             --model ${{ env.AUDIT_MODEL }}
@@ -502,7 +590,11 @@ jobs:
             [ "$is_err" = "false" ] && ok=true
           fi
           if [ "$ok" = "true" ]; then
-            echo "✅ Weekly audit synthesis completed (log: $EXEC_FILE)"
+            echo "✅ Nightly audit synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Weekly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            # Hard-fail, not a warning: a green run that audited nothing is indistinguishable
+            # from a green run that found nothing, which is how the actor-gate outage went
+            # unnoticed for a month. A flake here costs one re-run; silence costs coverage.
+            echo "::error title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            exit 1
           fi

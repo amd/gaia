@@ -148,6 +148,7 @@ class ToolLoader:
         embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]] = None,
         threshold: float = DEFAULT_THRESHOLD,
         max_tools: int = DEFAULT_MAX_TOOLS,
+        optional_tools: Sequence[str] = (),
     ) -> None:
         """Build a semantic tool loader.
 
@@ -160,9 +161,15 @@ class ToolLoader:
                 one-shot tool-doc embedding; falls back to per-doc ``embed_fn``.
             threshold: Inclusive cosine match threshold.
             max_tools: Hard ceiling on the loaded set size.
+            optional_tools: Configured names that a healthy registry may
+                legitimately lack — environment-conditional tools, or tools a
+                subclass contributes that the base profile does not. Exempt from
+                :meth:`validate_registry` only; every other name there still
+                fails loudly, and ``select`` already tolerates absent members.
         """
         self._core: FrozenSet[str] = frozenset(core_tools)
         self._bundles: List[ToolBundle] = list(bundles)
+        self._optional: FrozenSet[str] = frozenset(optional_tools)
         self._embed_fn = embed_fn
         self._embed_batch_fn = embed_batch_fn
         self._threshold = float(threshold)
@@ -200,6 +207,10 @@ class ToolLoader:
     def validate_registry(self, registry: Dict[str, dict]) -> None:
         """Raise if CORE or any bundle names a tool absent from *registry*.
 
+        Names in ``optional_tools`` are exempt — they are absent by construction
+        on some installs (env-gated backends, subclass-only mixins), so treating
+        them as drift would fail a healthy agent.
+
         Checks the config→registry direction only (no dead/misspelled CORE or
         bundle names). The host agent calls this once on first activation
         (ChatAgent does, since its doc CORE∪bundles must cover the registry) so
@@ -209,7 +220,7 @@ class ToolLoader:
         CORE/bundles, which would silently never be surfaced) is the CI bundle
         test's job — it compares both sets exactly.
         """
-        names = set(registry)
+        names = set(registry) | self._optional
         missing_core = sorted(self._core - names)
         missing_bundle = sorted({m for b in self._bundles for m in b.members} - names)
         if missing_core or missing_bundle:
@@ -547,6 +558,14 @@ class ToolLoader:
         if missing:
             if self._embed_batch_fn is not None:
                 vecs = self._embed_batch_fn([docs[n] for n in missing])
+                if len(vecs) != len(missing):
+                    # A warming-up embedder can answer 200 with fewer vectors
+                    # than texts; a bare zip would silently drop entries and
+                    # surface later as a misleading KeyError.
+                    raise RuntimeError(
+                        f"embedding batch returned {len(vecs)} vectors for "
+                        f"{len(missing)} texts — embedder still loading?"
+                    )
                 for name, vec in zip(missing, vecs):
                     self._embed_cache[keys[name]] = np.asarray(vec, dtype=np.float32)
             else:

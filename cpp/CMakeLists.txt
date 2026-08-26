@@ -13,7 +13,8 @@ endif()
 # Must be included before project() so the toolchain is set in time.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
 
-project(gaia-cpp VERSION 0.1.0 LANGUAGES CXX)
+# C is required for the vendored SQLite amalgamation (third_party/sqlite).
+project(gaia-cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +92,44 @@ if(NOT httplib_FOUND)
     FetchContent_MakeAvailable(httplib)
 endif()
 
+# yaml-cpp (private dependency -- SKILL.md frontmatter parsing).
+# Kept out of the public headers: skill.h exposes nlohmann::json blobs, never
+# YAML::Node, so consumers never need yaml-cpp on their include path.
+find_package(yaml-cpp 0.8 QUIET)
+if(NOT yaml-cpp_FOUND)
+    message(STATUS "yaml-cpp not found -- fetching via FetchContent")
+    set(_GAIA_SAVE_BSL_YAML ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    # Installed alongside gaia_core: it is linked into the static library, so
+    # the install prefix must carry it (and its config package) for a consumer
+    # to link the result.
+    set(YAML_CPP_INSTALL ON CACHE BOOL "" FORCE)
+    set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+    # yaml-cpp 0.8.0 asks for cmake_minimum_required(3.4), which CMake 4.x
+    # rejects outright. Floor it for this subproject only.
+    set(_GAIA_SAVE_POLICY_MIN ${CMAKE_POLICY_VERSION_MINIMUM})
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    FetchContent_Declare(
+        yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG        0.8.0
+    )
+    FetchContent_MakeAvailable(yaml-cpp)
+    set(CMAKE_POLICY_VERSION_MINIMUM ${_GAIA_SAVE_POLICY_MIN})
+    set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL_YAML})
+
+    # yaml-cpp 0.8.0 predates the libstdc++ 13 header cleanup: its
+    # emitterutils.cpp uses uint16_t without including <cstdint>, so it fails to
+    # compile on GCC 13+ (the STX runner ships GCC 15). Upstream fixed this after
+    # the tag; force the include rather than drift off the pinned 0.8.0.
+    if(TARGET yaml-cpp AND NOT MSVC)
+        target_compile_options(yaml-cpp PRIVATE -include cstdint)
+    endif()
+endif()
+
 # FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
 # FTXUI must always be built static — it doesn't export symbols for DLL builds,
 # so BUILD_SHARED_LIBS=ON causes LNK1181 on Windows.
@@ -112,6 +151,66 @@ if(GAIA_BUILD_TUI)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# SQLite — vendored amalgamation (third_party/sqlite), NOT find_package
+# ---------------------------------------------------------------------------
+# Deliberately no system-SQLite fallback: a distro build may lack FTS5 or use
+# different compile-time defaults, and that only surfaces at query time on one
+# platform. Compiling the amalgamation gives all three platforms identical
+# semantics. See cpp/third_party/sqlite/README.md.
+#
+# An OBJECT library keeps SQLite's own warnings out of gaia_core's -Wall/-W4
+# without loosening them for our code, and its objects are baked straight into
+# gaia_core, so nothing extra ends up in the install export set.
+add_library(gaia_sqlite3 OBJECT third_party/sqlite/sqlite3.c)
+
+set(GAIA_SQLITE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
+
+target_include_directories(gaia_sqlite3 PRIVATE ${GAIA_SQLITE_INCLUDE_DIR})
+
+set_target_properties(gaia_sqlite3 PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    C_STANDARD 99
+)
+
+# Applied to both the amalgamation and to src/database.cpp, which includes
+# sqlite3.h — the two must agree or the header describes a different build than
+# the one linked in.
+set(GAIA_SQLITE_DEFINITIONS
+    # Full-text search. A missing flag fails at *query* time, not build time —
+    # tests/test_database.cpp has an FTS5 smoke test that catches a silent drop.
+    SQLITE_ENABLE_FTS5
+    # Serialized mode: a gaia::Database may be shared across threads.
+    SQLITE_THREADSAFE=1
+    # Reject double-quoted string literals, so a typo'd column name is an error
+    # instead of silently becoming a string constant.
+    SQLITE_DQS=0
+    # Foreign-key constraints enforced unless a caller opts out.
+    SQLITE_DEFAULT_FOREIGN_KEYS=1
+    # Reject LIKE against BLOBs rather than coercing.
+    SQLITE_LIKE_DOESNT_MATCH_BLOBS
+    # WAL commits sync the WAL, not the whole database — the standard WAL default.
+    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1
+    # Views/triggers/indexes can't invoke non-SQLITE_INNOCUOUS functions.
+    SQLITE_TRUSTED_SCHEMA=0
+    # Drop the global allocation counters we never read.
+    SQLITE_DEFAULT_MEMSTATUS=0
+    # Depth of the expression tree is bounded by SQLITE_MAX_SQL_LENGTH instead
+    # of a separate, lower limit that rejects legitimate generated SQL.
+    SQLITE_MAX_EXPR_DEPTH=0
+)
+# Note: no SQLITE_OMIT_* flags — upstream documents those as unsupported with
+# the amalgamation. Loadable extensions are instead disabled per-connection via
+# sqlite3_db_config() in src/database.cpp, which is a runtime guarantee.
+
+target_compile_definitions(gaia_sqlite3 PRIVATE ${GAIA_SQLITE_DEFINITIONS})
+
+# Third-party source: never our warnings to fix.
+target_compile_options(gaia_sqlite3 PRIVATE
+    $<$<C_COMPILER_ID:MSVC>:/W0>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
+)
+
 # Google Test (unit tests and/or integration tests)
 if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
@@ -132,29 +231,46 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(gaia_core
     src/types.cpp
+    src/model_registry.cpp
     src/image.cpp
     src/tool_registry.cpp
     src/console.cpp
     src/clean_console.cpp
     src/json_utils.cpp
+    src/http_client.cpp
     src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
+    src/mcp_registry.cpp
     src/security.cpp
     src/sse_parser.cpp
     src/process.cpp
     src/file_tools.cpp
+    src/ignore.cpp
     src/git_tools.cpp
     src/session.cpp
+    src/vector_index.cpp
     src/repl.cpp
     src/json_event_handler.cpp
+    src/chunking.cpp
+    src/skill.cpp
+    src/database.cpp
 )
+
+# SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
+# $<TARGET_OBJECTS:> rather than target_link_libraries keeps gaia_sqlite3 out of
+# gaia_core's link interface, so install(EXPORT) has nothing extra to resolve —
+# the same approach this file already takes for the fetched httplib/json.
+target_sources(gaia_core PRIVATE $<TARGET_OBJECTS:gaia_sqlite3>)
+target_include_directories(gaia_core PRIVATE ${GAIA_SQLITE_INCLUDE_DIR})
+target_compile_definitions(gaia_core PRIVATE ${GAIA_SQLITE_DEFINITIONS})
 
 # TUI sources (conditional on FTXUI availability)
 if(GAIA_BUILD_TUI)
     target_sources(gaia_core PRIVATE
-        src/tui_console.cpp
         src/tui_markdown.cpp
+        src/tui_transcript.cpp
+        src/tui_app.cpp
     )
     target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
 endif()
@@ -209,9 +325,19 @@ else()
     )
 endif()
 
+# yaml-cpp is PRIVATE (SKILL.md parsing detail — never in a public header), but
+# gaia_core is static, so it still reaches the exported link interface and a
+# consumer of the installed package must resolve it. Whether it came from the
+# system or from FetchContent, it installs its own config package into the same
+# prefix, so find_dependency() finds it either way.
+target_link_libraries(gaia_core PRIVATE yaml-cpp::yaml-cpp)
+
 # Platform-specific libraries
 if(UNIX)
     target_link_libraries(gaia_core PUBLIC pthread)
+    # SQLite references dlopen/dlsym on Unix even with extension loading
+    # disabled at runtime; the symbols must resolve at link time.
+    target_link_libraries(gaia_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
@@ -305,19 +431,27 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent.cpp
         tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
+        tests/test_mcp_registry.cpp
         tests/test_console.cpp
+        tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_native_tool_calls.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
         tests/test_sse_parser.cpp
         tests/test_process.cpp
         tests/test_file_tools.cpp
+        tests/test_ignore.cpp
         tests/test_git_tools.cpp
         tests/test_session.cpp
+        tests/test_vector_index.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
+        tests/test_chunking.cpp
+        tests/test_skill.cpp
+        tests/test_database.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -340,12 +474,21 @@ if(GAIA_BUILD_TESTS)
 
     target_compile_definitions(tests_mock PRIVATE
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        # The SKILL.md conformance corpus is shared with the Python runtime and
+        # lives at the repo root. test_skill.cpp discovers the skills from the
+        # directory, so new corpora (e.g. openclaw_skills/) are picked up
+        # automatically instead of needing a hardcoded list here.
+        GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)
-        target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+        target_sources(tests_mock PRIVATE
+            tests/test_tui_markdown.cpp
+            tests/test_tui_transcript.cpp
+            tests/test_tui_app.cpp
+        )
         target_link_libraries(tests_mock PRIVATE
             ftxui::component ftxui::dom ftxui::screen
         )
@@ -369,6 +512,7 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         tests/integration/test_integration_wifi.cpp
         tests/integration/test_integration_health.cpp
         tests/integration/test_integration_vlm.cpp
+        tests/integration/test_integration_tool_calls.cpp
     )
 
     target_link_libraries(tests_integration PRIVATE

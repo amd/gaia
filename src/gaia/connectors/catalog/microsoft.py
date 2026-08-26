@@ -25,9 +25,8 @@ see ``providers/microsoft.py`` for the resolution chain and
 Foundation for the Outlook mailbox (#1275) and calendar (#1276) agents. Those
 leads add agent tools that request a Bearer token for these Graph scopes via
 the generic ``oauth_pkce`` handler — no Microsoft-specific OAuth code in the
-agents. #2629 tracks teaching the email agent / Agent UI about
-``microsoft_work``; today only ``microsoft`` is in any agent's
-``REQUIRED_CONNECTORS``.
+agents. ``microsoft_work`` is now in the email agent's ``REQUIRED_CONNECTORS``
+too (#2629) — both Microsoft connectors are agent-reachable.
 """
 
 import gaia.connectors.oauth_pkce  # noqa: F401  # pylint: disable=unused-import

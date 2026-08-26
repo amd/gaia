@@ -11,7 +11,6 @@ on:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
       - 'src/gaia/apps/webui/**'
-      - 'hub/agents/emr/python/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
   pull_request:
@@ -21,7 +20,6 @@ on:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
       - 'src/gaia/apps/webui/**'
-      - 'hub/agents/emr/python/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
   merge_group:
@@ -91,10 +89,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Deliberately above the Agent UI's `engines.node` build floor: this job
+      # runs the *test* toolchain, and jsdom 30 (#2750) pulls undici 8, which
+      # needs Node >= 22.19 for worker_threads `markAsUncloneable`. On Node 20
+      # every Vitest worker dies at import with "webidl.util.markAsUncloneable
+      # is not a function" and the suite silently reports zero tests. Don't
+      # lower this to match `engines.node` — that floor covers building the
+      # app, which has no jsdom.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: src/gaia/apps/webui/package-lock.json
 
@@ -135,7 +140,7 @@ jobs:
         run: |
           cd tests/electron
           # Run structure tests for all apps and framework integration
-          npm test -- test_electron_jira_app.js test_electron_example_app.js test_electron_emr_dashboard.js test_electron_framework_integration.js
+          npm test -- test_electron_example_app.js test_electron_framework_integration.js
 
       - name: Run Agent UI tests
         run: |
@@ -198,15 +203,9 @@ jobs:
       fail-fast: false
       matrix:
         app:
-          - name: jira
-            path: src/gaia/apps/jira/webui
-            has_package_script: true
           - name: example
             path: src/gaia/apps/example/webui
             has_package_script: true
-          - name: emr-dashboard
-            path: hub/agents/emr/python/gaia_agent_emr/dashboard/electron
-            has_package_script: false
 
     steps:
       - uses: actions/checkout@v7
@@ -276,13 +275,6 @@ jobs:
             exit 1
           fi
 
-      - name: Validate Electron can be required (EMR Dashboard)
-        if: matrix.app.name == 'emr-dashboard'
-        run: |
-          cd ${{ matrix.app.path }}
-          # Verify Electron module can be loaded
-          node -e "require('electron'); console.log('✅ Electron module loads successfully')"
-
   dependency-audit:
     name: Audit Dependencies
     runs-on: ubuntu-latest
@@ -292,12 +284,8 @@ jobs:
         package:
           - name: electron-framework
             path: src/gaia/electron
-          - name: jira-app
-            path: src/gaia/apps/jira/webui
           - name: example-app
             path: src/gaia/apps/example/webui
-          - name: emr-dashboard
-            path: hub/agents/emr/python/gaia_agent_emr/dashboard/electron
 
     steps:
       - uses: actions/checkout@v7
@@ -335,8 +323,6 @@ jobs:
       fail-fast: false
       matrix:
         app:
-          - name: jira
-            path: src/gaia/apps/jira/webui
           - name: example
             path: src/gaia/apps/example/webui
 

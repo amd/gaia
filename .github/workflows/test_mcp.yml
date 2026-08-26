@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # This workflow tests the MCP (Model Context Protocol) bridge functionality
-# Tests include: HTTP-native bridge, JSON-RPC protocol, Jira integration, and performance
+# Tests include: HTTP-native bridge, JSON-RPC protocol, and performance
 # Platform: Windows and Linux
 
 name: MCP Bridge Tests
@@ -133,12 +133,7 @@ jobs:
           Write-Host "Running comprehensive HTTP validation..."
           python tests/mcp/test_mcp_http_validation.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          
-          # Run MCP summarize tests
-          Write-Host "Running MCP summarize tests..."
-          python tests/mcp/test_mcp_summarize.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          
+
           Write-Host "✅ All MCP tests passed"
         shell: pwsh
 
@@ -214,10 +209,6 @@ jobs:
           echo "Running comprehensive HTTP validation..."
           python tests/mcp/test_mcp_http_validation.py
 
-          # Run MCP summarize tests
-          echo "Running MCP summarize tests..."
-          python tests/mcp/test_mcp_summarize.py
-
           echo "✅ All MCP tests passed"
 
       - name: Stop MCP Bridge
@@ -277,7 +268,6 @@ jobs:
             echo "  ✅ Performance testing with warm-up"
             echo "  ✅ Integration testing"
             echo "  ✅ Cross-platform compatibility (Windows & Linux)"
-            echo "  ⏭️  Jira tests skipped (requires authentication)"
           else
             echo "❌ Some MCP tests failed"
             exit 1

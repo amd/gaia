@@ -1450,11 +1450,17 @@ Agent: "I can learn more about your setup by looking at your system.
 | Source | What it reads | What it stores | Sensitive? |
 |---|---|---|---|
 | **File system** | `~/`, `~/Documents`, `~/Work`, `~/Projects` -- folder names + file extensions only, not file contents | Project names, languages used (by extension), directory structure | No |
-| **Browser bookmarks** | Chrome/Edge/Firefox bookmark files (JSON/SQLite) | Bookmarked sites -> interests, tools, frequently visited services | Partial -- flag social media, banking |
-| **Browser history** | Last 30 days of visited URLs (not page content) | Top domains -> interests, workflow patterns, services used | Yes -- auto-flag all |
-| **Installed apps** | Windows Apps & Features registry, Start Menu shortcuts | App inventory -> tools, IDEs, communication apps, creative tools | No |
+| **Browser bookmarks** | Chrome/Edge/Chromium/Firefox bookmark files (JSON/SQLite) from every profile, plus Safari on macOS | Bookmarked sites -> interests, tools, frequently visited services | Partial -- flag social media, banking |
+| **Browser history** | Last 30 days of visited URLs (not page content), every profile, plus Safari on macOS | Top domains -> interests, workflow patterns, services used | Yes -- auto-flag all |
+| **Installed apps** | Windows Apps & Features registry + Start Menu shortcuts; macOS `.app` bundles in `/Applications` and `~/Applications`; Linux `.desktop` entries incl. Flatpak and Snap exports | App inventory -> tools, IDEs, communication apps, creative tools | No |
 | **Git repos** | Walk project folders for `.git/config` -- read remotes, branch names | Project names, languages (by file extensions), remote URLs (GitHub/GitLab) | Partial -- flag private repos |
-| **Email accounts** | Windows credential store / Thunderbird profiles -- addresses only | Email addresses -> entity creation (`service:gmail`, `service:outlook`) | Yes -- addresses only, not content |
+| **Email accounts** | Windows credential store; macOS Keychain *attributes* + Apple Mail plists; Thunderbird profiles on every platform; Evolution sources on Linux -- addresses only, never passwords | Email addresses -> entity creation (`service:gmail`, `service:outlook`) | Yes -- addresses only, not content |
+
+**Unsupported platforms are reported, never silently empty.** A source with no
+scanner for the running OS (for example the Windows UserAssist registry on
+macOS) is named in a log line and, in the Agent UI, in the discovery stream —
+so a user can always tell "GAIA cannot look here" from "you have none".
+`SystemDiscovery.scan_all` maps such a source to `[]` without invoking it.
 
 #### Discovery Flow
 
@@ -1499,16 +1505,29 @@ class SystemDiscovery:
         """Find .git directories. Returns repo names, remotes, languages."""
 
     def scan_installed_apps(self) -> List[Dict]
-        """Read Windows registry/shortcuts. Returns app inventory."""
+        """Windows registry/shortcuts, macOS .app bundles, or Linux .desktop
+        entries across XDG_DATA_DIRS/XDG_DATA_HOME. Returns app inventory."""
 
     def scan_browser_bookmarks(self) -> List[Dict]
-        """Read Chrome/Edge/Firefox bookmark files. Returns categorized sites."""
+        """Read Chromium/Firefox bookmark files (every profile, including Snap
+        and Flatpak installs on Linux) plus Safari on macOS. Returns
+        categorized sites."""
 
     def scan_browser_history(self, days: int = 30) -> List[Dict]
-        """Read browser history DBs. Returns top domains. All flagged sensitive."""
+        """Read browser history DBs (every profile). Returns top domains.
+        All flagged sensitive."""
 
     def scan_email_accounts(self) -> List[Dict]
-        """Read credential store for email addresses. All flagged sensitive."""
+        """Read this platform's credential store and mail-client config for
+        addresses only -- never passwords. All flagged sensitive."""
+
+
+def unsupported_reason(source: str) -> Optional[str]
+    """Why `source` has no scanner on this platform, or None if it has one.
+    scan_all(), the Agent UI discovery and inference streams, and
+    `gaia memory bootstrap` consult this before dispatching; a scanner called
+    directly applies the same gate itself. An unsupported source is always
+    reported by name instead of returning empty."""
 ```
 
 Each method returns dicts like:

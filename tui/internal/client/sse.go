@@ -87,6 +87,12 @@ type SSEClient struct {
 	// noticedOldPeer records that the "this agent cannot be asked anything"
 	// notice has already been shown, so it appears once per launch, not per turn.
 	noticedOldPeer bool
+	// sessionID identifies this conversation to a peer that supports it
+	// (#2829). Minted lazily on first Send (mirrors runID's own mint time,
+	// so a mint failure surfaces the same way runID's does); "" means "mint
+	// on next Send". /clear clears it here so the NEXT turn starts a new
+	// conversation server-side too, not just in the visible transcript.
+	sessionID string
 }
 
 // runHandle is the cancel side of the currently streaming run.
@@ -129,6 +135,11 @@ type queryRequest struct {
 	// and then send it explicitly — including `false`, which is a real answer
 	// the agent branches on, not an absence.
 	CanAnswerQuestions *bool `json:"can_answer_questions,omitempty"`
+	// Plain string (not a pointer, unlike CanAnswerQuestions): unlike a bool,
+	// there is no legitimate "explicit empty" session_id to distinguish from
+	// absence -- a minted id is never "", so plain omitempty is enough. Sent
+	// only once negotiation proves the peer is >= 2.12 (#2829).
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -174,6 +185,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		interactive := s.opts.Interactive
 		canAnswer = &interactive
 	}
+	var sessionID string
+	if peer.supportsSession {
+		sessionID, err = s.ensureSessionID()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
@@ -182,6 +200,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		Model:              s.opts.Model,
 		MaxSteps:           s.opts.MaxSteps,
 		CanAnswerQuestions: canAnswer,
+		SessionID:          sessionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -217,7 +236,8 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		status := resp.StatusCode
 		resp.Body.Close()
 		cancel()
-		if status == http.StatusNotFound {
+		switch status {
+		case http.StatusNotFound:
 			// A 404 on the query path is specifically "this route does not exist
 			// there" — most often a sidecar predating the canonical /query
 			// endpoint. Saying so beats making the user decode a bare 404.
@@ -227,10 +247,22 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 					"`gaia daemon agents` and reinstall/update the agent — or no agent with "+
 					"that id is registered with the daemon",
 				s.agentID, detail)
+		case http.StatusConflict:
+			// The session's run_lock is still held by a previous turn (#2901) —
+			// most often the tail of a just-cancelled one the daemon has not
+			// finished unwinding yet. Name the busy resource, like Respond and
+			// Confirm already do for their own 409s, instead of the generic
+			// relay-refused copy below (which points at a daemon that is down,
+			// not one that is merely still finishing).
+			return nil, fmt.Errorf(
+				"the '%s' agent is still finishing the previous turn on this session (%s). "+
+					"Wait a moment and try again",
+				s.agentID, detail)
+		default:
+			return nil, fmt.Errorf(
+				"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
+				s.agentID, detail)
 		}
-		return nil, fmt.Errorf(
-			"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
-			s.agentID, detail)
 	}
 
 	handle := &runHandle{runID: runID, cancel: cancel}
@@ -569,6 +601,21 @@ type confirmRequest struct {
 	Approved bool `json:"approved"`
 }
 
+// postCancel POSTs /v1/<agent>/query/{runID}/cancel and returns the response,
+// or an error if the request itself could not be delivered. Shared by
+// cancelRun (best-effort, fire-and-forget) and Cancel (the caller-facing,
+// error-reporting seam — #2901).
+func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID string) (*http.Response, error) {
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
+			url.PathEscape(s.agentID), url.PathEscape(runID)),
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+	})
+	return resp, err
+}
+
 // cancelRun asks the relay to drop a run we are abandoning.
 //
 // Best-effort: the sidecar may already be gone. It owns its own background
@@ -586,13 +633,7 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
 	defer cancel()
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
-		Method: http.MethodPost,
-		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
-			url.PathEscape(s.agentID), url.PathEscape(handle.runID)),
-		HTTPClient: s.cancelHTTP,
-		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
-	})
+	resp, err := s.postCancel(ctx, inst, handle.runID)
 	if err != nil {
 		s.opts.Logf("sse: best-effort cancel for '%s' run_id=%s failed: %v",
 			s.agentID, handle.runID, err)
@@ -610,6 +651,54 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	if resp.StatusCode != http.StatusOK {
 		s.opts.Logf("sse: cancel for '%s' run_id=%s answered HTTP %d",
 			s.agentID, handle.runID, resp.StatusCode)
+	}
+}
+
+// Cancel implements client.AgentCanceler (#2901). It asks the server to stop
+// the active run WITHOUT touching this client's own read of the run's SSE
+// stream — unlike the caller's context.CancelFunc, which tears that read
+// down immediately and is exactly what let a resend beat the daemon's
+// session run_lock (cooperative cancellation, released by the sidecar's
+// worker thread's own `finally`, checked once per agent-loop step; see
+// hub/agents/email/python/gaia_agent_email/query_routes.py).
+//
+// Leaving the read running is what makes the eventual terminal signal a
+// near-certain settlement signal in practice — not a proven one. The
+// sidecar's `finally` runs signal_done() and only THEN run_lock.release(),
+// same thread, no I/O between the two statements, so by the time anything
+// downstream notices signal_done the lock is released in all but a
+// vanishingly rare preemption between those two lines (#2912 review). A
+// client that aborts its own read instead observes a "done" that is
+// guaranteed to race ahead of the release, which is the bug this method
+// exists to avoid reintroducing. Closing that last window for good is a
+// one-line server-side reorder (release, then signal_done) — tracked
+// separately, not required here since this is a Go-only change.
+func (s *SSEClient) Cancel(ctx context.Context) error {
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		// Nothing live to cancel — most often the run already reached its own
+		// terminal event between the keypress and this call. Not an error: the
+		// caller's read will observe that completion on its own.
+		return nil
+	}
+
+	resp, err := s.postCancel(ctx, inst, active.runID)
+	if err != nil {
+		return fmt.Errorf("could not deliver the cancel request for the '%s' agent: %w", s.agentID, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNotFound:
+		// 404 means the run had already ended by the time this landed — the
+		// caller's read will see that completion on its own; nothing failed.
+		return nil
+	default:
+		return fmt.Errorf("cancelling the '%s' run failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
 	}
 }
 
@@ -694,10 +783,37 @@ func (s *SSEClient) Transcript() []Turn {
 // ResetTranscript drops the accumulated context, so the next turn starts fresh.
 // Wired to the chat screen's /clear, which would otherwise clear the visible
 // history while still pushing it as `context`.
+//
+// Also drops the session id (#2829): /clear starts a NEW conversation, and a
+// stale id would let the sidecar resolve the pre-clear agent even though the
+// visible transcript says otherwise. No network call — matches ResetTranscript
+// itself, which has no error return and is called outside a tea.Cmd
+// (model.go), so a blocking DELETE here would freeze the UI. The next Send
+// mints a fresh id lazily, exactly like the very first turn.
 func (s *SSEClient) ResetTranscript() {
 	s.mu.Lock()
 	s.transcript = nil
+	s.sessionID = ""
 	s.mu.Unlock()
+}
+
+// ensureSessionID returns this conversation's session id, minting one on
+// first use. Lazy and mutex-guarded so concurrent callers never mint two
+// (Send() itself is documented as serialized, but this stays correct either
+// way). Reuses newRunID's generator; a mint failure is reported the same way
+// a run_id mint failure already is, by Send returning the error.
+func (s *SSEClient) ensureSessionID() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionID != "" {
+		return s.sessionID, nil
+	}
+	id, err := newRunID()
+	if err != nil {
+		return "", fmt.Errorf("could not mint a session id: %w", err)
+	}
+	s.sessionID = id
+	return id, nil
 }
 
 // Close cancels any in-flight run and refuses further sends.
@@ -736,5 +852,6 @@ var (
 	_ AgentClient        = (*SSEClient)(nil)
 	_ AgentResponder     = (*SSEClient)(nil)
 	_ AgentConfirmer     = (*SSEClient)(nil)
+	_ AgentCanceler      = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )

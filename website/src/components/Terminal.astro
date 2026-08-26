@@ -2,13 +2,13 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Hero terminal: a scripted email-agent session that types on character by
+// Hero terminal: a scripted terminal-hub session that types on character by
 // character. The transcript is rendered server-side, so no-JS and
 // prefers-reduced-motion visitors get the whole session statically.
 //
-// The session is ILLUSTRATIVE, not captured output — the commands, the stream
-// event types (status / tool_call / final) and the triage categories are real,
-// the message subjects are invented. That is why the window chrome says so.
+// The session is ILLUSTRATIVE, not captured output — the commands (gaia init,
+// gaia-tui) and the stream event types (status / tool_call / final) are real,
+// the document and its findings are invented. That is why the chrome says so.
 
 interface Props {
   class?: string;
@@ -20,19 +20,18 @@ const { class: className = '' } = Astro.props;
 type Segment = [string, string];
 
 const LINES: Segment[][] = [
-  [['$ ', 'tok-key'], ['lemonade-server serve', '']],
-  [['✦ Gemma-4-E4B-it-GGUF loaded', 'log-dim']],
-  [['$ ', 'tok-key'], ['npx @amd-gaia/agent-email playground', '']],
-  [['◆ sidecar up on 127.0.0.1:8131', 'tok-key']],
-  [['› ', 'tok-key'], ["find today's urgent mail, archive promos", '']],
-  [['[status] ', 'log-dim'], ['resolving mailbox · Google connector', '']],
-  [['[tool_call] ', 'log-dim'], ['triage · classifying on-device', '']],
-  [['  URGENT          ', 'log-urgent'], ['Prod incident follow-up — Sarah', '']],
-  [['  NEEDS_RESPONSE  ', 'log-needs'], ['Contract redline due Fri — Legal', '']],
-  [['  FYI             ', 'log-fyi'], ['Weekly metrics digest', 'log-dim']],
-  [['  PROMOTIONAL     ', 'log-dim'], ['6 messages → archived', 'log-dim']],
-  [['[tool_call] ', 'log-dim'], ['draft_reply · awaiting your confirmation', '']],
-  [['[final] ', 'log-ok'], ['no email content left the device', 'log-ok']],
+  [['$ ', 'tok-key'], ['gaia init', '']],
+  [['✦ Gemma-4-E4B-it-GGUF ready · local runtime up', 'log-dim']],
+  [['$ ', 'tok-key'], ['gaia-tui', '']],
+  [['◆ GAIA terminal hub · agents on this machine', 'tok-key']],
+  [['› ', 'tok-key'], ['what should I flag in ~/reports/q3-forecast.pdf?', '']],
+  [['[status] ', 'log-dim'], ['indexing q3-forecast.pdf · on-device', '']],
+  [['[tool_call] ', 'log-dim'], ['rag.query · retrieving relevant pages', '']],
+  [['  RISK    ', 'log-urgent'], ['Supply constraint flagged in section 4', '']],
+  [['  RISK    ', 'log-needs'], ['FX assumption unchanged since Q1', '']],
+  [['  NOTE    ', 'log-fyi'], ['Margin outlook revised upward', 'log-dim']],
+  [['[tool_call] ', 'log-dim'], ['memory.save · remembered for next session', '']],
+  [['[final] ', 'log-ok'], ['answered locally — the file never left this machine', 'log-ok']],
 ];
 
 const escChar = (c: string) =>
@@ -69,20 +68,20 @@ const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key" a
     <span class="h-[11px] w-[11px] rounded-full bg-white/10" aria-hidden="true"></span>
     <span class="h-[11px] w-[11px] rounded-full bg-white/10" aria-hidden="true"></span>
     <span class="h-[11px] w-[11px] rounded-full bg-white/10" aria-hidden="true"></span>
-    <span class="mono ml-1.5 text-[11.5px] text-g-code-faint">agent-email v0.5.0 · illustrative</span>
+    <span class="mono ml-1.5 text-[11.5px] text-g-code-faint">gaia-tui · illustrative</span>
     <span class="mono ml-auto rounded-g-badge border border-g-gold-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-gold">local</span>
   </div>
 
   {/* The box scrolls (the transcript is taller than 268px, much taller when it
       wraps on a phone), so it must be focusable to be keyboard-scrollable — and
       it must not be role="img", which would hide the transcript, including the
-      "no email content left the device" payoff, from assistive tech. */}
+      "never left this machine" payoff, from assistive tech. */}
   <div
     data-terminal
     data-lines={JSON.stringify(LINES)}
     tabindex="0"
     role="region"
-    aria-label="Illustrative terminal session — a scripted email-triage demo, not captured output."
+    aria-label="Illustrative terminal session — a scripted terminal-hub demo, not captured output."
     class="mono h-[268px] overflow-y-auto px-[18px] pb-[22px] pt-[18px] text-[13px] leading-[1.85] text-g-code-text"
     set:html={transcript}
   />

@@ -124,6 +124,7 @@ jobs:
   build:
     name: Build ${{ matrix.platform }} installer
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     # Build job is strictly read-only — it produces workflow-run artifacts
     # that callers (publish.yml) download and re-upload. The opt-in
     # GitHub Release upload step elevates with a per-step token (see the
@@ -578,6 +579,7 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -738,6 +740,7 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -781,6 +784,7 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: macos-latest  # Apple Silicon (arm64) — matches build matrix
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -812,6 +816,7 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1071,6 +1076,8 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
+    # apt-get can stall fetching xvfb; without this the job inherits the 6h default.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1161,6 +1168,7 @@ jobs:
           done
           if [ "$HEALTH_OK" -ne 1 ]; then
             echo "::error::userns-restricted: /api/health did not report service=gaia-agent-ui"
+            tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
             kill -9 "$APP_PID" 2>/dev/null || true
             exit 1
           fi
@@ -1248,6 +1256,7 @@ jobs:
       inputs.publish_to_release == true &&
       inputs.tag != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     strategy:
@@ -1283,6 +1292,7 @@ jobs:
   build-complete:
     name: Build complete
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs:
       - build
       - validate-artifacts

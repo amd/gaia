@@ -27,7 +27,7 @@ func hubResponse(installed bool, supervised bool) *HubCatalog {
 	}
 	return &HubCatalog{
 		Agents:               []HubEntry{entry},
-		UnsupervisedFiltered: []string{"code"},
+		UnsupervisedFiltered: []string{"chat"},
 	}
 }
 
@@ -102,10 +102,10 @@ func TestSeedAgentsAbsentFromTheHubAreNotOffered(t *testing.T) {
 			t.Errorf("no reason recorded for %q", a.ID)
 		}
 	}
-	// 'code' is the id the fixture reports as filtered-for-lack-of-a-spec, so
+	// 'chat' is the id the fixture reports as filtered-for-lack-of-a-spec, so
 	// that fact must replace the seed's blanket "not published yet".
-	if got := c.Get("code").NotOfferedReason; got != "no way to run it yet" {
-		t.Errorf("'code' reason = %q, want the daemon's filtered reason", got)
+	if got := c.Get("chat").NotOfferedReason; got != "no way to run it yet" {
+		t.Errorf("'chat' reason = %q, want the daemon's filtered reason", got)
 	}
 }
 
@@ -236,6 +236,43 @@ func TestFindBinaryInRepoFindsANonExeBuildOutput(t *testing.T) {
 	t.Chdir(dir)
 	if got := findBinaryInRepo("gaia-bash"); got == "" {
 		t.Fatal("findBinaryInRepo cannot see a binary without a .exe suffix")
+	}
+}
+
+// The flagship agent is the only seeded entry declared TransportSubprocess, so
+// it is the only one whose transport the sentinel path had to correct -- which
+// is why installing it shipped a TUI that spawned the frozen REST sidecar and
+// tried to read newline-delimited JSON out of a uvicorn log.
+func TestInstalledSeededSubprocessAgentBecomesDaemonTransport(t *testing.T) {
+	sentinel := `{"id":"gaia","version":"0.1.1","language":"python","artifact_kind":"binary"}`
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	c := NewCatalog()
+	if seeded := c.Get("gaia"); seeded == nil || seeded.Transport != TransportSubprocess {
+		t.Skip("gaia is no longer seeded as a subprocess agent; this regression cannot recur")
+	}
+
+	c.LoadInstalledAgents()
+
+	gaia := c.Get("gaia")
+	if gaia == nil {
+		t.Fatal("gaia disappeared from the catalog after loading its sentinel")
+	}
+	if gaia.Transport != TransportDaemon {
+		t.Errorf("transport = %v, want TransportDaemon: an installed hub agent is an "+
+			"HTTP sidecar the daemon supervises, not a binary to spawn over stdio",
+			gaia.Transport)
 	}
 }
 

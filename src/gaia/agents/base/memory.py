@@ -42,7 +42,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -1471,6 +1471,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             try:
                 op_type = op["op"]
 
+                # The auto-extraction path has even less oversight than the
+                # model-issued remember() tool (no explicit call to approve),
+                # so it gets the same credential refusal before ADD/UPDATE.
+                if op_type in ("add", "update") and self._looks_like_credential(
+                    op.get("content", "")
+                ):
+                    logger.info(
+                        "[MemoryMixin] auto-extraction: refusing to store "
+                        "credential-shaped content (op=%s)",
+                        op_type,
+                    )
+                    continue
+
                 if op_type == "add":
                     new_id = store.store(
                         category=op["category"],
@@ -2132,9 +2145,36 @@ class MemoryMixin(ProceduralMemoryMixin):
         Uses a single DB query (get_by_category_contexts) instead of two
         sequential get_by_category() calls, halving the DB round-trips.
         """
-        return self._memory_store.get_by_category_contexts(
-            category, context, limit=limit
+        return self._redact_credentials(
+            self._memory_store.get_by_category_contexts(category, context, limit=limit)
         )
+
+    @classmethod
+    def _redact_credentials(cls, items: List[Dict]) -> List[Dict]:
+        """Mask credential-shaped content on the way OUT of memory.
+
+        The write path already refuses to store a credential, but that only
+        protects rows written after it existed. A store built before it — or
+        anything the detector missed on the way in — still held the secret, and
+        recall handed it straight back: asked what it remembered, the agent
+        recited a stored passphrase verbatim.
+
+        This is the second gate, and the one that covers a memory that is
+        already poisoned. The row is left on disk so ``/memory`` can still show
+        the user they have something to delete; only what reaches the model is
+        masked.
+        """
+        safe = []
+        for item in items:
+            content = str(item.get("content") or "")
+            if cls._looks_like_credential(content):
+                item = dict(item)
+                item["content"] = (
+                    "[redacted: this memory looks like a credential. "
+                    "Use /memory to review or remove it.]"
+                )
+            safe.append(item)
+        return safe
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
@@ -2245,15 +2285,126 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Auto-store novel errors as knowledge
                 if is_error and error_msg:
                     self._auto_store_error(tool_name, error_msg)
+                elif not is_error:
+                    # It worked. Retire whatever this tool was once blamed for,
+                    # so a fixed bug stops being replayed into every prompt.
+                    self._forget_errors_for_tool(tool_name)
         except Exception as e:
             logger.debug("[MemoryMixin] tool logging failed: %s", e)
 
         return result
 
+    #: Substrings marking an error that describes a MOMENT, not a durable rule.
+    #:
+    #: Stored errors are replayed into every later system prompt under "Known
+    #: errors to avoid", so persisting one of these teaches the model that a
+    #: working tool is broken — permanently, and long after the cause is gone.
+    #: Observed: a `run_shell_command` hang (since fixed) stayed in the prompt
+    #: afterwards, and the agent kept telling users that shell commands and the
+    #: network were unavailable while running them successfully.
+    #:
+    #: A durable constraint is still stored. "Command 'foo' is not in the
+    #: allowed list" is a rule about this agent and worth remembering; "timed
+    #: out" is weather.
+    _TRANSIENT_ERROR_MARKERS: ClassVar[tuple] = (
+        "did not return within",
+        "timed out",
+        "timeout",
+        "was abandoned",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "max retries exceeded",
+        "temporarily unavailable",
+        "service unavailable",
+        "rate limit",
+        "cancelled",
+        "canceled",
+        "intermittent",
+        "intermittently",
+    )
+
+    @classmethod
+    def _is_transient_error(cls, error_msg: str) -> bool:
+        """True when *error_msg* describes a passing condition, not a rule."""
+        lowered = error_msg.lower()
+        return any(marker in lowered for marker in cls._TRANSIENT_ERROR_MARKERS)
+
+    #: Patterns for credential-shaped content: known API-key/token prefixes,
+    #: and a keyword (password/secret/token/...) directly adjacent to a value.
+    #: Conservative and NOT exhaustive by design (#6.2) — it catches shapes we
+    #: know about, not every possible secret. A user should still not paste
+    #: secrets into chat; this is a backstop, not a guarantee.
+    _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
+        re.compile(p, re.IGNORECASE)
+        for p in (
+            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
+            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
+            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
+            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
+            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
+            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
+            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
+            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
+            # keyword directly adjacent to a value: "password is X", "secret: X"
+            r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
+            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # generic dash/underscore-joined high-entropy-looking token, e.g.
+            # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
+            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+        )
+    )
+
+    @classmethod
+    def _looks_like_credential(cls, text: str) -> bool:
+        """True when *text* looks like it carries a credential (conservative).
+
+        Pattern-based, not exhaustive: it catches known API-key shapes and
+        keyword-adjacent secrets, but a secret with no recognizable shape and
+        no adjacent keyword will slip through. Bias is toward not storing —
+        false positives just mean "ask the user to rephrase", false negatives
+        mean a leaked secret, so this errs conservative on what it flags.
+        """
+        if not text:
+            return False
+        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
+
+    def _forget_errors_for_tool(self, tool_name: str) -> None:
+        """Drop stored errors for *tool_name* once it has worked again.
+
+        The self-healing half. Without it a stored error is permanent doctrine:
+        nothing expires it, nothing lowers its confidence, and the model is told
+        to avoid the tool forever — including after the bug is fixed. A tool that
+        just returned successfully is, by direct evidence, not broken.
+        """
+        try:
+            prefix = f"{tool_name}: "
+            for entry in self._memory_store.get_by_category(
+                "error", context=self._memory_context, limit=50
+            ):
+                if str(entry.get("content", "")).startswith(prefix):
+                    self._memory_store.delete(entry["id"])
+                    logger.debug(
+                        "[MemoryMixin] dropped a stale error for '%s' — it worked",
+                        tool_name,
+                    )
+        except Exception as exc:  # never let bookkeeping break a good call
+            logger.debug(
+                "[MemoryMixin] could not clear errors for %s: %s", tool_name, exc
+            )
+
     def _auto_store_error(self, tool_name: str, error_msg: str) -> None:
         """Store a novel tool error as knowledge for future avoidance."""
         try:
             if not error_msg or not error_msg.strip():
+                return
+            if self._is_transient_error(error_msg):
+                logger.debug(
+                    "[MemoryMixin] not persisting a transient error for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
                 return
             error_content = f"{tool_name}: {error_msg}"
             kid = self._memory_store.store(
@@ -2400,6 +2551,44 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {
                     "status": "error",
                     "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
+                }
+
+            # A moment isn't a rule: an error observation about a tool's own
+            # reliability ("times out intermittently") must not outlive the
+            # moment it described, or it becomes permanent (false) doctrine —
+            # the same failure _auto_store_error already guards on the tool's
+            # own errors, extended to the model's own remember() calls.
+            if category == "error" and MemoryMixin._is_transient_error(fact):
+                logger.debug(
+                    "[MemoryMixin] remember(): refusing a transient "
+                    "self-observation: %s",
+                    fact[:80],
+                )
+                return {
+                    "status": "skipped",
+                    "message": (
+                        "Not stored — this describes a transient condition (a "
+                        "moment, not a durable rule), so it will not persist to "
+                        "mislead future turns. Re-test the tool directly if you "
+                        "need to confirm current behavior."
+                    ),
+                }
+
+            # Refuse credential-shaped content outright rather than store it —
+            # a local-first memory that quietly accumulates secrets is the
+            # Microsoft Recall failure mode. See _looks_like_credential for
+            # what this detector can and cannot catch.
+            if MemoryMixin._looks_like_credential(fact):
+                logger.info(
+                    "[MemoryMixin] remember(): refusing credential-shaped content"
+                )
+                return {
+                    "status": "skipped",
+                    "message": (
+                        "Not stored — this looks like a credential (API key, "
+                        "password, or similar secret). GAIA does not keep "
+                        "secrets in memory; use a password manager instead."
+                    ),
                 }
 
             if due_at:
@@ -2617,8 +2806,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 domain,
             )
 
-            # Sensitive items ARE accessible via explicit recall tool calls
-            # (per spec). They are only excluded from the system prompt injection.
+            # Items the user explicitly MARKED sensitive stay accessible here
+            # (per spec) — but a credential nobody ever classified is not that
+            # case, and was coming back verbatim. Mask by shape as well as by
+            # flag, or "what do you remember about me?" recites a passphrase,
+            # and on a remote backend sends it off the machine.
+            results = self._redact_credentials(results)
 
             return {
                 "status": "found" if results else "empty",
@@ -2647,6 +2840,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                     return {
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
+                    }
+                if MemoryMixin._looks_like_credential(content):
+                    logger.info(
+                        "[MemoryMixin] update_memory(): refusing "
+                        "credential-shaped content"
+                    )
+                    return {
+                        "status": "skipped",
+                        "message": (
+                            "Not stored — this looks like a credential (API "
+                            "key, password, or similar secret). GAIA does not "
+                            "keep secrets in memory."
+                        ),
                     }
                 kwargs["content"] = content[:MAX_CONTENT_LENGTH]
             if category:
@@ -2810,7 +3016,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return {
                 "status": "found" if results else "empty",
                 "count": len(results),
-                "results": results,
+                "results": self._redact_credentials(results),
             }
 
         logger.info("[MemoryMixin] registered 5 memory tools (v2)")

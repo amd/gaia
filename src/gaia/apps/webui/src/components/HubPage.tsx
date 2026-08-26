@@ -361,7 +361,11 @@ export function HubPage({ agents, activeAgentId, onSelect, onStartChat, onCreate
                 </div>
             )}
 
-            {/* ── Discovery lanes: Apps · Components · Agents ── */}
+            {/* ── Discovery lanes: Apps · Components · Agents · Skills ──
+                An empty lane renders nothing. Skills (#2467) stay empty until
+                the `gaia skill install` CLI lands — the backend filters them
+                out of the agent catalog rather than offering an install button
+                that would call a verb that does not exist yet. */}
             {!error &&
                 LANES.map((lane) => {
                     const items = lanes[lane.key];
