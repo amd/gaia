@@ -9,7 +9,10 @@ npx @amd-gaia/gaia
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
 you into the terminal UI. No Python to install, no repo to clone, no build step.
-Everything runs locally on your machine; nothing you type or index leaves it.
+Everything runs locally on your machine; nothing you type or index leaves it. The
+terminal UI's `--use-claude` flag, which would send a conversation to the
+Anthropic API, is refused for the agent this package installs — see
+[`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
 exact same binary a full GAIA install runs as `gaia tui`, not a separate build. So
@@ -138,6 +141,12 @@ curl http://127.0.0.1:8141/health
 
 It waits for `GET /health`, checks the contract version, and tears the whole
 process tree down on Ctrl+C. See [`SPEC.md`](./SPEC.md) for the endpoints.
+
+The sidecar normally requires a per-session bearer token on `/v1/gaia/*`, but
+neither `serve` nor `startSidecar` mints one, so both leave it in dev mode — the
+token check off, `Host`/`Origin` still enforced. This agent has shell and file
+tools, so before you expose it to anything, supply a token of your own: see
+[`SPEC.md` §5.4](./SPEC.md#54-caller-authentication).
 
 ## Programmatic use
 

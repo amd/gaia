@@ -291,7 +291,10 @@ none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or
 close an idle session) and retry. A
 `session_id` can also be evicted from the retention table under an idle
-timeout or an LRU cap on concurrent sessions; a `/query` that lands on an
+timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
+(**100**) — the two knobs that decide when the `503` above can happen at all
+(`session_registry.py`). Eviction is idle-only: a conversation still in use is
+never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
@@ -304,13 +307,66 @@ against this package's `API_VERSION`. A differing major is a breaking contract
 change and raises `VersionMismatchError`. A higher minor with the same major is a
 backward-compatible addition and is accepted.
 
-### 5.4 No caller-auth token
+### 5.4 Caller authentication
 
-The email sidecar authenticates callers with a per-session bearer minted into
-`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.1, so
-this package mints and sends nothing. When the sidecar grows one, it lands here as
-a spawn-time env var and a request header — a change to this section, not a new
-subsystem.
+Loopback binding is not access control: this sidecar exposes shell and file
+tools, so an unauthenticated port lets any page the user visits drive it. Three
+controls guard it, all in `gaia_agent.caller_auth`, which binds this sidecar's
+env-var names and exempt paths onto the shared mechanism in
+`gaia.sidecar.caller_auth`:
+
+1. **Per-session bearer token.** Every `/v1/gaia/*` request must carry
+   `Authorization: Bearer <token>`. The spawning parent supplies it one of two
+   ways: `GAIA_GAIA_SIDECAR_TOKEN_FILE` — the path to a `0600`, owner-only file
+   holding the token, which is the preferred channel because the secret never
+   sits in the environment — or `GAIA_GAIA_SIDECAR_TOKEN`, the token itself, the
+   legacy delivery. A request without it is **401**, with a `detail` naming both
+   env vars.
+2. **Host allowlist.** The `Host` header must be loopback (`127.0.0.1`,
+   `localhost`, `::1`); anything else is **400**. This is what defeats DNS
+   rebinding, where the rebound request arrives with `Host: evil.com`.
+3. **Origin rejection.** A request carrying a non-loopback browser `Origin` is
+   **403**. Non-browser clients send no `Origin` and are unaffected.
+
+`/health`, `/version`, and `/v1/gaia/version` are **token-exempt** — they are
+the probes a host polls during the attach handshake, before any token is in
+play, and none of them exposes user data or accepts work. Host and Origin still
+apply to them, so `waitForHealth` and `checkVersion` work against a
+token-protected sidecar without knowing the token.
+
+**Dev mode.** If neither env var is set the token check is skipped and the
+sidecar logs a loud warning saying so; Host and Origin are still enforced. That
+is the state a sidecar this package spawns comes up in, because `spawnSidecar`
+mints nothing — pass your own token through `spawnSidecar`'s `env` option to
+turn the check on. The shipped product does not rely on dev mode: the daemon
+mints a per-session token and passes it as `GAIA_GAIA_SIDECAR_TOKEN_FILE`
+(`gaia.daemon.sidecars.spec` mirrors both names as plain strings so core never
+imports this wheel).
+
+### 5.5 Other transports
+
+The HTTP server above is the surface this package drives, and everything in
+this document describes it. It is not the agent's only transport:
+`gaia_agent.stdio` runs the same agent over newline-delimited JSON on
+stdin/stdout — no port, no token, no discovery file. The terminal UI reaches it
+that way when it spawns the agent as a subprocess; an agent **installed** from
+the hub, which is what this package delivers, is supervised by the daemon over
+the HTTP surface above instead (§6.1).
+
+It emits the identical canonical event vocabulary, but its input channel accepts
+a JSON line carrying a `gaia_control` key, which gives it something HTTP does
+not have: a back-channel that can answer a confirmation prompt *while* a turn is
+in flight. It also takes `--bypass-permissions` (start with gating off) and
+`--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
+local Lemonade; embeddings stay on Lemonade either way). None of that is
+reachable over `/v1/gaia/query`.
+
+`--use-claude` is the one with a reach beyond the machine, and it cannot be
+turned on for what this package delivers: the terminal UI **refuses** it for a
+daemon-transport agent, with an error saying so, because the daemon relay has no
+way to switch inference backends. So the local-only claim in the README holds
+for every path this package installs — it is a property of the transport, not a
+default someone can flip.
 
 ---
 
