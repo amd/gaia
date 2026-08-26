@@ -283,15 +283,15 @@ def _print_startup_info(self):
 
 def test_server_initialization():
     """Test AgentMCPServer initializes."""
-    from gaia_agent_docker.agent import DockerAgent
+    from my_package.agent import GreeterAgent
 
     server = AgentMCPServer(
-        agent_class=DockerAgent,
+        agent_class=GreeterAgent,
         port=9999,
         agent_params={"silent_mode": True}
     )
 
-    assert server.agent_class == DockerAgent
+    assert server.agent_class == GreeterAgent
     assert server.port == 9999
 
 def test_server_rejects_non_mcp_agent():
@@ -303,10 +303,10 @@ def test_server_rejects_non_mcp_agent():
 
 def test_tool_registration():
     """Test tools are registered from agent."""
-    from gaia_agent_docker.agent import DockerAgent
+    from my_package.agent import GreeterAgent
 
     server = AgentMCPServer(
-        agent_class=DockerAgent,
+        agent_class=GreeterAgent,
         agent_params={"silent_mode": True}
     )
 
@@ -314,24 +314,24 @@ def test_tool_registration():
     # FastMCP stores tools in internal registry
     tools = server.agent.get_mcp_tool_definitions()
     assert len(tools) > 0
-    assert tools[0]["name"] == "dockerize"
+    assert tools[0]["name"] == "greet"
 
 @pytest.mark.asyncio
 async def test_parameter_mapping():
     """Test VSCode parameter unwrapping."""
-    from gaia_agent_docker.agent import DockerAgent
+    from my_package.agent import GreeterAgent
 
     server = AgentMCPServer(
-        agent_class=DockerAgent,
+        agent_class=GreeterAgent,
         agent_params={"silent_mode": True}
     )
 
     # Simulate VSCode kwargs wrapper
     vscode_kwargs = {
-        "kwargs": {"app_dir": "C:/myapp", "port": 5000}
+        "kwargs": {"name": "Ada"}
     }
 
-    # Tool wrapper should unwrap and map app_dir → appPath
+    # Tool wrapper should unwrap the nested kwargs before dispatch
     # (Testing internal logic, actual test would mock tool execution)
 ```
 
@@ -339,19 +339,16 @@ async def test_parameter_mapping():
 
 ```bash
 # Start server
-python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
+python -m gaia.mcp.start_example_mcp --port 8081 --verbose
 
 # Test with MCP client
-curl -X POST http://localhost:8080/mcp/tools/dockerize \
+curl -X POST http://localhost:8081/mcp/tools/greet \
   -H "Content-Type: application/json" \
-  -d '{"appPath": "C:/Users/test/myapp", "port": 5000}'
+  -d '{"name": "Ada"}'
 
 # Verify response
 {
-  "success": true,
-  "status": "completed",
-  "result": "Successfully containerized application...",
-  "steps_taken": 4
+  "message": "Hello, Ada!"
 }
 ```
 
@@ -372,17 +369,17 @@ from gaia.logger import get_logger
 
 ## Usage Examples
 
-### Example 1: Start Docker MCP Server
+### Example 1: Start an MCP Server for Your Agent
 
 ```python
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from gaia_agent_docker.agent import DockerAgent
+from my_package.agent import MyAgent
 
 # Create server
 server = AgentMCPServer(
-    agent_class=DockerAgent,
-    name="GAIA Docker MCP",
-    port=8080,
+    agent_class=MyAgent,
+    name="My Agent MCP",
+    port=8081,
     verbose=True,
     agent_params={
         "allowed_paths": ["/home/user/projects"],
@@ -445,18 +442,18 @@ server.start()
 ### Example 3: CLI Wrapper
 
 ```bash
-# src/gaia/mcp/start_docker_mcp.py
+# src/gaia/mcp/start_example_mcp.py
 import argparse
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from gaia_agent_docker.agent import DockerAgent
+from my_package.agent import GreeterAgent
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--port", type=int, default=8080)
+parser.add_argument("--port", type=int, default=8081)
 parser.add_argument("--verbose", action="store_true")
 args = parser.parse_args()
 
 server = AgentMCPServer(
-    agent_class=DockerAgent,
+    agent_class=GreeterAgent,
     port=args.port,
     verbose=args.verbose
 )
@@ -466,7 +463,7 @@ server.start()
 
 **Usage:**
 ```bash
-python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
+python -m gaia.mcp.start_example_mcp --port 8081 --verbose
 ```
 
 ---
@@ -474,7 +471,6 @@ python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
 ## Related Specifications
 
 - [mcp-agent](/spec/mcp-agent) - MCPAgent interface
-- [docker-agent](/spec/docker-agent) - Example agent using MCP
 - [electron-integration](/spec/electron-integration) - Electron MCP client
 
 ---

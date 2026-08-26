@@ -105,14 +105,14 @@ func TestFilterKeepsTheCursorInsideTheVisibleSet(t *testing.T) {
 		d.send(keyDown())
 	}
 	d.send(key("/"))
-	for _, r := range "docker" {
+	for _, r := range "gmail" {
 		d.send(key(string(r)))
 	}
 	d.send(keyEnter()) // apply the filter
 
 	visible := d.m.VisibleAgentIDs()
 	if len(visible) == 0 {
-		t.Fatal("filtering for 'docker' matched nothing")
+		t.Fatal("filtering for 'gmail' matched nothing")
 	}
 	if got := d.m.SelectedAgentID(); got == "" {
 		t.Fatalf("nothing selected after filtering to %d row(s)", len(visible))

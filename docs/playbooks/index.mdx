@@ -50,30 +50,6 @@ Build an agent that analyzes your system hardware and recommends which LLMs you 
 
 ---
 
-### Image Generation Agent
-
-Build an agent that generates images from text descriptions using Stable Diffusion running on Ryzen AI.
-
-<CardGroup cols={1}>
-  <Card
-    title="Building an Image Generation Agent"
-    icon="image"
-    href="/playbooks/sd-agent/index"
-  >
-    **20-30 minutes**
-
-    Build an agent that generates images using SDToolsMixin.
-
-    - Quick start (5 min working example)
-    - SDToolsMixin pattern
-    - Tool registration and orchestration
-    - Prompt enhancement strategies
-    - Multiple model support (SD-Turbo, SDXL)
-  </Card>
-</CardGroup>
-
----
-
 ### Document Q&A Agent with RAG
 
 Build an agent that searches, indexes, and answers questions about documents. Split into 3 progressive parts for easier learning.
@@ -128,115 +104,6 @@ Build an agent that searches, indexes, and answers questions about documents. Sp
 
 ---
 
-### Medical Intake Agent (EMR)
-
-Build an automated patient intake processor with VLM extraction, database storage, and a real-time web dashboard. Perfect for learning FileWatcherMixin and DatabaseMixin.
-
-<CardGroup cols={3}>
-  <Card
-    title="Part 1: Getting Started"
-    icon="notes-medical"
-    href="/playbooks/emr-agent/part-1-getting-started"
-  >
-    **20-25 minutes**
-
-    Build an automated intake form processor.
-
-    - FileWatcherMixin for auto-detection
-    - VLM extraction from images/PDFs
-    - DatabaseMixin for patient storage
-    - Natural language patient queries
-  </Card>
-
-  <Card
-    title="Part 2: Dashboard & API"
-    icon="chart-line"
-    href="/playbooks/emr-agent/part-2-dashboard"
-  >
-    **20-25 minutes**
-
-    Create a real-time monitoring dashboard.
-
-    - FastAPI server setup
-    - Server-Sent Events (SSE)
-    - React frontend components
-    - REST API endpoints
-  </Card>
-
-  <Card
-    title="Part 3: Architecture"
-    icon="sitemap"
-    href="/playbooks/emr-agent/part-3-architecture"
-  >
-    **15-20 minutes**
-
-    Deep dive into system design.
-
-    - Database schema design
-    - Processing pipeline steps
-    - Time savings calculation
-    - Production considerations
-  </Card>
-</CardGroup>
-
----
-
-### Code Generation Agent
-
-Build an AI-powered agent that generates complete Next.js applications from natural language descriptions. Split into 3 progressive parts.
-
-<CardGroup cols={3}>
-  <Card
-    title="Part 1: Introduction & Architecture"
-    icon="code"
-    href="/playbooks/code-agent/part-1-introduction"
-  >
-    **20-25 minutes**
-
-    Understanding GAIA Code Agent architecture.
-
-    - What is GAIA Code?
-    - System architecture
-    - MVP approach
-    - Technology stack
-    - Quick start example
-  </Card>
-
-  <Card
-    title="Part 2: App Creation & Components"
-    icon="puzzle-piece"
-    href="/playbooks/code-agent/part-2-app-creation"
-  >
-    **20-25 minutes**
-
-    Schema, API, and React component generation.
-
-    - Database schema generation
-    - API route creation with validation
-    - React component creation
-    - Tailwind CSS styling
-    - Working examples
-  </Card>
-
-  <Card
-    title="Part 3: Validation & Building"
-    icon="hammer"
-    href="/playbooks/code-agent/part-3-validation-building"
-  >
-    **15-20 minutes**
-
-    TypeScript validation and error iteration.
-
-    - TypeScript validation process
-    - Next.js build pipeline
-    - Error iteration loop
-    - Auto-fix process
-    - Testing final applications
-  </Card>
-</CardGroup>
-
----
-
 ### More Guides
 
 <CardGroup cols={2}>
@@ -250,12 +117,12 @@ Build an AI-powered agent that generates complete Next.js applications from natu
   </Card>
 
   <Card
-    title="Routing Agent"
-    icon="route"
-    href="/guides/routing"
+    title="The Flagship GAIA Agent"
+    icon="robot"
+    href="/guides/gaia"
     color="#16a34a"
   >
-    Intelligent request analysis and agent selection through conversational disambiguation.
+    Conversation, documents, data, web, memory, and skills in one agent.
   </Card>
 </CardGroup>
 

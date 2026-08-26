@@ -350,6 +350,11 @@ class ShellToolsMixin:
         through, and frames a blocked action as merely risky. Refuse it first
         and say why.
 
+        The mirror of that rule is what makes writes work: a command that WOULD
+        run on approval must not be refused here. ``_validate_shell_command``
+        returns None for a granted binary's confirmable write, so it falls
+        through to the prompt instead of dying in front of it.
+
         Duck-typed rather than an override — ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
@@ -383,6 +388,13 @@ class ShellToolsMixin:
         command is a granted binary running a read-only subcommand, so
         ``gh issue list | head`` still prompts even though ``head`` is
         whitelisted: consent was given for ``gh``, not for a pipeline.
+
+        **The ALLOW tier only.** A confirmable write (``gh issue comment``)
+        answers False here on purpose: the grant declares which writes MAY be
+        offered, and the user still approves each one. This is the single place
+        that decides a gh call runs with nobody asked, which is why it uses
+        ``validate_invocation`` — the function whose contract is exactly that
+        question, and which answers no for CONFIRM as well as REFUSE.
 
         Duck-typed rather than an override — ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -506,14 +518,22 @@ class ShellToolsMixin:
                 global.
 
         Returns None if the command is allowed, or an error dict if blocked.
+
+        A skill-granted CLI's *confirmable write* returns None here too. This
+        method answers "is this refused?", not "may it run unasked" — the
+        second question belongs to ``skill_grant_covers_call``, which is what
+        decides whether the confirmation prompt is skipped. Answering yes here
+        would refuse a write before anyone could approve it, which is the dead
+        end this tier removes.
         """
-        # Skill-granted CLIs are gated by their own read-only policy table
-        # instead of ALLOWED_COMMANDS; anything ungranted is still refused.
+        # Skill-granted CLIs are gated by their own policy table instead of
+        # ALLOWED_COMMANDS; anything ungranted is still refused.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
+            REFUSE,
+            classify_invocation,
             normalize_binary,
-            validate_invocation,
         )
 
         binary = normalize_binary(cmd_base)
@@ -531,15 +551,17 @@ class ShellToolsMixin:
                     "has_errors": True,
                     "hint": f"{policy.summary} {policy.install_hint}",
                 }
-            error = validate_invocation(policy, cmd_parts)
-            if error:
+            decision = classify_invocation(policy, cmd_parts)
+            if decision.outcome == REFUSE:
                 return {
                     "status": "error",
-                    "error": error,
+                    "error": decision.message,
                     "has_errors": True,
                     "hint": (
-                        f"The '{binary}' grant is read-only. Draft the change and "
-                        "show it to the user instead of performing it."
+                        f"This one is refused outright, not gated — the '{binary}' "
+                        "grant will not run it even with the user's approval. "
+                        "Use an allowed command, or tell the user what you would "
+                        "have run and why it is blocked."
                     ),
                 }
             return None
@@ -906,7 +928,25 @@ class ShellToolsMixin:
                 # whitelist, we use shell=True on Windows so cmd.exe can resolve
                 # both built-ins and commands on PATH (including those from Git
                 # for Windows which provides ls, cat, grep, etc.).
-                use_shell = os.name == "nt"
+                #
+                # A skill-granted CLI is the exception, and must stay one. It is
+                # a real executable — it needs no built-in resolution — and it
+                # is the one path that can run without a confirmation prompt, on
+                # arguments built from untrusted remote text (an issue body the
+                # model just read). Handing cmd.exe the raw STRING there would
+                # let that text act: `--search "x|whoami"` is one argv token to
+                # every check above and two commands to cmd.exe, and `%VAR%`
+                # expands into a value the approval prompt never showed. argv
+                # goes to the process verbatim, so neither is possible.
+                # One segment only: a pipeline needs a shell to be a pipeline,
+                # and `cmd_parts` has already dropped the `|` tokens, so an argv
+                # run of one would silently concatenate the two commands.
+                lone_granted_segment = (
+                    len(segments) == 1
+                    and bool(granted)
+                    and _is_granted_binary(segments[0][0], granted)
+                )
+                use_shell = os.name == "nt" and not lone_granted_segment
 
                 # Build the command string for execution
                 # On Windows with shell=True, use the ORIGINAL command string

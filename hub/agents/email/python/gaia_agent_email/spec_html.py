@@ -995,8 +995,8 @@ def render_endpoint_spec_html() -> str:
     <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
     <strong>HTTP 401</strong>. Liveness/version probes
     (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>
-  <li><strong>Host allowlist.</strong> A non-loopback <code>Host</code> header is
-    rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
+  <li><strong>Host allowlist.</strong> An absent or non-loopback <code>Host</code>
+    header is rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
   <li><strong>Origin rejection.</strong> A request carrying a non-loopback browser
     <code>Origin</code> is rejected with <strong>HTTP 403</strong>, closing
     drive-by web-page access. Non-browser clients send no Origin and are

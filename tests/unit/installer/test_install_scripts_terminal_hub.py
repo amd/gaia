@@ -131,6 +131,35 @@ def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
     assert '@("$GAIA_VENV\\Scripts", $GAIA_BIN)' in ps1_text
 
 
+# ── the core install carries the daemon extras ─────────────────────────────
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_every_core_install_requests_the_daemon_extras(sh_text, ps1_text, script):
+    """gaia-tui is useless without `gaia daemon`, which bare amd-gaia can't run.
+
+    Both the fresh-install and the `--upgrade` call site must ask for [api];
+    dropping it from either leaves that path installing a core that refuses to
+    start the daemon (fastapi/uvicorn/psutil missing).
+    """
+    text = sh_text if script == "sh" else ps1_text
+    call_sites = [
+        line.strip()
+        for line in text.splitlines()
+        if "uv pip install" in line and "amd-gaia" in line
+    ]
+    assert len(call_sites) == 2, (
+        f"expected the fresh-install and --upgrade pip call sites in "
+        f"install.{script}; found {len(call_sites)}: {call_sites}"
+    )
+    bare = [line for line in call_sites if '"amd-gaia[api]"' not in line]
+    assert not bare, (
+        f"install.{script} installs amd-gaia without the [api] extra — the "
+        "daemon needs fastapi/uvicorn/psutil and no `gaia init` profile "
+        f"supplies them. Offending line(s): {bare}"
+    )
+
+
 # ── macOS is no longer gated out ───────────────────────────────────────────
 
 

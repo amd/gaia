@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+// writeSentinel marks <root>/<agentID> a completed install, which is what
+// findInstalledBinaryIn requires before it will hand back a binary from there.
+func writeSentinel(t *testing.T, root, agentID, executable string) {
+	t.Helper()
+	dir := filepath.Join(root, agentID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"` + agentID + `","version":"0.1.0","language":"python","executable":"` + executable + `"}`
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func hubResponse(installed bool, supervised bool) *HubCatalog {
 	entry := HubEntry{
 		ID:                "email",
@@ -27,7 +41,7 @@ func hubResponse(installed bool, supervised bool) *HubCatalog {
 	}
 	return &HubCatalog{
 		Agents:               []HubEntry{entry},
-		UnsupervisedFiltered: []string{"code"},
+		UnsupervisedFiltered: []string{"chat"},
 	}
 }
 
@@ -102,10 +116,10 @@ func TestSeedAgentsAbsentFromTheHubAreNotOffered(t *testing.T) {
 			t.Errorf("no reason recorded for %q", a.ID)
 		}
 	}
-	// 'code' is the id the fixture reports as filtered-for-lack-of-a-spec, so
+	// 'chat' is the id the fixture reports as filtered-for-lack-of-a-spec, so
 	// that fact must replace the seed's blanket "not published yet".
-	if got := c.Get("code").NotOfferedReason; got != "no way to run it yet" {
-		t.Errorf("'code' reason = %q, want the daemon's filtered reason", got)
+	if got := c.Get("chat").NotOfferedReason; got != "no way to run it yet" {
+		t.Errorf("'chat' reason = %q, want the daemon's filtered reason", got)
 	}
 }
 
@@ -179,6 +193,7 @@ func TestFindInstalledBinaryFindsANonWindowsExecutable(t *testing.T) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSentinel(t, root, "email", name)
 
 	got := findInstalledBinaryIn(root, "email", "gaia-agent-email")
 	if got == "" {
@@ -198,8 +213,59 @@ func TestFindInstalledBinarySearchesTheBinSubdir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "gaia-agent-email"), []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSentinel(t, root, "email", "gaia-agent-email")
 	if got := findInstalledBinaryIn(root, "email", "gaia-agent-email"); got == "" {
 		t.Fatal("did not search <id>/bin/")
+	}
+}
+
+// The flagship's stdio child and the frozen REST sidecar are both named
+// `gaia-agent`, and other installers stage the REST one into this same
+// directory without a sentinel. Spawning it fed uvicorn's startup log to a JSON
+// line scanner, which the user saw as "unreadable event skipped" (#3062).
+func TestFindInstalledBinaryIgnoresABinaryWithNoSentinel(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "gaia-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := findInstalledBinaryIn(root, "gaia", "gaia-agent"); got != "" {
+		t.Errorf("ran an unverified binary from the install root: %s", got)
+	}
+	// The file is still there, so the diagnostic must say "finish the install"
+	// rather than sending the user to look for a download that already happened.
+	if got := installDirBinaryIn(root, "gaia", "gaia-agent"); got == "" {
+		t.Error("installDirBinaryIn must still see the file, for the diagnostic")
+	}
+}
+
+// A corrupt sentinel is not proof of a completed install either.
+func TestFindInstalledBinaryIgnoresACorruptSentinel(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "gaia-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findInstalledBinaryIn(root, "gaia", "gaia-agent"); got != "" {
+		t.Errorf("trusted a corrupt sentinel: %s", got)
 	}
 }
 
@@ -215,6 +281,10 @@ func TestFindInstalledBinaryIgnoresANonExecutableFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "gaia-agent-email"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Sentinel present on purpose: without it the install-completeness gate
+	// would reject this, and the test would pass without ever reaching the mode
+	// bits it exists to check.
+	writeSentinel(t, root, "email", "gaia-agent-email")
 	if got := findInstalledBinaryIn(root, "email", "gaia-agent-email"); got != "" {
 		t.Errorf("returned a non-executable file: %s", got)
 	}
@@ -236,6 +306,43 @@ func TestFindBinaryInRepoFindsANonExeBuildOutput(t *testing.T) {
 	t.Chdir(dir)
 	if got := findBinaryInRepo("gaia-bash"); got == "" {
 		t.Fatal("findBinaryInRepo cannot see a binary without a .exe suffix")
+	}
+}
+
+// The flagship agent is the only seeded entry declared TransportSubprocess, so
+// it is the only one whose transport the sentinel path had to correct -- which
+// is why installing it shipped a TUI that spawned the frozen REST sidecar and
+// tried to read newline-delimited JSON out of a uvicorn log.
+func TestInstalledSeededSubprocessAgentBecomesDaemonTransport(t *testing.T) {
+	sentinel := `{"id":"gaia","version":"0.1.1","language":"python","artifact_kind":"binary"}`
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	c := NewCatalog()
+	if seeded := c.Get("gaia"); seeded == nil || seeded.Transport != TransportSubprocess {
+		t.Skip("gaia is no longer seeded as a subprocess agent; this regression cannot recur")
+	}
+
+	c.LoadInstalledAgents()
+
+	gaia := c.Get("gaia")
+	if gaia == nil {
+		t.Fatal("gaia disappeared from the catalog after loading its sentinel")
+	}
+	if gaia.Transport != TransportDaemon {
+		t.Errorf("transport = %v, want TransportDaemon: an installed hub agent is an "+
+			"HTTP sidecar the daemon supervises, not a binary to spawn over stdio",
+			gaia.Transport)
 	}
 }
 

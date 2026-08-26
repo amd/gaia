@@ -121,7 +121,30 @@ func findInstalledBinary(agentID, name string) string {
 	return findInstalledBinaryIn(InstallRoot(), agentID, name)
 }
 
+// findInstalledBinaryIn returns the agent's binary under the install root, but
+// only when an .installed sentinel proves the directory is a completed install.
+//
+// Without that gate the file's NAME is the only evidence of what it is, and the
+// name is not unique: `gaia-agent` is both the stdio child this looks for and
+// the frozen REST sidecar other installers stage into this same directory.
+// Spawning the wrong one feeds uvicorn's startup log to a JSON line scanner
+// (#3062). A directory with no sentinel is a leftover or an in-progress
+// install, which is how LocalInstalls already treats it.
 func findInstalledBinaryIn(root, agentID, name string) string {
+	if root == "" || agentID == "" {
+		return ""
+	}
+	if record, err := readSentinel(filepath.Join(root, agentID, SentinelName)); err != nil || record == nil {
+		return ""
+	}
+	return installDirBinaryIn(root, agentID, name)
+}
+
+// installDirBinaryIn finds the binary by name alone, with no sentinel check.
+// Only two callers may use it: findInstalledBinaryIn once the sentinel has
+// verified the install, and ResolveExecutable's diagnostic, which needs to tell
+// "nothing is there" apart from "something is there but unverified".
+func installDirBinaryIn(root, agentID, name string) string {
 	if root == "" || agentID == "" {
 		return ""
 	}
@@ -215,6 +238,15 @@ func ResolveExecutable(nameOrPath, agentID string) (string, error) {
 		where = "~/.gaia/agents"
 	} else {
 		where = filepath.Join(where, agentID)
+	}
+	// A file IS sitting there, it just has no sentinel to say what it is. Saying
+	// "not found" here sends the user hunting for a missing download when the
+	// real answer is "finish the install"; naming the file is the difference.
+	if p := installDirBinaryIn(InstallRoot(), agentID, nameOrPath); p != "" {
+		return "", fmt.Errorf(
+			"%w: reinstall %s with `gaia hub install %s` — %s exists but the install "+
+				"is unverified (no %s), so it is not safe to run",
+			ErrNoExecutable, agentID, agentID, p, SentinelName)
 	}
 	// Action first: this text is also shown in the hub's one-row status bar,
 	// where an 80-column terminal truncates whatever comes after ~70 characters.
@@ -421,6 +453,12 @@ func (c *Catalog) applyInstalledRecord(id, version string) {
 	}
 	a := &c.agents[idx]
 	a.FromHub = true
+	// A sentinel under the install root means the daemon installed it as an
+	// HTTP sidecar it supervises, so there is no binary for the TUI to spawn --
+	// same invariant upsertHubEntry applies. Seeded entries reach here with
+	// whatever transport the seed guessed, and a seeded subprocess agent that
+	// kept it would be spawned over stdio and fed a frozen REST binary.
+	a.Transport = TransportDaemon
 	a.InstalledVersion = version
 	if version != "" {
 		a.Version = version
@@ -708,36 +746,6 @@ func seedAgents() []Agent {
 			NotOfferedReason: NotPublishedReason,
 		},
 		{
-			ID: "code", Name: "Code", Description: "Code generation and editing",
-			Category: "Code", Tags: []string{"code", "programming", "developer"},
-			Icon: "🔧", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "blender", Name: "Blender", Description: "3D scene automation and modeling",
-			Category: "Creative", Tags: []string{"3d", "blender", "modeling", "animation"},
-			Icon: "🎨", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "jira", Name: "Jira", Description: "Issue tracking and project management",
-			Category: "Productivity", Tags: []string{"jira", "issues", "project", "agile"},
-			Icon: "🎫", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "docker", Name: "Docker", Description: "Container management and orchestration",
-			Category: "DevOps", Tags: []string{"docker", "containers", "kubernetes"},
-			Icon: "🐳", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "summarize", Name: "Summarize", Description: "Document and text summarization",
-			Category: "Documents", Tags: []string{"summarize", "text", "tldr"},
-			Icon: "📝", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
 			// The email agent is an HTTP sidecar the daemon supervises, not a
 			// binary the TUI can spawn — it is reached through the daemon relay.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
@@ -774,26 +782,6 @@ func seedAgents() []Agent {
 			// while the agent kept logging errors only — and the log is where the
 			// answer usually is.
 			DevArgs: []string{"--dev"},
-		},
-
-		// --- Coming Soon ---
-		{
-			ID: "routing", Name: "Routing", Description: "Intelligent agent selection and orchestration",
-			Category: "Infrastructure", Tags: []string{"routing", "orchestration", "multi-agent"},
-			Icon: "🔀", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "browser", Name: "Browser", Description: "Web browsing and automation",
-			Category: "Research", Tags: []string{"browser", "web", "scraping", "automation"},
-			Icon: "🌐", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "data-analyst", Name: "Data Analyst", Description: "Data analysis and visualization",
-			Category: "Data", Tags: []string{"data", "analysis", "charts", "csv", "excel"},
-			Icon: "📊", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
 		},
 	}
 }

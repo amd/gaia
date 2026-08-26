@@ -129,6 +129,40 @@ func TestSetMockBinaryMakesTheSubprocessAgentLaunchable(t *testing.T) {
 	}
 }
 
+// The diagnostic a user actually reads when a binary IS there but unverified.
+// "not found" would send them chasing a download that already happened, so the
+// wording is the fix, not an implementation detail — pin it.
+func TestResolveExecutableNamesAnUnverifiedInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)        // os.UserHomeDir on POSIX
+	t.Setenv("USERPROFILE", home) // ... and on Windows
+	dir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A name no real machine has on PATH, so exec.LookPath cannot pre-empt the
+	// install-root lookup this is about.
+	const name = "gaia-agent-unverified-fixture"
+	file := name
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ResolveExecutable(name, "gaia")
+	if err == nil {
+		t.Fatal("an unverified binary in the install root resolved successfully")
+	}
+	// Naming the file is what separates "finish the install" from "go download it".
+	for _, want := range []string{"gaia hub install", SentinelName, file} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q:\n%s", want, err)
+		}
+	}
+}
+
 // ResolveExecutable is what turns "the catalog names a binary" into "this
 // process can exec it". A name that resolves nowhere must fail here — before a
 // caller can report a connection.

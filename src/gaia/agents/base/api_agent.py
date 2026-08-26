@@ -7,10 +7,9 @@ This module provides ApiAgent, an optional mixin class for agents that want to b
 exposed via the OpenAI-compatible API with custom behavior.
 
 Inheritance patterns:
-    - CodeAgent(ApiAgent, Agent) - API-only agent
-    - DockerAgent(MCPAgent, Agent) - MCP-only agent
-    - JiraAgent(MCPAgent, ApiAgent, Agent) - Both protocols
-    - Future: FooAgent(MCPAgent, ApiAgent, Agent) - Multiple inheritance
+    - FooAgent(ApiAgent, Agent) - API-only agent
+    - FooAgent(MCPAgent, Agent) - MCP-only agent
+    - FooAgent(MCPAgent, ApiAgent, Agent) - both protocols
 """
 
 from typing import Any, Dict
@@ -40,9 +39,9 @@ class ApiAgent(Agent):
             pass
 
     Example:
-        >>> class CodeAgent(ApiAgent, MCPAgent, Agent):
+        >>> class FooAgent(ApiAgent, MCPAgent, Agent):
         ...     def get_model_id(self) -> str:
-        ...         return "gaia-code-agent"
+        ...         return "gaia"
         ...
         ...     def get_model_info(self) -> Dict:
         ...         return {
@@ -59,12 +58,13 @@ class ApiAgent(Agent):
         Default: gaia-{classname} (with 'Agent' suffix removed)
 
         Returns:
-            Model ID string (e.g., "gaia-code", "gaia-jira")
+            Model ID string (e.g., "gaia")
 
         Example:
-            CodeAgent -> gaia-code
-            JiraAgent -> gaia-jira
-            DockerAgent -> gaia-docker
+            FooAgent -> gaia-foo
+
+        The flagship is served as the model id "gaia" via its AGENT_MODELS key,
+        not through this default.
         """
         # All agents follow *Agent naming convention, strip "Agent" suffix
         name = self.__class__.__name__

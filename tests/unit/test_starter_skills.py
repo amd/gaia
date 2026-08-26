@@ -207,6 +207,10 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     each name is instead verified against the agent's source: the ``def``
     must exist in ``agent.py`` or the name is dropped — keeping this list
     incapable of drifting past a rename.
+
+    ``request_user_input`` comes from ``_register_loop_control_tools``, which
+    every non-``chat`` profile runs, so a skill that has to ask the user a
+    question before acting can legitimately declare it.
     """
     # Ships with the standalone gaia-agent-chat wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
@@ -215,7 +219,7 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "list_files"}
+    inline = {"execute_python_file", "list_files", "request_user_input"}
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 
