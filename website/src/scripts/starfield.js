@@ -1,31 +1,39 @@
 /*
- * GAIA constellation starfield — pointer-reactive canvas background.
+ * GAIA star chart — pointer-reactive canvas background.
+ *
+ * The figures are REAL: eleven classical constellations at their J2000
+ * positions, gnomonically projected per figure and scattered across the
+ * viewport (see constellations.js). Star size and brightness come from visual
+ * magnitude, so Betelgeuse outshines Meissa here exactly as it does overhead.
+ * Faint field stars fill the gaps; only the real asterisms carry lines.
  *
  * Framework-agnostic, dependency-free, no build step. Mount it on a fixed,
  * pointer-events:none <canvas> behind the page content. See StarField.astro.
  *
  * Pointer-reactive: a smoothed cursor trails the real one, brightening nearby
- * stars and constellation lines and drifting nearby stars toward it. No
- * ambient glow — the reaction lives entirely in the field itself.
- * Honors prefers-reduced-motion: renders one static frame, no rAF loop, and
- * no pointer reaction at all.
+ * stars and lines and drifting nearby stars toward it. No ambient glow — the
+ * reaction lives entirely in the field itself. Honors prefers-reduced-motion:
+ * one static frame, no rAF loop, no pointer reaction at all.
  *
  * Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  * SPDX-License-Identifier: MIT
  */
 
-const STAR_CELL = 108;        // grid cell px — one candidate star each
-const STAR_SKIP = 0.82;       // > this random value → skip the cell (open sky)
-const LINK_MAX_DIST = 150;    // px — constellation line reach
+import { CONSTELLATIONS, projectFigure } from './constellations.js';
+
+const FIELD_CELL = 128;       // px — one candidate field star per cell
+const FIELD_SKIP = 0.55;      // > this random value → empty cell (open sky)
+const FIG_CELL_W = 470;       // px — one constellation per cell, at most
+const FIG_CELL_H = 430;
+const FIG_SKIP = 0.72;        // > this → leave the cell empty
 const POINTER_RADIUS = 300;   // px — pointer influence radius
 const POINTER_ATTRACT = 12;   // px — max drift of a star toward the pointer
 const POINTER_SMOOTH = 160;   // ms — time constant of the trailing pointer
-const PACKET_INTERVAL = 340;  // ms between signal packets
-const PACKET_MAX = 46;
+const PACKET_INTERVAL = 420;  // ms between signal packets
+const PACKET_MAX = 30;
 
 // Stellar temperature classes, weighted to the real sky: mostly blue-white and
 // white, few warm. This is what keeps the field from reading as a gold wash.
-// Weights are fixed; only the four colors are themeable.
 const CLASS_WEIGHTS = [0.42, 0.78, 0.93, 1.0];
 
 // Dark ground (the designed default).
@@ -43,6 +51,9 @@ const rnd = (s) => {
   const x = Math.sin(s * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 };
+
+// Projected once at module load — the geometry never changes, only its placement.
+const FIGURES = CONSTELLATIONS.map(projectFigure);
 
 /**
  * @param {HTMLCanvasElement} canvas
@@ -67,6 +78,43 @@ export function mountStarField(canvas, palette) {
   let spx = null, spy = null, pk = 0;     // smoothed pointer + influence 0..1
   let raf = 0, last = performance.now(), spawnAcc = 0;
 
+  const starColor = (seed) => {
+    const t = rnd(seed);
+    return pal.stars[CLASS_WEIGHTS.findIndex((w) => t < w)] || pal.stars[0];
+  };
+
+  const addStar = (x, y, radius, bright, seed) => {
+    const n = {
+      x, y,
+      dx: x, dy: y,                        // drawn position (pointer drift)
+      col: starColor(seed),
+      base: radius,
+      bright,
+      tw: rnd(seed + 7) * 6.28,            // twinkle phase
+      tws: 0.4 + rnd(seed + 11) * 0.9,     // twinkle speed
+      pulse: 0,                            // 0..1, set when a packet arrives
+    };
+    nodes.push(n);
+    return n;
+  };
+
+  // One constellation, placed in a cell: projected coordinates scaled to the
+  // cell, rotated a few degrees so the sky does not read as a grid of decals.
+  function placeFigure(fig, cx, cy, size, rot, seed) {
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const placed = fig.pts.map((p, i) => {
+      const x = cx + (p.x * cos - p.y * sin) * size;
+      const y = cy + (p.x * sin + p.y * cos) * size;
+      // Visual magnitude → radius and brightness. Real magnitudes run roughly
+      // 0–5 here, and the scale is inverted: smaller number, brighter star.
+      const r = Math.max(0.65, 2.35 - p.mag * 0.33);
+      const b = Math.max(0.3, 0.92 - p.mag * 0.1);
+      return addStar(x, y, r, b, seed + i * 17.3);
+    });
+
+    fig.lines.forEach(([a, b]) => edges.push({ a: placed[a], b: placed[b] }));
+  }
+
   function build() {
     W = canvas.clientWidth;
     H = canvas.clientHeight;
@@ -76,54 +124,45 @@ export function mountStarField(canvas, palette) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     nodes = []; edges = []; packets = [];
-    const cols = Math.ceil(W / STAR_CELL), rows = Math.ceil(H / STAR_CELL);
-    let id = 0;
 
+    // 1. Field stars — texture between the figures, never joined by lines.
+    const cols = Math.ceil(W / FIELD_CELL), rows = Math.ceil(H / FIELD_CELL);
     for (let gx = 0; gx < cols; gx++) {
       for (let gy = 0; gy < rows; gy++) {
         const s = gx * 73.3 + gy * 191.7;
-        if (rnd(s + 9) > STAR_SKIP) continue;
-        const mag = rnd(s + 5);              // magnitude: most tiny, few bright
-        const t = rnd(s + 13);
-        const col = pal.stars[CLASS_WEIGHTS.findIndex((w) => t < w)] || pal.stars[0];
-        const x = (gx + 0.15 + rnd(s) * 0.7) * STAR_CELL;
-        const y = (gy + 0.15 + rnd(s + 3) * 0.7) * STAR_CELL;
-        nodes.push({
-          id: id++,
-          x,
-          y,
-          dx: x,                             // drawn position (pointer drift)
-          dy: y,
-          col,
-          base: 0.5 + mag * mag * 1.8,       // radius
-          bright: 0.28 + mag * 0.5,
-          tw: rnd(s + 7) * 6.28,             // twinkle phase
-          tws: 0.4 + rnd(s + 11) * 0.9,      // twinkle speed
-          pulse: 0,                          // 0..1, set when a packet arrives
-        });
+        if (rnd(s + 9) > FIELD_SKIP) continue;
+        const mag = rnd(s + 5);
+        addStar(
+          (gx + 0.15 + rnd(s) * 0.7) * FIELD_CELL,
+          (gy + 0.15 + rnd(s + 3) * 0.7) * FIELD_CELL,
+          0.45 + mag * mag * 1.1,
+          0.2 + mag * 0.34,
+          s + 13,
+        );
       }
     }
 
-    // Constellation lines: each star joins its 1–2 nearest neighbours.
-    const maxD2 = LINK_MAX_DIST * LINK_MAX_DIST;
-    const seen = new Set();
-    nodes.forEach((a) => {
-      const near = [];
-      nodes.forEach((b) => {
-        if (b === a) return;
-        const d2 = (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
-        if (d2 < maxD2) near.push({ b, d2 });
-      });
-      near.sort((p, q) => p.d2 - q.d2);
-      const links = a.base > 1.4 ? 2 : 1;    // brighter stars anchor more lines
-      for (let k = 0; k < Math.min(links, near.length); k++) {
-        const b = near[k].b;
-        const key = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        edges.push({ a, b });
+    // 2. Constellations — one per cell at most, cycling the catalogue so the
+    //    same figure never lands twice side by side.
+    const fcols = Math.max(1, Math.round(W / FIG_CELL_W));
+    const frows = Math.max(1, Math.round(H / FIG_CELL_H));
+    const cw = W / fcols, ch = H / frows;
+    let pick = 0;
+    for (let gx = 0; gx < fcols; gx++) {
+      for (let gy = 0; gy < frows; gy++) {
+        const s = gx * 37.1 + gy * 53.9 + 4.2;
+        if (fcols * frows > 2 && rnd(s + 21) > FIG_SKIP) continue;
+        const fig = FIGURES[pick++ % FIGURES.length];
+        placeFigure(
+          fig,
+          (gx + 0.22 + rnd(s + 1) * 0.56) * cw,
+          (gy + 0.22 + rnd(s + 2) * 0.56) * ch,
+          Math.min(cw, ch) * (0.44 + rnd(s + 3) * 0.2),
+          (rnd(s + 4) - 0.5) * 0.34,          // ±~10°
+          s * 3.7,
+        );
       }
-    });
+    }
   }
 
   function draw(now) {
@@ -180,7 +219,7 @@ export function mountStarField(canvas, palette) {
       }
     });
 
-    // Constellation lines.
+    // Asterism lines.
     ctx.lineWidth = 1;
     edges.forEach((e) => {
       const k = Math.max(
