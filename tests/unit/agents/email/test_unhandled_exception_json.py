@@ -19,6 +19,7 @@ import gaia_agent_email.api_routes as email_routes
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from gaia_agent_email.server import install_email_unhandled_exception_handler
+
 from gaia.connectors.errors import AuthRequiredError
 
 
