@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **An Outlook search containing a quoted value no longer sends Graph a malformed
+  `$search` (#3021).** `from:"Acme Corp"` was wrapped verbatim, producing
+  `$search="from:"Acme Corp""` nested unescaped quotes. Inner quotes and
+  backslashes are now escaped per OData search phrase rules.
 - **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
   `require_caller_token` enforces a per-session bearer token at runtime, but was
   invisible to schema generation (it's a plain `Request` dependency, not a
@@ -33,11 +37,10 @@ contract version is tracked separately as
   (post-normalization) query and retry state are now logged for
   `search_messages`, so a future zero-result report is diagnosable from
   `~/.gaia/gaia.log` without reproducing it live.
-  **Outlook mailboxes are unaffected by this fix** — `outlook_backend.py`
-  sends the whole query as a single quoted Microsoft Graph `$search` phrase
-  and never parses Gmail operator syntax, so the corrected duration handling
-  has no effect there; operator search against Outlook was already
-  non-functional before and after this change.
+  **Outlook mailboxes are unaffected by this duration fix** —
+  `outlook_backend.py` never parses Gmail operator syntax, so converting
+  `w` to days has no effect there. Quoted Outlook `$search` values are
+  escaped separately (see the Graph quote escape entry below).
 
 ### Changed
 

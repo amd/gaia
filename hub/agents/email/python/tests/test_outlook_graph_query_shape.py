@@ -39,6 +39,20 @@ def test_list_messages_search_escapes_inner_quotes():
     assert captured["params"].get("$search") == '"from:\\"Acme Corp\\""'
 
 
+def test_list_messages_search_escapes_backslash():
+    """A literal backslash must be doubled so Graph doesn't read it as an escape."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"value": []})
+
+    backend = _backend(handler)
+    backend.list_messages(query="subject:a\\b", max_results=5)
+
+    assert captured["params"].get("$search") == '"subject:a\\\\b"'
+
+
 def test_get_thread_query_omits_orderby():
     """get_thread must filter on conversationId without an $orderby (the
     combination Graph rejects with InefficientFilter)."""
