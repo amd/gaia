@@ -2444,7 +2444,8 @@ daemon client token from `~/.gaia/host/instance.json`; the per-sidecar bearer
 is injected by the daemon and never leaves it for relayed traffic.
 
 Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
-`pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
+`pip install "amd-gaia[api]"` (or `[ui]`, which adds the Agent UI's RAG stack on
+top). The one-line installer already does this. Running it on a base install
 fails loudly with that instruction.
 
 #### Model-slot serialization
@@ -2554,7 +2555,7 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   `security_tier` counts as `experimental` and is gated the same way. Nothing
   infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
   this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
+- Requires the daemon extras (`pip install "amd-gaia[api]"`), same as `gaia daemon`.
 
 <Note>
 `gaia agent install <id>` does the same install **in-process**; `gaia hub

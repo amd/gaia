@@ -14,7 +14,7 @@
  * "continue anyway" path.
  */
 
-import { realpathSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -115,7 +115,10 @@ Usage:
 
 run options:
   --base-url <url>     Override the per-component download base URL from
-                       binaries.lock.json (applies to every component fetched)
+                       binaries.lock.json (applies to every component fetched).
+                       Must be https unless --allow-insecure-base-url is given.
+  --allow-insecure-base-url
+                       Permit a non-https --base-url (a trusted local mirror)
   --cache-dir <dir>    Where to cache the TUI binary
   --sidecar-dir <dir>  Where to install the agent sidecar
                        (default ~/.gaia/agents/gaia — the daemon's own cache)
@@ -129,6 +132,8 @@ fetch options:
 
 serve options:
   --port <n>           Bind port (default ${DEFAULT_PORT}; ${RESERVED_PORT} is reserved and refused)
+  --base-url, --sidecar-dir, --force as above. \`serve\` never downloads the TUI,
+  so --cache-dir is refused rather than ignored.
 
 Notes:
   * No binaries are committed to the repo. Every download is SHA-256 verified
@@ -154,21 +159,76 @@ interface DownloadOptions {
 }
 
 /**
- * Shared download options. `--platform` is accepted only by `fetch`: `run` and
- * `serve` execute what they download, and honouring a foreign platform there
- * would write a wrong-architecture binary into the daemon's cache and then try
- * to spawn it.
+ * Which commands actually READ each value flag, and why the others refuse it.
+ * A flag a command ignores is worse than one it rejects: `run --port 9000`
+ * used to parse fine and silently come up on the default port.
  */
-function downloadOptions(args: ParsedArgs, allowPlatform = false): DownloadOptions {
-  const platformKey = flagStr(args, "platform");
-  if (platformKey !== undefined && !allowPlatform) {
+const VALUE_FLAG_SCOPE: Record<string, { commands: readonly string[]; why: string }> = {
+  "base-url": { commands: ["run", "fetch", "serve"], why: "it only affects downloads" },
+  "sidecar-dir": { commands: ["run", "fetch", "serve"], why: "it only affects downloads" },
+  platform: {
+    commands: ["fetch"],
+    why:
+      "`run` and `serve` execute the binary, so it must be built for this host " +
+      `(${currentPlatformKey()})`,
+  },
+  port: {
+    commands: ["serve"],
+    why: "only `serve` binds a port; `run` reaches the agent through the daemon, which picks its own",
+  },
+  component: {
+    commands: ["fetch"],
+    why: "`run` needs both binaries and `serve` needs the sidecar, so neither can fetch a subset",
+  },
+  "cache-dir": {
+    commands: ["run", "fetch"],
+    why: "it caches the TUI, which `serve` never downloads (use --sidecar-dir)",
+  },
+};
+
+/** Refuse a value flag the chosen command would otherwise silently ignore. */
+function assertFlagsInScope(args: ParsedArgs, cmd: string): void {
+  for (const [flag, scope] of Object.entries(VALUE_FLAG_SCOPE)) {
+    if (args.flags[flag] === undefined || scope.commands.includes(cmd)) continue;
     throw new UsageError(
-      "--platform is only valid for `gaia fetch`. `run` and `serve` execute the " +
-        `binary, so it must be built for this host (${currentPlatformKey()}).`,
+      `--${flag} is not valid for \`gaia ${cmd}\` — ${scope.why}. ` +
+        `It is accepted by: ${scope.commands.map((c) => `\`gaia ${c}\``).join(", ")}.`,
     );
   }
+}
+
+/**
+ * Require https for a download source. Integrity still holds over plaintext
+ * (the SHA is pinned), but a MITM then surfaces as a baffling IntegrityError
+ * instead of the transport failure it is.
+ */
+function checkedBaseUrl(args: ParsedArgs): string | undefined {
+  const raw = flagStr(args, "base-url");
+  if (raw === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new UsageError(
+      `--base-url '${raw}' is not a valid absolute URL (expected e.g. https://host/path).`,
+    );
+  }
+  if (parsed.protocol !== "https:" && !args.flags["allow-insecure-base-url"]) {
+    throw new UsageError(
+      `--base-url '${raw}' uses ${parsed.protocol}, not https. Downloads are ` +
+        "SHA-256 verified either way, but plaintext turns tampering into a " +
+        "confusing integrity failure instead of a transport error. Use an https " +
+        "URL, or pass --allow-insecure-base-url for a trusted local mirror.",
+    );
+  }
+  return raw;
+}
+
+/** Shared download options. Scope and scheme are validated before we get here. */
+function downloadOptions(args: ParsedArgs, allowPlatform = false): DownloadOptions {
+  const platformKey = flagStr(args, "platform");
   return {
-    baseUrl: flagStr(args, "base-url"),
+    baseUrl: checkedBaseUrl(args),
     ...(allowPlatform && platformKey !== undefined ? { platformKey } : {}),
     force: Boolean(args.flags["force"]),
     tuiDir: flagStr(args, "cache-dir"),
@@ -191,8 +251,10 @@ export function pathWithoutOwnShim(
   if (rawPath === undefined || !argv1) return rawPath;
   const sep = process.platform === "win32" ? ";" : ":";
   let ownBinDir: string;
+  let ownName: string;
   try {
     ownBinDir = path.resolve(path.dirname(argv1));
+    ownName = path.basename(argv1);
   } catch {
     return rawPath;
   }
@@ -202,15 +264,36 @@ export function pathWithoutOwnShim(
       ? resolved.toLowerCase() === ownBinDir.toLowerCase()
       : resolved === ownBinDir;
   };
-  return rawPath
-    .split(sep)
-    .filter((d) => d !== "" && !same(d))
-    .join(sep);
+  const entries = rawPath.split(sep).filter((d) => d !== "");
+  const kept = entries.filter((d) => !same(d));
+  if (kept.length === entries.length) return kept.join(sep);
+  // A dir holding nothing but our own shim (an npx temp dir, node_modules/.bin)
+  // costs nothing to drop. A SHARED bin dir must NOT be dropped — that is where
+  // python3 / lemonade-server / the real `gaia` live — so it moves to the end
+  // instead, letting any other `gaia` on PATH win while its siblings survive.
+  return (isExclusivelyOurs(ownBinDir, ownName) ? kept : [...kept, ownBinDir]).join(sep);
+}
+
+/** True when every file in `dir` is a shim for `name` (`gaia`, `gaia.cmd`, …). */
+function isExclusivelyOurs(dir: string, name: string): boolean {
+  const stem = name.replace(/\.(cmd|bat|ps1|exe)$/i, "");
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false; // unreadable → treat as shared, the non-destructive branch
+  }
+  return (
+    entries.length > 0 &&
+    entries.every((e) => e.replace(/\.(cmd|bat|ps1|exe)$/i, "") === stem)
+  );
 }
 
 /** Validate `--port`. Rejects out-of-range values and the reserved port. */
 export function resolvePort(raw: string | boolean | undefined): { port: number } | { error: string } {
-  const port = typeof raw === "string" ? Number(raw) : DEFAULT_PORT;
+  // Strict digits, not Number(): that accepts "0x2710", " 80 ", and "1e3",
+  // so a typo would quietly bind a port the user never named.
+  const port = typeof raw === "string" ? (/^\d+$/.test(raw) ? Number(raw) : NaN) : DEFAULT_PORT;
   if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === RESERVED_PORT) {
     return {
       error: `--port must be a port in 1..65535 and not ${RESERVED_PORT} (got ${String(raw)})`,
@@ -289,6 +372,8 @@ async function cmdFetch(args: ParsedArgs): Promise<number> {
   return 0;
 }
 
+const SERVE_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
 async function cmdServe(args: ParsedArgs): Promise<number> {
   const parsed = resolvePort(args.flags["port"]);
   if ("error" in parsed) {
@@ -316,10 +401,19 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
     process.stdout.write(`\n  ▸ GAIA agent: ${sidecar.baseUrl}/v1/gaia/query\n`);
     process.stdout.write(`    Health:     ${sidecar.baseUrl}/health\n`);
     process.stdout.write("    Lemonade must be running for live queries. Ctrl+C to stop.\n\n");
-    await new Promise<void>((resolve) => {
+    let stop!: () => void;
+    const stopped = new Promise<void>((resolve) => {
       let stopping = false;
-      const stop = (): void => {
-        if (stopping) return; // a second signal must not re-enter shutdown
+      stop = (): void => {
+        if (stopping) {
+          // Absorbed, so say what is happening — otherwise a repeat Ctrl+C
+          // during a slow teardown just looks like a frozen terminal.
+          process.stderr.write(
+            `[gaia] already stopping the sidecar (pid ${String(sidecar.child.pid)}); ` +
+              "waiting for its process tree to exit ...\n",
+          );
+          return;
+        }
         stopping = true;
         process.stderr.write("\n[gaia] stopping the sidecar ...\n");
         void shutdown(sidecar).catch(() => undefined).finally(resolve);
@@ -328,8 +422,15 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
       // otherwise hit Node's default disposition and kill us mid-teardown,
       // orphaning the detached sidecar tree on port 8141. The `stopping` guard
       // absorbs the repeats.
-      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, stop);
+      for (const sig of SERVE_SIGNALS) process.on(sig, stop);
     });
+    try {
+      await stopped;
+    } finally {
+      // Left installed, they would swallow every later signal AND suppress
+      // Node's default disposition, so Ctrl+C would stop working entirely.
+      for (const sig of SERVE_SIGNALS) process.removeListener(sig, stop);
+    }
     return 0;
   } catch (e) {
     await shutdown(sidecar).catch(() => undefined);
@@ -386,6 +487,7 @@ export async function main(argv: string[]): Promise<number> {
         "Arguments for the terminal UI go after a bare `--`.",
     );
   }
+  assertFlagsInScope(args, cmd);
   switch (cmd) {
     case "run":
       return cmdRun(args);

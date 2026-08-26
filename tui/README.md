@@ -7,47 +7,65 @@ your files, write code. The terminal hub is how you find them, install them,
 and talk to them. Everything runs on your own machine: no account, and nothing
 you type is sent to a hosted service.
 
-> **Heads up — this is early.** There is no download yet. Getting the hub means
-> building it yourself, so you will need `git`, [Go](https://go.dev/dl/), and
-> [uv](https://docs.astral.sh/uv/) installed, and about half an hour. If that is
-> not what you were hoping for, come back when it ships.
+## Install
 
-## Getting set up
-
-Three one-time steps, in this order.
-
-**1. Get GAIA itself.** The hub needs changes that are not in a published
-release yet, so install from source rather than from PyPI:
+One command installs the `gaia` CLI, the local model runtime, and the terminal
+hub itself:
 
 ```bash
-git clone https://github.com/amd/gaia.git
-cd gaia
-uv venv && uv pip install -e .
+# macOS and Linux
+curl -fsSL https://amd-gaia.ai/install.sh | sh
 ```
 
-That gives you `gaia`, GAIA's main command.
+```powershell
+# Windows
+irm https://amd-gaia.ai/install.ps1 | iex
+```
 
-**2. Get a local AI running.** Because agents run on your machine, something on
-your machine has to do the thinking. That is a local model server, and GAIA
-sets it up for you:
+Then set up the local model — several GB, so give it a while — and open the hub:
 
 ```bash
 gaia init
+gaia-tui
 ```
 
-It downloads a model — several GB, so give it a while. If you skip this, the
-hub will stop you before an agent starts and tell you the same thing.
+`gaia init` installs Lemonade Server, the runtime that does the thinking on your
+machine. Skip it and the hub stops you before an agent starts and tells you the
+same thing.
 
-**3. Build the hub.** From the same folder:
+### Or download the binary directly
+
+The installer fetches these and verifies their SHA-256; you can also take one
+yourself. Rename it to `gaia-tui` and put it on your `PATH`:
+
+| Platform | Download |
+|---|---|
+| Windows x64 | [`gaia-win-x64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-x64.exe) |
+| Windows ARM64 | [`gaia-win-arm64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-arm64.exe) |
+| macOS Apple Silicon | [`gaia-darwin-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-arm64) |
+| macOS Intel | [`gaia-darwin-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-x64) |
+| Linux x64 | [`gaia-linux-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-x64) |
+| Linux ARM64 | [`gaia-linux-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-arm64) |
+
+`https://hub.amd-gaia.ai/agents/terminal-hub/manifest.json` lists what is
+published, with the SHA-256 of each build. A direct download still needs the
+`gaia` CLI on your `PATH` — the hub starts a local daemon through it — so the
+one-line installer above is the shorter route.
+
+The binary is installed as `gaia-tui`, never as `gaia`: the two have different
+subcommands and would collide on your `PATH`.
+
+### Building from source
+
+For working on the hub itself. Needs `git`, [Go](https://go.dev/dl/), and
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
+git clone https://github.com/amd/gaia.git
+cd gaia && uv venv && uv pip install -e .
 cd tui && make build                # -> tui/bin/gaia
 cp bin/gaia ~/.local/bin/gaia-tui   # somewhere on your PATH
 ```
-
-That gives you `gaia-tui`, the command in this README. It is a separate name
-from `gaia` because the two have different subcommands and would otherwise
-collide on your `PATH`.
 
 ## Your first run
 

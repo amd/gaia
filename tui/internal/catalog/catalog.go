@@ -121,7 +121,30 @@ func findInstalledBinary(agentID, name string) string {
 	return findInstalledBinaryIn(InstallRoot(), agentID, name)
 }
 
+// findInstalledBinaryIn returns the agent's binary under the install root, but
+// only when an .installed sentinel proves the directory is a completed install.
+//
+// Without that gate the file's NAME is the only evidence of what it is, and the
+// name is not unique: `gaia-agent` is both the stdio child this looks for and
+// the frozen REST sidecar other installers stage into this same directory.
+// Spawning the wrong one feeds uvicorn's startup log to a JSON line scanner
+// (#3062). A directory with no sentinel is a leftover or an in-progress
+// install, which is how LocalInstalls already treats it.
 func findInstalledBinaryIn(root, agentID, name string) string {
+	if root == "" || agentID == "" {
+		return ""
+	}
+	if record, err := readSentinel(filepath.Join(root, agentID, SentinelName)); err != nil || record == nil {
+		return ""
+	}
+	return installDirBinaryIn(root, agentID, name)
+}
+
+// installDirBinaryIn finds the binary by name alone, with no sentinel check.
+// Only two callers may use it: findInstalledBinaryIn once the sentinel has
+// verified the install, and ResolveExecutable's diagnostic, which needs to tell
+// "nothing is there" apart from "something is there but unverified".
+func installDirBinaryIn(root, agentID, name string) string {
 	if root == "" || agentID == "" {
 		return ""
 	}
@@ -215,6 +238,15 @@ func ResolveExecutable(nameOrPath, agentID string) (string, error) {
 		where = "~/.gaia/agents"
 	} else {
 		where = filepath.Join(where, agentID)
+	}
+	// A file IS sitting there, it just has no sentinel to say what it is. Saying
+	// "not found" here sends the user hunting for a missing download when the
+	// real answer is "finish the install"; naming the file is the difference.
+	if p := installDirBinaryIn(InstallRoot(), agentID, nameOrPath); p != "" {
+		return "", fmt.Errorf(
+			"%w: reinstall %s with `gaia hub install %s` — %s exists but the install "+
+				"is unverified (no %s), so it is not safe to run",
+			ErrNoExecutable, agentID, agentID, p, SentinelName)
 	}
 	// Action first: this text is also shown in the hub's one-row status bar,
 	// where an 80-column terminal truncates whatever comes after ~70 characters.

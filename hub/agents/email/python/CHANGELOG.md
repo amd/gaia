@@ -13,6 +13,14 @@ contract version is tracked separately as
   `$search` (#3021).** `from:"Acme Corp"` was wrapped verbatim, producing
   `$search="from:"Acme Corp""` nested unescaped quotes. Inner quotes and
   backslashes are now escaped per OData search phrase rules.
+- **A request that omits its `Host` header is now refused (400).** The
+  DNS-rebinding check only compared the header when one was present, so a caller
+  could skip the control by leaving it out. Browsers always send `Host`, so the
+  drive-by vector this guards was never open and the token check applied
+  regardless — this closes a defence-in-depth fail-open, not a live bypass. The
+  refusal message quotes the header back when one was sent, so a malformed value
+  (`:8131`, an unbracketed `::1`) no longer reports as "no Host header".
+
 - **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
   `require_caller_token` enforces a per-session bearer token at runtime, but was
   invisible to schema generation (it's a plain `Request` dependency, not a

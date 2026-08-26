@@ -6431,8 +6431,8 @@ def _check_daemon_deps():
     """Fail loud if the daemon's runtime deps (extras-only) are missing.
 
     ``gaia daemon`` is a base console command but the daemon process needs
-    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[ui]``/``[api]``/
-    ``[dev]`` extras. On a base install the spawned daemon would die on
+    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[api]`` and ``[ui]``
+    extras. On a base install the spawned daemon would die on
     ``ModuleNotFoundError`` and surface a cryptic "process exited early"; name
     the real cause and the fix instead.
     """
@@ -6451,8 +6451,8 @@ def _check_daemon_deps():
         print(
             "❌ `gaia daemon` needs packages not in the base install: "
             + ", ".join(missing)
-            + '.\n   Install the daemon extras:  pip install "amd-gaia[ui]"'
-            "  (or [api]/[dev])."
+            + '.\n   Install the daemon extras:  pip install "amd-gaia[api]"'
+            "  (or [ui], which adds the Agent UI's RAG stack on top)."
         )
         sys.exit(1)
 
