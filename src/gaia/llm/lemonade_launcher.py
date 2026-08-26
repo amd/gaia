@@ -358,17 +358,9 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
             foreground=spec.argv[0] != "systemctl",
         )
 
-    if system == "Darwin":
-        # macOS has no `gaia init` install path, so never suggest it here.
-        if _macos_app_installed():
-            return StartHint(
-                instruction="Start the Lemonade app from Applications, then retry."
-            )
+    if system == "Darwin" and _macos_app_installed():
         return StartHint(
-            instruction=(
-                f"Lemonade Server is not installed. Download it from {_DOWNLOAD_URL} "
-                "and start the Lemonade app."
-            )
+            instruction="Start the Lemonade app from Applications, then retry."
         )
 
     return StartHint(
