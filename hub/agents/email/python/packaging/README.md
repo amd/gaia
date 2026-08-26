@@ -74,7 +74,7 @@ spawning parent hands over a per-session token through one of two channels:
   the file wins.
 
 Every `/v1/email/*` request must send `Authorization: Bearer <token>` or it is
-rejected with **401**. A non-loopback `Host` → **400** (DNS-rebinding) and a
+rejected with **401**. An absent or non-loopback `Host` → **400** (DNS-rebinding) and a
 non-loopback browser `Origin` → **403** (drive-by page); `/health`, `/version`,
 `/v1/email/spec`, and `/v1/email/playground` are exempt from the token. Launching
 by hand with neither variable disables the token check (local dev only, logged
