@@ -133,9 +133,11 @@ models and frontier models, running through the same Lemonade your local models
 use. The screen walks you through the gateway URL, your token, and which models
 to enable; the active one becomes the default for new chats.
 
-Your token is handed to Lemonade, which keeps it in memory only. The TUI masks
-the field and writes nothing but your model selection to `~/.gaia/gateway.json`.
-Needs Lemonade 11.8.0+.
+The TUI masks the token field and never writes the token to a file of its own —
+it hands it to Lemonade, then asks GAIA's background service to keep a copy in
+your OS credential store, so the next launch does not ask again. Only your
+base URL and model selection go to `~/.gaia/gateway.json`. Needs Lemonade
+11.8.0+.
 
 Details: <https://amd-gaia.ai/docs/guides/llm-gateway>
 

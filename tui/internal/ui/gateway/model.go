@@ -22,6 +22,10 @@ const (
 	stageModels
 )
 
+// savingNotice is shown while the token is on its way to the credential store,
+// and is the only notice the success path is allowed to overwrite.
+const savingNotice = "Saving it..."
+
 // CloseMsg asks the root model to leave the gateway screen.
 type CloseMsg struct{}
 
@@ -47,6 +51,12 @@ type installedMsg struct {
 type authedMsg struct {
 	result installResult
 	err    error
+}
+
+// persistedMsg reports whether the accepted token reached the credential
+// store. It never carries the token.
+type persistedMsg struct {
+	err error
 }
 
 // modelsMsg carries the discovered gateway models.
@@ -76,6 +86,10 @@ type GatewayModel struct {
 	height   int
 	initErr  error
 	haveInit bool
+
+	// pendingPersist saves the token once the gateway has accepted it. It is a
+	// closure over the token, never the token itself.
+	pendingPersist tea.Cmd
 }
 
 // New builds the screen. A nil client means Lemonade could not be reached; the
@@ -123,6 +137,11 @@ func (m GatewayModel) Init() tea.Cmd {
 func (m GatewayModel) fetchStatus() tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
+		// Lemonade forgets its token on restart, so replay a stored one before
+		// reading status — otherwise a user who already authenticated is asked
+		// again on every launch. Failure here is not an error to report: it
+		// just means there is nothing stored, and the token stage handles that.
+		restoreToken()
 		status, err := client.Status()
 		return statusMsg{status: status, err: err}
 	}
@@ -153,6 +172,14 @@ func (m GatewayModel) authenticate(token string) tea.Cmd {
 		result, err := client.SetToken(token, baseURL)
 		return authedMsg{result: result, err: err}
 	}
+}
+
+// persist holds the token in a closure rather than on the model, so it never
+// reaches rendered state or a message the root model forwards. Reaching the
+// daemon can mean starting one, so it runs after the auth result is already on
+// screen instead of blocking it.
+func (m GatewayModel) persist(token string) tea.Cmd {
+	return func() tea.Msg { return persistedMsg{err: rememberToken(token)} }
 }
 
 func (m GatewayModel) fetchModels() tea.Cmd {
@@ -241,13 +268,32 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.errMsg = ""
 		m.notice = fmt.Sprintf(
-			"Token accepted — %d model(s) discovered. It lives in Lemonade's "+
-				"memory only; set %s to persist it.",
-			msg.result.ModelsDiscovered, APIKeyEnv)
+			"Token accepted — %d model(s) discovered. %s",
+			msg.result.ModelsDiscovered, savingNotice)
 		m.stage = stageModels
 		m.tokenInput.Blur()
 		m.busy = "Loading models..."
-		return m, m.fetchModels()
+		save := m.pendingPersist
+		m.pendingPersist = nil
+		return m, tea.Batch(m.fetchModels(), save)
+
+	case persistedMsg:
+		if msg.err != nil {
+			// Always shown: the user has to know they will be asked again, and
+			// the remedy. This outranks whatever the model list had to say.
+			m.notice = fmt.Sprintf(
+				"Token accepted, but it could not be saved, so you will be "+
+					"asked again next launch: %v. Set %s to avoid that.",
+				msg.err, APIKeyEnv)
+			return m, nil
+		}
+		// The model list resolves first when saving is slow, and which model is
+		// now the default is the more useful thing to be reading. Only the
+		// "saving" placeholder gets replaced.
+		if strings.Contains(m.notice, savingNotice) {
+			m.notice = "Token saved to your OS credential store — GAIA will reuse it."
+		}
+		return m, nil
 
 	case modelsMsg:
 		m.busy = ""
@@ -340,6 +386,7 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.errMsg = ""
 			m.notice = ""
 			m.busy = "Sending token to Lemonade..."
+			m.pendingPersist = m.persist(token)
 			return m, m.authenticate(token)
 		case "tab":
 			m.stage = stageURL
