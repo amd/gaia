@@ -5170,6 +5170,7 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
 
 def handle_gateway_command(args):
     """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
+    from gaia.config import GaiaConfigError
     from gaia.llm.gateway import (
         DEFAULT_GATEWAY_BASE_URL,
         GATEWAY_API_KEY_ENV,
@@ -5177,6 +5178,7 @@ def handle_gateway_command(args):
         GatewayManager,
         GatewayState,
     )
+    from gaia.llm.lemonade_client import LemonadeClientError
 
     action = getattr(args, "gateway_action", None)
     if not action:
