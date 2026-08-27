@@ -62,16 +62,40 @@ DEFAULT_GATEWAY_BASE_URL = os.getenv(
 DEFAULT_AUTH_HEADER_NAME = "Ocp-Apim-Subscription-Key"
 DEFAULT_AUTH_HEADER_PREFIX = ""
 
-# Substrings that float a discovered model to the top of the picker and
-# pre-select it. Hints for ordering only — the real ids come from the gateway,
-# which uses its own naming and carries models beyond the public catalogs
-# (`Claude-Opus-5`, `Gemma-4-31B`). Matching is lowercase-substring so it holds
-# across the gateway's mixed casing (`Claude-Opus-5` vs `claude-opus-4.8`).
-RECOMMENDED_HINTS = (
+# Ordered preference for the picker, best first. The first match is what GAIA
+# selects automatically when a gateway is connected with nothing chosen yet.
+#
+# `Gemma-4-31B` leads deliberately: it is currently the ONLY gateway model that
+# streams. The others return zero tokens on a streaming request while
+# non-streaming works, and GAIA's agent path streams by default — so any other
+# default hands a new user an agent that produces nothing. It is also on-prem,
+# so it carries no per-token cost.
+#
+# Matching is lowercase-substring: the gateway mixes casing across its
+# catalogue (`Claude-Opus-5` sits next to `claude-opus-4.8`).
+PREFERRED_MODEL_HINTS = (
     "gemma-4-31b",
     "claude-opus-5",
     "claude-sonnet-5",
 )
+
+# Older name, kept so existing imports keep working.
+RECOMMENDED_HINTS = PREFERRED_MODEL_HINTS
+
+
+def preference_rank(model_id: str) -> int:
+    """Position in ``PREFERRED_MODEL_HINTS``; unlisted models sort last.
+
+    Explicit ranking rather than alphabetical: sorting the recommended models
+    by name put `Claude-Opus-5` ahead of `Gemma-4-31B`, which made the one
+    model that cannot stream the default.
+    """
+    lowered = model_id.lower()
+    for i, hint in enumerate(PREFERRED_MODEL_HINTS):
+        if hint in lowered:
+            return i
+    return len(PREFERRED_MODEL_HINTS)
+
 
 GATEWAY_STATE_FILE = Path(
     os.getenv("GAIA_GATEWAY_FILE", str(GAIA_CONFIG_DIR / "gateway.json"))
@@ -479,8 +503,31 @@ class GatewayManager:
             and entry.get("recipe") == CLOUD_RECIPE
             and str(entry.get("id", "")).startswith(f"{GATEWAY_PROVIDER}.")
         ]
-        models.sort(key=lambda m: (not m.recommended, m.id.lower()))
+        models.sort(key=lambda m: (preference_rank(m.id), m.id.lower()))
         return models
+
+    def default_model(self) -> Optional[str]:
+        """The model GAIA should pick when the user has not chosen one.
+
+        The top-ranked discovered model, so a fresh connection lands on one
+        that actually streams rather than the first name alphabetically.
+        """
+        models = self.list_models()
+        return models[0].id if models else None
+
+    def ensure_active_model(self) -> Optional[str]:
+        """Select a sensible default if nothing is active yet.
+
+        Returns the active model id, or None when the gateway has discovered
+        nothing. Existing choices are never overridden.
+        """
+        state = GatewayState.load()
+        if state.active_model:
+            return state.active_model
+        chosen = self.default_model()
+        if chosen:
+            self.set_active(chosen)
+        return chosen
 
     def enable(self, model_id: str) -> GatewayState:
         """Enable a model, making it active if nothing else is."""

@@ -260,6 +260,24 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.models) {
 			m.cursor = 0
 		}
+		// Land on a working model rather than an empty selection. Discovery
+		// returns 76 models and a new user has no way to know which of them
+		// streams; without this they leave the screen with nothing active and
+		// their next agent turn fails on whatever the old default was.
+		// An existing choice is never overridden.
+		if m.state.ActiveModel == "" && len(m.models) > 0 {
+			chosen := m.models[0].ID // preference-ranked, so Gemma-4-31B first
+			m.state = m.state.SetActive(chosen)
+			if err := m.state.Save(); err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			if err := setDefaultModel(chosen); err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			m.notice = chosen + " selected as the default. Press enter on another to change it."
+		}
 		return m, nil
 
 	case tea.KeyMsg:

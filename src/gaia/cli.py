@@ -5276,6 +5276,15 @@ def handle_gateway_command(args):
                 )
                 sys.exit(1)
             print(f"✅ Token accepted. Models discovered: {discovered}")
+            chosen = manager.ensure_active_model()
+            if chosen:
+                from gaia.config import GaiaConfig
+
+                cfg = GaiaConfig.load()
+                if not cfg.get("default_model"):
+                    cfg.set("default_model", chosen)
+                    cfg.save()
+                print(f"   Using {chosen} by default (change with `gaia gateway use`).")
             print(
                 f"   Held in Lemonade's memory only — it is gone when Lemonade "
                 f"restarts.\n   Set {GATEWAY_API_KEY_ENV} in Lemonade's environment "
@@ -5357,8 +5366,9 @@ def handle_gateway_command(args):
             if not model:
                 # Nothing chosen yet — fall back to the first recommended model
                 # so a fresh setup can be tested in one command.
-                discovered = manager.list_models()
-                if not discovered:
+                model = manager.ensure_active_model()
+                discovered = [] if model else manager.list_models()
+                if not model and not discovered:
                     print(
                         "❌ No gateway models were discovered.\n"
                         "   Check the token and base URL with `gaia gateway status`.",

@@ -43,14 +43,34 @@ const DefaultAuthHeaderPrefix = ""
 // cloudRecipe is what Lemonade stamps on a model it proxies to a gateway.
 const cloudRecipe = "cloud"
 
-// recommendedHints float a discovered model to the top of the picker. Hints
-// for ordering only — the real ids come from the gateway, which uses its own
-// naming and carries models beyond the public catalogs (`Claude-Opus-5`,
-// `Gemma-4-31B`). Matched lowercase so they hold across its mixed casing.
-var recommendedHints = []string{
+// preferredModelHints orders the picker, best first. The first match is what
+// the screen selects automatically when nothing has been chosen yet.
+//
+// Gemma-4-31B leads deliberately: it is currently the ONLY gateway model that
+// streams. The others return zero tokens on a streaming request while
+// non-streaming works, and the agent path streams by default — so any other
+// default hands a new user an agent that produces nothing. It is also on-prem,
+// so it carries no per-token cost.
+//
+// Matched lowercase: the gateway mixes casing across its catalogue.
+var preferredModelHints = []string{
 	"gemma-4-31b",
 	"claude-opus-5",
 	"claude-sonnet-5",
+}
+
+// preferenceRank is the position in preferredModelHints; unlisted models sort
+// last. Explicit ranking rather than alphabetical, which put Claude-Opus-5
+// ahead of Gemma-4-31B and so made the one model that cannot stream the
+// default.
+func preferenceRank(id string) int {
+	lowered := strings.ToLower(id)
+	for i, hint := range preferredModelHints {
+		if strings.Contains(lowered, hint) {
+			return i
+		}
+	}
+	return len(preferredModelHints)
 }
 
 // Model is a gateway model Lemonade has discovered.
@@ -62,13 +82,7 @@ type Model struct {
 
 // Recommended reports whether this model should be surfaced first.
 func (m Model) Recommended() bool {
-	lowered := strings.ToLower(m.ID)
-	for _, hint := range recommendedHints {
-		if strings.Contains(lowered, hint) {
-			return true
-		}
-	}
-	return false
+	return preferenceRank(m.ID) < len(preferredModelHints)
 }
 
 // Status is the gateway provider's registration and auth state.
@@ -435,8 +449,9 @@ func (c *Client) ListModels() ([]Model, error) {
 		})
 	}
 	sort.SliceStable(models, func(i, j int) bool {
-		if models[i].Recommended() != models[j].Recommended() {
-			return models[i].Recommended()
+		ri, rj := preferenceRank(models[i].ID), preferenceRank(models[j].ID)
+		if ri != rj {
+			return ri < rj
 		}
 		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
 	})

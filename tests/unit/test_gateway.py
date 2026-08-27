@@ -390,6 +390,27 @@ class TestListModels:
         ):
             assert not GatewayModel(id=model_id).recommended, model_id
 
+    def test_gemma_is_the_default_because_it_is_the_only_one_that_streams(
+        self, manager
+    ):
+        """Alphabetical order put Claude-Opus-5 first, which cannot stream.
+
+        GAIA's agent path streams by default, so that default handed a new
+        user an agent that produced nothing.
+        """
+        manager.client.list_models.return_value = self.CATALOG
+        assert manager.list_models()[0].id == "amd.gemma-4-31b-it"
+        assert manager.default_model() == "amd.gemma-4-31b-it"
+
+    def test_ensure_active_model_does_not_override_a_choice(self, manager):
+        manager.client.list_models.return_value = self.CATALOG
+        manager.set_active("amd.Claude-Opus-5")
+        assert manager.ensure_active_model() == "amd.Claude-Opus-5"
+
+    def test_ensure_active_model_picks_the_preferred_one_when_unset(self, manager):
+        manager.client.list_models.return_value = self.CATALOG
+        assert manager.ensure_active_model() == "amd.gemma-4-31b-it"
+
     def test_recommendation_is_case_insensitive(self):
         """The gateway mixes casing across ids (`Claude-Opus-5` vs
         `claude-opus-4.8`), so matching cannot depend on it."""
