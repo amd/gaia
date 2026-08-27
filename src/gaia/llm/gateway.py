@@ -233,6 +233,53 @@ def clear_default_model_if(model_id: Optional[str]) -> bool:
         ) from e
 
 
+# Slot name in the OS credential store. Namespaced by provider so a second
+# gateway would not collide.
+GATEWAY_SECRET_NAME = f"gateway:{GATEWAY_PROVIDER}"
+
+
+def remember_token(token: str) -> None:
+    """Keep the token in the OS credential store so it survives a restart.
+
+    Lemonade holds a token in memory only, which means re-entering it every
+    time Lemonade restarts — several times a day for anyone running an agent
+    harness. This is the one place GAIA persists it, and it is encrypted at
+    rest by the OS (DPAPI on Windows, Keychain on macOS, SecretService on
+    Linux). ``verify_keyring_backend`` refuses plaintext backends, so it cannot
+    quietly become a readable file.
+
+    Still never written to ``gateway.json`` or any other GAIA file.
+    """
+    from gaia.connectors.store import save_secret
+
+    save_secret(GATEWAY_SECRET_NAME, token)
+
+
+def recall_token() -> Optional[str]:
+    """The remembered token, or None when there is none.
+
+    A keyring that cannot be opened is reported as "no stored token" rather
+    than raised: the caller's next step is to prompt, which is the right
+    outcome either way. The reason is logged.
+    """
+    try:
+        from gaia.connectors.store import peek_secret
+
+        return peek_secret(GATEWAY_SECRET_NAME)
+    except Exception as e:  # noqa: BLE001 - degraded to "prompt me", never fatal
+        log.debug(f"Could not read the stored gateway token: {e}")
+        return None
+
+
+def forget_token() -> bool:
+    """Remove the remembered token. True when one was actually stored."""
+    from gaia.connectors.store import delete_secret
+
+    had = recall_token() is not None
+    delete_secret(GATEWAY_SECRET_NAME)
+    return had
+
+
 class GatewayManager:
     """Talks to Lemonade's cloud-provider API on behalf of GAIA."""
 
@@ -469,6 +516,28 @@ class GatewayManager:
     def clear_token(self) -> Dict[str, Any]:
         """Drop the session token. Does not affect the env var."""
         return self._request("DELETE", f"cloud/auth/{GATEWAY_PROVIDER}")
+
+    def ensure_authenticated(self) -> bool:
+        """Give Lemonade the remembered token if it has none.
+
+        Lemonade forgets its token on restart, so without this every restart
+        means re-entering it. Returns True when the gateway is usable.
+        """
+        status = self.status()
+        if not status.installed or status.authenticated:
+            return status.authenticated
+        token = recall_token()
+        if not token:
+            return False
+        try:
+            self.set_token(token)
+        except GatewayError as e:
+            # A remembered token that the gateway now rejects is worth saying
+            # out loud — silently prompting again hides a revoked key.
+            self.log.warning(f"The remembered gateway token was not accepted: {e}")
+            return False
+        del token
+        return True
 
     def status(self) -> GatewayStatus:
         """Registration and auth state for the gateway provider."""

@@ -20,23 +20,29 @@ Requires **Lemonade Server 11.8.0 or newer**, which added cloud offload. Run
 `gaia init` to upgrade.
 </Note>
 
-## Your token is never written to disk
+## Where your token is kept
 
-GAIA hands your token straight to Lemonade, which keeps it **in process memory only**.
-Nothing in GAIA stores it — the settings file GAIA does write (`~/.gaia/gateway.json`)
-records the base URL and which models you enabled, and has no field a secret could go in.
+You enter it once. GAIA remembers it in your **OS credential store** — DPAPI on
+Windows, Keychain on macOS, SecretService on Linux — so it is encrypted at rest and
+scoped to your user account. GAIA refuses to fall back to a plaintext keyring backend,
+so it cannot quietly become a readable file.
 
-The trade-off: a token supplied this way is gone when Lemonade restarts. For one that
-persists, set it in **Lemonade's** environment before starting the server:
+It is never written to a GAIA file. `~/.gaia/gateway.json` records the base URL and
+which models you enabled, and has no field a secret could occupy.
+
+Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
+and restores it from the credential store, which is why you are not asked again.
 
 ```bash
-export LEMONADE_AMD_API_KEY=your-token-here
-lemonade-server serve
+gaia gateway auth --no-remember    # do not store it; ask me every restart
+gaia gateway logout                # clear Lemonade's copy, keep the remembered one
+gaia gateway logout --forget       # also delete it from the credential store
+gaia gateway status                # shows whether a token is remembered
 ```
 
-The environment variable always wins. If it is set and you try to supply a different
-token at runtime, Lemonade refuses with a clear error rather than silently using one
-of them.
+`LEMONADE_AMD_API_KEY` in **Lemonade's** environment still works and takes precedence.
+If it is set and you supply a different token, Lemonade refuses with a clear error
+rather than silently picking one.
 
 ## Connect from the TUI
 

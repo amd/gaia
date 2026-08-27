@@ -566,6 +566,41 @@ def clear_provider_credentials(provider: str) -> None:
     _kr_delete(username)
 
 
+def _secret_username(name: str) -> str:
+    """Keyring slot for a standalone secret, namespaced away from connections."""
+    return f"secret:{name}"
+
+
+def save_secret(name: str, value: str) -> None:
+    """Persist a standalone secret in the OS credential store.
+
+    For credentials that are not OAuth connections — an API key, a gateway
+    token — where :func:`save_connection` (which wants a refresh token, scopes
+    and a client-id hash) and :func:`save_provider_credentials` (which requires
+    a client id) would both mean inventing fields to satisfy a schema.
+
+    Encrypted at rest by the OS: DPAPI on Windows, Keychain on macOS,
+    SecretService on Linux. ``verify_keyring_backend`` refuses plaintext
+    backends, so this cannot silently degrade to a readable file.
+    """
+    verify_keyring_backend()
+    if not value:
+        raise ConnectorsError(f"save_secret({name!r}): value is empty")
+    _kr_set(_secret_username(name), value)
+
+
+def peek_secret(name: str) -> Optional[str]:
+    """Read a secret saved by :func:`save_secret`, or None when absent."""
+    verify_keyring_backend()
+    return _kr_get(_secret_username(name))
+
+
+def delete_secret(name: str) -> None:
+    """Remove a secret. Idempotent."""
+    verify_keyring_backend()
+    _kr_delete(_secret_username(name))
+
+
 def list_connections() -> List[str]:
     """
     Best-effort enumeration of stored providers.

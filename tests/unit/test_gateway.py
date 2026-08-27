@@ -548,3 +548,72 @@ class TestState:
         with pytest.raises(GatewayError) as excinfo:
             GatewayState.load()
         assert str(isolated_state) in str(excinfo.value)
+
+
+class TestRememberedToken:
+    """The token is the one thing GAIA persists, so pin down where and how."""
+
+    def test_round_trips_through_the_os_credential_store(self, monkeypatch):
+        vault = {}
+        monkeypatch.setattr(
+            "gaia.connectors.store.save_secret", lambda n, v: vault.__setitem__(n, v)
+        )
+        monkeypatch.setattr("gaia.connectors.store.peek_secret", lambda n: vault.get(n))
+        monkeypatch.setattr(
+            "gaia.connectors.store.delete_secret", lambda n: vault.pop(n, None)
+        )
+        from gaia.llm import gateway as gw
+
+        gw.remember_token("tok-abc")
+        assert gw.recall_token() == "tok-abc"
+        assert gw.forget_token() is True
+        assert gw.recall_token() is None
+
+    def test_never_lands_in_the_state_file(self, manager, isolated_state, monkeypatch):
+        """The credential store is the ONLY place it is kept."""
+        monkeypatch.setattr("gaia.connectors.store.save_secret", lambda n, v: None)
+        with patch(
+            "gaia.llm.gateway.requests.request", return_value=_response(body={})
+        ):
+            manager.set_token("tok-secret-xyz")
+        manager.set_active("amd.Gemma-4-31B")
+        assert "tok-secret-xyz" not in isolated_state.read_text()
+
+    def test_an_unreadable_keyring_means_prompt_me_not_crash(self, monkeypatch):
+        """A locked or missing keyring must degrade to asking, never fail hard."""
+
+        def boom(_name):
+            raise RuntimeError("keyring locked")
+
+        monkeypatch.setattr("gaia.connectors.store.peek_secret", boom)
+        from gaia.llm import gateway as gw
+
+        assert gw.recall_token() is None
+
+    def test_ensure_authenticated_restores_after_a_lemonade_restart(
+        self, manager, monkeypatch
+    ):
+        """Lemonade forgets its token on restart; without this the user
+        re-enters it every time."""
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_secret", lambda n: "remembered-tok"
+        )
+        sent = {}
+
+        def fake_request(method, url, **kwargs):
+            if url.endswith("/system-info"):
+                installed = {
+                    "name": GATEWAY_PROVIDER,
+                    "base_url": "https://gw/v1",
+                    "env_var_set": False,
+                    "runtime_key_set": bool(sent),
+                    "models_discovered": 76 if sent else 0,
+                }
+                return _response(body={"cloud": {"providers": [installed]}})
+            sent["key"] = kwargs["json"]["api_key"]
+            return _response(body={"models_discovered": 76})
+
+        with patch("gaia.llm.gateway.requests.request", side_effect=fake_request):
+            assert manager.ensure_authenticated() is True
+
+        assert sent["key"] == "remembered-tok"

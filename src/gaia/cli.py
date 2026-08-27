@@ -2929,8 +2929,19 @@ Examples:
         help="Read the token from stdin, e.g. `gaia gateway auth --token-stdin "
         "< token.txt` — keeps it out of the process list and shell history",
     )
-    gateway_subparsers.add_parser(
+    gateway_auth_parser.add_argument(
+        "--no-remember",
+        action="store_true",
+        help="Do not keep the token in the OS credential store; you will be "
+        "asked again after every Lemonade restart",
+    )
+    gateway_logout_parser = gateway_subparsers.add_parser(
         "logout", help="Clear the session token held by Lemonade"
+    )
+    gateway_logout_parser.add_argument(
+        "--forget",
+        action="store_true",
+        help="Also delete the token remembered in the OS credential store",
     )
     gateway_subparsers.add_parser("models", help="List discovered gateway models")
     gateway_enable_parser = gateway_subparsers.add_parser(
@@ -5177,6 +5188,9 @@ def handle_gateway_command(args):
         GatewayError,
         GatewayManager,
         GatewayState,
+        forget_token,
+        recall_token,
+        remember_token,
     )
     from gaia.llm.lemonade_client import LemonadeClientError
 
@@ -5207,6 +5221,10 @@ def handle_gateway_command(args):
                     f"  session token:     {'set' if status.runtime_key_set else 'not set'}"
                 )
                 print(f"  models discovered: {status.models_discovered}")
+                print(
+                    f"  remembered token:  "
+                    f"{'yes (OS credential store)' if recall_token() else 'no'}"
+                )
                 for warning in status.warnings:
                     print(f"  ⚠️  {warning}")
                 if not status.authenticated:
@@ -5253,6 +5271,7 @@ def handle_gateway_command(args):
             token = _resolve_gateway_token(
                 args, prompt="Gateway API token (input hidden): "
             )
+            token_for_store = token
             result = manager.set_token(token)
             del token
             discovered = result.get("models_discovered", 0)
@@ -5275,7 +5294,23 @@ def handle_gateway_command(args):
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            print(f"✅ Token accepted. Models discovered: {discovered}")
+            if not getattr(args, "no_remember", False):
+                try:
+                    remember_token(token_for_store)
+                    print(
+                        "✅ Token accepted and remembered in your OS credential "
+                        f"store ({discovered} models).\n"
+                        "   Encrypted at rest; you will not be asked again."
+                    )
+                except Exception as e:  # noqa: BLE001
+                    print(
+                        f"✅ Token accepted ({discovered} models), but it could "
+                        f"not be remembered: {e}\n"
+                        f"   You will be asked again after a Lemonade restart.",
+                        file=sys.stderr,
+                    )
+            else:
+                print(f"✅ Token accepted. Models discovered: {discovered}")
             chosen = manager.ensure_active_model()
             if chosen:
                 from gaia.config import GaiaConfig
@@ -5295,6 +5330,19 @@ def handle_gateway_command(args):
         if action == "logout":
             manager.clear_token()
             print("✅ Session token cleared.")
+            if getattr(args, "forget", False):
+                if forget_token():
+                    print(
+                        "   Removed the remembered token from your OS credential store."
+                    )
+                else:
+                    print("   No remembered token was stored.")
+            elif recall_token():
+                print(
+                    "   A remembered token is still in your OS credential store; "
+                    "it will be restored\n   on the next command. Use "
+                    "`gaia gateway logout --forget` to delete it."
+                )
             print(
                 f"   Note: this does not unset {GATEWAY_API_KEY_ENV} if it is set "
                 f"in Lemonade's environment."
@@ -5302,6 +5350,7 @@ def handle_gateway_command(args):
             return
 
         if action == "models":
+            manager.ensure_authenticated()
             _print_gateway_models(manager.list_models(), state)
             return
 
@@ -5342,6 +5391,7 @@ def handle_gateway_command(args):
             # Verify the gateway is actually usable before sending anything, so
             # a missing token reads as "supply a token" rather than surfacing
             # later as an unhelpful model-not-found.
+            manager.ensure_authenticated()
             status = manager.status()
             if not status.installed:
                 print(
