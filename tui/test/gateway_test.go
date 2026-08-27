@@ -78,6 +78,13 @@ func newFakeLemonade(t *testing.T) *fakeLemonade {
 					"id": "amd.zephyr-small", "recipe": "cloud",
 					"labels": []string{}, "context_length": 8192,
 				},
+				// The on-prem model the real gateway serves, and the one the
+				// preference ranking must put first. Deliberately listed after
+				// Claude-Opus-5 so alphabetical order would get it wrong.
+				map[string]any{
+					"id": "amd.Gemma-4-31B", "recipe": "cloud",
+					"labels": []string{"tool-calling"}, "context_length": 131072,
+				},
 				map[string]any{
 					"id": "amd.Claude-Opus-5", "recipe": "cloud",
 					"labels": []string{"tool-calling", "vision"}, "context_length": 1000000,
@@ -98,7 +105,7 @@ func newFakeLemonade(t *testing.T) *fakeLemonade {
 
 func (f *fakeLemonade) discovered() int {
 	if f.authenticated {
-		return 2
+		return 3
 	}
 	return 0
 }
@@ -256,16 +263,20 @@ func TestGatewayFlowRegistersAuthenticatesAndSelects(t *testing.T) {
 	if strings.Contains(view, "Gemma-4-E4B-it-GGUF") {
 		t.Error("a local model leaked into the gateway list")
 	}
-	// Recommended models sort first, so Claude-Opus-5 precedes zephyr-small.
+	// Preference order, not alphabetical: Gemma-4-31B leads because it is the
+	// only gateway model that streams, then Claude-Opus-5, then the rest.
+	if strings.Index(view, "amd.Gemma-4-31B") > strings.Index(view, "amd.Claude-Opus-5") {
+		t.Error("Gemma-4-31B should rank above Claude-Opus-5")
+	}
 	if strings.Index(view, "amd.Claude-Opus-5") > strings.Index(view, "amd.zephyr-small") {
-		t.Error("recommended models should sort above the rest")
+		t.Error("preferred models should sort above the rest")
 	}
 
 	// Enable the first model and make it active.
 	d.send(keySpace())
 	d.send(keyEnter())
-	if got := d.m.ActiveModel(); got != "amd.Claude-Opus-5" {
-		t.Errorf("active model = %q, want amd.Claude-Opus-5", got)
+	if got := d.m.ActiveModel(); got != "amd.Gemma-4-31B" {
+		t.Errorf("active model = %q, want amd.Gemma-4-31B", got)
 	}
 
 	// The selection must survive a reload — and carry no secret.
@@ -273,7 +284,7 @@ func TestGatewayFlowRegistersAuthenticatesAndSelects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading state: %v", err)
 	}
-	if state.ActiveModel != "amd.Claude-Opus-5" {
+	if state.ActiveModel != "amd.Gemma-4-31B" {
 		t.Errorf("persisted active model = %q", state.ActiveModel)
 	}
 	if strings.Contains(readStateFile(t), "sk-super-secret") {
@@ -291,8 +302,8 @@ func TestGatewayFlowRegistersAuthenticatesAndSelects(t *testing.T) {
 	if err := json.Unmarshal(raw, &config); err != nil {
 		t.Fatalf("GAIA config is not valid JSON: %v", err)
 	}
-	if got := config["default_model"]; got != "amd.Claude-Opus-5" {
-		t.Errorf("default_model = %v, want amd.Claude-Opus-5", got)
+	if got := config["default_model"]; got != "amd.Gemma-4-31B" {
+		t.Errorf("default_model = %v, want amd.Gemma-4-31B", got)
 	}
 	if strings.Contains(string(raw), "sk-super-secret") {
 		t.Fatal("the token leaked into GAIA's config file")
@@ -331,7 +342,7 @@ func TestGatewayPreservesUnknownConfigKeys(t *testing.T) {
 	if config["profile"] != "npu" || config["default_device"] != "npu" {
 		t.Errorf("unrelated config keys were dropped: %v", config)
 	}
-	if config["default_model"] != "amd.Claude-Opus-5" {
+	if config["default_model"] != "amd.Gemma-4-31B" {
 		t.Errorf("default_model = %v, want the selected model", config["default_model"])
 	}
 }
@@ -424,5 +435,66 @@ func TestGatewayRecommendationSurfacesFlagshipAndOnPrem(t *testing.T) {
 		if (gateway.Model{ID: id}).Recommended() {
 			t.Errorf("%q should not be recommended", id)
 		}
+	}
+}
+
+// TestGatewayRemembersTheModelAcrossRestarts is the "I picked a model
+// yesterday" case. Auto-selecting a default on first connect must not turn
+// into silently resetting the user's choice on every launch.
+func TestGatewayRemembersTheModelAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "gateway.json")
+	t.Setenv("GAIA_GATEWAY_FILE", statePath)
+	t.Setenv("GAIA_CONFIG_FILE", filepath.Join(dir, "config.json"))
+
+	// Last session: the user deliberately chose Claude-Opus-5, which is NOT
+	// the model the preference ranking would pick on its own.
+	prior := gateway.State{
+		BaseURL:       "https://gw.example.com/v1",
+		EnabledModels: []string{"amd.Claude-Opus-5"},
+		ActiveModel:   "amd.Claude-Opus-5",
+	}
+	if err := prior.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// This session: gateway already registered and authenticated, so the
+	// screen goes straight to the model list and discovery runs.
+	fake := newFakeLemonade(t)
+	fake.installed = true
+	fake.authenticated = true
+
+	d := &gatewayDriver{t: t, m: gateway.New(gateway.NewClientAt(fake.baseURL()), nil)}
+	d.pump(d.m.Init())
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	if got := d.m.ActiveModel(); got != "amd.Claude-Opus-5" {
+		t.Fatalf("relaunch changed the active model to %q; the user's choice must win", got)
+	}
+	reloaded, err := gateway.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.ActiveModel != "amd.Claude-Opus-5" {
+		t.Errorf("persisted active model = %q, want the prior choice", reloaded.ActiveModel)
+	}
+
+	// And the screen shows it as active, not merely stored.
+	if view := d.m.View(); !strings.Contains(view, "amd.Claude-Opus-5 (active)") {
+		t.Errorf("prior choice not marked active on screen:\n%s", view)
+	}
+}
+
+// TestGatewayAutoSelectsOnlyWhenNothingChosen is the other half: a first-ever
+// connect should land on a working model rather than an empty selection.
+func TestGatewayAutoSelectsOnlyWhenNothingChosen(t *testing.T) {
+	fake := newFakeLemonade(t)
+	fake.installed = true
+	fake.authenticated = true
+	d := newGatewayDriver(t, fake) // fresh temp dirs, no prior state
+
+	if got := d.m.ActiveModel(); got != "amd.Gemma-4-31B" {
+		t.Errorf("first connect active model = %q, want amd.Gemma-4-31B "+
+			"(the only gateway model that streams)", got)
 	}
 }

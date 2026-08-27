@@ -632,5 +632,35 @@ class TestRememberedToken:
         with pytest.raises(GatewayError) as excinfo:
             remember_token("tok")
         message = str(excinfo.value)
-        assert "gnome-keyring" in message  # the Linux remedy
-        assert "--no-remember" in message  # the way out
+        # The remedy is platform-specific now; what must always be offered is
+        # the environment variable and the opt-out.
+        assert "LEMONADE_AMD_API_KEY" in message
+        assert "--no-remember" in message
+
+    @pytest.mark.parametrize(
+        "platform,expected",
+        [
+            ("linux", "headless Linux"),
+            ("darwin", "Keychain"),
+            ("win32", "Windows Credential Manager"),
+        ],
+    )
+    def test_the_remedy_matches_the_platform(self, platform, expected, monkeypatch):
+        """Telling someone on a headless server to unlock gnome-keyring sends
+        them to fix something they cannot fix. The env var is the answer
+        there, so it leads."""
+        monkeypatch.setattr("gaia.llm.gateway.sys.platform", platform)
+        from gaia.llm.gateway import GATEWAY_API_KEY_ENV, _no_credential_store_message
+
+        message = _no_credential_store_message()
+        assert expected in message
+        assert GATEWAY_API_KEY_ENV in message  # always offered
+
+    def test_the_shell_syntax_matches_the_platform(self, monkeypatch):
+        """A bash export line pasted into PowerShell just fails."""
+        from gaia.llm.gateway import _no_credential_store_message
+
+        monkeypatch.setattr("gaia.llm.gateway.sys.platform", "win32")
+        assert "$env:LEMONADE_AMD_API_KEY = " in _no_credential_store_message()
+        monkeypatch.setattr("gaia.llm.gateway.sys.platform", "linux")
+        assert "export LEMONADE_AMD_API_KEY=" in _no_credential_store_message()

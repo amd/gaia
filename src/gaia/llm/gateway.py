@@ -19,6 +19,7 @@ enabled; it has no field for a secret.
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -258,15 +259,68 @@ def remember_token(token: str) -> None:
     # so the save "succeeds" and the user is told the token was remembered
     # right before being asked for it again. Fail loudly instead.
     if peek_secret(GATEWAY_SECRET_NAME) != token:
-        raise GatewayError(
-            "The OS credential store accepted the token but did not keep it, "
-            "so it cannot be remembered.\n"
-            "  On Linux, install and unlock gnome-keyring or kwallet; a "
-            "headless session has neither.\n"
-            "  If PYTHON_KEYRING_BACKEND is set to a null backend, unset it.\n"
-            "  Otherwise set LEMONADE_AMD_API_KEY in Lemonade's environment, or "
-            "use `gaia gateway auth --no-remember`."
+        raise GatewayError(_no_credential_store_message())
+
+
+def _no_credential_store_message() -> str:
+    """Why the token could not be remembered, and the fix for THIS platform.
+
+    The remedy differs enough per platform to be worth branching on. The one
+    that fits a machine with no desktop session is the environment variable:
+    telling someone on a headless server to install and unlock gnome-keyring
+    sends them to fix something they cannot fix, and should not want to — a
+    machine-scoped credential belongs in the service's environment, not in a
+    per-user login keyring.
+    """
+    # Shell syntax matters here: a bash `export` line pasted into PowerShell
+    # fails, and an error that tells you to run something that does not work
+    # is barely better than no error.
+    if sys.platform == "win32":
+        export = f"$env:{GATEWAY_API_KEY_ENV} = '<your-token>'"
+    else:
+        export = f"export {GATEWAY_API_KEY_ENV}=<your-token>"
+    persist = (
+        f"Set the token in *Lemonade's* environment instead — Lemonade reads it\n"
+        f"  directly, so GAIA does not need to store anything:\n\n"
+        f"      {export}\n"
+        f"      lemonade-server serve\n\n"
+        f"  (It must be set for the Lemonade process, not just your shell.)"
+    )
+
+    if sys.platform.startswith("linux"):
+        return (
+            "The OS credential store did not keep the token, so it cannot be "
+            "remembered.\n"
+            "  This is normal on a headless Linux session: there is no "
+            "gnome-keyring or\n"
+            "  kwallet to talk to, and keyring silently falls back to a store "
+            "that discards\n"
+            "  writes.\n\n"
+            f"  {persist}\n\n"
+            "  On a Linux desktop, installing and unlocking gnome-keyring or "
+            "kwallet also\n"
+            "  works. To skip storage entirely, use "
+            "`gaia gateway auth --no-remember`."
         )
+    if sys.platform == "darwin":
+        return (
+            "The macOS Keychain did not keep the token, so it cannot be "
+            "remembered.\n"
+            "  Keychain is built in, so this usually means it is locked, or "
+            "PYTHON_KEYRING_BACKEND\n"
+            "  is pointing at a null backend — check that first.\n\n"
+            f"  {persist}\n\n"
+            "  To skip storage entirely, use `gaia gateway auth --no-remember`."
+        )
+    return (
+        "The OS credential store did not keep the token, so it cannot be "
+        "remembered.\n"
+        "  Windows Credential Manager is built in, so this usually means "
+        "PYTHON_KEYRING_BACKEND\n"
+        "  is pointing at a null backend — check that first.\n\n"
+        f"  {persist}\n\n"
+        "  To skip storage entirely, use `gaia gateway auth --no-remember`."
+    )
 
 
 def recall_token() -> Optional[str]:
