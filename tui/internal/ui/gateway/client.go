@@ -28,21 +28,23 @@ const Provider = "amd"
 // *Lemonade's* environment for a token that survives a restart.
 const APIKeyEnv = "LEMONADE_AMD_API_KEY"
 
-// DefaultBaseURL is a starting suggestion, not a silent default: the screen
-// makes it editable and Probe reports the real HTTP status when it is wrong.
-const DefaultBaseURL = "https://llm.amd.com/api/v1"
+// DefaultBaseURL is AMD's gateway. Verified against the live host:
+// `/v1/models` exists (302 to SSO when unauthenticated) while `/api/v1/models`
+// 404s, so the OpenAI-compatible surface is `/v1`. Still editable on the
+// screen, and Probe reports the real status when it is wrong.
+const DefaultBaseURL = "https://llm.amd.com/v1"
 
 // cloudRecipe is what Lemonade stamps on a model it proxies to a gateway.
 const cloudRecipe = "cloud"
 
 // recommendedHints float a discovered model to the top of the picker. Hints
-// for ordering only — the real ids come from the gateway, which names things
-// its own way (e.g. "Claude-Opus-5").
+// for ordering only — the real ids come from the gateway, which uses its own
+// naming and carries models beyond the public catalogs (`Claude-Opus-5`,
+// `Gemma-4-31B`). Matched lowercase so they hold across its mixed casing.
 var recommendedHints = []string{
 	"gemma-4-31b",
-	"gemma4-31b",
-	"claude-opus",
-	"claude-sonnet",
+	"claude-opus-5",
+	"claude-sonnet-5",
 }
 
 // Model is a gateway model Lemonade has discovered.

@@ -44,7 +44,7 @@ Press <kbd>g</kbd> from the agent hub.
 
 <Steps>
   <Step title="Confirm the gateway URL">
-    The OpenAI-compatible base URL, e.g. `https://llm.amd.com/api/v1`. GAIA tests it
+    The OpenAI-compatible base URL, e.g. `https://llm.amd.com/v1`. GAIA tests it
     before registering, so a wrong path fails immediately with the actual HTTP status
     instead of showing up later as an empty model list.
   </Step>
@@ -63,7 +63,7 @@ The active model becomes the default for GAIA's model-bearing commands.
 ## Connect from the CLI
 
 ```bash
-gaia gateway install --base-url https://llm.amd.com/api/v1
+gaia gateway install --base-url https://llm.amd.com/v1
 gaia gateway auth                    # prompts without echo
 gaia gateway models                  # what the gateway offers
 gaia gateway use amd.Claude-Opus-5   # make it the default
@@ -109,8 +109,27 @@ will not try native tool calls against a model that cannot do them.
 | `models` lists nothing | Lemonade only discovers models once it has a working token. Run `gaia gateway auth`. |
 | Setting a token returns a conflict | `LEMONADE_AMD_API_KEY` is set in Lemonade's environment and wins. Keep using it, or unset it and restart Lemonade. |
 | `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
-| The probe returns 404 | The base URL is missing its API path — try `.../api/v1` or `.../v1`. |
-| A Claude model is listed but chat fails | Some gateways serve Claude models only over the Anthropic Messages format. GAIA speaks OpenAI chat completions, so those are not usable yet. |
+| The probe returns 404 | The base URL is missing its API path. AMD's gateway serves `/v1`, **not** `/api/v1`. |
+
+## What the gateway offers
+
+Verified against the live catalog (`https://llm.amd.com/api/models`, which is readable
+without a token):
+
+| Model | Provider | Context |
+|---|---|---|
+| `Gemma-4-31B` | On-Prem Services | — |
+| `Qwen3.6-35B-A3B` | On-Prem Services | 262K |
+| `Llama-4-Scout-17B` | On-Prem Services | 10M |
+| `Claude-Opus-5` | Azure OpenAI / Vertex | 1M |
+| `Claude-Sonnet-5` | Azure OpenAI | 1M |
+
+Around 100 models across On-Prem Services, Azure OpenAI, and Vertex Gen AI.
+
+**Every chat model on this gateway — Claude included — is served over OpenAI Chat
+Completions**, not the Anthropic Messages format. That is why GAIA registers the
+provider with `wire_format: openai` and why Claude models work through the ordinary
+agent path with no special handling.
 
 ## Disconnecting
 

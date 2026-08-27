@@ -45,23 +45,21 @@ GATEWAY_PROVIDER = "amd"
 # environment (not your shell) for a token that survives a restart.
 GATEWAY_API_KEY_ENV = f"LEMONADE_{GATEWAY_PROVIDER.upper()}_API_KEY"
 
-# AMD's internal gateway. Unverified from this repo (the host is SSO-gated), so
-# it is a starting suggestion the user confirms, never a silent default: every
-# entry point makes it editable and `check_reachable` reports the real HTTP
-# status when it is wrong.
-DEFAULT_GATEWAY_BASE_URL = os.getenv(
-    "GAIA_GATEWAY_BASE_URL", "https://llm.amd.com/api/v1"
-)
+# AMD's gateway. Verified against the live host: `/v1/models` exists (302 to
+# SSO when unauthenticated) while `/api/v1/models` 404s, so the
+# OpenAI-compatible surface is `/v1`. Still editable everywhere it appears, and
+# probed before registration so a wrong path fails with the real HTTP status.
+DEFAULT_GATEWAY_BASE_URL = os.getenv("GAIA_GATEWAY_BASE_URL", "https://llm.amd.com/v1")
 
 # Substrings that float a discovered model to the top of the picker and
 # pre-select it. Hints for ordering only — the real ids come from the gateway,
-# which names things its own way (e.g. "Claude-Opus-5", not Anthropic's
-# "claude-opus-4-8").
+# which uses its own naming and carries models beyond the public catalogs
+# (`Claude-Opus-5`, `Gemma-4-31B`). Matching is lowercase-substring so it holds
+# across the gateway's mixed casing (`Claude-Opus-5` vs `claude-opus-4.8`).
 RECOMMENDED_HINTS = (
     "gemma-4-31b",
-    "gemma4-31b",
-    "claude-opus",
-    "claude-sonnet",
+    "claude-opus-5",
+    "claude-sonnet-5",
 )
 
 GATEWAY_STATE_FILE = Path(
