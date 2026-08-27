@@ -116,6 +116,41 @@ class TestInstall:
         assert payload["auth_header_name"] == "X-Api-Key"
         assert payload["auth_header_prefix"] == ""
 
+    def test_insecure_http_opt_in_is_forwarded(self, manager):
+        """Lemonade refuses to hold a token for an http:// endpoint without
+        this, so an on-prem gateway without TLS cannot be registered at all."""
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={})
+            manager.install("http://gw.internal:8080/v1", allow_insecure_http=True)
+
+        assert request.call_args.kwargs["json"]["allow_insecure_http"] is True
+
+    def test_insecure_flag_is_omitted_for_https(self, manager):
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={})
+            manager.install("https://gw.example.com/v1")
+
+        assert "allow_insecure_http" not in request.call_args.kwargs["json"]
+
+    def test_auth_carries_the_insecure_opt_in_for_an_http_provider(self, manager):
+        """Caught end to end: install succeeded with the opt-in, then auth
+        failed 400 without it, leaving a registered provider that could never
+        be given a token."""
+        GatewayState(base_url="http://gw.internal:8080/v1").save()
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={})
+            manager.set_token("tok")
+
+        assert request.call_args.kwargs["json"]["allow_insecure_http"] is True
+
+    def test_auth_omits_the_insecure_opt_in_for_https(self, manager):
+        GatewayState(base_url="https://llm.amd.com/v1").save()
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={})
+            manager.set_token("tok")
+
+        assert "allow_insecure_http" not in request.call_args.kwargs["json"]
+
     def test_remembers_the_base_url(self, manager):
         with patch("gaia.llm.gateway.requests.request") as request:
             request.return_value = _response(body={})

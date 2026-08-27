@@ -111,29 +111,49 @@ func (c *Client) BaseURL() string { return c.baseURL }
 
 // DetectLemonadeURL probes the ports Lemonade listens on and returns the first
 // reachable API base, honouring LEMONADE_BASE_URL when it is set.
+//
+// The probe carries LEMONADE_API_KEY. An embedded Lemonade is always launched
+// with a key — that is how it locks out other apps — so a probe without one
+// gets 401 and the whole gateway screen reports "Lemonade is not reachable"
+// against a server that is running fine.
+//
+// A 401 still counts as found: the server is there, and every later request
+// carries the same key, so a genuinely wrong key surfaces on that call with
+// Lemonade's own message rather than as a bogus "not reachable".
 func DetectLemonadeURL() string {
 	probe := &http.Client{Timeout: 2 * time.Second}
+	key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY"))
+
+	reachable := func(base string) bool {
+		req, err := http.NewRequest(http.MethodGet, base+"/models", nil)
+		if err != nil {
+			return false
+		}
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		resp, err := probe.Do(req)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK ||
+			resp.StatusCode == http.StatusUnauthorized
+	}
+
 	if env := strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")); env != "" {
 		base := strings.TrimRight(env, "/")
 		if !strings.HasSuffix(base, "/api/v1") {
 			base += "/api/v1"
 		}
-		if resp, err := probe.Get(base + "/models"); err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return base
-			}
+		if reachable(base) {
+			return base
 		}
 		return ""
 	}
 	for _, port := range []string{"13305", "8000"} {
 		base := "http://localhost:" + port + "/api/v1"
-		resp, err := probe.Get(base + "/models")
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if reachable(base) {
 			return base
 		}
 	}

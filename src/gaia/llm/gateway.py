@@ -308,12 +308,18 @@ class GatewayManager:
         api_key: Optional[str] = None,
         auth_header_name: Optional[str] = None,
         auth_header_prefix: Optional[str] = None,
+        allow_insecure_http: bool = False,
     ) -> Dict[str, Any]:
         """Register the gateway with Lemonade as a cloud provider.
 
         ``auth_header_name`` / ``auth_header_prefix`` exist because some
         gateways front an OpenAI-shaped API behind a non-Bearer header; leave
         them unset for the standard ``Authorization: Bearer`` scheme.
+
+        ``allow_insecure_http`` is required before Lemonade will hold a token
+        for an ``http://`` endpoint — it refuses by default rather than send a
+        credential in the clear. Needed only for an on-prem gateway without
+        TLS; AMD's is https and does not.
         """
         payload: Dict[str, Any] = {
             "backend": "cloud",
@@ -327,6 +333,8 @@ class GatewayManager:
             payload["auth_header_name"] = auth_header_name
         if auth_header_prefix is not None:
             payload["auth_header_prefix"] = auth_header_prefix
+        if allow_insecure_http:
+            payload["allow_insecure_http"] = True
         if api_key:
             payload["api_key"] = api_key
 
@@ -363,10 +371,19 @@ class GatewayManager:
                 "No token supplied. Pass one to `gaia gateway auth`, or set "
                 f"{GATEWAY_API_KEY_ENV} in Lemonade's environment."
             )
+        payload: Dict[str, Any] = {
+            "provider": GATEWAY_PROVIDER,
+            "api_key": api_key.strip(),
+        }
+        # Lemonade refuses to hold a token for an http:// endpoint unless the
+        # caller has opted in. Carry the opt-in already recorded at install so
+        # `auth` does not fail on a provider registration that succeeded.
+        if GatewayState.load().base_url.lower().startswith("http://"):
+            payload["allow_insecure_http"] = True
         return self._request(
             "POST",
             "cloud/auth",
-            payload={"provider": GATEWAY_PROVIDER, "api_key": api_key.strip()},
+            payload=payload,
             timeout=_DISCOVERY_TIMEOUT,
             redact=True,
         )

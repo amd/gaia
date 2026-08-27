@@ -2522,6 +2522,14 @@ class LemonadeClient:
         """Cloud check that warms the catalog once when the id could match.
 
         Local ids short-circuit on ``may_be_cloud_model`` without any request.
+
+        A namespaced id that the catalog does not know is still treated as
+        cloud. Discovery only runs once the provider has a working token, so an
+        absent or expired one leaves gateway models missing from the catalog —
+        and falling through to the local path then reports "model not found,
+        run `gaia init` to reinstall it", which sends the user to fix the wrong
+        thing. Skipping the load lets the completion surface Lemonade's real
+        cloud error instead ("No API key for cloud provider ...").
         """
         if is_cloud_model(model):
             return True
@@ -2534,7 +2542,18 @@ class LemonadeClient:
             # load/pull that follows still fails loudly on its own terms.
             self.log.debug(f"Could not refresh catalog to classify '{model}': {e}")
             return False
-        return is_cloud_model(model)
+        if is_cloud_model(model):
+            return True
+        known_locally = any(
+            _model_ids_match(entry.get("id"), model)
+            for entry in (self.list_models().get("data") or [])
+        )
+        if not known_locally:
+            self.log.debug(
+                f"'{model}' is namespaced but absent from the catalog; treating "
+                f"it as gateway-hosted so the error names the real cause"
+            )
+        return not known_locally
 
     def get_model_details(self, model_id: str) -> Dict[str, Any]:
         """

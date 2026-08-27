@@ -92,6 +92,20 @@ class TestClassification:
         assert client._is_cloud_model(LOCAL_MODEL) is False
         client.list_models.assert_not_called()
 
+    def test_namespaced_id_absent_from_the_catalog_is_treated_as_cloud(self, client):
+        """Caught end to end with an unauthenticated gateway.
+
+        Discovery only runs once the provider has a working token, so a missing
+        or expired one leaves gateway models out of the catalog. Falling through
+        to the local path then reported "model not found, run `gaia init` to
+        reinstall it" — sending the user to fix the wrong thing entirely.
+        """
+        assert client._is_cloud_model("amd.Claude-Opus-5") is True
+
+    def test_a_local_id_absent_from_the_catalog_is_not_treated_as_cloud(self, client):
+        # No dot, so it can never be "<provider>.<model>" — must stay local.
+        assert client._is_cloud_model("Some-Unlisted-GGUF") is False
+
     def test_uninstalling_the_provider_drops_its_models(self):
         record_cloud_models(CATALOG)
         assert is_cloud_model(CLOUD_MODEL)

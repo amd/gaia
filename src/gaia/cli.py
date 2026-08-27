@@ -2905,6 +2905,12 @@ Examples:
         action="store_true",
         help="Register without first probing the gateway's /models endpoint",
     )
+    gateway_install_parser.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="Permit an http:// gateway. Lemonade refuses to hold a token over "
+        "plaintext otherwise; only for an on-prem gateway without TLS",
+    )
     gateway_auth_parser = gateway_subparsers.add_parser(
         "auth",
         help="Give Lemonade a gateway token for this session (never stored on disk)",
@@ -5174,6 +5180,7 @@ def handle_gateway_command(args):
                 base_url,
                 auth_header_name=args.auth_header_name,
                 auth_header_prefix=args.auth_header_prefix,
+                allow_insecure_http=args.allow_insecure_http,
             )
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
