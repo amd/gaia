@@ -5252,10 +5252,27 @@ def handle_gateway_command(args):
             )
             result = manager.set_token(token)
             del token
-            print(
-                f"✅ Token accepted. Models discovered: "
-                f"{result.get('models_discovered', 0)}"
-            )
+            discovered = result.get("models_discovered", 0)
+            # Lemonade stores a token without validating it upstream, so a
+            # rejected credential still comes back 200 with zero models. Calling
+            # that a success sent the user on to `models` and `test`, which then
+            # failed for reasons that looked unrelated.
+            if not discovered:
+                print(
+                    "❌ Lemonade stored the token but the gateway returned no "
+                    "models.\n"
+                    "   The token was not accepted as sent. Lemonade does not "
+                    "validate it,\n"
+                    "   so this is the first point the rejection shows up.\n\n"
+                    "   Find the header the gateway wants:\n"
+                    "     scripts/diagnose-gateway-auth.ps1\n"
+                    "   then re-register with, for example:\n"
+                    "     gaia gateway install --base-url <url> "
+                    "--auth-header-name api-key --auth-header-prefix ''",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print(f"✅ Token accepted. Models discovered: {discovered}")
             print(
                 f"   Held in Lemonade's memory only — it is gone when Lemonade "
                 f"restarts.\n   Set {GATEWAY_API_KEY_ENV} in Lemonade's environment "

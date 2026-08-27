@@ -45,11 +45,22 @@ GATEWAY_PROVIDER = "amd"
 # environment (not your shell) for a token that survives a restart.
 GATEWAY_API_KEY_ENV = f"LEMONADE_{GATEWAY_PROVIDER.upper()}_API_KEY"
 
-# AMD's gateway. Verified against the live host: `/v1/models` exists (302 to
-# SSO when unauthenticated) while `/api/v1/models` 404s, so the
-# OpenAI-compatible surface is `/v1`. Still editable everywhere it appears, and
-# probed before registration so a wrong path fails with the real HTTP status.
-DEFAULT_GATEWAY_BASE_URL = os.getenv("GAIA_GATEWAY_BASE_URL", "https://llm.amd.com/v1")
+# AMD's gateway. `llm.amd.com` is the SSO-gated portal, not the API — every
+# path there redirects to Okta. The OpenAI-compatible surface is the Unified
+# API on a separate host, verified live: `<base>/models` lists 76 models and
+# `<base>/chat/completions` returns real completions.
+DEFAULT_GATEWAY_BASE_URL = os.getenv(
+    "GAIA_GATEWAY_BASE_URL", "https://llm-api.amd.com/Unified/v1"
+)
+
+# The gateway is Azure API Management, which authenticates on its own
+# subscription-key header rather than a bearer token. AMD's sample sends the key
+# in `Authorization: Bearer` as well, but only because the OpenAI SDK requires
+# an `api_key`; the gateway ignores it. Verified: the APIM header alone returns
+# 200, and `Authorization: Bearer` alone returns 401 "missing subscription key".
+# That matters because Lemonade can carry exactly one auth header.
+DEFAULT_AUTH_HEADER_NAME = "Ocp-Apim-Subscription-Key"
+DEFAULT_AUTH_HEADER_PREFIX = ""
 
 # Substrings that float a discovered model to the top of the picker and
 # pre-select it. Hints for ordering only — the real ids come from the gateway,
@@ -269,8 +280,13 @@ class GatewayManager:
         OpenAI-compatible endpoint" and block registration entirely.
         """
         url = f"{base_url.rstrip('/')}/models"
-        token = os.getenv(GATEWAY_API_KEY_ENV)
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        token = os.getenv(GATEWAY_API_KEY_ENV) or os.getenv("GAIA_GATEWAY_TOKEN")
+        # Same header Lemonade will use, so the probe tests the real thing.
+        headers = (
+            {DEFAULT_AUTH_HEADER_NAME: f"{DEFAULT_AUTH_HEADER_PREFIX}{token}"}
+            if token
+            else {}
+        )
         try:
             response = requests.get(
                 url, headers=headers, timeout=_PROBE_TIMEOUT, allow_redirects=False
@@ -328,6 +344,12 @@ class GatewayManager:
             # GAIA's agents speak OpenAI chat completions end to end; the
             # anthropic wire format serves only /v1/messages.
             "wire_format": "openai",
+            # Default to the APIM subscription header the gateway actually
+            # checks. Sending a bearer token instead returns 401 and, because
+            # Lemonade stores a key without validating it, that surfaces only
+            # as an empty model list much later.
+            "auth_header_name": DEFAULT_AUTH_HEADER_NAME,
+            "auth_header_prefix": DEFAULT_AUTH_HEADER_PREFIX,
         }
         if auth_header_name is not None:
             payload["auth_header_name"] = auth_header_name

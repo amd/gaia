@@ -28,11 +28,17 @@ const Provider = "amd"
 // *Lemonade's* environment for a token that survives a restart.
 const APIKeyEnv = "LEMONADE_AMD_API_KEY"
 
-// DefaultBaseURL is AMD's gateway. Verified against the live host:
-// `/v1/models` exists (302 to SSO when unauthenticated) while `/api/v1/models`
-// 404s, so the OpenAI-compatible surface is `/v1`. Still editable on the
-// screen, and Probe reports the real status when it is wrong.
-const DefaultBaseURL = "https://llm.amd.com/v1"
+// DefaultBaseURL is AMD's gateway. `llm.amd.com` is the SSO-gated portal, not
+// the API; the OpenAI-compatible surface is the Unified API on a separate host.
+// Verified live: <base>/models lists 76 models, <base>/chat/completions works.
+const DefaultBaseURL = "https://llm-api.amd.com/Unified/v1"
+
+// The gateway is Azure API Management, which authenticates on its own
+// subscription-key header, not a bearer token. Verified: this header alone
+// returns 200; `Authorization: Bearer` alone returns 401 "missing subscription
+// key". Lemonade can carry exactly one auth header, so this is the one.
+const DefaultAuthHeaderName = "Ocp-Apim-Subscription-Key"
+const DefaultAuthHeaderPrefix = ""
 
 // cloudRecipe is what Lemonade stamps on a model it proxies to a gateway.
 const cloudRecipe = "cloud"
@@ -252,8 +258,12 @@ func (c *Client) Probe(baseURL string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%q is not a usable URL: %w", baseURL, err)
 	}
-	if token := strings.TrimSpace(os.Getenv(APIKeyEnv)); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	token := strings.TrimSpace(os.Getenv(APIKeyEnv))
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("GAIA_GATEWAY_TOKEN"))
+	}
+	if token != "" {
+		req.Header.Set(DefaultAuthHeaderName, DefaultAuthHeaderPrefix+token)
 	}
 
 	probe := &http.Client{
@@ -313,6 +323,9 @@ func (c *Client) Install(baseURL string) (installResult, error) {
 		"base_url": strings.TrimRight(baseURL, "/"),
 		// GAIA's agents speak OpenAI chat completions end to end.
 		"wire_format": "openai",
+		// The header the gateway actually checks; a bearer token 401s.
+		"auth_header_name":   DefaultAuthHeaderName,
+		"auth_header_prefix": DefaultAuthHeaderPrefix,
 	}, &result)
 	return result, err
 }

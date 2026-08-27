@@ -92,15 +92,34 @@ class TestInstall:
             "https://gw.example.com/api/v1"
         )
 
-    def test_optional_auth_header_fields_are_omitted_when_unset(self, manager):
-        """Omitted fields keep Lemonade's stored value on a re-install."""
+    def test_defaults_to_the_apim_header_the_gateway_checks(self, manager):
+        """Verified live: the APIM subscription header alone returns 200, while
+        `Authorization: Bearer` alone returns 401 "missing subscription key".
+
+        Lemonade carries exactly one auth header and stores a key without
+        validating it, so getting this wrong surfaces only much later as an
+        empty model list.
+        """
         with patch("gaia.llm.gateway.requests.request") as request:
             request.return_value = _response(body={})
-            manager.install("https://gw.example.com/api/v1")
+            manager.install("https://llm-api.amd.com/Unified/v1")
 
         payload = request.call_args.kwargs["json"]
-        assert "auth_header_name" not in payload
-        assert "auth_header_prefix" not in payload
+        assert payload["auth_header_name"] == "Ocp-Apim-Subscription-Key"
+        assert payload["auth_header_prefix"] == ""
+
+    def test_an_explicit_auth_header_overrides_the_default(self, manager):
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={})
+            manager.install(
+                "https://gw.example.com/v1",
+                auth_header_name="X-Api-Key",
+                auth_header_prefix="Token ",
+            )
+
+        payload = request.call_args.kwargs["json"]
+        assert payload["auth_header_name"] == "X-Api-Key"
+        assert payload["auth_header_prefix"] == "Token "
 
     def test_empty_auth_header_prefix_is_sent_not_dropped(self, manager):
         """A gateway using `X-Api-Key: <raw>` needs an explicitly empty prefix."""
