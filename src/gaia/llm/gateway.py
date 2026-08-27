@@ -9,12 +9,15 @@ provider* and expose its models in its own ``/api/v1/models`` under a
 GAIA agent can address a gateway model with no new LLM client — see
 ``docs/guides/llm-gateway.mdx``.
 
-**No API token is ever written to disk by GAIA.** Tokens go straight to
+**No API token is ever written to a GAIA file.** Tokens go straight to
 Lemonade's ``POST /api/v1/cloud/auth``, which holds them in process memory only.
-For a token that survives a Lemonade restart, set ``LEMONADE_AMD_API_KEY`` in
-Lemonade's environment. The file this module *does* write
-(``~/.gaia/gateway.json``) records only the base URL and which models the user
-enabled; it has no field for a secret.
+Because that is lost on restart, a copy also goes to the OS credential store
+(DPAPI / Keychain / SecretService) and is replayed from there — encrypted at
+rest, and refused outright if only a plaintext keyring backend is available.
+``LEMONADE_AMD_API_KEY`` in Lemonade's environment still takes precedence. The
+file this module writes (``~/.gaia/gateway.json``) records the base URL, which
+models the user enabled, and learned model capabilities; it has no field a
+secret could occupy.
 """
 
 import json

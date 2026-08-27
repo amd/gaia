@@ -5320,11 +5320,12 @@ def handle_gateway_command(args):
                     cfg.set("default_model", chosen)
                     cfg.save()
                 print(f"   Using {chosen} by default (change with `gaia gateway use`).")
-            print(
-                f"   Held in Lemonade's memory only — it is gone when Lemonade "
-                f"restarts.\n   Set {GATEWAY_API_KEY_ENV} in Lemonade's environment "
-                f"to persist it."
-            )
+            if getattr(args, "no_remember", False):
+                print(
+                    f"   Held in Lemonade's memory only — it is gone when "
+                    f"Lemonade restarts.\n   Set {GATEWAY_API_KEY_ENV} in "
+                    f"Lemonade's environment to persist it."
+                )
             return
 
         if action == "logout":
@@ -5417,15 +5418,17 @@ def handle_gateway_command(args):
                 # Nothing chosen yet — fall back to the first recommended model
                 # so a fresh setup can be tested in one command.
                 model = manager.ensure_active_model()
-                discovered = [] if model else manager.list_models()
-                if not model and not discovered:
-                    print(
-                        "❌ No gateway models were discovered.\n"
-                        "   Check the token and base URL with `gaia gateway status`.",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-                model = discovered[0].id
+                if not model:
+                    discovered = manager.list_models()
+                    if not discovered:
+                        print(
+                            "❌ No gateway models were discovered.\n"
+                            "   Check the token and base URL with "
+                            "`gaia gateway status`.",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    model = discovered[0].id
                 print(f"No active model set; using {model}.\n")
             # Deliberately goes through the ordinary client so this exercises
             # the same path agents use, cloud short-circuits included.

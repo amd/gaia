@@ -572,12 +572,6 @@ def streams_ok(model_id: Optional[str]) -> bool:
     return model_id not in _CLOUD_NON_STREAMING
 
 
-def known_non_streaming() -> set:
-    """Models learned to be non-streaming."""
-    _load_non_streaming()
-    return set(_CLOUD_NON_STREAMING)
-
-
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -1178,6 +1172,9 @@ class LemonadeClient:
         self.model = model
         self.server_process = None
         self.log = get_logger(__name__)
+        # Gateway models already announced as non-streaming, so the reason is
+        # given once rather than before every answer.
+        self._announced_non_streaming: set = set()
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key)
@@ -2053,10 +2050,15 @@ class LemonadeClient:
             # Known not to stream: go straight to the non-streaming call rather
             # than making the user wait for an empty stream every turn.
             if is_cloud_model(model) and not streams_ok(model):
-                self.log.info(
-                    f"'{model}' does not support streaming on this gateway; "
-                    f"using a single non-streaming response instead."
-                )
+                # Said once per process, not once per turn: the console handler
+                # writes INFO to stdout, so repeating it would interleave a log
+                # line with every streamed reply in `gaia chat`.
+                if model not in self._announced_non_streaming:
+                    self._announced_non_streaming.add(model)
+                    self.log.info(
+                        f"'{model}' does not support streaming on this gateway; "
+                        f"answering without streaming instead."
+                    )
                 yield from self._chat_completion_as_single_chunk(
                     model=model,
                     messages=messages,
@@ -2091,6 +2093,7 @@ class LemonadeClient:
             # stream entirely.
             if not produced and is_cloud_model(model):
                 mark_non_streaming(model)
+                self._announced_non_streaming.add(model)
                 self.log.warning(
                     f"'{model}' returned no tokens when streamed. This gateway "
                     f"does not stream that model; retrying without streaming. "
@@ -2142,9 +2145,14 @@ class LemonadeClient:
             "content": message.get("content") or "",
         }
         # Without this a tool call on a non-streaming model reaches the agent as
-        # an empty turn.
+        # an empty turn. The index is required, not cosmetic: consumers key
+        # fragments by it, so N unindexed calls would all fold into slot 0 and
+        # concatenate into one unparseable call.
         if message.get("tool_calls"):
-            delta["tool_calls"] = message["tool_calls"]
+            delta["tool_calls"] = [
+                {**call, "index": call.get("index", i)}
+                for i, call in enumerate(message["tool_calls"])
+            ]
         yield {
             "id": response.get("id", ""),
             "object": "chat.completion.chunk",

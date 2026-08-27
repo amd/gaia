@@ -295,24 +295,55 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
         resolve_lemonade_api_key,
     )
 
-    resp = requests.get(
-        f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
-        timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    entries = body.get("data", []) if isinstance(body, dict) else []
-    # Keep cloud classification current — this response is the authority, and
-    # the readiness gate may be the first thing to read it in this process.
-    record_cloud_models(body if isinstance(body, dict) else None)
-    for entry in entries:
-        if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model_id):
-            # A gateway model is "present" the moment it is discovered; there
-            # is nothing to download. Reporting it absent sends the user to
-            # `gaia init` for a model that lives on the gateway.
-            return True
+    def _probe_once() -> bool:
+        resp = requests.get(
+            f"{probe_base}/models",
+            headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+            timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        entries = body.get("data", []) if isinstance(body, dict) else []
+        # Keep cloud classification current — this response is the authority,
+        # and the readiness gate may be the first thing to read it in this
+        # process.
+        record_cloud_models(body if isinstance(body, dict) else None)
+        for entry in entries:
+            if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model_id):
+                # A gateway model is "present" the moment it is discovered;
+                # there is nothing to download. Reporting it absent sends the
+                # user to `gaia init` for a model that lives on the gateway.
+                return True
+        return False
+
+    if _probe_once():
+        return True
+    # A gateway model missing from the catalog usually means Lemonade restarted
+    # and forgot its token, not that the model is gone — Lemonade discovers
+    # nothing until it can authenticate. Every front-end funnels through here,
+    # so this is the one place that makes a remembered token survive a restart.
+    if _replay_gateway_token(model_id):
+        return _probe_once()
     return False
+
+
+def _replay_gateway_token(model_id: str) -> bool:
+    """Give Lemonade its remembered gateway token back. True if that changed anything.
+
+    Returns False for a local model, when nothing is stored, or when the stored
+    token is rejected — all cases where re-probing would just repeat itself.
+    """
+    from gaia.llm.gateway import GATEWAY_PROVIDER, GatewayError, GatewayManager
+
+    if not str(model_id or "").lower().startswith(f"{GATEWAY_PROVIDER}."):
+        return False
+    try:
+        return GatewayManager().ensure_authenticated()
+    except (GatewayError, requests.RequestException) as e:
+        # Never fatal: the model may simply be absent, and the caller's own
+        # "not found" message is the actionable one.
+        logger.debug(f"Could not replay the remembered gateway token: {e}")
+        return False
 
 
 def extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int]:

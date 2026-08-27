@@ -347,7 +347,64 @@ class TestNonStreamingFallback:
         )
 
         # Dropping these would turn a tool call into an empty assistant turn.
-        assert chunks[0]["choices"][0]["delta"]["tool_calls"] == calls
+        delivered = chunks[0]["choices"][0]["delta"]["tool_calls"]
+        assert [c["function"] for c in delivered] == [c["function"] for c in calls]
+
+    def test_parallel_tool_calls_stay_separate(self, client):
+        """Consumers key streamed fragments by ``index``. A non-streaming
+        response carries none, so without one every call folds into slot 0 and
+        the arguments concatenate into unparseable JSON — a wrong answer with
+        no error. The gateway's Claude models both emit parallel calls and are
+        the ones routed through this fallback."""
+        record_cloud_models(CATALOG)
+        lc.mark_non_streaming(CLOUD_MODEL)
+        client._ensure_model_loaded = MagicMock()
+        client.chat_completions = MagicMock(
+            return_value={
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "a",
+                                    "function": {
+                                        "name": "one",
+                                        "arguments": '{"x":1}',
+                                    },
+                                },
+                                {
+                                    "id": "b",
+                                    "function": {
+                                        "name": "two",
+                                        "arguments": '{"y":2}',
+                                    },
+                                },
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+        )
+
+        chunks = list(
+            client._stream_chat_completions_with_openai(
+                model=CLOUD_MODEL, messages=[{"role": "user", "content": "hi"}]
+            )
+        )
+
+        # Folded by the real consumer, not a stand-in: the bug lived in the
+        # gap between what this shim emits and what that function expects.
+        from gaia.llm.providers.lemonade import _accumulate_tool_calls
+
+        acc = {}
+        _accumulate_tool_calls(acc, chunks[0]["choices"][0]["delta"]["tool_calls"])
+        assert sorted(c["function"]["name"] for c in acc.values()) == ["one", "two"]
+        assert sorted(c["function"]["arguments"] for c in acc.values()) == [
+            '{"x":1}',
+            '{"y":2}',
+        ]
 
     def test_a_local_model_that_streams_nothing_is_left_alone(self, client):
         """Only the gateway has this defect; a silent local model is a real

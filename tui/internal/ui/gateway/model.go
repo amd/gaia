@@ -471,8 +471,8 @@ func (m GatewayModel) View() string {
 	b.WriteString(titleStyle.Render("AMD LLM Gateway"))
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(
-		"Run GAIA agents on gateway-hosted models. Your token is sent to " +
-			"Lemonade,\nwhich keeps it in memory only — GAIA never writes it to disk."))
+		"Run GAIA agents on gateway-hosted models. Your token goes to " +
+			"Lemonade and\nto your OS credential store — encrypted, never a GAIA file."))
 	b.WriteString("\n\n")
 
 	if m.initErr != nil {
@@ -498,8 +498,8 @@ func (m GatewayModel) View() string {
 		b.WriteString(labelStyle.Render("Gateway API token"))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render(
-			"Held by Lemonade in memory only, so it is gone when Lemonade restarts.\n" +
-				"Set " + APIKeyEnv + " in Lemonade's environment for one that persists."))
+			"Saved to your OS credential store, so you are not asked again.\n" +
+				"Set " + APIKeyEnv + " in Lemonade's environment to use that instead."))
 		b.WriteString("\n")
 		b.WriteString(m.tokenInput.View())
 		b.WriteString("\n")

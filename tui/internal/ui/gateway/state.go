@@ -18,7 +18,16 @@ type State struct {
 	BaseURL       string   `json:"base_url"`
 	EnabledModels []string `json:"enabled_models"`
 	ActiveModel   string   `json:"active_model,omitempty"`
+
+	// extra holds keys this file does not model so a save does not delete
+	// them. The Python side records learned model capabilities here; a
+	// round-trip through the TUI must not cost that.
+	extra map[string]json.RawMessage
 }
+
+// ownedKeys are the fields State models itself; everything else in the file
+// belongs to another writer and is carried through untouched.
+var ownedKeys = []string{"base_url", "enabled_models", "active_model"}
 
 // StatePath is where the selection is stored. GAIA_GATEWAY_FILE overrides it
 // for tests; GAIA_CONFIG_DIR moves the whole GAIA config directory.
@@ -57,6 +66,14 @@ func LoadState() (State, error) {
 			"gateway settings at %s are not valid JSON: %w\n"+
 				"Delete the file to start fresh", path, err)
 	}
+	if err := json.Unmarshal(raw, &state.extra); err != nil {
+		return State{}, fmt.Errorf(
+			"gateway settings at %s are not a JSON object: %w\n"+
+				"Delete the file to start fresh", path, err)
+	}
+	for _, own := range ownedKeys {
+		delete(state.extra, own)
+	}
 	if state.BaseURL == "" {
 		state.BaseURL = DefaultBaseURL
 	}
@@ -74,7 +91,17 @@ func (s State) Save() error {
 	if s.EnabledModels == nil {
 		s.EnabledModels = []string{}
 	}
-	encoded, err := json.MarshalIndent(s, "", "  ")
+	merged := map[string]any{
+		"base_url":       s.BaseURL,
+		"enabled_models": s.EnabledModels,
+	}
+	if s.ActiveModel != "" {
+		merged["active_model"] = s.ActiveModel
+	}
+	for k, v := range s.extra {
+		merged[k] = v
+	}
+	encoded, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return fmt.Errorf("could not encode gateway settings: %w", err)
 	}
