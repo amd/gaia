@@ -220,15 +220,38 @@ class TestErrors:
             with pytest.raises(GatewayError, match="11.8.0"):
                 manager.clear_token()
 
-    def test_probe_401_tells_the_user_to_supply_a_token(self, manager):
+    @pytest.mark.parametrize("status", [401, 403, 301, 302, 303, 307, 308])
+    def test_probe_treats_auth_required_as_reachable(self, manager, status):
+        """The chicken-and-egg case, caught against the live gateway.
+
+        A token cannot be set until the provider is registered, so an
+        unauthenticated probe must not block registration. AMD's gateway
+        answers `302 -> /login`; 401/403 mean the same thing.
+        """
         with patch(
             "gaia.llm.gateway.requests.get",
-            return_value=_response(status_code=401, body={}),
+            return_value=_response(status_code=status, body={}),
         ):
-            with pytest.raises(GatewayError) as excinfo:
-                manager.check_reachable("https://gw.example.com/api/v1")
+            assert manager.check_reachable("https://gw.example.com/v1") is None
 
-        assert "gaia gateway auth" in str(excinfo.value)
+    def test_probe_does_not_follow_redirects(self, manager):
+        """Following the redirect lands on an Okta HTML page — a 200 that
+        parses as neither JSON nor a model list, which would report a correct
+        URL as 'not an OpenAI-compatible endpoint'."""
+        with patch(
+            "gaia.llm.gateway.requests.get",
+            return_value=_response(status_code=302, body={}),
+        ) as get:
+            manager.check_reachable("https://gw.example.com/v1")
+
+        assert get.call_args.kwargs["allow_redirects"] is False
+
+    def test_probe_counts_models_when_the_gateway_answers(self, manager):
+        with patch(
+            "gaia.llm.gateway.requests.get",
+            return_value=_response(body={"data": [{"id": "a"}, {"id": "b"}]}),
+        ):
+            assert manager.check_reachable("https://gw.example.com/v1") == 2
 
     def test_probe_non_json_body_says_it_is_not_an_openai_endpoint(self, manager):
         html = MagicMock()
@@ -296,12 +319,28 @@ class TestListModels:
     def test_upstream_id_strips_the_gaia_namespace(self):
         assert GatewayModel(id="amd.Claude-Opus-5").upstream_id == "Claude-Opus-5"
 
-    def test_recommendation_is_a_substring_hint_not_a_hardcoded_id(self):
-        # The gateway names models its own way, so matching must be loose.
-        assert GatewayModel(id="amd.Claude-Opus-5").recommended
-        assert GatewayModel(id="amd.claude-opus-4-8").recommended
-        assert GatewayModel(id="amd.Gemma-4-31B-Instruct").recommended
-        assert not GatewayModel(id="amd.some-other-model").recommended
+    def test_recommendation_surfaces_the_flagship_and_on_prem_models(self):
+        """Ids below are the gateway's real ones, taken from its live catalog.
+
+        The gateway lists seven Opus variants; floating all of them would bury
+        the two models this feature exists to reach, so the hints deliberately
+        match only the current flagship and the on-prem model.
+        """
+        for model_id in ("amd.Claude-Opus-5", "amd.Claude-Sonnet-5", "amd.Gemma-4-31B"):
+            assert GatewayModel(id=model_id).recommended, model_id
+
+        for model_id in (
+            "amd.claude-opus-4.8",  # superseded — still selectable, just not surfaced
+            "amd.claude-haiku-4.5",
+            "amd.gpt-oss-20b",
+        ):
+            assert not GatewayModel(id=model_id).recommended, model_id
+
+    def test_recommendation_is_case_insensitive(self):
+        """The gateway mixes casing across ids (`Claude-Opus-5` vs
+        `claude-opus-4.8`), so matching cannot depend on it."""
+        assert GatewayModel(id="amd.CLAUDE-OPUS-5").recommended
+        assert GatewayModel(id="amd.gemma-4-31b").recommended
 
 
 # --------------------------------------------------------------------------

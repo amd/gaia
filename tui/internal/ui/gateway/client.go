@@ -217,8 +217,15 @@ func (c *Client) httpError(resp *http.Response, method, url string) error {
 const probeTimeout = 12 * time.Second
 
 // Probe checks the gateway's own /models endpoint before registration, so a
-// wrong URL or a dead token fails here with the real status rather than
-// surfacing later as an empty model list.
+// wrong URL fails here with the real status rather than surfacing later as an
+// empty model list.
+//
+// Redirects are deliberately not followed. AMD's gateway answers an
+// unauthenticated request with `302 -> /login`; following that lands on an
+// Okta HTML page — a 200 that is neither JSON nor a model list, which would
+// report a correct URL as "not an OpenAI-compatible endpoint" and block
+// registration. A redirect and a 401 mean the same thing here: the route is
+// real and wants credentials, which is the normal state before the token step.
 func (c *Client) Probe(baseURL string) (int, error) {
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -229,7 +236,12 @@ func (c *Client) Probe(baseURL string) (int, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	probe := &http.Client{Timeout: probeTimeout}
+	probe := &http.Client{
+		Timeout: probeTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := probe.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -239,14 +251,16 @@ func (c *Client) Probe(baseURL string) (int, error) {
 	defer resp.Body.Close()
 
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
-		// Expected before a token is supplied — the endpoint is real, so let
-		// the flow continue to the token step.
+	case resp.StatusCode >= 300 && resp.StatusCode < 400,
+		resp.StatusCode == http.StatusUnauthorized,
+		resp.StatusCode == http.StatusForbidden:
+		// The endpoint is real and wants credentials — continue to the token step.
 		return 0, nil
 	case resp.StatusCode >= 400:
 		return 0, fmt.Errorf(
 			"the gateway at %s returned HTTP %d.\n"+
-				"Check the base URL includes the API path (e.g. .../api/v1)",
+				"Check the base URL includes the API path "+
+				"(e.g. .../v1 — AMD's gateway serves /v1, not /api/v1)",
 			url, resp.StatusCode)
 	}
 

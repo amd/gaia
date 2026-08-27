@@ -5163,7 +5163,12 @@ def handle_gateway_command(args):
             if not args.skip_probe:
                 print(f"Probing {base_url}/models ...")
                 count = manager.check_reachable(base_url)
-                print(f"✅ Gateway reachable, advertising {count} model(s)")
+                if count is None:
+                    print(
+                        "✅ Gateway reachable — it wants a token before it lists models"
+                    )
+                else:
+                    print(f"✅ Gateway reachable, advertising {count} model(s)")
             print(f"Registering '{base_url}' with Lemonade ...")
             result = manager.install(
                 base_url,

@@ -402,17 +402,27 @@ func TestGatewayStateTogglePreservesActive(t *testing.T) {
 	}
 }
 
-func TestGatewayRecommendationIsASubstringHint(t *testing.T) {
-	// The gateway names models its own way, so matching must be loose rather
-	// than a hardcoded id list.
+func TestGatewayRecommendationSurfacesFlagshipAndOnPrem(t *testing.T) {
+	// Ids below are the gateway's real ones, taken from its live catalog. It
+	// lists seven Opus variants; floating all of them would bury the two models
+	// this feature exists to reach, so the hints match only the current
+	// flagship and the on-prem model. Casing varies across the catalog
+	// (`Claude-Opus-5` vs `claude-opus-4.8`), so matching ignores it.
 	for _, id := range []string{
-		"amd.Claude-Opus-5", "amd.claude-opus-4-8", "amd.Gemma-4-31B-Instruct",
+		"amd.Claude-Opus-5", "amd.Claude-Sonnet-5", "amd.Gemma-4-31B",
+		"amd.CLAUDE-OPUS-5", "amd.gemma-4-31b",
 	} {
 		if !(gateway.Model{ID: id}).Recommended() {
 			t.Errorf("%q should be recommended", id)
 		}
 	}
-	if (gateway.Model{ID: "amd.some-other-model"}).Recommended() {
-		t.Error("an unrelated model should not be recommended")
+	for _, id := range []string{
+		"amd.claude-opus-4.8", // superseded — selectable, just not surfaced
+		"amd.claude-haiku-4.5",
+		"amd.gpt-oss-20b",
+	} {
+		if (gateway.Model{ID: id}).Recommended() {
+			t.Errorf("%q should not be recommended", id)
+		}
 	}
 }

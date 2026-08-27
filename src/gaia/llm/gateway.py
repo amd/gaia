@@ -254,36 +254,42 @@ class GatewayManager:
 
     # -- provider lifecycle ----------------------------------------------
 
-    def check_reachable(self, base_url: str) -> int:
-        """Probe the gateway's own ``/models`` and return how many it lists.
+    def check_reachable(self, base_url: str) -> Optional[int]:
+        """Probe the gateway's own ``/models`` before registering it.
 
-        Runs before registration so a wrong URL or a dead token fails here,
-        with the real HTTP status, instead of surfacing later as an empty
-        model list.
+        Returns the number of models it lists, or ``None`` when the endpoint is
+        real but wants credentials — which is the normal state before a token
+        has been supplied, since a token cannot be set until the provider is
+        registered.
+
+        Redirects are deliberately NOT followed. AMD's gateway answers an
+        unauthenticated request with ``302 -> /login``, and following that
+        lands on an Okta HTML page: a ``200`` that parses as neither JSON nor a
+        model list, which would report a correct URL as "not an
+        OpenAI-compatible endpoint" and block registration entirely.
         """
         url = f"{base_url.rstrip('/')}/models"
         token = os.getenv(GATEWAY_API_KEY_ENV)
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         try:
-            response = requests.get(url, headers=headers, timeout=_PROBE_TIMEOUT)
+            response = requests.get(
+                url, headers=headers, timeout=_PROBE_TIMEOUT, allow_redirects=False
+            )
         except requests.exceptions.RequestException as e:
             raise GatewayError(
                 f"Could not reach the gateway at {url}: {e}. "
                 f"Check the base URL and that you are on the network/VPN that "
                 f"can see it."
             ) from e
-        if response.status_code in (401, 403):
-            raise GatewayError(
-                f"The gateway at {url} rejected the request (HTTP "
-                f"{response.status_code}). Supply a token with "
-                f"`gaia gateway auth`, or set {GATEWAY_API_KEY_ENV} in "
-                f"Lemonade's environment."
-            )
+        # A redirect to a login page and a 401 mean the same thing: the route
+        # exists and wants credentials.
+        if response.status_code in (301, 302, 303, 307, 308, 401, 403):
+            return None
         if response.status_code >= 400:
             raise GatewayError(
                 f"The gateway at {url} returned HTTP {response.status_code}. "
                 f"Check that the base URL includes the API path "
-                f"(e.g. .../api/v1 or .../v1)."
+                f"(e.g. .../v1 — AMD's gateway serves /v1, not /api/v1)."
             )
         try:
             body = response.json()
