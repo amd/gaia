@@ -311,7 +311,10 @@ jobs:
           }
           Write-Host "Built: $($wheel.Name)"
           Write-Host "Installing $($wheel.Name) into the fresh venv (no -e, no hub packages) ..."
-          & "$env:RUN_DIR\venv\Scripts\pip.exe" install $wheel.FullName
+          # `python.exe -m pip`, not the venv's pip.exe: this runner's Application Control
+          # policy blocks the unsigned shim ("An Application Control policy has blocked
+          # this file"). Same install either way -- still a real non-editable wheel install.
+          & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install $wheel.FullName
           $gaiaVersion = & "$env:RUN_DIR\venv\Scripts\gaia.exe" --version
           Write-Host "Installed: $gaiaVersion"
           "- **Environment:** ✅ $($wheel.Name) installed, ``gaia --version`` -> $gaiaVersion" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
