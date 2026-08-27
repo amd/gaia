@@ -3,7 +3,7 @@
     Work out which auth header the AMD LLM gateway wants for your token.
 
 .DESCRIPTION
-    Talks to https://llm.amd.com/v1/models directly, with no GAIA and no
+    Talks to https://llm-api.amd.com/Unified/v1/models directly, with no GAIA and no
     Lemonade in the way, so a failure here is about the credential rather than
     anything GAIA does with it.
 
@@ -19,7 +19,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$GatewayUrl = "https://llm.amd.com/v1"
+    [string]$GatewayUrl = "https://llm-api.amd.com/Unified/v1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,8 +46,21 @@ $candidates = @(
 $winner = $null
 foreach ($c in $candidates) {
     $label = $c[0]; $hName = $c[1]; $hPrefix = $c[2]
-    $body = & curl.exe -s -m 20 --max-redirs 0 -H "$hName`: $hPrefix$token" $url 2>$null
-    $code = & curl.exe -s -o NUL -m 20 --max-redirs 0 -w "%{http_code}" -H "$hName`: $hPrefix$token" $url 2>$null
+    # Invoke-WebRequest keeps the token out of argv. Passing it as a curl.exe
+    # -H argument made it readable by any local user in the process list.
+    $headers = @{ $hName = "$hPrefix$token" }
+    $code = 0
+    $body = $null
+    try {
+        $resp = Invoke-WebRequest -Uri $url -Headers $headers -Method Get `
+            -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 `
+            -ErrorAction Stop
+        $code = [int]$resp.StatusCode
+        $body = $resp.Content
+    }
+    catch {
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+    }
 
     $verdict = "no"
     $detail = ""

@@ -291,6 +291,7 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
     from gaia.llm.lemonade_client import (
         _model_ids_match,
         lemonade_auth_headers,
+        record_cloud_models,
         resolve_lemonade_api_key,
     )
 
@@ -302,8 +303,14 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
     resp.raise_for_status()
     body = resp.json()
     entries = body.get("data", []) if isinstance(body, dict) else []
+    # Keep cloud classification current — this response is the authority, and
+    # the readiness gate may be the first thing to read it in this process.
+    record_cloud_models(body if isinstance(body, dict) else None)
     for entry in entries:
         if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model_id):
+            # A gateway model is "present" the moment it is discovered; there
+            # is nothing to download. Reporting it absent sends the user to
+            # `gaia init` for a model that lives on the gateway.
             return True
     return False
 
@@ -370,9 +377,19 @@ def pull_model(probe_base: str, model_id: str) -> None:
     import requests
 
     from gaia.llm.lemonade_client import (
+        is_cloud_model,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
+
+    if is_cloud_model(model_id):
+        # A gateway model has no weights to fetch. Lemonade 400s on a pull for
+        # one, and the message talks about a download the user cannot perform.
+        raise RuntimeError(
+            f"'{model_id}' is hosted on a gateway, so there is nothing to "
+            f"download. If it is unavailable, check the gateway connection "
+            f"with `gaia gateway status`."
+        )
 
     resp = requests.post(
         f"{probe_base}/pull",

@@ -476,6 +476,33 @@ class TestSelection:
         manager.set_active("amd.Claude-Opus-5")
         assert GatewayState.load().active_model == "amd.Claude-Opus-5"
 
+    def test_uninstall_clears_the_global_default_model(self, manager, monkeypatch):
+        """`use` writes the choice to two places; removing it cleaned only one,
+        leaving `gaia chat` resolving a gateway id that no longer exists."""
+        cleared = {}
+
+        class FakeCfg:
+            def get(self, k):
+                return "amd.Claude-Opus-5"
+
+            def set(self, k, v):
+                cleared[k] = v
+
+            def save(self):
+                cleared["saved"] = True
+
+        monkeypatch.setattr(
+            "gaia.config.GaiaConfig.load", classmethod(lambda cls, *a, **k: FakeCfg())
+        )
+        manager.set_active("amd.Claude-Opus-5")
+        with patch(
+            "gaia.llm.gateway.requests.request", return_value=_response(body={})
+        ):
+            manager.uninstall()
+
+        assert cleared.get("default_model") == ""
+        assert cleared.get("saved")
+
     def test_uninstall_forgets_the_selection(self, manager):
         manager.set_active("amd.Claude-Opus-5")
         with patch(

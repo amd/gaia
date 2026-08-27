@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Stands up an embeddable Lemonade 11.8 on a private port, registers
-    https://llm.amd.com/v1 with it, and runs real completions through the CLI
+    https://llm-api.amd.com/Unified/v1 with it, and runs real completions through the CLI
     and the agent path.
 
     Your token is read with Read-Host so it never enters PowerShell history,
@@ -19,7 +19,7 @@
     Port for the private Lemonade. Default 15305.
 
 .PARAMETER GatewayUrl
-    Gateway base URL. Default https://llm.amd.com/v1 (note /v1, not /api/v1).
+    Gateway base URL. Default https://llm-api.amd.com/Unified/v1 (note /v1, not /api/v1).
 
 .PARAMETER KeepRunning
     Leave Lemonade running afterwards so you can drive the TUI against it.
@@ -36,7 +36,7 @@
 [CmdletBinding()]
 param(
     [int]$Port = 15305,
-    [string]$GatewayUrl = "https://llm.amd.com/v1",
+    [string]$GatewayUrl = "https://llm-api.amd.com/Unified/v1",
     [switch]$KeepRunning,
     [switch]$SkipDownload
 )

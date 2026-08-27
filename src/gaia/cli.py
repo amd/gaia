@@ -2892,13 +2892,14 @@ Examples:
     gateway_install_parser.add_argument(
         "--auth-header-name",
         default=None,
-        help="Override the auth header name (default: Authorization)",
+        help="Override the auth header name (default: Ocp-Apim-Subscription-Key, "
+        "which is what AMD's Azure APIM gateway checks)",
     )
     gateway_install_parser.add_argument(
         "--auth-header-prefix",
         default=None,
-        help="Override the auth header value prefix (default: 'Bearer '; pass "
-        "'' for none)",
+        help="Override the auth header value prefix (default: empty, since the "
+        "APIM header takes a bare key). Use 'Bearer ' for a bearer-token gateway",
     )
     gateway_install_parser.add_argument(
         "--skip-probe",
@@ -5307,6 +5308,14 @@ def handle_gateway_command(args):
             return
 
         if action == "use":
+            discovered = {m.id for m in manager.list_models()}
+            if discovered and args.model not in discovered:
+                print(
+                    f"❌ '{args.model}' is not a discovered gateway model.\n"
+                    f"   Run `gaia gateway models` to see what is available.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             manager.set_active(args.model)
             # Route through the existing default_model mechanism so chat/llm/
             # prompt pick it up with no extra precedence rules (issue #98).
@@ -5382,6 +5391,18 @@ def handle_gateway_command(args):
 
     except GatewayError as e:
         print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except LemonadeClientError as e:
+        # `models` and `test` go through LemonadeClient, which raises its own
+        # type. Letting it escape printed a traceback instead of the message.
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except GaiaConfigError as e:
+        print(
+            f"❌ GAIA's config could not be read or written: {e}\n"
+            f"   Fix or delete ~/.gaia/config.json and try again.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 

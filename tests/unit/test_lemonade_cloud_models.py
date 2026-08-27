@@ -92,6 +92,36 @@ class TestClassification:
         assert client._is_cloud_model(LOCAL_MODEL) is False
         client.list_models.assert_not_called()
 
+    def test_only_registered_provider_namespaces_are_claimed_as_cloud(self, client):
+        """A dot alone must not mean "cloud".
+
+        Plenty of legitimate local checkpoints carry one, and a
+        device-filtered catalog can omit them. Claiming those as gateway-hosted
+        silently skipped the download they actually needed.
+        """
+        record_cloud_models(CATALOG)  # registers only the "amd" namespace
+        assert client._is_cloud_model("amd.Not-Yet-Discovered") is True
+        assert client._is_cloud_model("openai.gpt-4") is False
+        assert client._is_cloud_model("Llama-3.2-1B-Instruct-Hybrid") is False
+
+    def test_provider_namespaces_come_from_the_catalog(self):
+        record_cloud_models(CATALOG)
+        assert lc.known_cloud_providers() == frozenset({"amd"})
+        record_cloud_models({"data": []})
+        assert lc.known_cloud_providers() == frozenset()
+
+    def test_catalog_rebuild_is_atomic(self):
+        """Readers must never observe a half-built map.
+
+        The previous clear()+update() left a window where a concurrent reader
+        saw an empty map and routed a gateway model down the local path.
+        """
+        record_cloud_models(CATALOG)
+        before = lc._CLOUD_MODELS
+        record_cloud_models(CATALOG)
+        # A fresh object each time — rebound, never mutated in place.
+        assert lc._CLOUD_MODELS is not before
+
     def test_namespaced_id_absent_from_the_catalog_is_treated_as_cloud(self, client):
         """Caught end to end with an unauthenticated gateway.
 
@@ -171,6 +201,20 @@ class TestNoDownloadOrLoad:
 
 
 class TestSlotLease:
+    def test_cloud_model_takes_no_slot_on_a_COLD_cache(self, client):
+        """The bug the warm-cache version of this test hid.
+
+        ``chat_completions`` takes the lease *before* ``_ensure_model_loaded``
+        warms the cache, so on a fresh process the lease decision is made with
+        nothing known. Reading the cache strictly meant the first gateway turn
+        of every process held the single local slot for the whole remote call.
+        """
+        assert not is_cloud_model(CLOUD_MODEL)  # cold, as a real process starts
+        with patch("gaia.daemon.broker_client.model_lease") as lease:
+            with client._model_slot_lease(CLOUD_MODEL):
+                pass
+        lease.assert_not_called()
+
     def test_cloud_model_takes_no_model_slot(self, client):
         """A gateway request holds no local slot; leasing one would stall
         every local agent for the length of a remote call."""

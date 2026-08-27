@@ -68,6 +68,7 @@ type GatewayModel struct {
 	tokenInput textinput.Model
 
 	status   Status
+	warnings []string
 	busy     string
 	errMsg   string
 	notice   string
@@ -147,8 +148,9 @@ func (m GatewayModel) install(baseURL string) tea.Cmd {
 // and the caller clears the input immediately after.
 func (m GatewayModel) authenticate(token string) tea.Cmd {
 	client := m.client
+	baseURL := m.state.BaseURL
 	return func() tea.Msg {
-		result, err := client.SetToken(token)
+		result, err := client.SetToken(token, baseURL)
 		return authedMsg{result: result, err: err}
 	}
 }
@@ -179,6 +181,9 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.status
 		if msg.status.BaseURL != "" {
 			m.urlInput.SetValue(msg.status.BaseURL)
+		}
+		if len(msg.status.Warnings) > 0 {
+			m.warnings = msg.status.Warnings
 		}
 		// Skip straight to the models when there is nothing left to set up.
 		if msg.status.Installed && msg.status.Authenticated() {
@@ -420,7 +425,7 @@ func (m GatewayModel) View() string {
 	case stageURL:
 		b.WriteString(labelStyle.Render("Gateway base URL"))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("The OpenAI-compatible endpoint, e.g. https://llm.amd.com/api/v1"))
+		b.WriteString(dimStyle.Render("The OpenAI-compatible endpoint, e.g. https://llm-api.amd.com/Unified/v1"))
 		b.WriteString("\n")
 		b.WriteString(m.urlInput.View())
 		b.WriteString("\n")

@@ -44,7 +44,7 @@ Press <kbd>g</kbd> from the agent hub.
 
 <Steps>
   <Step title="Confirm the gateway URL">
-    The OpenAI-compatible base URL, e.g. `https://llm.amd.com/v1`. GAIA tests it
+    The OpenAI-compatible base URL, e.g. `https://llm-api.amd.com/Unified/v1`. GAIA tests it
     before registering, so a wrong path fails immediately with the actual HTTP status
     instead of showing up later as an empty model list.
   </Step>
@@ -63,7 +63,7 @@ The active model becomes the default for GAIA's model-bearing commands.
 ## Connect from the CLI
 
 ```bash
-gaia gateway install --base-url https://llm.amd.com/v1
+gaia gateway install                 # defaults to the AMD gateway
 gaia gateway auth                    # prompts without echo
 gaia gateway models                  # what the gateway offers
 gaia gateway use amd.Claude-Opus-5   # make it the default
@@ -92,7 +92,7 @@ Gateway models are namespaced `amd.<model>` and work anywhere a local model does
 
 ```bash
 gaia chat --model amd.Claude-Opus-5
-gaia llm --model amd.gemma-4-31b-it "Explain NPU offload"
+gaia llm --model amd.Gemma-4-31B "Explain NPU offload"
 ```
 
 GAIA recognises them as gateway-hosted and skips the download, load, and model-slot
@@ -109,22 +109,25 @@ will not try native tool calls against a model that cannot do them.
 | `models` lists nothing | Lemonade only discovers models once it has a working token. Run `gaia gateway auth`. |
 | Setting a token returns a conflict | `LEMONADE_AMD_API_KEY` is set in Lemonade's environment and wins. Keep using it, or unset it and restart Lemonade. |
 | `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
-| The probe returns 404 | The base URL is missing its API path. AMD's gateway serves `/v1`, **not** `/api/v1`. |
+| The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
+| `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |
+| Streaming returns nothing | Known gateway-side issue on models other than `Gemma-4-31B`; non-streaming works. |
 
 ## What the gateway offers
 
-Verified against the live catalog (`https://llm.amd.com/api/models`, which is readable
-without a token):
+76 models, verified live. Measured latency and throughput on a 120-word generation:
 
-| Model | Provider | Context |
-|---|---|---|
-| `Gemma-4-31B` | On-Prem Services | — |
-| `Qwen3.6-35B-A3B` | On-Prem Services | 262K |
-| `Llama-4-Scout-17B` | On-Prem Services | 10M |
-| `Claude-Opus-5` | Azure OpenAI / Vertex | 1M |
-| `Claude-Sonnet-5` | Azure OpenAI | 1M |
+| Model | Provider | Latency | Avg TPS |
+|---|---|---|---|
+| `GPT-oss-20B` | On-Prem | 3.1s | 96 |
+| `Gemma-4-31B` | On-Prem | 3.7s | 40 |
+| `Qwen3.6-35B-A3B` | On-Prem | 4.8s | 62 |
+| `Claude-Opus-5` | Azure OpenAI | 5.6s | 53 |
+| `GPT-oss-120B` | On-Prem | 8.4s | 31 |
 
-Around 100 models across On-Prem Services, Azure OpenAI, and Vertex Gen AI.
+`Gemma-4-31B` streams at 78 TPS with 1.8s to first token. **Streaming currently
+returns no tokens for the other models**, while non-streaming works for all of
+them — a gateway-side limitation, not a GAIA one.
 
 **Every chat model on this gateway — Claude included — is served over OpenAI Chat
 Completions**, not the Anthropic Messages format. That is why GAIA registers the

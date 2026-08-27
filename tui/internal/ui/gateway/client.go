@@ -78,6 +78,10 @@ type Status struct {
 	EnvVarSet        bool
 	RuntimeKeySet    bool
 	ModelsDiscovered int
+	// Lemonade's own per-provider warnings (insecure http, discovery
+	// failures). Python surfaces these; dropping them here meant a TUI user
+	// never saw why a provider was misbehaving.
+	Warnings []string
 }
 
 // Authenticated reports whether Lemonade can resolve a token for the gateway.
@@ -317,7 +321,7 @@ type installResult struct {
 // Install registers the gateway with Lemonade as a cloud provider.
 func (c *Client) Install(baseURL string) (installResult, error) {
 	var result installResult
-	err := c.do(http.MethodPost, "install", map[string]any{
+	body := map[string]any{
 		"backend":  "cloud",
 		"provider": Provider,
 		"base_url": strings.TrimRight(baseURL, "/"),
@@ -326,19 +330,48 @@ func (c *Client) Install(baseURL string) (installResult, error) {
 		// The header the gateway actually checks; a bearer token 401s.
 		"auth_header_name":   DefaultAuthHeaderName,
 		"auth_header_prefix": DefaultAuthHeaderPrefix,
-	}, &result)
+	}
+	// Lemonade refuses to hold a token for a plaintext endpoint without this.
+	// Registration succeeded without it and `auth` then failed 400, leaving a
+	// provider that could never be given a token.
+	if isInsecure(baseURL) {
+		body["allow_insecure_http"] = true
+	}
+	err := c.do(http.MethodPost, "install", body, &result)
 	return result, err
+}
+
+// isInsecure reports whether the gateway is served over plaintext http.
+func isInsecure(baseURL string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(baseURL)), "http://")
 }
 
 // SetToken hands a token to Lemonade for this session. Lemonade holds it in
 // process memory and never writes it to disk.
-func (c *Client) SetToken(token string) (installResult, error) {
+func (c *Client) SetToken(token, baseURL string) (installResult, error) {
 	var result installResult
-	err := c.do(http.MethodPost, "cloud/auth", map[string]any{
+	body := map[string]any{
 		"provider": Provider,
 		"api_key":  strings.TrimSpace(token),
-	}, &result)
+	}
+	if isInsecure(baseURL) {
+		body["allow_insecure_http"] = true
+	}
+	err := c.do(http.MethodPost, "cloud/auth", body, &result)
 	return result, err
+}
+
+// Uninstall removes the provider from Lemonade.
+func (c *Client) Uninstall() error {
+	return c.do(http.MethodPost, "uninstall", map[string]any{
+		"backend":  "cloud",
+		"provider": Provider,
+	}, nil)
+}
+
+// ClearToken drops the session token Lemonade is holding.
+func (c *Client) ClearToken() error {
+	return c.do(http.MethodDelete, "cloud/auth/"+Provider, nil, nil)
 }
 
 // Status reads the gateway provider's registration and auth state.
@@ -346,11 +379,12 @@ func (c *Client) Status() (Status, error) {
 	var info struct {
 		Cloud struct {
 			Providers []struct {
-				Name             string `json:"name"`
-				BaseURL          string `json:"base_url"`
-				EnvVarSet        bool   `json:"env_var_set"`
-				RuntimeKeySet    bool   `json:"runtime_key_set"`
-				ModelsDiscovered int    `json:"models_discovered"`
+				Name             string   `json:"name"`
+				BaseURL          string   `json:"base_url"`
+				EnvVarSet        bool     `json:"env_var_set"`
+				RuntimeKeySet    bool     `json:"runtime_key_set"`
+				ModelsDiscovered int      `json:"models_discovered"`
+				Warnings         []string `json:"warnings"`
 			} `json:"providers"`
 		} `json:"cloud"`
 	}
@@ -367,6 +401,7 @@ func (c *Client) Status() (Status, error) {
 			EnvVarSet:        p.EnvVarSet,
 			RuntimeKeySet:    p.RuntimeKeySet,
 			ModelsDiscovered: p.ModelsDiscovered,
+			Warnings:         p.Warnings,
 		}, nil
 	}
 	return Status{Installed: false}, nil

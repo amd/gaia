@@ -179,6 +179,36 @@ class GatewayState:
             log.debug(f"Could not tighten permissions on {target}: {e}")
 
 
+def clear_default_model_if(model_id: Optional[str]) -> bool:
+    """Drop GAIA's persistent ``default_model`` when it names *model_id*.
+
+    ``gaia gateway use`` writes the choice to two places: this module's state
+    file and ``GaiaConfig.default_model``. Removing a model from only the first
+    left ``gaia chat`` / ``llm`` / ``prompt`` resolving a gateway id that no
+    longer exists, with no way to clear it short of editing config.json.
+
+    Returns True when a value was actually cleared.
+    """
+    if not model_id:
+        return False
+    try:
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        cfg = GaiaConfig.load()
+        if cfg.get("default_model") != model_id:
+            return False
+        cfg.set("default_model", "")
+        cfg.save()
+        return True
+    except (GaiaConfigError, OSError) as e:
+        # Surfaced rather than swallowed: the caller reports it alongside the
+        # operation that triggered it.
+        raise GatewayError(
+            f"Removed the gateway model but could not clear GAIA's default "
+            f"model ({e}). Run `gaia config set default_model <id>` to fix it."
+        ) from e
+
+
 class GatewayManager:
     """Talks to Lemonade's cloud-provider API on behalf of GAIA."""
 
@@ -328,9 +358,9 @@ class GatewayManager:
     ) -> Dict[str, Any]:
         """Register the gateway with Lemonade as a cloud provider.
 
-        ``auth_header_name`` / ``auth_header_prefix`` exist because some
-        gateways front an OpenAI-shaped API behind a non-Bearer header; leave
-        them unset for the standard ``Authorization: Bearer`` scheme.
+        ``auth_header_name`` / ``auth_header_prefix`` override the APIM
+        subscription header GAIA sends by default. Pass
+        ``("Authorization", "Bearer ")`` for a bearer-token gateway.
 
         ``allow_insecure_http`` is required before Lemonade will hold a token
         for an ``http://`` endpoint — it refuses by default rather than send a
@@ -376,9 +406,11 @@ class GatewayManager:
             payload={"backend": "cloud", "provider": GATEWAY_PROVIDER},
         )
         state = GatewayState.load()
+        previously_active = state.active_model
         state.enabled_models = []
         state.active_model = None
         state.save()
+        clear_default_model_if(previously_active)
         return result
 
     def set_token(self, api_key: str) -> Dict[str, Any]:
@@ -463,11 +495,23 @@ class GatewayManager:
     def disable(self, model_id: str) -> GatewayState:
         state = GatewayState.load()
         state.enabled_models = [m for m in state.enabled_models if m != model_id]
-        if state.active_model == model_id:
+        was_active = state.active_model == model_id
+        if was_active:
             state.active_model = (
                 state.enabled_models[0] if state.enabled_models else None
             )
         state.save()
+        if was_active:
+            if state.active_model:
+                # Hand the global default to whatever took over.
+                from gaia.config import GaiaConfig
+
+                cfg = GaiaConfig.load()
+                if cfg.get("default_model") == model_id:
+                    cfg.set("default_model", state.active_model)
+                    cfg.save()
+            else:
+                clear_default_model_if(model_id)
         return state
 
     def set_active(self, model_id: str) -> GatewayState:

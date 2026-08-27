@@ -637,6 +637,7 @@ class LemonadeManager:
                         # SD models don't have context size, only LLM models do
                         llm_models_loaded = any(
                             "image" not in model.get("labels", [])
+                            and not _is_cloud_entry(model)
                             for model in status.loaded_models
                         )
 
@@ -727,6 +728,9 @@ class LemonadeManager:
                         and "image" not in model.get("labels", [])
                         and "embeddings" not in model.get("labels", [])
                     )
+                    # A gateway model is resident nowhere local, so it must not
+                    # count as "an LLM is loaded" for context-size decisions.
+                    and not _is_cloud_entry(model)
                     for model in status.loaded_models
                 )
 
@@ -749,6 +753,7 @@ class LemonadeManager:
                         status.loaded_models = []
                     llm_models_loaded = any(
                         "image" not in model.get("labels", [])
+                        and not _is_cloud_entry(model)
                         for model in status.loaded_models
                     )
 

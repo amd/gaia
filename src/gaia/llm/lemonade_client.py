@@ -500,7 +500,17 @@ CLOUD_RECIPE = "cloud"
 # Cloud models are discovered live from the gateway, so there is no static
 # registry to consult. Populated from every ``/api/v1/models`` response and read
 # by ``is_cloud_model`` / ``is_tool_calling_model``.
+#
+# Rebound wholesale under ``_CLOUD_LOCK`` rather than mutated in place, so a
+# concurrent reader always sees a complete map. Readers take no lock: reading a
+# module global is atomic and a slightly stale map is harmless, whereas a
+# half-built one is not.
 _CLOUD_MODELS: Dict[str, Dict[str, Any]] = {}
+# The provider namespaces present in the catalog, e.g. ``{"amd"}``. Lets an
+# unknown id be attributed to a registered gateway instead of guessing from
+# punctuation alone.
+_CLOUD_PROVIDERS: frozenset = frozenset()
+_CLOUD_LOCK = threading.Lock()
 
 
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
@@ -527,8 +537,16 @@ def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
             "labels": list(labels),
             "ctx_size": entry.get("context_length"),
         }
-    _CLOUD_MODELS.clear()
-    _CLOUD_MODELS.update(discovered)
+    # Rebind rather than clear()+update(): the UI and daemon call list_models()
+    # from several threads, and a reader landing between the two saw an empty
+    # map and routed a gateway model down the local download path. Rebinding is
+    # atomic, so a reader sees either the old map or the new one.
+    global _CLOUD_MODELS, _CLOUD_PROVIDERS
+    with _CLOUD_LOCK:
+        _CLOUD_MODELS = discovered
+        _CLOUD_PROVIDERS = frozenset(
+            mid.split(".", 1)[0] for mid in discovered if "." in mid
+        )
 
 
 def is_cloud_model(model_id: Optional[str]) -> bool:
@@ -548,11 +566,20 @@ def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
     return dict(info) if info is not None else None
 
 
+def known_cloud_providers() -> frozenset:
+    """Provider namespaces seen in the catalog, e.g. ``{"amd"}``."""
+    return _CLOUD_PROVIDERS
+
+
 def may_be_cloud_model(model_id: Optional[str]) -> bool:
     """Cheap pre-filter: could *model_id* possibly be cloud-routed?
 
     Cloud models are namespaced ``<provider>.<id>``, so anything without a dot
     or already in ``MODELS`` is local and costs no network call to rule out.
+
+    A dot alone is NOT enough to conclude "cloud" — plenty of legitimate local
+    checkpoints carry one (``Qwen3.5-35B-A3B``). This only says "worth asking
+    the catalog"; the answer comes from the catalog itself.
     """
     if not model_id or "." not in model_id:
         return False
@@ -2516,42 +2543,60 @@ class LemonadeClient:
         Returns the discovered cloud models keyed by id.
         """
         self.list_models()
-        return {mid: dict(info) for mid, info in _CLOUD_MODELS.items()}
+        # Snapshot the global first: iterating it directly can raise
+        # "dictionary changed size" if another thread rebuilds mid-iteration.
+        snapshot = _CLOUD_MODELS
+        return {mid: dict(info) for mid, info in snapshot.items()}
 
     def _is_cloud_model(self, model: str) -> bool:
         """Cloud check that warms the catalog once when the id could match.
 
         Local ids short-circuit on ``may_be_cloud_model`` without any request.
 
-        A namespaced id that the catalog does not know is still treated as
-        cloud. Discovery only runs once the provider has a working token, so an
-        absent or expired one leaves gateway models missing from the catalog —
-        and falling through to the local path then reports "model not found,
-        run `gaia init` to reinstall it", which sends the user to fix the wrong
-        thing. Skipping the load lets the completion surface Lemonade's real
-        cloud error instead ("No API key for cloud provider ...").
+        An id the catalog does not list is treated as cloud only when its
+        namespace matches a REGISTERED gateway provider. Discovery runs only
+        once a provider has a working token, so an absent or expired one leaves
+        gateway models out of the catalog — and falling through to the local
+        path then reports "model not found, run `gaia init` to reinstall it",
+        sending the user to fix the wrong thing.
+
+        Matching on the provider namespace rather than "has a dot" matters: a
+        legitimate local checkpoint like ``Llama-3.2-1B-Instruct-Hybrid`` can be
+        missing from a device-filtered catalog, and calling it cloud would
+        silently skip the download it actually needs.
         """
         if is_cloud_model(model):
             return True
         if not may_be_cloud_model(model):
             return False
         try:
-            self.list_models()
-        except Exception as e:
-            # Classification is a routing hint, not the operation itself — the
-            # load/pull that follows still fails loudly on its own terms.
-            self.log.debug(f"Could not refresh catalog to classify '{model}': {e}")
-            return False
+            catalog = self.list_models()
+        except LemonadeClientError as e:
+            # Re-raise with context rather than guessing. Returning False here
+            # sent gateway models down the local download path, which fails
+            # with an unrelated message.
+            raise LemonadeClientError(
+                f"Could not read Lemonade's model catalog at {self.base_url} to "
+                f"determine whether '{model}' is gateway-hosted: {e}. "
+                f"Check the server is running (`gaia gateway status`)."
+            ) from e
         if is_cloud_model(model):
             return True
+
+        # Not in the catalog. Only claim it for a gateway whose namespace is
+        # actually registered.
+        provider = model.split(".", 1)[0]
+        if provider not in known_cloud_providers():
+            return False
         known_locally = any(
             _model_ids_match(entry.get("id"), model)
-            for entry in (self.list_models().get("data") or [])
+            for entry in (catalog.get("data") or [])
         )
         if not known_locally:
             self.log.debug(
-                f"'{model}' is namespaced but absent from the catalog; treating "
-                f"it as gateway-hosted so the error names the real cause"
+                f"'{model}' names registered gateway provider '{provider}' but "
+                f"is absent from the catalog; treating it as gateway-hosted so "
+                f"the error names the real cause"
             )
         return not known_locally
 
@@ -3300,9 +3345,16 @@ class LemonadeClient:
         Cloud-routed models occupy no slot, so leasing one would stall every
         local agent for the length of a remote request.
 
+        The cloud check WARMS the catalog rather than reading the cache. The
+        callers that matter — ``chat_completions`` and its streaming twin —
+        take this lease *before* ``_ensure_model_loaded`` runs, so on a fresh
+        process the cache is still cold here. Reading it strictly meant the
+        first gateway turn of every process held the single local slot for the
+        whole remote request, which is the exact stall this exists to avoid.
+
         Deferred import keeps ``gaia.daemon`` off the standalone import path.
         """
-        if is_cloud_model(model):
+        if self._is_cloud_model(model):
             return contextlib.nullcontext()
 
         from gaia.daemon.broker_client import model_lease
@@ -4144,6 +4196,10 @@ class LemonadeClient:
                         "model_name": name,
                         "type": hm.get("type"),
                         "labels": catalog.get("labels", []),
+                        # Carried through so consumers can tell a gateway-routed
+                        # model from a local one. Without it every ctx-size and
+                        # slot decision downstream treats a cloud model as local.
+                        "recipe": catalog.get("recipe", ""),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
                         "_health": hm,
