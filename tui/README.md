@@ -126,6 +126,19 @@ gaia-tui version
 
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
+## Running on gateway-hosted models
+
+Press <kbd>g</kbd> in the hub to connect the AMD LLM gateway — larger on-prem
+models and frontier models, running through the same Lemonade your local models
+use. The screen walks you through the gateway URL, your token, and which models
+to enable; the active one becomes the default for new chats.
+
+Your token is handed to Lemonade, which keeps it in memory only. The TUI masks
+the field and writes nothing but your model selection to `~/.gaia/gateway.json`.
+Needs Lemonade 11.8.0+.
+
+Details: <https://amd-gaia.ai/docs/guides/llm-gateway>
+
 ---
 
 # Going deeper

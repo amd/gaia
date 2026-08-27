@@ -1379,6 +1379,43 @@ environment variable; see [the Microsoft connector guide](/connectors/microsoft#
 
 ---
 
+## AMD LLM Gateway
+
+Runs GAIA agents on gateway-hosted models — larger on-prem models and frontier
+models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
+
+Your token goes straight to Lemonade, which holds it in process memory only.
+GAIA never writes it to disk.
+
+```bash
+gaia gateway install --base-url https://llm.amd.com/api/v1  # register the gateway
+gaia gateway auth                     # prompts for the token without echo
+gaia gateway status                   # registration, auth state, active model
+gaia gateway models                   # what the gateway offers
+gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
+gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
+gaia gateway test "Say hello"         # end-to-end round trip
+gaia gateway logout                   # drop the session token
+gaia gateway uninstall                # remove the provider
+```
+
+| Flag | Command | Purpose |
+|------|---------|---------|
+| `--base-url` | `install` | Gateway OpenAI-compatible base URL |
+| `--auth-header-name` | `install` | Non-standard auth header (default `Authorization`) |
+| `--auth-header-prefix` | `install` | Header value prefix (default `Bearer `; `""` for none) |
+| `--skip-probe` | `install` | Register without first testing the gateway |
+| `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
+| `--model` | `test` | Model to test (default: the active gateway model) |
+
+Gateway models are namespaced `amd.<model>` and work anywhere a local model
+does. For a token that survives a Lemonade restart, set `LEMONADE_AMD_API_KEY`
+in **Lemonade's** environment.
+
+[→ LLM Gateway Guide](/docs/guides/llm-gateway)
+
+---
+
 ## Configuration
 
 GAIA keeps a small persistent config at `~/.gaia/config.json` (override the

@@ -8,6 +8,7 @@ This module provides a client for interacting with the Lemonade server's
 OpenAI-compatible API and additional functionality.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -491,6 +492,73 @@ AGENT_PROFILES = {
 }
 
 
+# Recipe Lemonade stamps on a cloud-offloaded model (>= 11.8). Such a model is
+# proxied to a remote gateway: no local weights, no router slot, and it can be
+# neither pulled nor loaded. See ``docs/guides/llm-gateway.mdx``.
+CLOUD_RECIPE = "cloud"
+
+# Cloud models are discovered live from the gateway, so there is no static
+# registry to consult. Populated from every ``/api/v1/models`` response and read
+# by ``is_cloud_model`` / ``is_tool_calling_model``.
+_CLOUD_MODELS: Dict[str, Dict[str, Any]] = {}
+
+
+def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
+    """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
+
+    Rebuilds the map wholesale so uninstalling a gateway provider drops its
+    models instead of leaving them classified as cloud forever.
+    """
+    if not isinstance(models_payload, dict):
+        return
+    entries = models_payload.get("data")
+    if not isinstance(entries, list):
+        return
+    discovered: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("recipe") != CLOUD_RECIPE:
+            continue
+        model_id = entry.get("id")
+        if not model_id:
+            continue
+        labels = entry.get("labels") or []
+        discovered[model_id] = {
+            "tool_calling": "tool-calling" in labels,
+            "labels": list(labels),
+            "ctx_size": entry.get("context_length"),
+        }
+    _CLOUD_MODELS.clear()
+    _CLOUD_MODELS.update(discovered)
+
+
+def is_cloud_model(model_id: Optional[str]) -> bool:
+    """True when *model_id* is served by a Lemonade cloud provider.
+
+    Only meaningful once a ``/api/v1/models`` response has been seen; a caller
+    that must be correct on a cold cache should list models first.
+    """
+    return bool(model_id) and model_id in _CLOUD_MODELS
+
+
+def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Discovered capability metadata for a cloud model, or None."""
+    if not model_id:
+        return None
+    info = _CLOUD_MODELS.get(model_id)
+    return dict(info) if info is not None else None
+
+
+def may_be_cloud_model(model_id: Optional[str]) -> bool:
+    """Cheap pre-filter: could *model_id* possibly be cloud-routed?
+
+    Cloud models are namespaced ``<provider>.<id>``, so anything without a dot
+    or already in ``MODELS`` is local and costs no network call to rule out.
+    """
+    if not model_id or "." not in model_id:
+        return False
+    return not any(mr.model_id == model_id for mr in MODELS.values())
+
+
 def is_tool_calling_model(model_id: Optional[str]) -> bool:
     """Return True if model_id supports native OpenAI tool_calls via Lemonade.
 
@@ -503,6 +571,10 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     for mr in MODELS.values():
         if mr.model_id == model_id:
             return mr.tool_calling
+    cloud = _CLOUD_MODELS.get(model_id)
+    if cloud is not None:
+        # Gateways advertise this per model; trust them over the GGUF default.
+        return bool(cloud["tool_calling"])
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
@@ -1660,6 +1732,12 @@ class LemonadeClient:
             # retrying would just repeat the same failing request.
             raise error
 
+        if is_cloud_model(model):
+            # There is nothing to download. A missing-model error here means the
+            # gateway rejected the id or lost its key — surface that, don't
+            # bury it under a download attempt that cannot succeed.
+            raise error
+
         self.log.info(
             f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
             f"attempting auto-download and load..."
@@ -2428,7 +2506,35 @@ class LemonadeClient:
         url = f"{self.base_url}/models"
         if show_all:
             url += "?show_all=true"
-        return self._send_request("get", url)
+        result = self._send_request("get", url)
+        record_cloud_models(result)
+        return result
+
+    def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:
+        """Re-read the catalog so cloud-model classification is current.
+
+        Returns the discovered cloud models keyed by id.
+        """
+        self.list_models()
+        return {mid: dict(info) for mid, info in _CLOUD_MODELS.items()}
+
+    def _is_cloud_model(self, model: str) -> bool:
+        """Cloud check that warms the catalog once when the id could match.
+
+        Local ids short-circuit on ``may_be_cloud_model`` without any request.
+        """
+        if is_cloud_model(model):
+            return True
+        if not may_be_cloud_model(model):
+            return False
+        try:
+            self.list_models()
+        except Exception as e:
+            # Classification is a routing hint, not the operation itself — the
+            # load/pull that follows still fails loudly on its own terms.
+            self.log.debug(f"Could not refresh catalog to classify '{model}': {e}")
+            return False
+        return is_cloud_model(model)
 
     def get_model_details(self, model_id: str) -> Dict[str, Any]:
         """
@@ -2812,6 +2918,15 @@ class LemonadeClient:
         try:
             # Check if model is already downloaded
             models_response = self.list_models()
+            # list_models() refreshed the cloud map — a gateway model is
+            # "available" the moment it is discovered; there is nothing to pull.
+            if is_cloud_model(model_name):
+                if show_progress:
+                    self.log.info(
+                        f"{_emoji('☁️', '[CLOUD]')} Model is gateway-hosted, "
+                        f"no download needed: {model_name}"
+                    )
+                return True
             for model in models_response.get("data", []):
                 if _model_ids_match(model.get("id"), model_name):
                     if model.get("downloaded", False):
@@ -3163,8 +3278,14 @@ class LemonadeClient:
         silent fallback. When the broker IS configured but unreachable, the
         underlying context manager raises loudly rather than racing the slot.
 
+        Cloud-routed models occupy no slot, so leasing one would stall every
+        local agent for the length of a remote request.
+
         Deferred import keeps ``gaia.daemon`` off the standalone import path.
         """
+        if is_cloud_model(model):
+            return contextlib.nullcontext()
+
         from gaia.daemon.broker_client import model_lease
 
         def _on_wait(reason: str) -> None:
@@ -3202,12 +3323,24 @@ class LemonadeClient:
         if not auto_download:
             return  # Skip if auto_download disabled
 
+        # A cloud model is proxied to a gateway: nothing to download, no local
+        # slot to pin. Taking the lease here would stall local agents for the
+        # length of a remote request.
+        if self._is_cloud_model(model):
+            self.log.debug(f"'{model}' is cloud-routed; skipping download/load")
+            return
+
         with self._model_slot_lease(model):
             self._ensure_model_loaded_locked(model)
 
     def _ensure_model_loaded_locked(self, model: str) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
+        # Defence in depth for direct callers: this must precede the pinned-load
+        # branch below, which would otherwise unload the resident local model to
+        # pin a ctx window a cloud model does not have.
+        if is_cloud_model(model):
+            return
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
@@ -4614,6 +4747,15 @@ def create_lemonade_client(
     # Auto-load model if requested
     if auto_load:
         try:
+            # A gateway model has no local weights and no slot — pulling and
+            # loading are both meaningless, and load would evict the resident
+            # local model to pin a window this model does not have.
+            if client._is_cloud_model(model_name):
+                client.log.info(
+                    f"Model '{model_name}' is gateway-hosted; skipping pull/load"
+                )
+                return client
+
             # Check if auto_pull is enabled and model needs to be pulled first
             if auto_pull:
                 # Check if model is available

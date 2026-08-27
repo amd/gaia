@@ -2868,6 +2868,83 @@ Examples:
     config_set_parser.add_argument("value", help="Value to assign")
     config_parser.set_defaults(action="config")
 
+    # AMD LLM gateway — registers the gateway with Lemonade as a cloud provider
+    # so its models appear alongside local ones. See docs/guides/llm-gateway.mdx.
+    gateway_parser = subparsers.add_parser(
+        "gateway",
+        help="Connect GAIA to the AMD LLM gateway (requires Lemonade >= 11.8)",
+    )
+    gateway_subparsers = gateway_parser.add_subparsers(
+        dest="gateway_action", help="Gateway action"
+    )
+    gateway_subparsers.add_parser(
+        "status", help="Show gateway registration, auth state, and active model"
+    )
+    gateway_install_parser = gateway_subparsers.add_parser(
+        "install", help="Register the gateway with Lemonade"
+    )
+    gateway_install_parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Gateway OpenAI-compatible base URL (default: last used, else the "
+        "AMD gateway)",
+    )
+    gateway_install_parser.add_argument(
+        "--auth-header-name",
+        default=None,
+        help="Override the auth header name (default: Authorization)",
+    )
+    gateway_install_parser.add_argument(
+        "--auth-header-prefix",
+        default=None,
+        help="Override the auth header value prefix (default: 'Bearer '; pass "
+        "'' for none)",
+    )
+    gateway_install_parser.add_argument(
+        "--skip-probe",
+        action="store_true",
+        help="Register without first probing the gateway's /models endpoint",
+    )
+    gateway_auth_parser = gateway_subparsers.add_parser(
+        "auth",
+        help="Give Lemonade a gateway token for this session (never stored on disk)",
+    )
+    gateway_auth_parser.add_argument(
+        "--token",
+        default=None,
+        help="Token value. Omit to be prompted without echo (preferred — a token "
+        "passed here lands in your shell history and process list)",
+    )
+    gateway_subparsers.add_parser(
+        "logout", help="Clear the session token held by Lemonade"
+    )
+    gateway_subparsers.add_parser("models", help="List discovered gateway models")
+    gateway_enable_parser = gateway_subparsers.add_parser(
+        "enable", help="Enable a gateway model"
+    )
+    gateway_enable_parser.add_argument("model", help="Model id, e.g. amd.Claude-Opus-5")
+    gateway_disable_parser = gateway_subparsers.add_parser(
+        "disable", help="Disable a gateway model"
+    )
+    gateway_disable_parser.add_argument("model", help="Model id to disable")
+    gateway_use_parser = gateway_subparsers.add_parser(
+        "use", help="Make a gateway model the default for gaia chat/llm/prompt"
+    )
+    gateway_use_parser.add_argument("model", help="Model id to make active")
+    gateway_test_parser = gateway_subparsers.add_parser(
+        "test", help="Send a prompt through the gateway end to end"
+    )
+    gateway_test_parser.add_argument(
+        "prompt", nargs="?", default="Reply with the single word: ok"
+    )
+    gateway_test_parser.add_argument(
+        "--model", default=None, help="Model id (default: the active gateway model)"
+    )
+    gateway_subparsers.add_parser(
+        "uninstall", help="Remove the gateway provider from Lemonade"
+    )
+    gateway_parser.set_defaults(action="gateway")
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -4190,6 +4267,11 @@ Let me know your answer!
         handle_config_command(args)
         return
 
+    # Handle Gateway command (AMD LLM gateway via Lemonade cloud offload)
+    if args.action == "gateway":
+        handle_gateway_command(args)
+        return
+
     # Handle Cache command
     if args.action == "cache":
         handle_cache_command(args)
@@ -5000,6 +5082,198 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {args.value}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _print_gateway_models(models, state):
+    """Render discovered gateway models with their enabled/active state."""
+    if not models:
+        print("No gateway models discovered.")
+        print("   Lemonade only discovers models once it has a token — run")
+        print("   `gaia gateway auth`, then `gaia gateway models` again.")
+        return
+    print(f"{len(models)} gateway model(s):\n")
+    for model in models:
+        if model.id == state.active_model:
+            marker = "▶"
+        elif model.id in state.enabled_models:
+            marker = "✓"
+        else:
+            marker = " "
+        details = list(model.labels)
+        if model.ctx_size:
+            details.append(f"{model.ctx_size // 1024}K ctx")
+        suffix = f"  [{', '.join(details)}]" if details else ""
+        star = " ★" if model.recommended else ""
+        print(f"  {marker} {model.id}{star}{suffix}")
+    print("\n  ▶ active   ✓ enabled   ★ recommended")
+
+
+def handle_gateway_command(args):
+    """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
+    from gaia.llm.gateway import (
+        DEFAULT_GATEWAY_BASE_URL,
+        GATEWAY_API_KEY_ENV,
+        GatewayError,
+        GatewayManager,
+        GatewayState,
+    )
+
+    action = getattr(args, "gateway_action", None)
+    if not action:
+        print(
+            "No gateway action specified. Use: gaia gateway "
+            "status|install|auth|logout|models|enable|disable|use|test|uninstall",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        state = GatewayState.load()
+        manager = GatewayManager()
+
+        if action == "status":
+            status = manager.status()
+            print(
+                f"Gateway provider: {'registered' if status.installed else 'not registered'}"
+            )
+            if status.installed:
+                print(f"  base URL:          {status.base_url}")
+                print(
+                    f"  {GATEWAY_API_KEY_ENV}: {'set' if status.env_var_set else 'not set'}"
+                )
+                print(
+                    f"  session token:     {'set' if status.runtime_key_set else 'not set'}"
+                )
+                print(f"  models discovered: {status.models_discovered}")
+                for warning in status.warnings:
+                    print(f"  ⚠️  {warning}")
+                if not status.authenticated:
+                    print(
+                        "\n  No token — Lemonade cannot discover models. "
+                        "Run `gaia gateway auth`."
+                    )
+            else:
+                print(f"\n  Register it with `gaia gateway install`.")
+            print(f"\nEnabled models: {', '.join(state.enabled_models) or '(none)'}")
+            print(f"Active model:   {state.active_model or '(none)'}")
+            return
+
+        if action == "install":
+            base_url = args.base_url or state.base_url or DEFAULT_GATEWAY_BASE_URL
+            if not args.skip_probe:
+                print(f"Probing {base_url}/models ...")
+                count = manager.check_reachable(base_url)
+                print(f"✅ Gateway reachable, advertising {count} model(s)")
+            print(f"Registering '{base_url}' with Lemonade ...")
+            result = manager.install(
+                base_url,
+                auth_header_name=args.auth_header_name,
+                auth_header_prefix=args.auth_header_prefix,
+            )
+            print(
+                f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
+            )
+            auth = result.get("auth_state") or {}
+            if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+                print(
+                    "\n  No token yet — run `gaia gateway auth` so Lemonade can "
+                    "discover models."
+                )
+            return
+
+        if action == "auth":
+            token = args.token
+            if not token:
+                import getpass
+
+                token = getpass.getpass("Gateway API token (input hidden): ")
+            result = manager.set_token(token)
+            del token
+            print(
+                f"✅ Token accepted. Models discovered: "
+                f"{result.get('models_discovered', 0)}"
+            )
+            print(
+                f"   Held in Lemonade's memory only — it is gone when Lemonade "
+                f"restarts.\n   Set {GATEWAY_API_KEY_ENV} in Lemonade's environment "
+                f"to persist it."
+            )
+            return
+
+        if action == "logout":
+            manager.clear_token()
+            print("✅ Session token cleared.")
+            print(
+                f"   Note: this does not unset {GATEWAY_API_KEY_ENV} if it is set "
+                f"in Lemonade's environment."
+            )
+            return
+
+        if action == "models":
+            _print_gateway_models(manager.list_models(), state)
+            return
+
+        if action == "enable":
+            updated = manager.enable(args.model)
+            print(f"✅ Enabled {args.model}")
+            if updated.active_model == args.model:
+                print(f"   It is now the active gateway model.")
+            return
+
+        if action == "disable":
+            updated = manager.disable(args.model)
+            print(f"✅ Disabled {args.model}")
+            print(f"   Active model is now: {updated.active_model or '(none)'}")
+            return
+
+        if action == "use":
+            manager.set_active(args.model)
+            # Route through the existing default_model mechanism so chat/llm/
+            # prompt pick it up with no extra precedence rules (issue #98).
+            from gaia.config import GaiaConfig
+
+            cfg = GaiaConfig.load()
+            cfg.set("default_model", args.model)
+            cfg.save()
+            print(f"✅ {args.model} is now the default model for gaia chat/llm/prompt.")
+            return
+
+        if action == "test":
+            model = args.model or state.active_model
+            if not model:
+                print(
+                    "❌ No model specified and no active gateway model.\n"
+                    "   Run `gaia gateway models`, then `gaia gateway use <model>`.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            # Deliberately goes through the ordinary client so this exercises
+            # the same path agents use, cloud short-circuits included.
+            manager.client.refresh_cloud_models()
+            print(f"Sending a prompt to {model} ...\n")
+            response = manager.client.chat_completions(
+                model=model,
+                messages=[{"role": "user", "content": args.prompt}],
+                max_tokens=256,
+            )
+            content = response["choices"][0]["message"]["content"]
+            print(content)
+            usage = response.get("usage") or {}
+            if usage:
+                print(
+                    f"\n[{usage.get('prompt_tokens', '?')} prompt + "
+                    f"{usage.get('completion_tokens', '?')} completion tokens]"
+                )
+            return
+
+        if action == "uninstall":
+            manager.uninstall()
+            print("✅ Gateway provider removed from Lemonade.")
+            return
+
+    except GatewayError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def handle_cache_command(args):
