@@ -168,6 +168,10 @@ class GatewayState:
     base_url: str = DEFAULT_GATEWAY_BASE_URL
     enabled_models: List[str] = field(default_factory=list)
     active_model: Optional[str] = None
+    # Models this gateway accepts a streaming request for and then sends no
+    # tokens. Nothing advertises it, so it is learned by trying; remembering it
+    # means the empty stream is paid once ever rather than once per launch.
+    non_streaming_models: List[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "GatewayState":
@@ -185,6 +189,7 @@ class GatewayState:
             base_url=raw.get("base_url") or DEFAULT_GATEWAY_BASE_URL,
             enabled_models=list(raw.get("enabled_models") or []),
             active_model=raw.get("active_model"),
+            non_streaming_models=list(raw.get("non_streaming_models") or []),
         )
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -194,6 +199,7 @@ class GatewayState:
             "base_url": self.base_url,
             "enabled_models": self.enabled_models,
             "active_model": self.active_model,
+            "non_streaming_models": sorted(self.non_streaming_models),
         }
         target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         # Preferences, not secrets — but this sits next to config.json in a

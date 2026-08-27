@@ -209,7 +209,14 @@ class TestAuth:
     def test_state_schema_has_no_field_that_could_hold_a_secret(self, isolated_state):
         GatewayState(base_url="https://x", enabled_models=["amd.a"]).save()
         persisted = json.loads(isolated_state.read_text())
-        assert set(persisted) == {"base_url", "enabled_models", "active_model"}
+        # An exact set, not a subset: a new field has to be added here
+        # deliberately, so nobody slips a token-shaped one in unnoticed.
+        assert set(persisted) == {
+            "base_url",
+            "enabled_models",
+            "active_model",
+            "non_streaming_models",
+        }
 
     def test_empty_token_is_refused_before_any_request(self, manager):
         with patch("gaia.llm.gateway.requests.request") as request:

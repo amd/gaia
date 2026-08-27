@@ -512,6 +512,71 @@ _CLOUD_MODELS: Dict[str, Dict[str, Any]] = {}
 _CLOUD_PROVIDERS: frozenset = frozenset()
 _CLOUD_LOCK = threading.Lock()
 
+# Gateway models observed to answer a streaming request with no tokens at all.
+# The AMD gateway currently does this for every model except Gemma-4-31B: a
+# stream returns 200 and then nothing, while the same prompt non-streaming
+# works. Nothing in the catalogue advertises this, so it can only be learned by
+# trying. Remembered so the empty stream is paid once per model, not per turn.
+_CLOUD_NON_STREAMING: set = set()
+
+
+_NON_STREAMING_LOADED = False
+
+
+def _load_non_streaming() -> None:
+    """Seed the learned set from ``~/.gaia/gateway.json``, once per process.
+
+    Imported here rather than at module scope because ``gaia.llm.gateway``
+    depends on this module; the direction only inverts for this one preference.
+    """
+    global _NON_STREAMING_LOADED
+    if _NON_STREAMING_LOADED:
+        return
+    _NON_STREAMING_LOADED = True
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        stored = GatewayState.load().non_streaming_models
+    except Exception as e:  # noqa: BLE001 - a preference, never fatal
+        log.debug(f"Could not read the learned non-streaming models: {e}")
+        return
+    with _CLOUD_LOCK:
+        _CLOUD_NON_STREAMING.update(m for m in stored if m)
+
+
+def mark_non_streaming(model_id: str) -> None:
+    """Record that *model_id* returns nothing when streamed, for good."""
+    if not model_id:
+        return
+    _load_non_streaming()
+    with _CLOUD_LOCK:
+        if model_id in _CLOUD_NON_STREAMING:
+            return
+        _CLOUD_NON_STREAMING.add(model_id)
+        learned = sorted(_CLOUD_NON_STREAMING)
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+        state.non_streaming_models = learned
+        state.save()
+    except Exception as e:  # noqa: BLE001 - the in-memory set still holds
+        log.debug(f"Could not persist the learned non-streaming models: {e}")
+
+
+def streams_ok(model_id: Optional[str]) -> bool:
+    """False when *model_id* is known to return nothing on a streaming call."""
+    if not model_id:
+        return False
+    _load_non_streaming()
+    return model_id not in _CLOUD_NON_STREAMING
+
+
+def known_non_streaming() -> set:
+    """Models learned to be non-streaming."""
+    _load_non_streaming()
+    return set(_CLOUD_NON_STREAMING)
+
 
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
@@ -1984,7 +2049,28 @@ class LemonadeClient:
         # when the consumer finishes or closes the stream.
         with self._model_slot_lease(model):
             self._ensure_model_loaded(model, auto_download)
-            yield from self._stream_chat_chunks(
+
+            # Known not to stream: go straight to the non-streaming call rather
+            # than making the user wait for an empty stream every turn.
+            if is_cloud_model(model) and not streams_ok(model):
+                self.log.info(
+                    f"'{model}' does not support streaming on this gateway; "
+                    f"using a single non-streaming response instead."
+                )
+                yield from self._chat_completion_as_single_chunk(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    tools=tools,
+                    **kwargs,
+                )
+                return
+
+            produced = False
+            for chunk in self._stream_chat_chunks(
                 model=model,
                 messages=messages,
                 temperature=temperature,
@@ -1994,7 +2080,84 @@ class LemonadeClient:
                 logprobs=logprobs,
                 tools=tools,
                 **kwargs,
-            )
+            ):
+                produced = True
+                yield chunk
+
+            # A cloud model that streamed nothing has not "finished" — the
+            # gateway accepted the request and sent no tokens. Falling back is
+            # announced, never silent: the user is told what happened and why,
+            # and the model is remembered so the next turn skips the empty
+            # stream entirely.
+            if not produced and is_cloud_model(model):
+                mark_non_streaming(model)
+                self.log.warning(
+                    f"'{model}' returned no tokens when streamed. This gateway "
+                    f"does not stream that model; retrying without streaming. "
+                    f"Later turns will skip streaming for it automatically."
+                )
+                yield from self._chat_completion_as_single_chunk(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    tools=tools,
+                    **kwargs,
+                )
+
+    def _chat_completion_as_single_chunk(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_completion_tokens: int = 1000,
+        stop: Optional[Union[str, List[str]]] = None,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Run a non-streaming completion, shaped like one streaming chunk.
+
+        Lets a caller that asked to stream consume a model that cannot, without
+        the caller having to know the difference.
+        """
+        response = self.chat_completions(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_completion_tokens=max_completion_tokens,
+            stop=stop,
+            stream=False,
+            timeout=timeout,
+            tools=tools,
+            auto_download=False,  # already ensured by the caller
+            **kwargs,
+        )
+        choice = (response.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        delta = {
+            "role": message.get("role", "assistant"),
+            "content": message.get("content") or "",
+        }
+        # Without this a tool call on a non-streaming model reaches the agent as
+        # an empty turn.
+        if message.get("tool_calls"):
+            delta["tool_calls"] = message["tool_calls"]
+        yield {
+            "id": response.get("id", ""),
+            "object": "chat.completion.chunk",
+            "model": response.get("model", model),
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": choice.get("finish_reason", "stop"),
+                }
+            ],
+            "usage": response.get("usage"),
+        }
 
     def _stream_chat_chunks(
         self,

@@ -248,3 +248,122 @@ class TestToolCalling:
 
     def test_unclassified_cloud_id_keeps_the_optimistic_default(self):
         assert is_tool_calling_model("amd.not-yet-discovered") is True
+
+
+class TestNonStreamingFallback:
+    """The AMD gateway answers a streaming request for most models with 200 and
+    then no tokens at all, while the same prompt works non-streaming. Nothing in
+    the catalog advertises this, so it can only be learned by trying — and the
+    user must be told, not silently served a different transport.
+    """
+
+    @pytest.fixture(autouse=True)
+    def isolated_state(self, tmp_path, monkeypatch):
+        """Learned state goes to a temp gateway.json, never the real one."""
+        monkeypatch.setattr(
+            "gaia.llm.gateway.GATEWAY_STATE_FILE", tmp_path / "gateway.json"
+        )
+        monkeypatch.setattr(lc, "_NON_STREAMING_LOADED", False)
+        lc._CLOUD_NON_STREAMING.clear()
+        yield
+        lc._CLOUD_NON_STREAMING.clear()
+
+    def test_an_empty_stream_falls_back_and_says_why(self, client, caplog):
+        record_cloud_models(CATALOG)
+        client._ensure_model_loaded = MagicMock()
+        client._stream_chat_chunks = MagicMock(return_value=iter([]))
+        client.chat_completions = MagicMock(
+            return_value={
+                "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]
+            }
+        )
+
+        with caplog.at_level("WARNING"):
+            chunks = list(
+                client._stream_chat_completions_with_openai(
+                    model=CLOUD_MODEL, messages=[{"role": "user", "content": "hi"}]
+                )
+            )
+
+        assert chunks[0]["choices"][0]["delta"]["content"] == "hi"
+        # Announced degradation, not silent: the user is told the gateway did
+        # not stream and that later turns will skip it.
+        assert "did not stream" in caplog.text.lower() or (
+            "no tokens" in caplog.text.lower()
+        )
+
+    def test_the_lesson_survives_a_restart(self, client):
+        record_cloud_models(CATALOG)
+        lc.mark_non_streaming(CLOUD_MODEL)
+
+        lc._CLOUD_NON_STREAMING.clear()
+        lc._NON_STREAMING_LOADED = False
+
+        assert lc.streams_ok(CLOUD_MODEL) is False
+        assert lc.streams_ok(LOCAL_MODEL) is True
+
+    def test_a_known_model_never_pays_the_empty_stream_again(self, client):
+        record_cloud_models(CATALOG)
+        lc.mark_non_streaming(CLOUD_MODEL)
+        client._ensure_model_loaded = MagicMock()
+        client._stream_chat_chunks = MagicMock(
+            side_effect=AssertionError("must not stream a model known not to")
+        )
+        client.chat_completions = MagicMock(
+            return_value={
+                "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]
+            }
+        )
+
+        chunks = list(
+            client._stream_chat_completions_with_openai(
+                model=CLOUD_MODEL, messages=[{"role": "user", "content": "hi"}]
+            )
+        )
+
+        assert chunks[0]["choices"][0]["delta"]["content"] == "hi"
+        client._stream_chat_chunks.assert_not_called()
+
+    def test_a_tool_call_survives_the_fallback(self, client):
+        record_cloud_models(CATALOG)
+        lc.mark_non_streaming(CLOUD_MODEL)
+        client._ensure_model_loaded = MagicMock()
+        calls = [{"id": "c1", "function": {"name": "search", "arguments": "{}"}}]
+        client.chat_completions = MagicMock(
+            return_value={
+                "choices": [
+                    {
+                        "message": {"content": None, "tool_calls": calls},
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+        )
+
+        chunks = list(
+            client._stream_chat_completions_with_openai(
+                model=CLOUD_MODEL, messages=[{"role": "user", "content": "hi"}]
+            )
+        )
+
+        # Dropping these would turn a tool call into an empty assistant turn.
+        assert chunks[0]["choices"][0]["delta"]["tool_calls"] == calls
+
+    def test_a_local_model_that_streams_nothing_is_left_alone(self, client):
+        """Only the gateway has this defect; a silent local model is a real
+        failure the caller must see, not something to retry differently."""
+        record_cloud_models(CATALOG)
+        client._ensure_model_loaded = MagicMock()
+        client._stream_chat_chunks = MagicMock(return_value=iter([]))
+        client.chat_completions = MagicMock(
+            side_effect=AssertionError("must not retry a local model")
+        )
+
+        assert (
+            list(
+                client._stream_chat_completions_with_openai(
+                    model=LOCAL_MODEL, messages=[{"role": "user", "content": "hi"}]
+                )
+            )
+            == []
+        )

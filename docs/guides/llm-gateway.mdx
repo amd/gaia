@@ -112,6 +112,19 @@ the model resident on your NPU or GPU.
 Tool-calling support comes from what the gateway advertises per model, so an agent
 will not try native tool calls against a model that cannot do them.
 
+### Models that cannot stream
+
+The gateway currently accepts a streaming request for every model except
+`Gemma-4-31B` and then sends no tokens, while the same prompt works
+non-streaming. Nothing in the catalog advertises this, so GAIA learns it the
+first time it happens: it tells you the gateway did not stream that model,
+answers the turn without streaming, and remembers the model in
+`~/.gaia/gateway.json` so later turns skip straight to the working path. You see
+one delayed first answer per model, then normal speed.
+
+This is why `Gemma-4-31B` is the default when the gateway is enabled — it is the
+one model that streams.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -121,7 +134,7 @@ will not try native tool calls against a model that cannot do them.
 | `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
 | The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
 | `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |
-| Streaming returns nothing | Known gateway-side issue on models other than `Gemma-4-31B`; non-streaming works. |
+| A gateway model answers all at once instead of streaming | Expected. The gateway does not stream that model, so GAIA switched to a non-streaming call and said so. See [Models that cannot stream](#models-that-cannot-stream). |
 
 ## What the gateway offers
 
