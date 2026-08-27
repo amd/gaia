@@ -2918,8 +2918,15 @@ Examples:
     gateway_auth_parser.add_argument(
         "--token",
         default=None,
-        help="Token value. Omit to be prompted without echo (preferred — a token "
-        "passed here lands in your shell history and process list)",
+        help="NOT RECOMMENDED — a token passed on the command line lands in your "
+        "shell history and is visible in the process list to any local user. "
+        "Omit this to be prompted without echo, or set GAIA_GATEWAY_TOKEN",
+    )
+    gateway_auth_parser.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read the token from stdin, e.g. `gaia gateway auth --token-stdin "
+        "< token.txt` — keeps it out of the process list and shell history",
     )
     gateway_subparsers.add_parser(
         "logout", help="Clear the session token held by Lemonade"
@@ -2945,6 +2952,17 @@ Examples:
     )
     gateway_test_parser.add_argument(
         "--model", default=None, help="Model id (default: the active gateway model)"
+    )
+    gateway_test_parser.add_argument(
+        "--token",
+        default=None,
+        help="NOT RECOMMENDED — see `gaia gateway auth --help`. Supplied only if "
+        "Lemonade has no token yet; otherwise you are prompted without echo",
+    )
+    gateway_test_parser.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read the token from stdin if one is needed",
     )
     gateway_subparsers.add_parser(
         "uninstall", help="Remove the gateway provider from Lemonade"
@@ -5114,6 +5132,41 @@ def _print_gateway_models(models, state):
     print("\n  ▶ active   ✓ enabled   ★ recommended")
 
 
+def _resolve_gateway_token(args, *, prompt: str) -> str:
+    """Get a gateway token without letting it reach disk or the process list.
+
+    Order: ``--token-stdin`` (pipe/file), then ``GAIA_GATEWAY_TOKEN``, then an
+    interactive no-echo prompt. ``--token`` is honoured but warned about — argv
+    is readable by any local user via the process list and is kept by the shell
+    in history.
+
+    The value is returned to the caller and handed straight to Lemonade; GAIA
+    never writes it anywhere.
+    """
+    if getattr(args, "token_stdin", False):
+        return sys.stdin.readline().strip()
+
+    token = getattr(args, "token", None)
+    if token:
+        print(
+            "⚠️  --token was passed on the command line, so it is now in your "
+            "shell history\n"
+            "   and was visible in the process list. Prefer --token-stdin, "
+            "GAIA_GATEWAY_TOKEN,\n"
+            "   or the interactive prompt.",
+            file=sys.stderr,
+        )
+        return token
+
+    env_token = os.environ.get("GAIA_GATEWAY_TOKEN")
+    if env_token and env_token.strip():
+        return env_token.strip()
+
+    import getpass
+
+    return getpass.getpass(prompt)
+
+
 def handle_gateway_command(args):
     """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
     from gaia.llm.gateway import (
@@ -5194,11 +5247,9 @@ def handle_gateway_command(args):
             return
 
         if action == "auth":
-            token = args.token
-            if not token:
-                import getpass
-
-                token = getpass.getpass("Gateway API token (input hidden): ")
+            token = _resolve_gateway_token(
+                args, prompt="Gateway API token (input hidden): "
+            )
             result = manager.set_token(token)
             del token
             print(
@@ -5251,14 +5302,43 @@ def handle_gateway_command(args):
             return
 
         if action == "test":
-            model = args.model or state.active_model
-            if not model:
+            # Verify the gateway is actually usable before sending anything, so
+            # a missing token reads as "supply a token" rather than surfacing
+            # later as an unhelpful model-not-found.
+            status = manager.status()
+            if not status.installed:
                 print(
-                    "❌ No model specified and no active gateway model.\n"
-                    "   Run `gaia gateway models`, then `gaia gateway use <model>`.",
+                    "❌ The gateway is not registered.\n"
+                    "   Run `gaia gateway install --base-url <url>` first.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
+            if not status.authenticated:
+                print("The gateway has no token yet.")
+                token = _resolve_gateway_token(
+                    args, prompt="Gateway API token (input hidden): "
+                )
+                result = manager.set_token(token)
+                del token
+                print(
+                    f"✅ Token accepted. Models discovered: "
+                    f"{result.get('models_discovered', 0)}\n"
+                )
+
+            model = args.model or state.active_model
+            if not model:
+                # Nothing chosen yet — fall back to the first recommended model
+                # so a fresh setup can be tested in one command.
+                discovered = manager.list_models()
+                if not discovered:
+                    print(
+                        "❌ No gateway models were discovered.\n"
+                        "   Check the token and base URL with `gaia gateway status`.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                model = discovered[0].id
+                print(f"No active model set; using {model}.\n")
             # Deliberately goes through the ordinary client so this exercises
             # the same path agents use, cloud short-circuits included.
             manager.client.refresh_cloud_models()
