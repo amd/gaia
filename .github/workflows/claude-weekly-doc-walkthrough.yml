@@ -70,6 +70,18 @@
 #   Fixed by scanning the whole text for the last is_error.
 # - Run 32770642262: PASSED end to end -- every step green, findings artifact
 #   uploaded, issue #3071 filed. First fully working run of this workflow.
+# - Run 32994770487 (2026-08-26): regressed on the FIRST post-merge run, from a
+#   runner change rather than a code change. The wheel builds, then installing it
+#   dies -- "An Application Control policy has blocked this file" -- because the
+#   policy now blocks the venv's unsigned pip.exe shim. Fixed by installing
+#   through `python.exe -m pip`, the form the same step already used two lines up.
+# - Run 33040830292: PASSED with that fix. Also settles the open question about
+#   the OTHER launcher in that folder: `gaia.exe` runs in the same step and the
+#   step passed, so the policy blocks that specific shim, not the class. Do NOT
+#   pre-emptively rewrite `gaia.exe` as `python -m gaia` -- driving the real
+#   console script is the property this workflow exists to prove. If the policy
+#   ever does block it, the fix is a runner allowlist entry, not a call-shape
+#   change here.
 #   A `.cmd` shim via path_to_claude_code_executable does work on this runner.
 
 name: Claude Weekly Doc Walkthrough
