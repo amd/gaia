@@ -34,7 +34,7 @@ func TestHubModelRenders(t *testing.T) {
 
 	// A fresh machine has nothing installed, so the hub opens on the first tab
 	// that has rows — the published agents it can actually offer.
-	checks := []string{"Agent Hub", "Email"}
+	checks := []string{"G A I A", "Email"}
 	for _, check := range checks {
 		if !contains(view, check) {
 			t.Errorf("hub view missing expected content: %q", check)
@@ -142,8 +142,8 @@ func TestRootModelStartsWithHub(t *testing.T) {
 	if view == "" {
 		t.Fatal("root view is empty")
 	}
-	if !contains(view, "Agent Hub") {
-		t.Error("root view missing Agent Hub text")
+	if !contains(view, "G A I A") {
+		t.Error("root view missing the GAIA wordmark")
 	}
 }
 

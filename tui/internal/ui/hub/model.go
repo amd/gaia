@@ -10,16 +10,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/ui/brand"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/vote"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
-
-// compactHeightRows is the terminal height below which the ASCII logo is
-// dropped for a one-line wordmark. The logo alone is 20 rows; keeping it on an
-// 80x24 terminal left the list with nothing and pushed the footer off screen.
-const compactHeightRows = 32
 
 // LaunchAgentMsg signals the root model to switch to chat with this agent.
 type LaunchAgentMsg struct {
@@ -572,11 +568,6 @@ func (m HubModel) View() string {
 	return view
 }
 
-// compact reports whether the terminal is too short for the ASCII logo.
-func (m HubModel) compact() bool {
-	return m.height > 0 && m.height < compactHeightRows
-}
-
 // line renders exactly one row, truncated to the terminal width so a long hint
 // can never wrap and push the layout off-screen.
 func (m HubModel) line(s string, style lipgloss.Style) string {
@@ -586,89 +577,7 @@ func (m HubModel) line(s string, style lipgloss.Style) string {
 	return style.Render(ansi.Truncate(s, m.width, "…"))
 }
 
-func (m HubModel) renderHeader() string {
-	if m.compact() {
-		wordmark := lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright).Render(" G A I A")
-		sub := lipgloss.NewStyle().Foreground(theme.Dim).Italic(true).
-			Render("  Local AI Agent Hub — by AMD")
-		return m.line(wordmark+sub, lipgloss.NewStyle())
-	}
-
-	logo := colorizeRobotLogo()
-
-	gaiaText := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(theme.AccentBright).
-		Render("  G A I A")
-
-	subtitle := lipgloss.NewStyle().
-		Foreground(theme.Dim).
-		Italic(true).
-		Render("  Local AI Agent Hub — by AMD")
-
-	return logo + "\n" + gaiaText + "  " + subtitle + "\n"
-}
-
-// colorizeRobotLogo renders the GAIA robot ASCII art with colors matching the mascot PNG.
-func colorizeRobotLogo() string {
-	// Colors from the GAIA mascot: green body, cyan eyes, dark background
-	bright := lipgloss.NewStyle().Foreground(theme.ArtBright) // body highlights
-	body := lipgloss.NewStyle().Foreground(theme.ArtBody)     // solid green
-	mid := lipgloss.NewStyle().Foreground(theme.ArtMid)       // mid-tone
-	detail := lipgloss.NewStyle().Foreground(theme.ArtDetail) // detail
-	shadow := lipgloss.NewStyle().Foreground(theme.ArtShadow) // shading
-	eye := lipgloss.NewStyle().Foreground(theme.ArtEye)       // eyes
-
-	lines := []string{
-		"               +=-------                 ",
-		"           =====++======-----            ",
-		"        ++======+*=========-----         ",
-		"      +++++++++++===========------       ",
-		"    ++++*#*++++++++============-=--      ",
-		"  +***+++==#+++++++++==============--    ",
-		" +#####*++=*%+++++##+++==============    ",
-		" *##%#%##++*%*++*%%%%%%%%%#########+=-   ",
-		" +#%#%%*#+*#%++#%%%#######%########%%%+  ",
-		"  *+**#####%++*%%%##*--+##%%%%%##++##%++ ",
-		"   +#####%%*+*#%%%##+--+*##%%%##*--*##** ",
-		"    +##%##++*#%%%%###++###%%%%%#*==##*#   ",
-		"    +**##+*++#%%%%%%####%%%%%%%%####*    ",
-		"     +*%%%**#+*%##%%%%%%%%%%%%%%%%%#+    ",
-		"       *##*###**+*####%%%%%%%%%%###=     ",
-		"         ==+*#######+*##########+=       ",
-		"               +#############*=          ",
-		"             +=***%%%%#**                 ",
-		"           %%%##*##**##***==              ",
-		"              #*+++++++**+=              ",
-	}
-
-	var result strings.Builder
-	for _, line := range lines {
-		for _, ch := range line {
-			switch ch {
-			case '%':
-				result.WriteString(bright.Render(string(ch)))
-			case '#':
-				result.WriteString(body.Render(string(ch)))
-			case '*':
-				result.WriteString(mid.Render(string(ch)))
-			case '+':
-				result.WriteString(detail.Render(string(ch)))
-			case '=':
-				result.WriteString(shadow.Render(string(ch)))
-			case '-':
-				// Eye sockets — use cyan for the dash markers inside the face area
-				result.WriteString(eye.Render(string(ch)))
-			case ' ':
-				result.WriteByte(' ')
-			default:
-				result.WriteString(shadow.Render(string(ch)))
-			}
-		}
-		result.WriteByte('\n')
-	}
-	return result.String()
-}
+func (m HubModel) renderHeader() string { return brand.Banner(m.width, m.height) }
 
 func (m HubModel) renderDashboard() string {
 	installed, active, idle := m.catalog.DashboardStats()
