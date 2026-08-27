@@ -290,3 +290,11 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /*_ANALYSIS.md
 /*_DEEPDIVE.md
 /GAIA_*_REPORT.md
+
+# Session-harvest output (gaia.factory.harvest). Derived from private Claude Code
+# transcripts and belongs in ~/.gaia/cache/factory/; these catch a stray redirect
+# run from the repo root.
+/tables.md
+/context.md
+/savings.md
+/labels.txt

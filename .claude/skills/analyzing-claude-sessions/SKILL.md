@@ -17,23 +17,29 @@ the user pasted into a prompt.
 
 ## Run it
 
+Redirect into the cache directory, never into a repository working tree. These tables
+are built from real transcripts, and an untracked `tables.md` sitting at a repo root is
+one `git add -A` away from being published.
+
 ```bash
+FACTORY=~/.gaia/cache/factory
+
 # 1. Extract. Deterministic, no LLM, no network. Roughly linear in transcript count.
 python -m gaia.factory.harvest.scan
 
 # 2. Tables. Absolute counts and share-of-total for every figure.
-python -m gaia.factory.harvest.report > tables.md
+python -m gaia.factory.harvest.report > "$FACTORY/tables.md"
 
 # 3. With use-case labels (see "Classifying intent" below):
-python -m gaia.factory.harvest.report --labels labels.txt > tables.md
+python -m gaia.factory.harvest.report --labels "$FACTORY/labels.txt" > "$FACTORY/tables.md"
 
 # 4. Per-request prompt size and local KV-cache memory. Re-reads the raw
 #    transcripts, because steps 1-2 aggregate per session and that hides how
 #    large any single request got.
-python -m gaia.factory.harvest.context --labels labels.txt > context.md
+python -m gaia.factory.harvest.context --labels "$FACTORY/labels.txt" > "$FACTORY/context.md"
 
 # 5. What each proposed fix would actually save, in tokens and dollars.
-python -m gaia.factory.harvest.savings > savings.md
+python -m gaia.factory.harvest.savings > "$FACTORY/savings.md"
 ```
 
 All accept `--root` (transcripts elsewhere) and `--out` / `--cache`; `context` and
@@ -89,8 +95,10 @@ catch them.
    reference report is a good starting set (`pr_lifecycle`, `code_review`, `doc_audit`,
    `feature_impl`, `ci_debug`, `security_fix`, `research`, …), extended where the corpus
    demands it.
-3. Write `labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`.
-4. Re-run `report --labels labels.txt`.
+3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`.
+   It carries session-id prefixes, so it belongs in the cache directory like everything
+   else derived — not in a repo.
+4. Re-run `report --labels "$FACTORY/labels.txt"`.
 
 Classify from the **first user message**, not the auto-generated title — the title is a
 summary of what happened, which leaks the outcome into the label.
