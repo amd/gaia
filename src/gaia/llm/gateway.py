@@ -250,9 +250,23 @@ def remember_token(token: str) -> None:
 
     Still never written to ``gateway.json`` or any other GAIA file.
     """
-    from gaia.connectors.store import save_secret
+    from gaia.connectors.store import peek_secret, save_secret
 
     save_secret(GATEWAY_SECRET_NAME, token)
+    # Read it back. keyring's null backend — which a headless Linux box or
+    # PYTHON_KEYRING_BACKEND=null selects — accepts a write and stores nothing,
+    # so the save "succeeds" and the user is told the token was remembered
+    # right before being asked for it again. Fail loudly instead.
+    if peek_secret(GATEWAY_SECRET_NAME) != token:
+        raise GatewayError(
+            "The OS credential store accepted the token but did not keep it, "
+            "so it cannot be remembered.\n"
+            "  On Linux, install and unlock gnome-keyring or kwallet; a "
+            "headless session has neither.\n"
+            "  If PYTHON_KEYRING_BACKEND is set to a null backend, unset it.\n"
+            "  Otherwise set LEMONADE_AMD_API_KEY in Lemonade's environment, or "
+            "use `gaia gateway auth --no-remember`."
+        )
 
 
 def recall_token() -> Optional[str]:

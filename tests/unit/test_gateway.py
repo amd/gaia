@@ -617,3 +617,20 @@ class TestRememberedToken:
             assert manager.ensure_authenticated() is True
 
         assert sent["key"] == "remembered-tok"
+
+    def test_a_no_op_keyring_fails_loudly_instead_of_pretending(self, monkeypatch):
+        """keyring's null backend accepts a write and stores nothing.
+
+        A headless Linux box (no gnome-keyring/kwallet) selects it, as does
+        PYTHON_KEYRING_BACKEND=null. Without a read-back the user is told the
+        token was remembered and is then asked for it again next launch.
+        """
+        monkeypatch.setattr("gaia.connectors.store.save_secret", lambda n, v: None)
+        monkeypatch.setattr("gaia.connectors.store.peek_secret", lambda n: None)
+        from gaia.llm.gateway import GatewayError, remember_token
+
+        with pytest.raises(GatewayError) as excinfo:
+            remember_token("tok")
+        message = str(excinfo.value)
+        assert "gnome-keyring" in message  # the Linux remedy
+        assert "--no-remember" in message  # the way out
