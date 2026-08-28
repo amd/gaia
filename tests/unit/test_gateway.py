@@ -671,3 +671,79 @@ class TestRememberedToken:
         assert "$env:LEMONADE_AMD_API_KEY = " in _no_credential_store_message()
         monkeypatch.setattr("gaia.llm.gateway.sys.platform", "linux")
         assert "export LEMONADE_AMD_API_KEY=" in _no_credential_store_message()
+
+
+class TestEnsureAuthenticatedReportsRealUsability:
+    """Lemonade stores a cloud key without validating it, so "authenticated"
+    means "a string was accepted", not "the gateway took it". A revoked token
+    reports 200 and discovers nothing — and because the readiness gate replays
+    the stored token, calling that success sends the user hunting for a missing
+    model instead of an expired key. Observed live against Lemonade 11.5.
+    """
+
+    def test_a_stored_token_the_gateway_rejects_is_not_success(
+        self, manager, isolated_state
+    ):
+        with patch("gaia.llm.gateway.recall_token", return_value="revoked"):
+            with patch("gaia.llm.gateway.requests.request") as request:
+                request.side_effect = [
+                    # system-info: registered, no key held yet
+                    _response(
+                        body={
+                            "cloud": {
+                                "providers": [
+                                    {
+                                        "name": GATEWAY_PROVIDER,
+                                        "base_url": "https://x/v1",
+                                        "env_var_set": False,
+                                        "runtime_key_set": False,
+                                        "models_discovered": 0,
+                                    }
+                                ]
+                            }
+                        }
+                    ),
+                    # cloud/auth: stored happily, discovered nothing
+                    _response(body={"models_discovered": 0}),
+                ]
+                assert manager.ensure_authenticated() is False
+
+    def test_a_held_key_that_discovered_nothing_is_not_success(
+        self, manager, isolated_state
+    ):
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(
+                body={
+                    "cloud": {
+                        "providers": [
+                            {
+                                "name": GATEWAY_PROVIDER,
+                                "base_url": "https://x/v1",
+                                "env_var_set": False,
+                                "runtime_key_set": True,
+                                "models_discovered": 0,
+                            }
+                        ]
+                    }
+                }
+            )
+            assert manager.ensure_authenticated() is False
+
+    def test_a_working_token_still_reports_success(self, manager, isolated_state):
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(
+                body={
+                    "cloud": {
+                        "providers": [
+                            {
+                                "name": GATEWAY_PROVIDER,
+                                "base_url": "https://x/v1",
+                                "env_var_set": False,
+                                "runtime_key_set": True,
+                                "models_discovered": 76,
+                            }
+                        ]
+                    }
+                }
+            )
+            assert manager.ensure_authenticated() is True

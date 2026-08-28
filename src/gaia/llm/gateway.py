@@ -599,21 +599,44 @@ class GatewayManager:
 
         Lemonade forgets its token on restart, so without this every restart
         means re-entering it. Returns True when the gateway is usable.
+
+        "Usable" means models were discovered, not merely that Lemonade holds a
+        key: it stores one without validating it, so a revoked token reports
+        authenticated and discovers nothing. Reporting that as success sends the
+        caller looking for a missing model instead of an expired key.
         """
         status = self.status()
-        if not status.installed or status.authenticated:
-            return status.authenticated
+        if not status.installed:
+            return False
+        if status.authenticated:
+            if status.models_discovered:
+                return True
+            self.log.warning(
+                f"The gateway holds a token but advertises no models — it is "
+                f"almost certainly rejecting the key. Re-run `gaia gateway "
+                f"auth`, or unset {GATEWAY_API_KEY_ENV} if it is stale."
+            )
+            return False
         token = recall_token()
         if not token:
             return False
         try:
-            self.set_token(token)
+            result = self.set_token(token)
         except GatewayError as e:
             # A remembered token that the gateway now rejects is worth saying
             # out loud — silently prompting again hides a revoked key.
             self.log.warning(f"The remembered gateway token was not accepted: {e}")
             return False
         del token
+        # Lemonade stores a key without checking it, so this — not the 200 — is
+        # where a revoked token first shows.
+        if not (result or {}).get("models_discovered"):
+            self.log.warning(
+                "The remembered gateway token was stored but discovered no "
+                "models, which means the gateway rejected it. Re-run "
+                "`gaia gateway auth` with a current token."
+            )
+            return False
         return True
 
     def status(self) -> GatewayStatus:
