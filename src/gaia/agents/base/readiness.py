@@ -333,6 +333,8 @@ def _replay_gateway_token(model_id: str) -> bool:
     Returns False for a local model, when nothing is stored, or when the stored
     token is rejected — all cases where re-probing would just repeat itself.
     """
+    import requests
+
     from gaia.llm.gateway import GATEWAY_PROVIDER, GatewayError, GatewayManager
 
     if not str(model_id or "").lower().startswith(f"{GATEWAY_PROVIDER}."):

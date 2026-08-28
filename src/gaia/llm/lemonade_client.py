@@ -40,6 +40,9 @@ from gaia.llm.lemonade_launcher import (
 )
 from gaia.logger import get_logger
 
+# For the module-level helpers; the client class keeps its own ``self.log``.
+log = get_logger(__name__)
+
 # Load environment variables from .env file
 load_dotenv()
 

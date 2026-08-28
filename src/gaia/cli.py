@@ -5193,7 +5193,6 @@ def handle_gateway_command(args):
         recall_token,
         remember_token,
     )
-    from gaia.llm.lemonade_client import LemonadeClientError
 
     action = getattr(args, "gateway_action", None)
     if not action:
@@ -5234,7 +5233,7 @@ def handle_gateway_command(args):
                         "Run `gaia gateway auth`."
                     )
             else:
-                print(f"\n  Register it with `gaia gateway install`.")
+                print("\n  Register it with `gaia gateway install`.")
             print(f"\nEnabled models: {', '.join(state.enabled_models) or '(none)'}")
             print(f"Active model:   {state.active_model or '(none)'}")
             return
@@ -5363,7 +5362,7 @@ def handle_gateway_command(args):
             updated = manager.enable(args.model)
             print(f"✅ Enabled {args.model}")
             if updated.active_model == args.model:
-                print(f"   It is now the active gateway model.")
+                print("   It is now the active gateway model.")
             return
 
         if action == "disable":

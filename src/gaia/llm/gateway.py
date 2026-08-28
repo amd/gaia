@@ -272,7 +272,7 @@ def remember_token(token: str) -> None:
         raise GatewayError(_no_credential_store_message())
 
 
-def _no_credential_store_message() -> str:
+def _no_credential_store_message(platform: Optional[str] = None) -> str:
     """Why the token could not be remembered, and the fix for THIS platform.
 
     The remedy differs enough per platform to be worth branching on. The one
@@ -281,11 +281,17 @@ def _no_credential_store_message() -> str:
     sends them to fix something they cannot fix, and should not want to — a
     machine-scoped credential belongs in the service's environment, not in a
     per-user login keyring.
+
+    Args:
+        platform: ``sys.platform`` override. A parameter so tests can pick a
+            platform without reassigning the real ``sys.platform``, which
+            makes stdlib internals reach for a ``_winapi`` that POSIX lacks.
     """
+    platform = platform or sys.platform
     # Shell syntax matters here: a bash `export` line pasted into PowerShell
     # fails, and an error that tells you to run something that does not work
     # is barely better than no error.
-    if sys.platform == "win32":
+    if platform == "win32":
         export = f"$env:{GATEWAY_API_KEY_ENV} = '<your-token>'"
     else:
         export = f"export {GATEWAY_API_KEY_ENV}=<your-token>"
@@ -297,7 +303,7 @@ def _no_credential_store_message() -> str:
         f"  it before starting Lemonade: {describe_start_hint().instruction}"
     )
 
-    if sys.platform.startswith("linux"):
+    if platform.startswith("linux"):
         return (
             "The OS credential store did not keep the token, so it cannot be "
             "remembered.\n"
@@ -312,7 +318,7 @@ def _no_credential_store_message() -> str:
             "  works. To skip storage entirely, use "
             "`gaia gateway auth --no-remember`."
         )
-    if sys.platform == "darwin":
+    if platform == "darwin":
         return (
             "The macOS Keychain did not keep the token, so it cannot be "
             "remembered.\n"

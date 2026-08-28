@@ -658,25 +658,24 @@ class TestRememberedToken:
             ("win32", "Windows Credential Manager"),
         ],
     )
-    def test_the_remedy_matches_the_platform(self, platform, expected, monkeypatch):
+    def test_the_remedy_matches_the_platform(self, platform, expected):
         """Telling someone on a headless server to unlock gnome-keyring sends
         them to fix something they cannot fix. The env var is the answer
         there, so it leads."""
-        monkeypatch.setattr("gaia.llm.gateway.sys.platform", platform)
         from gaia.llm.gateway import GATEWAY_API_KEY_ENV, _no_credential_store_message
 
-        message = _no_credential_store_message()
+        # Passed in, not monkeypatched onto sys: reassigning the real
+        # sys.platform makes stdlib internals reach for a _winapi POSIX lacks.
+        message = _no_credential_store_message(platform)
         assert expected in message
         assert GATEWAY_API_KEY_ENV in message  # always offered
 
-    def test_the_shell_syntax_matches_the_platform(self, monkeypatch):
+    def test_the_shell_syntax_matches_the_platform(self):
         """A bash export line pasted into PowerShell just fails."""
         from gaia.llm.gateway import _no_credential_store_message
 
-        monkeypatch.setattr("gaia.llm.gateway.sys.platform", "win32")
-        assert "$env:LEMONADE_AMD_API_KEY = " in _no_credential_store_message()
-        monkeypatch.setattr("gaia.llm.gateway.sys.platform", "linux")
-        assert "export LEMONADE_AMD_API_KEY=" in _no_credential_store_message()
+        assert "$env:LEMONADE_AMD_API_KEY = " in _no_credential_store_message("win32")
+        assert "export LEMONADE_AMD_API_KEY=" in _no_credential_store_message("linux")
 
 
 class TestEnsureAuthenticatedReportsRealUsability:
