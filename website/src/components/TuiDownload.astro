@@ -4,18 +4,33 @@
 
 // Direct download of the agent's terminal entry point, OS-detected.
 //
-// Every published platform is rendered server-side, so a no-JS visitor gets the
-// whole list and a working link. JS promotes the one this machine can run into
-// the primary button and collapses the rest; a machine it cannot place
-// (Apple Silicon behind Safari, an unknown arch) keeps the full list rather
-// than guessing — see scripts/download-target.ts.
+// The native installer is the offer; the raw binary is the named alternative.
+// Downloading the binary gives a single file with no PATH entry, no shortcut
+// and no `gaia-agent` sidecar beside it — so the terminal opens with no agent
+// to run. The installer puts all of that on disk, which is what a visitor who
+// clicks "download" is asking for.
 //
-// The binary is the raw artifact, not an installer: it needs the `gaia` CLI for
-// the local model. That caveat lives in the page's terminal-install section
-// rather than under the button, which stays a single uncluttered action.
+// Every published platform is rendered server-side, so a no-JS visitor gets the
+// whole list and a working link. JS reveals the block for the platform this
+// machine can run and collapses the list behind a disclosure; a machine it
+// cannot place (Apple Silicon behind Safari, an unknown arch) keeps the full
+// list rather than guessing — see scripts/download-target.ts.
+//
+// Nothing here builds a URL. Each link is the `url` the hub manifest published
+// for an artifact whose filename matched a key exactly, so a platform the hub
+// has not published for is absent rather than a dead link.
 
-import { getComponentRelease } from '../data/catalog';
-import { PLATFORM_LABELS, type PlatformKey } from '../scripts/download-target';
+import { getComponentRelease, type PlatformBinary } from '../data/catalog';
+import {
+  DOWNLOAD_LABELS,
+  INSTALLERS_FOR,
+  INSTALLER_CTA_LABELS,
+  PLATFORM_LABELS,
+  artifactFileName,
+  type DownloadKey,
+  type InstallerKey,
+  type PlatformKey,
+} from '../scripts/download-target';
 
 interface Props {
   class?: string;
@@ -37,86 +52,177 @@ const ORDER: PlatformKey[] = [
   'linux-arm64',
 ];
 
-const platformOf = (filename: string): PlatformKey =>
-  filename.replace(/^gaia-/, '').replace(/\.exe$/, '') as PlatformKey;
+// Key -> exact filename -> the artifact the hub actually published. The reverse
+// direction is what broke: the manifest records no platform field, so deriving
+// one from a filename that now carries a version dropped every installer.
+const byFilename = new Map(release.binaries.map((b) => [b.filename, b]));
+const published = (key: DownloadKey): PlatformBinary | undefined =>
+  byFilename.get(artifactFileName(key, release.version));
 
-const downloads = release.binaries
-  .map((b) => ({ ...b, platform: platformOf(b.filename) }))
-  .filter((b) => b.platform in PLATFORM_LABELS)
-  .sort((a, b) => ORDER.indexOf(a.platform) - ORDER.indexOf(b.platform));
+interface Row {
+  platform: PlatformKey;
+  binary: PlatformBinary | undefined;
+  installers: { key: InstallerKey; artifact: PlatformBinary }[];
+}
+
+const rows: Row[] = ORDER.map((platform) => ({
+  platform,
+  binary: published(platform),
+  installers: INSTALLERS_FOR[platform].flatMap((key) => {
+    const artifact = published(key);
+    return artifact ? [{ key, artifact }] : [];
+  }),
+})).filter((r) => r.binary || r.installers.length);
+
+// Until the first release publishes installers, none of these exist — a valid
+// state, and the page is just the binary list it was before. Saying "no
+// installer for ARM64" then would imply the other platforms have one, so the
+// caveat only appears once at least one platform actually ships an installer.
+const anyInstaller = rows.some((r) => r.installers.length > 0);
+
+// One list entry per download. Labelled by what the FILE is only once
+// installers exist to tell it apart from — before then every platform has
+// exactly one download and the platform name is the whole label, as it was.
+const listOptions = (row: Row): { href: string; label: string }[] => {
+  const binary = row.binary
+    ? [
+        {
+          href: row.binary.url,
+          label: anyInstaller
+            ? row.installers.length > 0
+              ? DOWNLOAD_LABELS[row.platform]
+              : `${DOWNLOAD_LABELS[row.platform]} — no installer for this architecture`
+            : PLATFORM_LABELS[row.platform],
+        },
+      ]
+    : [];
+  return [
+    ...row.installers.map((i) => ({ href: i.artifact.url, label: DOWNLOAD_LABELS[i.key] })),
+    ...binary,
+  ];
+};
+
+const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 ---
 
-<div class:list={['min-w-0', centered && 'flex flex-col items-center text-center', className]} data-tui-download>
-  <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
-    {/* The resolved-platform CTA. Hidden until JS places the machine — with no
-        JS the list below is the whole interface. */}
-    <a
-      data-dl-primary
-      hidden
-      href={downloads[0]?.url}
-      class="g-btn g-btn-primary px-6 py-3 text-[15px]"
-    >
-      <svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      <span data-dl-label>Install the GAIA agent</span>
-    </a>
-  </div>
+<div
+  class:list={['min-w-0', centered && 'flex flex-col items-center text-center', className]}
+  data-tui-download
+  data-version={release.version}
+>
+  {/* One block per platform, all hidden until JS places the machine — with no
+      JS the list below is the whole interface. `hidden` sits on a bare wrapper
+      because the button primitives set `display` in the components layer, which
+      outranks Tailwind's preflight `[hidden]` rule and would show them all. */}
+  {rows.map((row) => (
+    <div data-dl-cta data-platform={row.platform} hidden>
+      <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
+        {row.installers.length > 0
+          ? row.installers.map((i) => (
+              <a href={i.artifact.url} class="g-btn g-btn-primary px-6 py-3 text-[15px]">
+                <Fragment set:html={DOWNLOAD_ICON} />
+                <span>{INSTALLER_CTA_LABELS[i.key]}</span>
+              </a>
+            ))
+          : row.binary && (
+              <a href={row.binary.url} class="g-btn g-btn-primary px-6 py-3 text-[15px]">
+                <Fragment set:html={DOWNLOAD_ICON} />
+                <span>Download GAIA for {PLATFORM_LABELS[row.platform]}</span>
+              </a>
+            )}
+      </div>
+
+      <p class:list={['g-body mt-3 max-w-[440px] text-[13px]', centered && 'mx-auto']}>
+        {row.installers.length > 0 ? (
+          <Fragment>
+            Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
+            {row.binary && (
+              <Fragment>
+                {' '}Or take the{' '}
+                <a href={row.binary.url} class="text-g-gold-text underline-offset-2 hover:underline">
+                  standalone binary
+                </a>{' '}— one file, no PATH entry and no agent alongside it.
+              </Fragment>
+            )}
+          </Fragment>
+        ) : anyInstaller ? (
+          <Fragment>
+            No installer is published for {PLATFORM_LABELS[row.platform]} — the agent has no
+            build for that architecture. This is the standalone binary: put it on your PATH
+            yourself.
+          </Fragment>
+        ) : (
+          <Fragment>
+            The standalone binary — put it on your PATH and run{' '}
+            <code class="text-g-text">gaia-tui</code>.
+          </Fragment>
+        )}
+      </p>
+    </div>
+  ))}
 
   <div data-dl-list class="mt-4">
     <div class="g-label mb-2.5" data-dl-list-label>Download for your platform · v{release.version}</div>
-    <ul class:list={['grid gap-x-6 gap-y-1.5 sm:grid-cols-2', centered && 'justify-items-center']}>
-      {downloads.map((d) => (
-        <li>
-          <a
-            href={d.url}
-            data-dl-option
-            data-platform={d.platform}
-            class="group inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-gold-text"
-          >
-            <span class="text-g-gold-text" aria-hidden="true">↓</span>
-            <span>{PLATFORM_LABELS[d.platform]}</span>
-          </a>
+    <ul
+      class:list={[
+        'grid sm:grid-cols-2',
+        anyInstaller ? 'gap-x-10 gap-y-5' : 'gap-x-6 gap-y-1.5',
+        centered && 'justify-items-center',
+      ]}
+    >
+      {rows.map((row) => (
+        <li class:list={[centered && 'text-center']}>
+          {anyInstaller && (
+            <div class="text-[13.5px] font-semibold text-g-text">
+              {PLATFORM_LABELS[row.platform]}
+            </div>
+          )}
+          <ul class:list={[anyInstaller && 'mt-1 space-y-1']}>
+            {listOptions(row).map((o) => (
+              <li>
+                <a
+                  href={o.href}
+                  class="group inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-gold-text"
+                >
+                  <span class="text-g-gold-text" aria-hidden="true">↓</span>
+                  <span>{o.label}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
         </li>
       ))}
     </ul>
   </div>
-
 </div>
 
 <script>
-  import { resolvePlatform, PLATFORM_LABELS } from '../scripts/download-target';
+  import { resolvePlatform } from '../scripts/download-target';
 
   document.querySelectorAll<HTMLElement>('[data-tui-download]').forEach(async (root) => {
-    const options = Array.from(
-      root.querySelectorAll<HTMLAnchorElement>('[data-dl-option]')
-    );
-    if (!options.length) return;
+    const blocks = Array.from(root.querySelectorAll<HTMLElement>('[data-dl-cta]'));
+    if (!blocks.length) return;
 
     const platform = await resolvePlatform(navigator).catch(() => null);
     if (!platform) return;   // Unplaceable machine: the full list stays as-is.
 
-    const match = options.find((o) => o.dataset.platform === platform);
+    const match = blocks.find((b) => b.dataset.platform === platform);
     if (!match) return;      // A platform the hub does not publish for.
 
-    const primary = root.querySelector<HTMLAnchorElement>('[data-dl-primary]');
-    const label = root.querySelector('[data-dl-label]');
-    if (!primary || !label) return;
+    match.hidden = false;
 
-    primary.href = match.href;
-    label.textContent = `Install GAIA for ${PLATFORM_LABELS[platform]}`;
-    primary.hidden = false;
-
-    // The other platforms stay reachable, one disclosure away.
+    // Every platform stays reachable, one disclosure away — including this
+    // machine's other options, so the standalone binary is never hidden from
+    // someone who came for it.
     const list = root.querySelector<HTMLElement>('[data-dl-list]');
     const listLabel = root.querySelector('[data-dl-list-label]');
     if (!list || !listLabel) return;
     const details = document.createElement('details');
-    details.className = 'mt-4';
+    details.className = 'mt-6';
     const summary = document.createElement('summary');
     summary.className =
       'g-label cursor-pointer list-none transition-colors hover:text-g-text';
-    summary.textContent = `Other platforms · v${listLabel.textContent?.split('v').pop() ?? ''}`;
+    summary.textContent = `All downloads · v${root.dataset.version ?? ''}`;
     list.replaceWith(details);
     details.append(summary, list);
     listLabel.remove();

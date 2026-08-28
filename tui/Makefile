@@ -1,4 +1,4 @@
-.PHONY: build build-release test test-race lint vet cover clean cross-compile mock-agent dev
+.PHONY: build build-release test test-race lint vet cover clean cross-compile winres mock-agent dev
 
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -80,9 +80,18 @@ dev: build mock-agent
 
 clean:
 	rm -rf bin/
+	rm -f cmd/gaia/*.syso
+
+# Windows icon + Details-tab metadata. Go links no Windows resource unless a
+# .syso sits beside the main package, so without this every shipped .exe draws
+# with the generic console glyph and reports no version to Explorer. Generated
+# rather than committed: the version inside the resource has to match the
+# ldflags stamp, and a checked-in blob drifts from it silently.
+winres:
+	@scripts/gen-winres.sh --version $(VERSION)
 
 # Cross-compile all 6 platform targets
-cross-compile:
+cross-compile: winres
 	@mkdir -p bin
 	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-amd64       ./cmd/gaia
 	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-arm64       ./cmd/gaia

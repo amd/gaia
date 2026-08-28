@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // The installer ships this binary as `gaia-tui`, so a hardcoded `gaia` in the
@@ -70,6 +72,20 @@ func TestUsageNamesTheInvokedBinary(t *testing.T) {
 	}
 	if path := runCmd.CommandPath(); !strings.HasPrefix(path, "gaia-tui ") {
 		t.Errorf("subcommand path = %q, want it to start with %q", path, "gaia-tui ")
+	}
+}
+
+// TestMousetrapIsDisabled pins the Explorer guard off. Cobra's default makes
+// preExecHook print "This is a command line tool. You need to open cmd.exe and
+// run it from there." and exit 1 for any Windows launch not traced to a
+// console — a double-click, and also the Start Menu and desktop shortcuts the
+// installer creates. Empty is cobra's opt-out; anything else re-breaks every
+// shortcut we ship (see command_win.go's `MousetrapHelpText != ""` guard).
+func TestMousetrapIsDisabled(t *testing.T) {
+	if cobra.MousetrapHelpText != "" {
+		t.Fatalf("cobra.MousetrapHelpText = %q, want empty: a non-empty value makes "+
+			"the Windows build refuse to start from a shortcut or a double-click",
+			cobra.MousetrapHelpText)
 	}
 }
 

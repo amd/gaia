@@ -10,9 +10,11 @@ readiness gate that runs on every launch and checks the few things that would
 otherwise make the agent fail. Where it can fix a problem itself, one key does it.
 Where it can't, it says so and gives you the exact command.
 
+Download the installer for your platform from **[amd-gaia.ai](https://amd-gaia.ai/#install)**,
+run it, then open a new terminal:
+
 ```bash
-cd tui && make build     # -> tui/bin/gaia-tui
-./tui/bin/gaia-tui
+gaia-tui
 ```
 
 <Info>
@@ -23,11 +25,9 @@ cd tui && make build     # -> tui/bin/gaia-tui
 </Info>
 
 <Note>
-  `gaia tui` is the Go terminal binary. Building from source it is
-  `tui/bin/gaia-tui` (`cd tui && make build`) — never `gaia`, which is the Python
-  CLI's name and has entirely different subcommands. It accepts a leading `tui`
-  word and drops it, so `./tui/bin/gaia-tui` and `./tui/bin/gaia-tui tui` open the
-  same session. See the
+  `gaia-tui` is the Go terminal binary — never `gaia`, which is the Python CLI's
+  name and has entirely different subcommands. It accepts a leading `tui` word and
+  drops it, so `gaia-tui` and `gaia-tui tui` open the same session. See the
   [CLI reference](/reference/cli#terminal-ui-gaia-tui) for its non-interactive
   subcommands.
 </Note>
@@ -40,6 +40,74 @@ cd tui && make build     # -> tui/bin/gaia-tui
   are gone. Installing a hub sidecar agent (`email`) is now the Python CLI's job —
   `gaia hub install <id>` — not the terminal's.
 </Warning>
+
+## Installing
+
+Every release publishes a native installer per platform, at
+[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform) and on the
+[GitHub release](https://github.com/amd/gaia/releases/latest). Each puts two binaries
+on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
+the hub runs) — so there is nothing to unzip and nothing to `chmod`.
+
+| Platform | File | How to install | Installs to |
+| --- | --- | --- | --- |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
+| macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
+| Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
+| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+
+The Windows setup is per-user: it needs no administrator rights and shows no UAC
+prompt. It also bundles Lemonade Server, so the install itself needs no network
+(Lemonade downloads its own runtime the first time you run a model). Start Menu
+and desktop shortcuts are created; open a **new** terminal afterwards, because an
+already-open one keeps the PATH it started with. Quit GAIA before upgrading —
+Windows cannot replace a running program, and the setup will tell you so rather
+than install over it half-way.
+
+<Note>
+  There is no installer for Windows on Arm or Linux on Arm. The flagship agent
+  publishes no build for either, so an installer there would set up the hub with no
+  agent behind it. The raw `gaia-tui` binary is still published for all six targets
+  if you want to run the hub against an agent you build yourself.
+</Note>
+
+Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
+you say otherwise. On Windows, Add/Remove Programs offers to delete it; on Linux,
+`apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
+because other things may be using it — see `gaia uninstall --purge-lemonade`.
+
+A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
+omission — so remove the files and then forget the receipt:
+
+```bash
+sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+sudo rm -rf /usr/local/share/doc/gaia-tui
+sudo pkgutil --forget ai.amd.gaia.terminal-hub
+sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
+```
+
+There are two receipts because the tools and the licence ship as separate
+components — forget both. `pkgutil --forget` drops only the installation receipt
+and deletes nothing, which is why the `rm` comes first. `~/.gaia` is untouched either way.
+
+macOS packages are unsigned unless the release was built with Apple credentials
+configured. Unsigned, Gatekeeper warns that the package comes from an
+unidentified developer. Right-click → Open no longer bypasses that as of macOS 15:
+dismiss the warning, then go to **System Settings → Privacy & Security** and click
+**Open Anyway** next to the blocked package.
+
+### Building from source
+
+Contributors who want the binary from a checkout, rather than the installer:
+
+```bash
+cd tui && make build     # -> tui/bin/gaia-tui
+```
+
+This builds `gaia-tui` only. `gaia-agent` still has to come from an installer or a
+hub download — the readiness gate below says so on the first screen if it is
+missing.
 
 ## The boot sequence
 
