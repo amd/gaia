@@ -18,7 +18,7 @@ import pytest
 from gaia.llm.gateway import (
     DEFAULT_AUTH_HEADER_NAME,
     DEFAULT_GATEWAY_BASE_URL,
-    GATEWAY_API_KEY_ENV,
+    GATEWAY_ENV_VAR,
     GATEWAY_PROVIDER,
     GatewayError,
     GatewayManager,
@@ -223,7 +223,7 @@ class TestAuth:
 
     def test_empty_token_is_refused_before_any_request(self, manager):
         with patch("gaia.llm.gateway.requests.request") as request:
-            with pytest.raises(GatewayError, match=GATEWAY_API_KEY_ENV):
+            with pytest.raises(GatewayError, match=GATEWAY_ENV_VAR):
                 manager.set_token("   ")
         request.assert_not_called()
 
@@ -234,7 +234,7 @@ class TestAuth:
                 "error": {
                     "type": "auth_conflict",
                     "message": "env var is set",
-                    "env_var": GATEWAY_API_KEY_ENV,
+                    "env_var": GATEWAY_ENV_VAR,
                 }
             },
         )
@@ -243,7 +243,7 @@ class TestAuth:
                 manager.set_token("sk-other")
 
         message = str(excinfo.value)
-        assert GATEWAY_API_KEY_ENV in message  # what
+        assert GATEWAY_ENV_VAR in message  # what
         assert "unset" in message.lower()  # what to do
 
     def test_clear_token_deletes_the_provider_key(self, manager):
@@ -662,13 +662,13 @@ class TestRememberedToken:
         """Telling someone on a headless server to unlock gnome-keyring sends
         them to fix something they cannot fix. The env var is the answer
         there, so it leads."""
-        from gaia.llm.gateway import GATEWAY_API_KEY_ENV, _no_credential_store_message
+        from gaia.llm.gateway import GATEWAY_ENV_VAR, _no_credential_store_message
 
         # Passed in, not monkeypatched onto sys: reassigning the real
         # sys.platform makes stdlib internals reach for a _winapi POSIX lacks.
         message = _no_credential_store_message(platform)
         assert expected in message
-        assert GATEWAY_API_KEY_ENV in message  # always offered
+        assert GATEWAY_ENV_VAR in message  # always offered
 
     def test_the_shell_syntax_matches_the_platform(self):
         """A bash export line pasted into PowerShell just fails."""
@@ -789,7 +789,7 @@ class TestProbeDoesNotLeakTheTokenOverPlaintext:
     def test_plaintext_probe_without_a_token_is_fine(self, manager, monkeypatch):
         """Nothing to leak, so URL validation must still work."""
         monkeypatch.delenv("GAIA_GATEWAY_TOKEN", raising=False)
-        monkeypatch.delenv(GATEWAY_API_KEY_ENV, raising=False)
+        monkeypatch.delenv(GATEWAY_ENV_VAR, raising=False)
         with patch("gaia.llm.gateway.requests.get") as get:
             get.return_value = _response(body={"data": []})
             manager.check_reachable("http://gw.example.com/v1")

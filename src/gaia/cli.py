@@ -5185,7 +5185,7 @@ def handle_gateway_command(args):
     from gaia.connectors.errors import ConnectorsError
     from gaia.llm.gateway import (
         DEFAULT_GATEWAY_BASE_URL,
-        GATEWAY_API_KEY_ENV,
+        GATEWAY_ENV_VAR,
         GatewayError,
         GatewayManager,
         GatewayState,
@@ -5215,7 +5215,7 @@ def handle_gateway_command(args):
             if status.installed:
                 print(f"  base URL:          {status.base_url}")
                 print(
-                    f"  {GATEWAY_API_KEY_ENV}: {'set' if status.env_var_set else 'not set'}"
+                    f"  {GATEWAY_ENV_VAR}: {'set' if status.env_var_set else 'not set'}"
                 )
                 print(
                     f"  session token:     {'set' if status.runtime_key_set else 'not set'}"
@@ -5326,7 +5326,7 @@ def handle_gateway_command(args):
             if getattr(args, "no_remember", False):
                 print(
                     f"   Held in Lemonade's memory only — it is gone when "
-                    f"Lemonade restarts.\n   Set {GATEWAY_API_KEY_ENV} in "
+                    f"Lemonade restarts.\n   Set {GATEWAY_ENV_VAR} in "
                     f"Lemonade's environment to persist it."
                 )
             return
@@ -5348,7 +5348,7 @@ def handle_gateway_command(args):
                     "`gaia gateway logout --forget` to delete it."
                 )
             print(
-                f"   Note: this does not unset {GATEWAY_API_KEY_ENV} if it is set "
+                f"   Note: this does not unset {GATEWAY_ENV_VAR} if it is set "
                 f"in Lemonade's environment."
             )
             return

@@ -46,9 +46,10 @@ log = get_logger(__name__)
 # the prefix of every gateway model id GAIA will see.
 GATEWAY_PROVIDER = "amd"
 
-# The env var Lemonade resolves for this provider. Set it in *Lemonade's*
-# environment (not your shell) for a token that survives a restart.
-GATEWAY_API_KEY_ENV = f"LEMONADE_{GATEWAY_PROVIDER.upper()}_API_KEY"
+# The NAME of the env var Lemonade resolves for this provider — never its
+# value, so it is safe to print. Set it in *Lemonade's* environment (not your
+# shell) for a token that survives a restart.
+GATEWAY_ENV_VAR = f"LEMONADE_{GATEWAY_PROVIDER.upper()}_API_KEY"
 
 # AMD's gateway. `llm.amd.com` is the SSO-gated portal, not the API — every
 # path there redirects to Okta. The OpenAI-compatible surface is the Unified
@@ -292,9 +293,9 @@ def _no_credential_store_message(platform: Optional[str] = None) -> str:
     # fails, and an error that tells you to run something that does not work
     # is barely better than no error.
     if platform == "win32":
-        export = f"$env:{GATEWAY_API_KEY_ENV} = '<your-token>'"
+        export = f"$env:{GATEWAY_ENV_VAR} = '<your-token>'"
     else:
-        export = f"export {GATEWAY_API_KEY_ENV}=<your-token>"
+        export = f"export {GATEWAY_ENV_VAR}=<your-token>"
     persist = (
         f"Set the token in *Lemonade's* environment instead — Lemonade reads it\n"
         f"  directly, so GAIA does not need to store anything:\n\n"
@@ -432,9 +433,9 @@ class GatewayManager:
 
         if response.status_code == 409 and error_type == "auth_conflict":
             return GatewayError(
-                f"{GATEWAY_API_KEY_ENV} is already set in Lemonade's environment, "
+                f"{GATEWAY_ENV_VAR} is already set in Lemonade's environment, "
                 f"so Lemonade refuses to accept a different token at runtime. "
-                f"Either keep using that key, or unset {GATEWAY_API_KEY_ENV} and "
+                f"Either keep using that key, or unset {GATEWAY_ENV_VAR} and "
                 f"restart Lemonade before setting one here."
             )
         if response.status_code == 404 and "cloud" in url:
@@ -467,7 +468,7 @@ class GatewayManager:
         OpenAI-compatible endpoint" and block registration entirely.
         """
         url = f"{base_url.rstrip('/')}/models"
-        token = os.getenv(GATEWAY_API_KEY_ENV) or os.getenv("GAIA_GATEWAY_TOKEN")
+        token = os.getenv(GATEWAY_ENV_VAR) or os.getenv("GAIA_GATEWAY_TOKEN")
         if token and url.lower().startswith("http://") and not allow_insecure_http:
             # Registration and token handoff both refuse plaintext without the
             # opt-in; the probe runs FIRST, so without this it is the one place
@@ -624,7 +625,7 @@ class GatewayManager:
         if not api_key or not api_key.strip():
             raise GatewayError(
                 "No token supplied. Pass one to `gaia gateway auth`, or set "
-                f"{GATEWAY_API_KEY_ENV} in Lemonade's environment."
+                f"{GATEWAY_ENV_VAR} in Lemonade's environment."
             )
         payload: Dict[str, Any] = {
             "provider": GATEWAY_PROVIDER,
@@ -667,7 +668,7 @@ class GatewayManager:
             self.log.warning(
                 f"The gateway holds a token but advertises no models — it is "
                 f"almost certainly rejecting the key. Re-run `gaia gateway "
-                f"auth`, or unset {GATEWAY_API_KEY_ENV} if it is stale."
+                f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
         token = recall_token()
