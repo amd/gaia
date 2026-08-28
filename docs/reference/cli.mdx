@@ -1542,22 +1542,26 @@ gaia lemonade embedded status
 gaia lemonade embedded stop
 ```
 
-`start` prints the two variables you need. Both are required — the port changes
-every start, and requests without the key get a 401:
+Both the port and the API key change on every start, and requests without the key
+get a 401. `start` writes them to a file you source rather than printing the key,
+so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 11.8.0 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 11.8.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
-   The instance is private — every request needs both:
-   export LEMONADE_BASE_URL=http://localhost:62232/api/v1
-   export LEMONADE_API_KEY=xUq3...
+   The instance is private. Load its URL and API key with:
+   source ~/.gaia/lemonade/env.sh
 ```
 
+The file sets `LEMONADE_BASE_URL` and `LEMONADE_API_KEY`, is owner-readable only,
+and is deleted on `stop` — credentials naming a dead port are worse than none,
+since whatever grabs that port next would inherit the trust. On Windows it is
+`env.ps1`, loaded with `. $HOME\.gaia\lemonade\env.ps1`.
+
 <Note>
-GAIA agents do not pick the embedded instance up on their own yet — export those
-two variables to point them at it. Automatic preference is coming with the
-startup wiring.
+GAIA agents do not pick the embedded instance up on their own yet — source that
+file to point them at it. Automatic preference is coming with the startup wiring.
 </Note>
 
 ### Commands
@@ -1612,7 +1616,8 @@ Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
 | `dist/<version>/` | The unpacked server for one version |
 | `cache/` | Downloaded backends (`bin/`), shared across versions |
 | `config/config.json` | Server configuration |
-| `state.json` | The running instance: pid, port, API key |
+| `state.json` | The running instance: pid, port, API key (owner-only) |
+| `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
 | `lemond.log` | Server output — read this first when `start` fails |
 
 Downloaded **models** are not duplicated: the embedded server reads the same

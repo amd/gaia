@@ -74,10 +74,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-11.8.0-windows-x64.zip": "c0dc9087840de5c7a1e9974279ba4690cb1ec545c7e165dbf52468ed845c71c7",
-    "lemonade-embeddable-11.8.0-ubuntu-x64.tar.gz": "3cb13e93b0496c583e4cb4dda6aef58c39fc71fbb058fb171d62ac18f4cd72fc",
-    "lemonade-embeddable-11.8.0-ubuntu-arm64.tar.gz": "04f0f6b72d9e70efa250b7e91a9a29e8a77e33fc66db6ca59e29afe5eac8262c",
-    "lemonade-embeddable-11.8.0-macos-arm64.tar.gz": "6cf8a519d883e2f3072a676fab69dd9be96f4d476a7ef440b3e4fb6e08ed4c36",
+    "lemonade-embeddable-11.8.1-windows-x64.zip": "9f76aeacec1ec9e3fce2460929229c02ae637bcdf73e70467b6a1aedc8739921",
+    "lemonade-embeddable-11.8.1-ubuntu-x64.tar.gz": "ed7809b66e325ee99c9fe3e241cfec7c6fc4b43ae794dcb70fc3627bfa3e4865",
+    "lemonade-embeddable-11.8.1-ubuntu-arm64.tar.gz": "0bbd7435a0a6a7d876de4a92f00118802775d2b5c268570acd55651c836a07f5",
+    "lemonade-embeddable-11.8.1-macos-arm64.tar.gz": "472aa96b290ddb3b4950b028151020aac1f838e59f32b347cfa0a15e2b573cb5",
 }
 
 # lemond reads these from <config_dir>/config.json.
@@ -335,6 +335,16 @@ class EmbeddedLemonade:
         return self.root / "config"
 
     @property
+    def env_path(self) -> Path:
+        """Shell-sourceable credentials for the running instance.
+
+        The API key is written here instead of printed, so it never reaches
+        terminal scrollback, shell history or a CI log.
+        """
+        name = "env.ps1" if platform.system() == "Windows" else "env.sh"
+        return self.root / name
+
+    @property
     def state_path(self) -> Path:
         """JSON file recording the running instance."""
         return self.root / "state.json"
@@ -557,8 +567,13 @@ class EmbeddedLemonade:
             json.dump(state, handle, indent=2)
 
     def _clear_state(self) -> None:
-        """Remove the state file if present."""
+        """Remove the state and credentials files if present.
+
+        Both go together: credentials naming a dead port are worse than none,
+        because the next process to grab that port inherits the trust.
+        """
         self.state_path.unlink(missing_ok=True)
+        self.env_path.unlink(missing_ok=True)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -686,14 +701,54 @@ class EmbeddedLemonade:
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
 
-        Every request to the private server needs this as a bearer token; the
-        CLI prints it so callers can export ``LEMONADE_API_KEY``.
+        Every request to the private server needs this as a bearer token.
+        Callers that only need to hand it to a shell should point the user at
+        :attr:`env_path` rather than printing it.
 
         Returns:
             The bearer token, or None when no instance is recorded.
         """
         state = self._read_state()
         return state.get("api_key") if state else None
+
+    def _write_env_file(self, port: int, api_key: str) -> Path:
+        """Write the sourceable credentials file for the running instance.
+
+        Args:
+            port: Port the instance listens on.
+            api_key: Bearer token the instance requires.
+
+        Returns:
+            Path to the written file.
+        """
+        base_url = self.base_url_for(port)
+        if platform.system() == "Windows":
+            body = (
+                f'$env:LEMONADE_BASE_URL = "{base_url}"\n'
+                f'$env:LEMONADE_API_KEY = "{api_key}"\n'
+            )
+        else:
+            body = (
+                f'export LEMONADE_BASE_URL="{base_url}"\n'
+                f'export LEMONADE_API_KEY="{api_key}"\n'
+            )
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        descriptor = os.open(self.env_path, flags, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        return self.env_path
+
+    def env_load_command(self) -> str:
+        """Return the shell command that loads the credentials file.
+
+        Returns:
+            A command the user can paste to set both environment variables.
+        """
+        if platform.system() == "Windows":
+            return f". {self.env_path}"
+        return f"source {self.env_path}"
 
     @staticmethod
     def base_url_for(port: int) -> str:
@@ -840,6 +895,7 @@ class EmbeddedLemonade:
                 "version": self.version,
             }
         )
+        self._write_env_file(port, api_key)
         log.info("Embedded Lemonade %s ready on port %s", self.version, port)
         return EmbeddedStatus(
             installed=True,

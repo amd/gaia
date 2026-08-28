@@ -5,6 +5,7 @@
 import hashlib
 import json
 import platform
+import stat
 import tarfile
 import zipfile
 from pathlib import Path
@@ -344,6 +345,43 @@ class TestStatus:
 
     def test_stop_reports_false_when_nothing_runs(self, manager):
         assert manager.stop() is False
+
+
+class TestCredentials:
+    """The API key must not leak into scrollback, history or CI logs."""
+
+    def test_env_file_holds_both_variables(self, manager):
+        path = manager._write_env_file(4321, "s3cret-key")
+        body = path.read_text(encoding="utf-8")
+        assert "s3cret-key" in body
+        assert "http://localhost:4321/api/v1" in body
+        assert "LEMONADE_BASE_URL" in body and "LEMONADE_API_KEY" in body
+
+    @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX file modes only")
+    def test_env_file_is_owner_readable_only(self, manager):
+        path = manager._write_env_file(4321, "s3cret-key")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX file modes only")
+    def test_state_file_is_owner_readable_only(self, manager):
+        manager._write_state(
+            {"pid": 1, "port": 2, "api_key": "k", "version": manager.version}
+        )
+        assert stat.S_IMODE(manager.state_path.stat().st_mode) == 0o600
+
+    def test_clearing_state_removes_the_credentials_too(self, manager):
+        # Credentials naming a dead port are worse than none: whatever grabs
+        # that port next would inherit the trust.
+        manager._write_state(
+            {"pid": 1, "port": 2, "api_key": "k", "version": manager.version}
+        )
+        manager._write_env_file(2, "k")
+        manager._clear_state()
+        assert not manager.env_path.exists()
+        assert not manager.state_path.exists()
+
+    def test_load_command_names_the_env_file(self, manager):
+        assert str(manager.env_path) in manager.env_load_command()
 
 
 class TestFailureMessages:
