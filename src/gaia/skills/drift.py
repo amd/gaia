@@ -264,13 +264,16 @@ def _content_drift(entry: LockEntry, directory: Path) -> Optional[Drift]:
                 "files cannot be checked for tampering."
             ),
             remediation=(
-                "This entry predates digest recording. Re-record it with "
-                "'gaia skill lock --relock'"
-                + (
-                    f", or reinstall with 'gaia skill install {entry.name} --force' "
-                    "to take the digest from the hub's own bytes."
-                    if entry.source == SOURCE_HUB
-                    else "."
+                (
+                    "This entry predates digest recording. Reinstall it with "
+                    f"'gaia skill install {entry.name} --force' to take the digest "
+                    "from the hub's own verified bytes — 'gaia skill lock --relock' "
+                    "refuses to stamp one over bytes no signature covered."
+                )
+                if _attested(entry)
+                else (
+                    "This entry predates digest recording. Record it with "
+                    "'gaia skill lock --relock'."
                 )
             ),
             path=str(directory),
@@ -318,6 +321,20 @@ def _remediation(entry: LockEntry, fatal: bool) -> str:
         "If you made this change, record it with 'gaia skill lock --relock'. If "
         f"you did not, {undo}."
     )
+
+
+def _would_launder(entry: LockEntry, drift: Drift) -> bool:
+    """Whether re-recording *drift* would put an attestation over unverified bytes.
+
+    Fatal drift is the obvious case. A **missing** digest is the subtle one: the
+    lock never covered these bytes at all, so stamping the current ones asserts
+    the publisher's signature over content nothing checked. That is the state
+    every upgrade from a pre-digest build lands in, which makes it the likeliest
+    way to launder an attestation, not the rarest.
+    """
+    if drift.fatal:
+        return True
+    return drift.kind == DRIFT_UNRECORDED and _attested(entry)
 
 
 def _inspect(entry: LockEntry, directory: Path) -> list[Drift]:
@@ -524,13 +541,13 @@ def relock(skills_root: Path | str) -> RelockResult:
     entries whose skill is gone, and starts tracking untracked directories as
     ``source: local``.
 
-    It **refuses** to re-record a signature-backed entry whose content drifted.
-    Rewriting the digest there would leave the lock asserting a ``verified`` /
-    ``community`` tier and a publisher signature over bytes that signature never
-    covered — laundering an attestation is exactly what a lockfile exists to
-    prevent. Those entries are returned in :attr:`RelockResult.refused` with the
-    two honest ways out (reinstall, or remove and re-import at
-    ``experimental``).
+    It **refuses** to re-record a signature-backed entry whose content drifted,
+    or one that has no recorded digest at all. Writing a digest in either case
+    would leave the lock asserting a ``verified`` / ``community`` tier and a
+    publisher signature over bytes that signature never covered — laundering an
+    attestation is exactly what a lockfile exists to prevent. Those entries are
+    returned in :attr:`RelockResult.refused` with the two honest ways out
+    (reinstall, or remove and re-import at ``experimental``).
 
     Raises:
         SkillValidationError: the existing lock is corrupt (from
@@ -553,7 +570,7 @@ def relock(skills_root: Path | str) -> RelockResult:
             removed.append(name)
             continue
 
-        blocking = [d for d in _inspect(entry, directory) if d.fatal]
+        blocking = [d for d in _inspect(entry, directory) if _would_launder(entry, d)]
         if blocking:
             refused.extend(blocking)
             continue
