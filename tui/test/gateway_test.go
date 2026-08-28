@@ -112,7 +112,7 @@ func (f *fakeLemonade) discovered() int {
 
 func (f *fakeLemonade) baseURL() string { return f.server.URL + "/api/v1" }
 
-// gatewayDriver pumps the screen the way driver_test.go pumps the hub.
+// gatewayDriver pumps the gateway screen directly, without going through root.
 type gatewayDriver struct {
 	t *testing.T
 	m gateway.GatewayModel

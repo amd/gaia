@@ -128,7 +128,7 @@ Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
 ## Running on gateway-hosted models
 
-Press <kbd>g</kbd> in the hub to connect the AMD LLM gateway — larger on-prem
+Type `/gateway` in chat to connect the AMD LLM gateway — larger on-prem
 models and frontier models, running through the same Lemonade your local models
 use. The screen walks you through the gateway URL, your token, and which models
 to enable; the active one becomes the default for new chats.
