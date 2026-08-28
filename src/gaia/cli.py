@@ -7220,6 +7220,15 @@ def handle_lemonade_embedded_command(args):
     except EmbeddedLemonadeError as e:
         print(f"❌ {e}")
         sys.exit(1)
+    except OSError as e:
+        # Spawning the daemon or opening its log can fail on a noexec mount or
+        # a read-only home; say so instead of dumping a traceback.
+        print(
+            f"❌ Could not run embedded Lemonade from {manager.dist_dir}: {e}. "
+            f"Check that the directory is writable and the daemon is "
+            f"executable, then retry."
+        )
+        sys.exit(1)
 
 
 def _print_embedded_status(manager):
@@ -7247,7 +7256,7 @@ def _print_embedded_status(manager):
         if status.installed:
             print("           start it with `gaia lemonade embedded start`")
         else:
-            print("           install it with `gaia lemonade embedded start`")
+            print("           install it with `gaia lemonade embedded install`")
     backends_dir = manager.cache_dir / "bin"
     if backends_dir.is_dir():
         installed = sorted(p.name for p in backends_dir.iterdir())
