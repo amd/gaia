@@ -14,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/ui/components"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // gaiaTestModel is a flagship-agent model (agentID == setupAgentID), the one
@@ -27,15 +29,15 @@ func gaiaTestModel(t *testing.T) ChatModel {
 	return m
 }
 
-// stubGaiaBinary points gaiaBinary at a fixed path for the duration of the
+// stubGaiaBinary points gaiainit.Binary at a fixed path for the duration of the
 // test, so a test can drive startSetup/checkSetupCmd without depending on
 // (or invoking) whatever `gaia` happens to be on the machine running the
 // test suite.
 func stubGaiaBinary(t *testing.T, path string) {
 	t.Helper()
-	orig := gaiaBinary
-	gaiaBinary = func() (string, error) { return path, nil }
-	t.Cleanup(func() { gaiaBinary = orig })
+	orig := gaiainit.Binary
+	gaiainit.Binary = func() (string, error) { return path, nil }
+	t.Cleanup(func() { gaiainit.Binary = orig })
 }
 
 // --- dispatch: /setup is a command, never a question -----------------------
@@ -68,7 +70,7 @@ func TestOnlyTheFlagshipAgentArmsTheGate(t *testing.T) {
 }
 
 // /setup on an agent with no local setup step says so and does not touch
-// gaiaBinary at all -- there is nothing to run.
+// gaiainit.Binary at all -- there is nothing to run.
 func TestSetupOnANonFlagshipAgentDeclines(t *testing.T) {
 	m, _ := newTestModel(t)
 	updated, cmd := m.submit("/setup")
@@ -123,13 +125,13 @@ func TestSetupStartFailureIsSurfacedLoudly(t *testing.T) {
 // --- gaia CLI resolution -----------------------------------------------
 
 func TestGaiaBinaryNotOnPathIsActionable(t *testing.T) {
-	restore := gaiaBinary
-	gaiaBinary = func() (string, error) {
+	restore := gaiainit.Binary
+	gaiainit.Binary = func() (string, error) {
 		return "", errNotOnPath
 	}
-	t.Cleanup(func() { gaiaBinary = restore })
+	t.Cleanup(func() { gaiainit.Binary = restore })
 
-	_, _, err := startSetup(false)
+	_, _, err := gaiainit.Start(false)
 	if err == nil || !strings.Contains(err.Error(), "not on PATH") {
 		t.Errorf("expected an actionable PATH error, got: %v", err)
 	}
@@ -198,7 +200,7 @@ func TestSetupTerminalEventAfterCancelSaysCancelled(t *testing.T) {
 	m.setupRunning = true
 	m.setupCancelRequested = true
 
-	updated, _ := m.handleSetupEvent(setupEvent{done: true, err: errTest("signal: killed")})
+	updated, _ := m.handleSetupEvent(gaiainit.Event{Done: true, Err: errTest("signal: killed")})
 	m = updated.(ChatModel)
 
 	if m.setupRunning {
@@ -216,7 +218,7 @@ func TestSetupTerminalEventOnFailureIsAnError(t *testing.T) {
 	m := gaiaTestModel(t)
 	m.setupRunning = true
 
-	updated, _ := m.handleSetupEvent(setupEvent{done: true, err: errTest("exit status 1")})
+	updated, _ := m.handleSetupEvent(gaiainit.Event{Done: true, Err: errTest("exit status 1")})
 	m = updated.(ChatModel)
 
 	last := m.messages[len(m.messages)-1]
@@ -231,7 +233,7 @@ func TestSetupTerminalEventOnFailureIsAnError(t *testing.T) {
 // --- Claude mode threads --skip-chat-model through ----------------------
 
 func TestClaudeModeSkipsTheChatModelInSetupArgs(t *testing.T) {
-	args := setupRunArgs(true)
+	args := gaiainit.RunArgs(true)
 	found := false
 	for _, a := range args {
 		if a == "--skip-chat-model" {
@@ -242,7 +244,7 @@ func TestClaudeModeSkipsTheChatModelInSetupArgs(t *testing.T) {
 		t.Errorf("claude mode must pass --skip-chat-model, got: %v", args)
 	}
 
-	args = setupRunArgs(false)
+	args = gaiainit.RunArgs(false)
 	for _, a := range args {
 		if a == "--skip-chat-model" {
 			t.Errorf("a non-claude session must not pass --skip-chat-model, got: %v", args)
@@ -251,7 +253,7 @@ func TestClaudeModeSkipsTheChatModelInSetupArgs(t *testing.T) {
 }
 
 func TestClaudeModeSkipsTheChatModelInCheckArgs(t *testing.T) {
-	args := setupCheckArgs(true)
+	args := gaiainit.CheckArgs(true)
 	found := false
 	for _, a := range args {
 		if a == "--skip-chat-model" {

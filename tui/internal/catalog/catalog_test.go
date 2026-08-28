@@ -1,9 +1,6 @@
 package catalog
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestNewCatalog(t *testing.T) {
 	c := NewCatalog()
@@ -11,7 +8,7 @@ func TestNewCatalog(t *testing.T) {
 		t.Fatal("NewCatalog() returned nil")
 	}
 	if len(c.agents) == 0 {
-		t.Fatal("NewCatalog() returned empty catalog")
+		t.Fatal("NewCatalog() returned an empty catalog")
 	}
 }
 
@@ -19,348 +16,107 @@ func TestAll(t *testing.T) {
 	c := NewCatalog()
 	all := c.All()
 	if len(all) != len(c.agents) {
-		t.Fatalf("All() returned %d agents, want %d", len(all), len(c.agents))
+		t.Errorf("All() returned %d agents, want %d", len(all), len(c.agents))
 	}
-	// Verify it's a copy, not a reference
+	// A copy, so a caller mutating a row cannot corrupt the catalog.
 	all[0].Name = "MUTATED"
 	if c.agents[0].Name == "MUTATED" {
-		t.Fatal("All() returned a reference, not a copy")
+		t.Error("All() handed out the catalog's own slice")
 	}
 }
 
 func TestGetValidID(t *testing.T) {
-	c := NewCatalog()
-	agent := c.Get("chat")
+	agent := NewCatalog().Get(FlagshipID)
 	if agent == nil {
-		t.Fatal("Get('chat') returned nil")
+		t.Fatalf("Get(%q) returned nil", FlagshipID)
 	}
-	if agent.ID != "chat" {
-		t.Fatalf("Get('chat').ID = %q, want 'chat'", agent.ID)
-	}
-	if agent.Name != "Chat" {
-		t.Fatalf("Get('chat').Name = %q, want 'Chat'", agent.Name)
+	if agent.ID != FlagshipID {
+		t.Errorf("Get returned %q", agent.ID)
 	}
 }
 
 func TestGetMissingID(t *testing.T) {
-	c := NewCatalog()
-	agent := c.Get("nonexistent")
-	if agent != nil {
-		t.Fatalf("Get('nonexistent') returned %+v, want nil", agent)
-	}
-}
-
-func TestBySectionInstalled(t *testing.T) {
-	c := NewCatalog()
-	// Nothing ships installed any more, so install one the way the daemon does.
-	c.ApplyHubCatalog(&HubCatalog{Agents: []HubEntry{{
-		ID: "email", Supervised: true, Installed: true, InstalledVersion: "1.0.0",
-	}}})
-	installed := c.BySection(SectionInstalled)
-	if len(installed) == 0 {
-		t.Fatal("BySection(Installed) returned empty")
-	}
-	for _, a := range installed {
-		if !a.Status.IsLaunchable() {
-			t.Fatalf("BySection(Installed) included non-launchable agent %q with status %s", a.ID, a.Status)
-		}
-	}
-}
-
-func TestBySectionAvailable(t *testing.T) {
-	c := NewCatalog()
-	available := c.BySection(SectionAvailable)
-	if len(available) == 0 {
-		t.Fatal("BySection(Available) returned empty")
-	}
-	for _, a := range available {
-		if a.Status != StatusAvailable {
-			t.Fatalf("BySection(Available) included agent %q with status %s", a.ID, a.Status)
-		}
-	}
-}
-
-func TestBySectionComingSoon(t *testing.T) {
-	c := NewCatalog()
-	comingSoon := c.BySection(SectionComingSoon)
-	if len(comingSoon) == 0 {
-		t.Fatal("BySection(ComingSoon) returned empty")
-	}
-	for _, a := range comingSoon {
-		if a.Status != StatusComingSoon {
-			t.Fatalf("BySection(ComingSoon) included agent %q with status %s", a.ID, a.Status)
-		}
-	}
-}
-
-func TestBySectionCoverage(t *testing.T) {
-	c := NewCatalog()
-	all := c.All()
-	installed := c.BySection(SectionInstalled)
-	available := c.BySection(SectionAvailable)
-	comingSoon := c.BySection(SectionComingSoon)
-	total := len(installed) + len(available) + len(comingSoon)
-	if total != len(all) {
-		t.Fatalf("sections sum to %d agents, want %d", total, len(all))
-	}
-}
-
-func TestDashboardStats(t *testing.T) {
-	c := NewCatalog()
-	installed, active, idle := c.DashboardStats()
-	// A fresh machine has nothing installed. It used to claim one — the bash
-	// binary that was never built, let alone published.
-	if installed != 0 {
-		t.Fatalf("DashboardStats() installed = %d, want 0 on a fresh catalog", installed)
-	}
-	if active != 0 {
-		t.Fatalf("DashboardStats() active = %d, want 0", active)
-	}
-	if idle != 0 {
-		t.Fatalf("DashboardStats() idle = %d, want 0", idle)
+	if got := NewCatalog().Get("nonexistent"); got != nil {
+		t.Errorf("Get(nonexistent) = %+v, want nil", got)
 	}
 }
 
 func TestSetStatus(t *testing.T) {
 	c := NewCatalog()
-	c.SetStatus("bash", StatusActive)
-	agent := c.Get("bash")
-	if agent.Status != StatusActive {
-		t.Fatalf("after SetStatus, status = %s, want active", agent.Status)
-	}
-
-	// Verify dashboard stats updated
-	installed, active, _ := c.DashboardStats()
-	if active != 1 {
-		t.Fatalf("after SetStatus(active), active = %d, want 1", active)
-	}
-	if installed != 0 {
-		t.Fatalf("after SetStatus(active), installed = %d, want 0", installed)
+	c.SetStatus(FlagshipID, StatusAvailable)
+	if got := c.Get(FlagshipID).Status; got != StatusAvailable {
+		t.Errorf("status = %s, want available", got)
 	}
 }
 
 func TestSetStatusNonexistent(t *testing.T) {
 	c := NewCatalog()
-	// Should not panic
-	c.SetStatus("nonexistent", StatusActive)
-}
-
-func TestRemove(t *testing.T) {
-	c := NewCatalog()
-	agent := c.Get("bash")
-	if agent.BinaryPath == "" {
-		t.Fatal("bash agent should have a BinaryPath before Remove")
-	}
-
-	c.Remove("bash")
-	agent = c.Get("bash")
-	// Not Available: the hub does not publish it, so offering an install would
-	// be a dead end. See TestRemoveDoesNotPromoteAnUnpublishedAgent.
-	if agent.Status != StatusComingSoon {
-		t.Fatalf("after Remove, status = %s, want coming soon", agent.Status)
-	}
-	if agent.BinaryPath != "" {
-		t.Fatalf("after Remove, BinaryPath = %q, want empty", agent.BinaryPath)
-	}
-	if agent.BinaryArgs != nil {
-		t.Fatalf("after Remove, BinaryArgs = %v, want nil", agent.BinaryArgs)
-	}
-}
-
-func TestRemoveNonexistent(t *testing.T) {
-	c := NewCatalog()
-	// Should not panic
-	c.Remove("nonexistent")
-}
-
-func TestIncrementVotes(t *testing.T) {
-	c := NewCatalog()
-	agent := c.Get("chat")
-	if agent.Votes != 0 {
-		t.Fatalf("initial Votes = %d, want 0", agent.Votes)
-	}
-
-	c.IncrementVotes("chat")
-	if agent.Votes != 1 {
-		t.Fatalf("after IncrementVotes, Votes = %d, want 1", agent.Votes)
-	}
-
-	c.IncrementVotes("chat")
-	if agent.Votes != 2 {
-		t.Fatalf("after second IncrementVotes, Votes = %d, want 2", agent.Votes)
-	}
-}
-
-func TestIncrementVotesNonexistent(t *testing.T) {
-	c := NewCatalog()
-	// Should not panic
-	c.IncrementVotes("nonexistent")
-}
-
-func TestFilterValue(t *testing.T) {
-	a := Agent{
-		Name:        "Chat",
-		Description: "General conversation and Q&A",
-		Category:    "Conversation",
-		Tags:        []string{"chat", "general", "qa"},
-	}
-	fv := a.FilterValue()
-	if !strings.Contains(fv, "Chat") {
-		t.Fatalf("FilterValue() missing Name, got %q", fv)
-	}
-	if !strings.Contains(fv, "General conversation") {
-		t.Fatalf("FilterValue() missing Description, got %q", fv)
-	}
-	if !strings.Contains(fv, "Conversation") {
-		t.Fatalf("FilterValue() missing Category, got %q", fv)
-	}
-	if !strings.Contains(fv, "qa") {
-		t.Fatalf("FilterValue() missing tag 'qa', got %q", fv)
-	}
-}
-
-func TestTitle(t *testing.T) {
-	a := Agent{Icon: "💬", Name: "Chat"}
-	title := a.Title()
-	want := "💬 Chat"
-	if title != want {
-		t.Fatalf("Title() = %q, want %q", title, want)
-	}
-}
-
-func TestStatusDot(t *testing.T) {
-	tests := []struct {
-		status AgentStatus
-		want   string
-	}{
-		{StatusActive, "●"},
-		{StatusIdle, "●"},
-		{StatusInstalled, "●"},
-		{StatusAvailable, "○"},
-		{StatusComingSoon, "◌"},
-		{AgentStatus(99), " "},
-	}
-	for _, tt := range tests {
-		got := tt.status.StatusDot()
-		if got != tt.want {
-			t.Errorf("StatusDot(%s) = %q, want %q", tt.status, got, tt.want)
-		}
+	before := len(c.All())
+	c.SetStatus("nope", StatusAvailable) // must not panic or add a row
+	if got := len(c.All()); got != before {
+		t.Errorf("SetStatus on an unknown id changed the catalog size to %d", got)
 	}
 }
 
 func TestIsLaunchable(t *testing.T) {
-	tests := []struct {
-		status AgentStatus
-		want   bool
-	}{
-		{StatusInstalled, true},
-		{StatusActive, true},
-		{StatusIdle, true},
-		{StatusAvailable, false},
-		{StatusComingSoon, false},
-		{AgentStatus(99), false},
+	if !StatusInstalled.IsLaunchable() {
+		t.Error("installed is not launchable")
 	}
-	for _, tt := range tests {
-		got := tt.status.IsLaunchable()
-		if got != tt.want {
-			t.Errorf("IsLaunchable(%s) = %v, want %v", tt.status, got, tt.want)
-		}
+	if StatusAvailable.IsLaunchable() {
+		t.Error("available is launchable; it is not on disk yet")
 	}
 }
 
 func TestStatusString(t *testing.T) {
-	tests := []struct {
-		status AgentStatus
-		want   string
-	}{
-		{StatusInstalled, "installed"},
-		{StatusActive, "active"},
-		{StatusIdle, "idle"},
-		{StatusAvailable, "available"},
-		{StatusComingSoon, "coming soon"},
-		{AgentStatus(99), "unknown"},
-	}
-	for _, tt := range tests {
-		got := tt.status.String()
-		if got != tt.want {
-			t.Errorf("String(%d) = %q, want %q", tt.status, got, tt.want)
+	for status, want := range map[AgentStatus]string{
+		StatusInstalled: "installed",
+		StatusAvailable: "available",
+		AgentStatus(99): "unknown",
+	} {
+		if got := status.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
 		}
 	}
 }
 
-func TestAllSections(t *testing.T) {
-	sections := AllSections()
-	if len(sections) != 3 {
-		t.Fatalf("AllSections() returned %d sections, want 3", len(sections))
-	}
-	if sections[0] != SectionInstalled {
-		t.Fatalf("AllSections()[0] = %q, want %q", sections[0], SectionInstalled)
-	}
-	if sections[1] != SectionAvailable {
-		t.Fatalf("AllSections()[1] = %q, want %q", sections[1], SectionAvailable)
-	}
-	if sections[2] != SectionComingSoon {
-		t.Fatalf("AllSections()[2] = %q, want %q", sections[2], SectionComingSoon)
-	}
-}
-
+// The zero value has to be the stdio path every pre-daemon entry used, or an
+// entry that declares no transport would silently be routed through a relay it
+// has no sidecar behind.
 func TestTransportZeroValueIsSubprocess(t *testing.T) {
 	var zero Transport
 	if zero != TransportSubprocess {
-		t.Fatalf("the zero Transport must be subprocess so existing entries keep working, got %v", zero)
+		t.Errorf("zero Transport = %v, want TransportSubprocess", zero)
 	}
-	if TransportSubprocess.String() != "subprocess" || TransportDaemon.String() != "daemon" {
-		t.Errorf("unexpected transport names: %q / %q", TransportSubprocess, TransportDaemon)
+	if got := zero.String(); got != "subprocess" {
+		t.Errorf("zero Transport.String() = %q", got)
 	}
 }
 
+// email is an HTTP sidecar the daemon supervises; there is no binary for the
+// TUI to spawn. Marking it subprocess would send the launch looking for one.
 func TestEmailUsesTheDaemonTransport(t *testing.T) {
-	c := NewCatalog()
-
-	email := c.Get("email")
+	email := NewCatalog().Get("email")
 	if email == nil {
-		t.Fatal("email is missing from the catalog")
+		t.Fatal("the seed catalog no longer has an email entry")
 	}
 	if email.Transport != TransportDaemon {
-		t.Errorf("email transport = %v, want daemon (it is an HTTP sidecar, not a spawnable binary)", email.Transport)
+		t.Errorf("email transport = %v, want daemon", email.Transport)
 	}
 	if email.BinaryPath != "" {
-		t.Errorf("a daemon-transport agent must carry no binary path, got %q", email.BinaryPath)
-	}
-
-	// The invariant is per-transport, not per-agent: a daemon-transport agent is
-	// an HTTP sidecar reached through the relay, so it must carry no binary path
-	// the TUI would try to spawn. Asserting "everything except email is
-	// subprocess" would need editing for every new sidecar — the opposite of a
-	// guard.
-	// gaia is deliberately absent: it moved onto the subprocess transport, so
-	// the TUI spawns it directly with no daemon, port or lease in the path.
-	daemonAgents := map[string]bool{"email": true}
-	for _, a := range c.All() {
-		if daemonAgents[a.ID] {
-			if a.Transport != TransportDaemon {
-				t.Errorf("agent %q transport = %v, want daemon (it is an HTTP sidecar)", a.ID, a.Transport)
-			}
-			if a.BinaryPath != "" {
-				t.Errorf("daemon-transport agent %q carries binary path %q", a.ID, a.BinaryPath)
-			}
-			continue
-		}
-		if a.Transport != TransportSubprocess {
-			t.Errorf("agent %q transport = %v, want subprocess", a.ID, a.Transport)
-		}
+		t.Errorf("email declares a binary %q; the daemon owns its lifecycle", email.BinaryPath)
 	}
 }
 
+// --mock stands in for the agent binary, so it must not touch a daemon agent —
+// there is nothing to spawn there for it to replace.
 func TestSetMockBinarySkipsDaemonTransport(t *testing.T) {
 	c := NewCatalog()
-	c.SetStatus("email", StatusInstalled)
 	c.SetMockBinary("/tmp/mock-agent")
 
 	if got := c.Get("email").BinaryPath; got != "" {
-		t.Errorf("a daemon-transport agent must not get a mock binary, got %q", got)
+		t.Errorf("--mock gave the daemon-transport email a binary %q", got)
 	}
-	if got := c.Get("bash").BinaryPath; got != "/tmp/mock-agent" {
-		t.Errorf("bash binary = %q, want the mock", got)
+	if got := c.Get(FlagshipID).BinaryPath; got != "/tmp/mock-agent" {
+		t.Errorf("--mock left the flagship pointing at %q", got)
 	}
 }

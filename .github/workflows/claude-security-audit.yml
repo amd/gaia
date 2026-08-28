@@ -313,6 +313,13 @@ jobs:
             yourself: STOP investigating at ~5 turns remaining and spend them writing the
             findings file. Reaching the turn ceiling mid-investigation discards everything
             you found. Partial findings written to the file beat perfect findings lost.
+
+            Subagent turns count against that ceiling too, and coordinating them is what
+            actually exhausts it — a lens that fans out to check the same gate across many
+            call sites burns its budget on orchestration and writes nothing. Delegate only
+            for a genuinely wide, parallelizable investigation, never to verify or
+            double-check your own findings, and prefer one subagent over several. Spend
+            turns reading code, not coordinating.
           claude_args: |
             --max-turns 45
             --model ${{ env.AUDIT_MODEL }}

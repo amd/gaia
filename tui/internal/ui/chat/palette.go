@@ -31,7 +31,6 @@ type paletteCommand struct {
 // grows a command this list doesn't know about.
 var paletteCommands = []paletteCommand{
 	{"/help", "Show the keyboard shortcuts and commands panel"},
-	{"/hub", "Return to the agent hub"},
 	{"/clear", "Clear this conversation"},
 	{"/memory", "View this agent's memory"},
 	{"/bypass", "Run every tool without asking first — shows a warning before it turns on"},

@@ -66,11 +66,11 @@ func TestUsageNamesTheInvokedBinary(t *testing.T) {
 		t.Errorf("root usage does not name the invoked binary:\n%s", usage)
 	}
 
-	listCmd, _, err := rootCmd.Find([]string{"list"})
+	runCmd, _, err := rootCmd.Find([]string{"run"})
 	if err != nil {
-		t.Fatalf("find list command: %v", err)
+		t.Fatalf("find run command: %v", err)
 	}
-	if path := listCmd.CommandPath(); !strings.HasPrefix(path, "gaia-tui ") {
+	if path := runCmd.CommandPath(); !strings.HasPrefix(path, "gaia-tui ") {
 		t.Errorf("subcommand path = %q, want it to start with %q", path, "gaia-tui ")
 	}
 }

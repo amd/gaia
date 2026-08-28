@@ -55,6 +55,13 @@ degraded — relaunch under `wt.exe`.
 
 `/control/v1/` — `status` · `screen` · `keys` · `text` · **`wait`** · `frames` · `resize`
 
+`view` is one of `splash` · `preflight` · `chat` · `unknown` — there is no hub
+screen to navigate, since `gaia-tui` boots straight into one agent's chat behind
+a readiness gate. On `preflight`, `blocker` names the row refusing the launch
+(`binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`); wait on
+`{"state": {"view": "chat"}}` rather than a screen substring. `esc` quits on
+`preflight` (no screen behind it) and clears the composer on an idle `chat`.
+
 ## The rule: wait, don't sleep
 
 `POST /control/v1/wait` blocks **server-side** until a condition holds:

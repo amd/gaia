@@ -2568,59 +2568,50 @@ under [Agent Command](#agent-command).
 
 ---
 
-### Terminal hub (`gaia tui`)
+### Terminal UI (`gaia tui`)
 
-`gaia tui` is the Go/Bubble Tea terminal hub: browse agents, install them, and
-chat with them without leaving the terminal. Building from source the binary is
-`tui/bin/gaia` (`cd tui && make build`).
+`gaia tui` is the Go/Bubble Tea terminal client: it boots straight into the
+flagship `gaia` agent's chat, behind a readiness gate. Building from source the
+binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui install
-  email` and `gaia install email` are the same command. Running the source build
-  directly, both `./tui/bin/gaia tui list` and `./tui/bin/gaia list` work.
+  The binary accepts a leading `tui` word and drops it, so `gaia tui status`
+  and `gaia status` are the same command. Running the source build directly,
+  both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
 </Note>
 
 ```bash
-gaia tui                                  # open the hub
-gaia tui list                             # what the Agent Hub offers + what you have
-gaia tui list --installed                 # local only, no network call
-gaia tui install email --trust            # download and install
-gaia tui uninstall email                  # stop the agent and remove it
-gaia tui run email                        # interactive chat
+gaia tui                                       # splash -> readiness gate -> chat
+gaia tui run email                             # chat with another agent by id
 gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
-gaia tui status                           # background service + what is installed
+gaia tui status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
-| `gaia tui` | Open the Agent Hub. |
-| `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
-| `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
-| `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
+| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui version` | Print the build version. |
 
-Install and uninstall are served by the GAIA daemon
-(`POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}`), so the
-TUI, `gaia hub`, and the Agent UI share one integrity check and one install
-lock. The daemon is started automatically for these commands; `gaia tui status`
-only ever attaches, so it reports what *is* running rather than starting
-something.
+There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
+not browse or manage the Agent Hub catalog. Installing or removing a hub
+sidecar agent (`email`) is the Python CLI's job:
 
-#### `--trust`: installing a non-verified agent
+```bash
+gaia hub list                 # what the Agent Hub offers, and what you have
+gaia hub install email --trust
+gaia hub uninstall email
+```
 
 An agent outside the `verified` security tier runs third-party code on your
-machine. The daemon refuses to install one with **HTTP 403** until the caller
-passes an explicit opt-in — there is no bypass, and nothing retries on your
-behalf.
-
-From the CLI, that opt-in is `--trust`. Without it the command prints exactly
-what you would be agreeing to and exits non-zero:
+machine, so `gaia hub install` refuses it with **HTTP 403** from the daemon
+until you pass `--trust` — there is no bypass, and nothing retries on your
+behalf:
 
 ```console
-$ gaia tui install email
+$ gaia hub install email
 
 Refusing to install "email" without --trust.
 
@@ -2632,12 +2623,8 @@ Refusing to install "email" without --trust.
   Access      none declared
 
 If you trust the publisher, re-run:
-  gaia tui install email --trust
+  gaia hub install email --trust
 ```
-
-In the hub screen the same refusal opens a **Trust & Install** confirmation
-showing the same facts. It defaults to *Cancel*, and only an explicit yes
-re-sends the request with the opt-in.
 
 #### `run --query` is a real one-shot
 
@@ -2653,13 +2640,14 @@ echo $?   # 0
 
 It never waits on something that is not there. Before the query is sent, a
 one-shot over the daemon transport (the agents the background service supervises)
-runs the same readiness check the hub's launch gate runs — background service,
-sidecar, local model server, model, and for email the mailbox — and if one of
-them is not ready it prints that row and its remedy to stderr and exits non-zero.
-Against an unreachable dependency that is about a second; the ceiling is the time
-it takes to start the sidecar. Nothing is sent to the agent, and the gate screen
-is never rendered: a script has nobody to press a key. An agent that runs as a
-local subprocess has no readiness route to probe, so it is launched directly.
+runs the same readiness check the interactive launch's gate runs — background
+service, sidecar, local model server, model, and for email the mailbox — and if
+one of them is not ready it prints that row and its remedy to stderr and exits
+non-zero. Against an unreachable dependency that is about a second; the ceiling
+is the time it takes to start the sidecar. Nothing is sent to the agent, and the
+gate screen is never rendered: a script has nobody to press a key. The flagship
+runs as a local subprocess and is checked the same way, just with its own
+three-row gate (agent binary, Lemonade, models) instead of the daemon's five.
 
 ```bash
 $ gaia tui run email --query "triage my inbox"   # with the model server down
@@ -2677,24 +2665,16 @@ timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interact
 `gaia tui run <id>` is unaffected — a person can read what arrives and press
 ctrl+c.
 
-#### Hub keys
+#### Readiness gate keys
 
 | Key | Action |
 |-----|--------|
-| `enter` | Run the selected agent |
-| `i` | Install it (or update it, when a newer version exists) |
-| `d` | Uninstall it (asks first) |
-| `r` | Refresh the agent list from the Agent Hub |
-| `/` | Search |
-| `tab` / `shift+tab` | Next / previous category |
-| `v` | Vote for a coming-soon agent |
-| `?` | Help |
-| `q`, `ctrl+c` | Quit |
-
-<Note>
-  `backspace` is deliberately unbound. It used to share the uninstall binding
-  with `d` and `delete`, which made "go back" a destructive action.
-</Note>
+| `f` | Apply the focused row's fix — shown only when that row has one |
+| `r` | Re-check everything |
+| `d` | Toggle the raw answer behind the focused row |
+| `↑` / `↓` (or `k` / `j`) | Move between rows |
+| `enter` | Continue anyway — offered only when nothing is outright broken |
+| `esc`, `ctrl+c` | Quit. There is no screen behind the gate to go back to |
 
 #### Waiting on a consequential readiness problem
 
@@ -2709,7 +2689,7 @@ and the notice lists every such row at once if more than one applies.
 
 #### Theme (light vs dark terminals)
 
-The hub asks the terminal for its background colour on startup and picks a
+The TUI asks the terminal for its background colour on startup and picks a
 light or dark palette to match, so text stays readable either way. Over SSH,
 inside tmux, or in a CI log where the terminal never answers that query, force
 a mode instead of guessing:
@@ -2727,11 +2707,11 @@ GAIA_TUI_THEME=light gaia tui    # or: dark
 
 ### TUI Control API
 
-The terminal hub (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+The terminal UI (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
 HTTP API that drives **the session you are looking at** — not a headless copy.
-An assistant navigates, types, and launches agents while the frames render in
-your terminal in real time. It is how the TUI gets tested without a human at
-the keyboard.
+An assistant navigates, types, and drives the readiness gate while the frames
+render in your terminal in real time. It is how the TUI gets tested without a
+human at the keyboard.
 
 Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
 token.
@@ -2744,8 +2724,8 @@ gaia tui --control --debug         # log every injected key, state change, and w
 
 <Note>
   These are persistent flags on the TUI binary's root command, so they apply to
-  the hub, `hub`, and `chat` alike. Building from source, that binary is
-  `tui/bin/gaia` (`cd tui && make build`).
+  the bare launch, `run`, and `chat` alike. Building from source, that binary is
+  `tui/bin/gaia-tui` (`cd tui && make build`).
 </Note>
 
 | Flag | Type | Default | Description |
@@ -2771,7 +2751,7 @@ Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /status` | `running` plus the active view, active agent, streaming, hub tab, selection, terminal size, and `can_return_to_hub`. |
+| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`), and terminal size. |
 | `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
 | `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
 | `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
@@ -2796,10 +2776,10 @@ Two response details matter when driving this:
   in that window, so the API refuses instead of reporting a success for keys that
   went nowhere. Reads (`/status`, `/screen`, `/frames`) keep working.
 
-`can_return_to_hub` exists because `esc` is not universally "go back": in a chat
-opened from the hub it returns there, but in a standalone `gaia chat --subprocess`
-session it **quits the program**. A driver that guesses wrong kills the session it
-was asked to drive, so the state says which.
+`esc` is not universally "go back": on the readiness gate it quits (there is no
+screen behind it), in an idle chat it clears the composer, and mid-turn it cancels
+the turn. A driver should read `view` and act on that rather than assume what `esc`
+does.
 
 Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.

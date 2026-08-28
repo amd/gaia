@@ -22,19 +22,6 @@ PID = 4242
 PORT = 8770
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
-# Verbatim from the Go hub (ui/hub/model.go). The previous fixture used an
-# invented "Enter=launch" form the product has never emitted, so the parser was
-# only ever tested against input that could not occur — and both install tools
-# were broken in the field while these tests passed.
-HUB_FOOTER = (
-    "  enter run · i install · d remove · / search · tab category · "
-    "v vote · r refresh · ? help · q quit"
-)
-HUB_FOOTER_NO_INSTALL = (
-    "  enter run · / search · tab category · v vote · r refresh · ? help · q quit"
-)
-
-
 # ── Fixtures / fakes ─────────────────────────────────────────────────
 
 
@@ -97,134 +84,68 @@ class FakeTui:
 
     def __init__(
         self,
-        tabs=(("Installed", ["bash", "chat"]),),
-        launchable=True,
-        footer=HUB_FOOTER,
-        status_line="",
-        view="hub",
-        agent="",
+        view="chat",
+        agent="gaia",
+        blocker="",
         service=tui_mcp.SERVICE_ID,
         pid=PID,
         unreachable=False,
-        confirms=True,
-        selected_index=0,
         streaming=False,
         overlay="",
-        can_return_to_hub=True,
         settled=True,
         running=True,
     ):
-        self.confirms = confirms
         self.streaming = streaming
         self.overlay = overlay
-        self.can_return_to_hub = can_return_to_hub
         self.settled = settled
         self.running = running
-        self.tabs = [(name, list(ids)) for name, ids in tabs]
-        self.tab_index = 0
-        self.selected_index = selected_index
         self.view = view
         self.agent = agent
-        self.launchable = launchable
-        self.footer = footer
-        self.status_line = status_line
+        self.blocker = blocker
         self.service = service
         self.pid = pid
         self.unreachable = unreachable
         self.seq = 0
         self.keys_sent = []
         self.text_sent = []
-        self.confirm_open = False
         self.requests_seen = []
         self.tokens_seen = []
 
     # -- state --------------------------------------------------------
 
-    def visible(self):
-        return self.tabs[self.tab_index][1]
-
-    def tab_name(self):
-        return self.tabs[self.tab_index][0]
-
-    def selected(self):
-        vis = self.visible()
-        if not vis:
-            return ""
-        return vis[min(self.selected_index, len(vis) - 1)]
-
     def state(self):
-        if self.view == "chat":
-            state = {
-                "view": "chat",
-                "agent": self.agent,
-                "streaming": self.streaming,
-            }
-            # Absent only when the build predates the field; None means "omit".
-            if self.can_return_to_hub is not None:
-                state["can_return_to_hub"] = self.can_return_to_hub
-            return state
-        return {
-            "view": "hub",
-            "agent": "",
-            "streaming": False,
-            "can_return_to_hub": False,
-            "hub_tab": self.tab_name(),
-            "hub_tab_index": self.tab_index,
-            "selected_agent_id": self.selected(),
-            "visible_agent_ids": list(self.visible()),
-            "filtering": False,
-            "overlay": self.overlay or ("confirm" if self.confirm_open else ""),
+        state = {
+            "view": self.view,
+            "agent": self.agent,
+            "streaming": self.streaming,
         }
+        if self.overlay:
+            state["overlay"] = self.overlay
+        if self.blocker:
+            state["blocker"] = self.blocker
+        return state
 
     def screen(self):
-        if self.view == "chat":
-            return f"chat with {self.agent}\n> \nEsc=back  q=quit"
-        lines = [f"GAIA hub — {self.tab_name()}"]
-        for i, aid in enumerate(self.visible()):
-            lines.append(("> " if i == self.selected_index else "  ") + aid)
-        if self.confirm_open:
-            lines.append(f'Uninstall "{self.selected()}"?    Yes    No')
-        if self.status_line:
-            lines.append(self.status_line)
-        lines.append(self.footer)
-        return "\n".join(lines)
+        if self.view == "splash":
+            return "  G A I A    Your local AI agent — by AMD\n\n  starting GAIA…"
+        if self.view == "preflight":
+            return (
+                f"  Getting {self.agent.upper()} ready\n"
+                f"  > [!]   Local AI            not running\n"
+                "  r re-check · d details · esc back"
+            )
+        return f"chat with {self.agent}\n> \n  Ctrl+C quit"
 
     def press(self, key):
         self.keys_sent.append(key)
         self.seq += 1
-        if self.confirm_open:
-            if key == "y":
-                name, ids = self.tabs[self.tab_index]
-                target = self.selected()
-                if target in ids:
-                    ids.remove(target)
-                self.tabs[self.tab_index] = (name, ids)
-                self.selected_index = 0
-                self.confirm_open = False
-            elif key in ("n", "esc"):
-                self.confirm_open = False
-            return
-        if key == "tab":
-            # bubbles' list.SetItems keeps the cursor index across a tab switch;
-            # it does not reset to the top. The navigation code must cope.
-            self.tab_index = (self.tab_index + 1) % len(self.tabs)
-            self.selected_index = min(
-                self.selected_index, max(len(self.visible()) - 1, 0)
-            )
-        elif key == "down":
-            self.selected_index = min(self.selected_index + 1, len(self.visible()) - 1)
-        elif key == "up":
-            self.selected_index = max(self.selected_index - 1, 0)
-        elif key == "esc":
-            self.view = "hub"
-            self.agent = ""
-        elif key == "enter" and self.view == "hub" and self.launchable:
+        # The readiness gate is the only screen with navigation left, and `r`
+        # is the only key that changes what it reports.
+        if self.view == "preflight" and key == "r":
+            self.blocker = ""
             self.view = "chat"
-            self.agent = self.selected()
-        elif key == "d" and self.confirms:
-            # The real hub opens the dialog only for an installed/idle agent;
-            # for anything else 'd' is a no-op, which confirms=False models.
-            self.confirm_open = True
+        elif key == "esc" and self.overlay:
+            self.overlay = ""
 
     # -- transport ----------------------------------------------------
 
@@ -668,9 +589,6 @@ def test_every_tool_errors_cleanly_when_no_tui(monkeypatch):
         "send_text": tui_mcp._send_text("hello"),
         "wait_for": tui_mcp._wait_for(contains="hi"),
         "resize": tui_mcp._resize(120, 40),
-        "launch": tui_mcp._launch_agent("email"),
-        "install": tui_mcp._install_agent("email"),
-        "uninstall": tui_mcp._uninstall_agent("email"),
     }
     for name, result in results.items():
         assert result["status"] == "error", name
@@ -692,12 +610,28 @@ def test_bad_arguments_are_rejected_before_discovery(monkeypatch):
 # ── Tools: happy paths ───────────────────────────────────────────────
 
 
-def test_status_summary_hub(live_tui):
-    live_tui(tabs=(("Installed", ["bash", "chat", "email", "jira", "code"]),))
+def test_status_summary_splash(live_tui):
+    """Nothing on the splash takes input — the summary must not invite a key."""
+    live_tui(view="splash", agent="gaia")
+    out = tui_mcp._status()
+    assert "starting up" in out["summary"]
+    assert "no key needed" in out["summary"]
+
+
+def test_status_summary_preflight_names_the_blocking_row(live_tui):
+    """Which row refuses is the one thing a caller needs off this screen."""
+    live_tui(view="preflight", agent="gaia", blocker="lemonade")
     out = tui_mcp._status()
     assert out["summary"] == (
-        "hub view, tab 'Installed', 5 agents visible, selected 'bash'"
+        "readiness gate, for 'gaia', blocked on 'lemonade' — read the screen for the fix"
     )
+
+
+def test_status_summary_preflight_still_checking(live_tui):
+    """No blocker yet is not the same as ready — say which it is."""
+    live_tui(view="preflight", agent="gaia")
+    out = tui_mcp._status()
+    assert "nothing is refusing the launch yet" in out["summary"]
 
 
 def test_status_summary_chat(live_tui):
@@ -717,7 +651,7 @@ def test_screen_default_is_plain(live_tui):
     fake = live_tui()
     out = tui_mcp._screen()
     assert out["format"] == "plain"
-    assert "GAIA hub" in out["screen"]
+    assert "chat with" in out["screen"]
     assert ("GET", "/screen") in fake.requests_seen
 
 
@@ -750,7 +684,7 @@ def test_wait_for_requires_a_matcher(live_tui):
 
 def test_wait_for_match(live_tui):
     live_tui()
-    out = tui_mcp._wait_for(contains="GAIA hub")
+    out = tui_mcp._wait_for(contains="chat with")
     assert out["matched"] is True
 
 
@@ -759,8 +693,8 @@ def test_wait_for_timeout_returns_the_actual_screen(live_tui):
     out = tui_mcp._wait_for(contains="never on this screen", timeout_ms=1000)
     assert out["status"] == "error"
     assert "Timed out after 1000 ms" in out["detail"]
-    assert "GAIA hub" in out["detail"]  # what WAS on screen
-    assert "bash" in out["screen"]
+    assert "chat with" in out["detail"]  # what WAS on screen
+    assert "chat with gaia" in out["screen"]
     assert out["matched"] is False
 
 
@@ -775,286 +709,11 @@ def test_wait_uses_a_timeout_longer_than_the_wait(live_tui):
         return original(method, url, **kwargs)
 
     fake.request = _record
-    tui_mcp._wait_for(contains="GAIA hub", timeout_ms=30000)
+    tui_mcp._wait_for(contains="chat with", timeout_ms=30000)
     assert seen["timeout"] == 30 + tui_mcp.WAIT_TIMEOUT_SLACK
 
 
-# ── tui_launch_agent ─────────────────────────────────────────────────
-
-
-def test_launch_agent_navigates_tabs_and_rows(live_tui):
-    fake = live_tui(
-        tabs=(
-            ("Installed", ["bash", "chat"]),
-            ("All", ["alpha", "beta", "gamma", "email"]),
-        )
-    )
-    out = tui_mcp._launch_agent("email")
-    assert out.get("launched") is True
-    assert out["agent"] == "email"
-    assert fake.keys_sent == ["tab", "down", "down", "down", "enter"]
-    assert "chat with email" in out["screen"]
-
-
-def test_launch_agent_moves_up_when_the_target_is_above_the_cursor(live_tui):
-    """The hub list does not wrap — 'down' alone can never reach a row above."""
-    fake = live_tui(tabs=(("Installed", ["bash", "chat", "email"]),), selected_index=2)
-    out = tui_mcp._launch_agent("bash")
-    assert out.get("launched") is True
-    assert fake.keys_sent == ["up", "up", "enter"]
-
-
-def test_launch_agent_handles_the_cursor_surviving_a_tab_switch(live_tui):
-    """bubbles keeps the cursor index across SetItems; the target may be above it."""
-    fake = live_tui(
-        tabs=(
-            ("Installed", ["bash", "chat", "code"]),
-            ("All", ["alpha", "beta", "email"]),
-        ),
-        selected_index=2,
-    )
-    out = tui_mcp._launch_agent("alpha")
-    assert out.get("launched") is True
-    assert fake.keys_sent == ["tab", "up", "up", "enter"]
-
-
-def test_launch_agent_already_open_sends_no_keys(live_tui):
-    """Re-launching the open chat would close it and throw the conversation away."""
-    fake = live_tui(view="chat", agent="email")
-    out = tui_mcp._launch_agent("email")
-    assert out == {
-        "launched": True,
-        "already_open": True,
-        "agent": "email",
-        "screen": out["screen"],
-    }
-    assert fake.keys_sent == []
-
-
-def test_launch_agent_refuses_to_interrupt_a_streaming_chat(live_tui):
-    fake = live_tui(
-        tabs=(("Installed", ["bash", "email"]),),
-        view="chat",
-        agent="bash",
-        streaming=True,
-    )
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "streaming" in out["detail"]
-    assert fake.keys_sent == []
-
-
-@pytest.mark.parametrize("overlay", ["help", "confirm"])
-def test_launch_agent_refuses_under_an_overlay(live_tui, overlay):
-    """Any key dismisses help / answers the dialog — navigating under one is blind."""
-    fake = live_tui(tabs=(("Installed", ["bash", "email"]),), overlay=overlay)
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert f"{overlay!r} overlay" in out["detail"]
-    assert fake.keys_sent == []
-
-
-def test_launch_agent_reports_a_failed_screen_read_instead_of_a_blank_screen(live_tui):
-    fake = live_tui(tabs=(("Installed", ["email"]),))
-    original = fake.request
-
-    def _fail_screen_reads(method, url, **kwargs):
-        if url.endswith("/screen"):
-            raise requests.exceptions.ConnectionError("socket closed")
-        return original(method, url, **kwargs)
-
-    fake.request = _fail_screen_reads
-    out = tui_mcp._launch_agent("email")
-    assert out.get("launched") is True
-    assert out["screen"] == ""
-    assert "Cannot reach" in out["screen_error"]
-
-
-def test_launch_agent_refuses_before_esc_in_a_standalone_chat(live_tui):
-    """can_return_to_hub=false: esc QUITS there, so the key must never be sent."""
-    fake = live_tui(
-        tabs=(("Installed", ["email"]),),
-        view="chat",
-        agent="bash",
-        can_return_to_hub=False,
-    )
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "standalone chat session" in out["detail"]
-    assert "quits the TUI" in out["detail"]
-    assert "tui_send_keys" in out["detail"]
-    assert fake.keys_sent == []
-
-
-def test_launch_agent_refuses_when_the_build_cannot_say_whether_esc_quits(live_tui):
-    """Absent field: unknowable, and guessing wrong ends the user's session."""
-    fake = live_tui(
-        tabs=(("Installed", ["email"]),),
-        view="chat",
-        agent="bash",
-        can_return_to_hub=None,
-    )
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "can_return_to_hub" in out["detail"]
-    assert fake.keys_sent == []
-
-
-def test_standalone_chat_is_called_out_in_the_status_summary(live_tui):
-    live_tui(view="chat", agent="bash", can_return_to_hub=False)
-    assert "standalone session" in tui_mcp._status()["summary"]
-
-
-def test_launch_agent_explains_a_standalone_chat_quitting_on_esc(live_tui):
-    """Belt and braces: a build that says it can return, but esc still quits."""
-    fake = live_tui(tabs=(("Installed", ["email"]),), view="chat", agent="bash")
-    original_press = fake.press
-
-    def _quit_on_esc(key):
-        original_press(key)
-        if key == "esc":
-            fake.unreachable = True
-
-    fake.press = _quit_on_esc
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "standalone chat session" in out["detail"]
-    assert "gaia tui --control" in out["detail"]
-
-
-def test_launch_agent_leaves_chat_view_first(live_tui):
-    fake = live_tui(tabs=(("Installed", ["bash", "email"]),), view="chat", agent="bash")
-    out = tui_mcp._launch_agent("email")
-    assert out.get("launched") is True
-    assert fake.keys_sent == ["esc", "down", "enter"]
-
-
-def test_launch_agent_not_found_lists_ids_seen(live_tui):
-    fake = live_tui(tabs=(("Installed", ["bash", "chat"]), ("All", ["alpha", "beta"])))
-    out = tui_mcp._launch_agent("nowhere")
-    assert out["status"] == "error"
-    assert "'nowhere' is not in any hub tab" in out["detail"]
-    assert "bash" in out["detail"] and "alpha" in out["detail"]
-    assert "Installed" in out["detail"] and "All" in out["detail"]
-    assert "enter" not in fake.keys_sent
-
-
-def test_launch_agent_surfaces_hub_status_line_on_timeout(live_tui):
-    live_tui(
-        tabs=(("Installed", ["bash", "email"]),),
-        launchable=False,
-        status_line="email is not installed yet",
-    )
-    out = tui_mcp._launch_agent("email", timeout_ms=1000)
-    assert out["status"] == "error"
-    assert "stayed on the hub" in out["detail"]
-    assert "email is not installed yet" in out["detail"]
-
-
-def test_launch_agent_stops_after_a_full_tab_cycle(live_tui):
-    """Two tabs means two probes, not four — the cycle back to tab 0 ends it."""
-    fake = live_tui(
-        tabs=(("Installed", ["bash"]), ("All", ["alpha"])),
-    )
-    out = tui_mcp._launch_agent("nowhere")
-    assert out["status"] == "error"
-    assert fake.keys_sent == ["tab", "tab"]
-    assert out["detail"].count("|") == 1  # exactly two tabs reported
-
-
-def test_launch_agent_transport_failure_is_not_reported_as_a_hub_refusal(live_tui):
-    fake = live_tui(tabs=(("Installed", ["email"]),))
-    original = fake.request
-
-    def _die_on_wait(method, url, **kwargs):
-        if url.endswith("/wait"):
-            raise requests.exceptions.ConnectionError("socket closed")
-        return original(method, url, **kwargs)
-
-    fake.request = _die_on_wait
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "stayed on the hub" not in out["detail"]
-    assert "Cannot reach the GAIA TUI control server" in out["detail"]
-
-
-def test_launch_agent_unknown_state_explains_manual_fallback(live_tui):
-    fake = live_tui()
-    fake.state = lambda: {"view": "unknown"}
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "does not report its view state" in out["detail"]
-    assert "tui_send_keys" in out["detail"]
-    assert fake.keys_sent == []
-
-
-# ── install / uninstall ──────────────────────────────────────────────
-
-
-def test_install_agent_without_a_binding_sends_no_keys(live_tui):
-    fake = live_tui(footer=HUB_FOOTER_NO_INSTALL)
-    out = tui_mcp._install_agent("bash")
-    assert out["status"] == "error"
-    assert "not yet available" in out["detail"]
-    assert "Bindings currently offered:" in out["detail"]
-    assert "enter" in out["detail"]
-    assert fake.keys_sent == []
-
-
-def test_uninstall_agent_uses_the_footer_binding_and_confirms(live_tui):
-    fake = live_tui(tabs=(("Installed", ["bash", "email"]),))
-    out = tui_mcp._uninstall_agent("email")
-    assert out.get("uninstalled") is True
-    assert out["confirmed"] is True
-    assert fake.keys_sent == ["down", "d", "y"]
-    assert "email" not in out["screen"]
-
-
-def test_confirm_marker_is_word_bounded():
-    """An agent called 'Notion' must not read as a No button."""
-    assert tui_mcp._confirm_marker("  Notion\n  Yesterday's runs") == ""
-    assert tui_mcp._confirm_marker("Delete bash?    Yes    No") == "Yes"
-    assert tui_mcp._confirm_marker('Uninstall "email"?  Yes  No') == 'Uninstall "'
-    assert tui_mcp._confirm_marker("") == ""
-
-
-def test_uninstall_the_hub_ignores_is_an_error_and_sends_no_y(live_tui):
-    """The real hub ignores 'd' unless the agent is installed — that is not success.
-
-    'Notion' is on screen on purpose: a substring test for a "No" button would
-    fire here and send a stray 'y' into whatever is focused.
-    """
-    fake = live_tui(tabs=(("Installed", ["Notion", "email"]),), confirms=False)
-    out = tui_mcp._uninstall_agent("email")
-    assert out["status"] == "error"
-    assert "still lists 'email'" in out["detail"]
-    assert fake.keys_sent == ["down", "d"]
-
-
-def test_uninstall_refuses_while_an_overlay_hides_the_footer(live_tui):
-    """The help overlay replaces the screen; no footer is not 'no keybinding'."""
-    fake = live_tui(tabs=(("Installed", ["email"]),), overlay="help")
-    fake.screen = lambda: "GAIA help\n\nEnter  launch the selected agent\n\nesc closes"
-    out = tui_mcp._uninstall_agent("email")
-    assert out["status"] == "error"
-    assert "'help' overlay" in out["detail"]
-    assert "not yet available" not in out["detail"]
-    assert fake.keys_sent == []
-
-
-def test_hub_status_line_never_quotes_the_footer_or_the_tab_bar():
-    screen = f"GAIA hub\n  bash\n  email\n{HUB_FOOTER}"
-    assert tui_mcp._hub_status_line(screen, "email") == ""
-    # The tab bar says "Coming Soon (3)" on every hub screen; quoting that back
-    # as the hub's explanation is an invented answer.
-    tabs = f"Installed (1)    Available (9)    Coming Soon (3)\n  bash\n{HUB_FOOTER}"
-    assert tui_mcp._hub_status_line(tabs, "email") == ""
-    real = f"{tabs}\nEmail is not installed yet"
-    assert tui_mcp._hub_status_line(real, "email") == "Email is not installed yet"
-    with_status = f"GAIA hub\n  email\nemail is not installed yet\n{HUB_FOOTER}"
-    assert (
-        tui_mcp._hub_status_line(with_status, "email") == "email is not installed yet"
-    )
+# ── Argument validation ──────────────────────────────────────────────
 
 
 def test_resize_rejects_sizes_the_server_would_400(live_tui):
@@ -1090,16 +749,6 @@ def test_settled_is_passed_through_to_the_caller(live_tui):
     assert tui_mcp._resize(100, 30)["settled"] is False
 
 
-def test_navigation_stops_instead_of_acting_on_an_unsettled_press(live_tui):
-    """settled=false means the next /status read describes the pre-key screen."""
-    fake = live_tui(tabs=(("Installed", ["bash", "email"]),), settled=False)
-    out = tui_mcp._launch_agent("email")
-    assert out["status"] == "error"
-    assert "settled=false" in out["detail"]
-    assert "queued and may still land" in out["detail"]
-    assert fake.keys_sent == ["down"]  # stopped after the first unconfirmed key
-
-
 def test_injection_is_refused_while_the_event_loop_is_not_running(live_tui):
     """503 not_running: a 200 there would be a lie — Send discards the message."""
     live_tui(running=False)
@@ -1111,54 +760,6 @@ def test_injection_is_refused_while_the_event_loop_is_not_running(live_tui):
     summary = tui_mcp._status()["summary"]
     assert summary.startswith("NOT ACCEPTING INPUT")
     assert tui_mcp._screen()["screen"]
-
-
-def test_install_verification_accepts_the_agent_moving_to_another_tab(live_tui):
-    """A real install promotes the row to the Installed tab — it may vanish here."""
-    fake = live_tui(
-        tabs=(("Available", ["email", "jira"]),),
-        footer="Enter=launch  i=install  ?=help  q=quit",
-    )
-
-    def _install(key):
-        fake.keys_sent.append(key)
-        fake.seq += 1
-        if key == "i":  # promoted away from this tab
-            fake.tabs[0] = ("Available", ["jira"])
-            fake.selected_index = 0
-
-    fake.press = _install
-    out = tui_mcp._install_agent("email")
-    assert out.get("installed") is True, out
-    assert fake.keys_sent == ["i"]
-
-
-def test_install_that_changes_nothing_is_an_error(live_tui):
-    fake = live_tui(
-        tabs=(("Available", ["email"]),),
-        footer="Enter=launch  i=install  ?=help  q=quit",
-    )
-    fake.press = lambda key: fake.keys_sent.append(key)  # the hub ignores it
-    out = tui_mcp._install_agent("email")
-    assert out["status"] == "error"
-    assert "ignored the install key" in out["detail"]
-
-
-def test_footer_parsing():
-    bindings = tui_mcp._parse_footer_bindings(f"hub\n  bash\n{HUB_FOOTER}")
-    assert bindings["enter"] == "run"
-    assert bindings["d"] == "remove"
-    assert bindings["i"] == "install"
-    assert tui_mcp._find_binding(bindings, "uninstall") == "d"
-    assert tui_mcp._find_binding(bindings, "install") == "i"
-
-    # The legacy "=" form still parses, so a future footer change in either
-    # direction is covered rather than silently unsupported.
-    legacy = tui_mcp._parse_footer_bindings("x\nEnter=launch  i=install  q=quit")
-    assert tui_mcp._find_binding(legacy, "install") == "i"
-    assert tui_mcp._find_binding(legacy, "uninstall") is None
-
-    assert tui_mcp._parse_footer_bindings("") == {}
 
 
 # ── Post-review hardening ────────────────────────────────────────────
@@ -1179,30 +780,6 @@ def test_discover_rejects_a_non_loopback_host(tmp_path, monkeypatch):
     assert "non-loopback host" in error["detail"]
     assert "10.0.0.7" in error["detail"]
     assert TOKEN not in error["detail"]
-
-
-def test_uninstall_that_leaves_the_agent_listed_is_an_error(live_tui):
-    """Pressing the key is not evidence: verify the row actually went away."""
-    fake = live_tui(
-        tabs=(("Installed", ["bash", "email"]),),
-        status_line="Email is coming soon — press 'v' to vote",
-        confirms=False,
-    )
-    # The hub refuses this row: the keypress is accepted but nothing is removed,
-    # which is exactly how the real hub treats a coming-soon entry.
-    original_press = fake.press
-
-    def _refuse(key):
-        if key == "d":
-            fake.keys_sent.append(key)
-            return
-        original_press(key)
-
-    fake.press = _refuse
-    out = tui_mcp._uninstall_agent("email")
-    assert out["status"] == "error"
-    assert "still lists" in out["detail"]
-    assert "coming soon" in out["detail"]
 
 
 def test_request_layer_failure_is_not_reported_as_a_non_json_response(monkeypatch):

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // The regression these guard: `gaia run gaia --use-claude --claude-model
@@ -58,14 +60,14 @@ func drainCmd(t *testing.T, cmd tea.Cmd) {
 // LemonadeServer.exe from this package runs through it.
 func TestClaudeLaunchNeverInvokesTheGaiaCLI(t *testing.T) {
 	called := false
-	orig := gaiaBinary
-	gaiaBinary = func() (string, error) {
+	orig := gaiainit.Binary
+	gaiainit.Binary = func() (string, error) {
 		called = true
 		t.Error("a --use-claude launch resolved the gaia CLI — that path starts " +
 			"LemonadeServer.exe via `gaia init`")
 		return "", nil
 	}
-	t.Cleanup(func() { gaiaBinary = orig })
+	t.Cleanup(func() { gaiainit.Binary = orig })
 
 	m := claudeLaunchModel(t, "claude-haiku-4-5")
 	runInitCmds(t, m)
@@ -120,13 +122,13 @@ func TestClaudeLaunchSaysTheLocalBackendWasNotStarted(t *testing.T) {
 //
 // It also proves the check above can actually fail: the same harness, on the
 // same constructor, DOES reach the gaia CLI when Claude mode is off. Without
-// this, "gaiaBinary was never called" would pass just as happily against a
+// this, "gaiainit.Binary was never called" would pass just as happily against a
 // model that never calls anything.
 func TestALocalFlagshipLaunchStillRunsTheSetupGate(t *testing.T) {
 	called := false
-	orig := gaiaBinary
-	gaiaBinary = func() (string, error) { called = true; return orig2Path(), nil }
-	t.Cleanup(func() { gaiaBinary = orig })
+	orig := gaiainit.Binary
+	gaiainit.Binary = func() (string, error) { called = true; return orig2Path(), nil }
+	t.Cleanup(func() { gaiainit.Binary = orig })
 
 	m := gaiaTestModel(t)
 	if !m.setupChecking {
