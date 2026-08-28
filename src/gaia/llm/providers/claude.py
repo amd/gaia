@@ -192,6 +192,8 @@ class ClaudeProvider(LLMClient):
             )
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
+        self._tool_name_map: Dict[str, str] = {}
 
     @property
     def provider_name(self) -> str:
@@ -218,8 +220,7 @@ class ClaudeProvider(LLMClient):
         return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
 
     def _restore_tool_name(self, api_name: str) -> str:
-        mapping = getattr(self, "_tool_name_map", None)
-        if mapping is None or api_name not in mapping:
+        if api_name not in self._tool_name_map:
             # Every outbound name is registered, so a miss means the map is
             # stale — the agent would blame the model for "Unknown tool name".
             logger.warning(
@@ -228,11 +229,11 @@ class ClaudeProvider(LLMClient):
                 api_name,
             )
             return api_name
-        return mapping[api_name]
+        return self._tool_name_map[api_name]
 
     def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
         """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
-        self._tool_name_map: dict = {}
+        self._tool_name_map = {}
         if not tools:
             return None
         converted = []
