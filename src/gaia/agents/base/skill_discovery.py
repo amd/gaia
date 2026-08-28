@@ -62,6 +62,7 @@ def discovery_env_override() -> Optional[bool]:
         return None
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
+
 #: The standing honesty rule — the only text this feature adds to every turn.
 #:
 #: It is deliberately about *sourcing*, not about skills: the failure it exists
@@ -311,9 +312,7 @@ class SkillDiscovery:
 
     def _decide(self, query: str, *, exclude) -> Decision:
         """Rank with this instance's threshold, if one was configured."""
-        return self._retriever.decide(
-            query, exclude=exclude, min_score=self._threshold
-        )
+        return self._retriever.decide(query, exclude=exclude, min_score=self._threshold)
 
     def _log(self, decision: Decision, loaded: Dict[str, "Skill"]) -> None:
         """One structured line per turn — the record a wrong answer is debugged from."""

@@ -248,6 +248,7 @@ def test_discovery_runs_before_the_turn_tool_filter(agent, monkeypatch):
         lambda self, q: order.append("bodies"),
         raising=True,
     )
+
     # Stop the turn the instant the three setup steps have run — the LLM loop
     # below them is not what this pins.
     def _stop(self, user_input):
