@@ -24,7 +24,7 @@ import (
 func TestHelpTextFitsItsBudget(t *testing.T) {
 	const maxWidth = helpBoxMaxWidth - 4
 
-	for name, text := range map[string]string{"hub": hubHelpText, "chat": chatHelpText} {
+	for name, text := range map[string]string{"chat": chatHelpText} {
 		for i, line := range strings.Split(text, "\n") {
 			if w := ansi.StringWidth(line); w > maxWidth {
 				t.Errorf("%s help line %d is %d columns, over %d — it will soft-wrap and cost an extra row: %q",
@@ -179,7 +179,6 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 	// commandText does the same for submit's local commands.
 	commandText := map[string]string{
 		"/help":   "/help",
-		"/hub":    "/hub",
 		"/clear":  "/clear",
 		"/memory": "/memory",
 		"/setup":  "/setup",
@@ -248,7 +247,7 @@ func TestHelpOverlayNeverOutgrowsTheWindow(t *testing.T) {
 		}
 	}
 
-	for _, ctx := range []HelpContext{HelpContextHub, HelpContextChat} {
+	for _, ctx := range []HelpContext{HelpContextChat} {
 		for _, s := range sizes {
 			assertExact(t, ctx, s.w, s.h, 0)
 		}
@@ -259,7 +258,7 @@ func TestHelpOverlayNeverOutgrowsTheWindow(t *testing.T) {
 	// to clamp itself, same as HelpMaxScroll clamps for the caller) to prove
 	// the exact-row-and-column invariant holds at every position, not just
 	// the top.
-	for _, ctx := range []HelpContext{HelpContextHub, HelpContextChat} {
+	for _, ctx := range []HelpContext{HelpContextChat} {
 		const w, h = 80, 10
 		maxScroll := HelpMaxScroll(ctx, w, h)
 		for scroll := -2; scroll <= maxScroll+2; scroll++ {

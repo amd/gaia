@@ -277,7 +277,6 @@ func TestEscCancelsAnInFlightMemoryFetch(t *testing.T) {
 func TestOrdinaryIdleEscStillDoesNotQuitAfterMemoryChanges(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
-	m.fromHub = false
 
 	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 

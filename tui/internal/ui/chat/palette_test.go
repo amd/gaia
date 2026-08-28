@@ -128,14 +128,15 @@ func TestPaletteUpDownWrapsAtTheEnds(t *testing.T) {
 // sendQuery — which would post it as a chat bubble and ship it to the agent.
 func TestPaletteEnterRunsTheSelectedCommandNotTheTypedText(t *testing.T) {
 	m, _ := newTestModel(t)
-	m = typeInto(t, m, "/h") // matches /help then /hub, in that order
+	m = typeInto(t, m, "/") // every command, in declaration order
+	m.messages = []Message{{Role: RoleStatus, Content: "something /clear must remove"}}
 
 	names := paletteNames(m.paletteFiltered())
-	if len(names) != 2 || names[0] != "/help" || names[1] != "/hub" {
-		t.Fatalf("test setup: expected [/help /hub], got %v", names)
+	if len(names) < 2 || names[0] != "/help" || names[1] != "/clear" {
+		t.Fatalf("test setup: expected /help then /clear, got %v", names)
 	}
 
-	// Move the selection down to /hub without ever typing more than "/h".
+	// Move the selection down to /clear without ever typing more than "/".
 	m, _ = press(t, m, tea.KeyDown)
 	if m.palette.selected != 1 {
 		t.Fatalf("test setup: expected row 1 selected, got %d", m.palette.selected)
@@ -155,13 +156,11 @@ func TestPaletteEnterRunsTheSelectedCommandNotTheTypedText(t *testing.T) {
 			t.Errorf("the command must never be posted as a chat message, found: %q", msg.Content)
 		}
 	}
-	// /hub on a model not launched from the hub (newTestModel) declines with
-	// a status note rather than switching views — proof it ran /hub, the
-	// SELECTED row, and not the literally-typed "/h" (which isn't a command
-	// at all and would have gone to sendQuery instead).
-	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "Not launched from hub") {
-		t.Errorf("expected the /hub decline note, got: %+v", last)
+	// An emptied transcript is proof it ran /clear — the SELECTED row — and
+	// not the literally-typed "/", which is not a command at all and would
+	// have gone to sendQuery instead.
+	if len(m.messages) != 0 {
+		t.Errorf("Enter did not run /clear: %+v", m.messages)
 	}
 }
 

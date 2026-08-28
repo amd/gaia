@@ -454,9 +454,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	_, seq, snap := s.state.Current()
 	cols, rows := s.state.Size()
-	if snap.VisibleAgentIDs == nil {
-		snap.VisibleAgentIDs = []string{}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":     ServiceID,
 		"api_version": APIVersion,
@@ -866,32 +863,12 @@ func matchesStateKey(key string, want any, snap Snapshot) bool {
 		return want == snap.View
 	case "agent":
 		return want == snap.Agent
-	case "hub_tab":
-		return want == snap.HubTab
-	case "selected_agent_id":
-		return want == snap.SelectedAgentID
 	case "overlay":
 		return want == snap.Overlay
+	case "blocker":
+		return want == snap.Blocker
 	case "streaming":
 		return want == snap.Streaming
-	case "filtering":
-		return want == snap.Filtering
-	case "can_return_to_hub":
-		return want == snap.CanReturnToHub
-	case "hub_tab_index":
-		n, ok := want.(float64)
-		return ok && int(n) == snap.HubTabIndex
-	case "visible_contains":
-		s, ok := want.(string)
-		if !ok {
-			return false
-		}
-		for _, id := range snap.VisibleAgentIDs {
-			if id == s {
-				return true
-			}
-		}
-		return false
 	}
 	return false
 }
@@ -899,16 +876,11 @@ func matchesStateKey(key string, want any, snap Snapshot) bool {
 // stateMatcherTypes documents the accepted type for each state matcher key, so
 // a typo or a wrong type is a 400 instead of a wait that can never succeed.
 var stateMatcherTypes = map[string]string{
-	"view":              "string",
-	"agent":             "string",
-	"hub_tab":           "string",
-	"selected_agent_id": "string",
-	"overlay":           "string",
-	"visible_contains":  "string",
-	"streaming":         "bool",
-	"filtering":         "bool",
-	"can_return_to_hub": "bool",
-	"hub_tab_index":     "number",
+	"view":      "string",
+	"agent":     "string",
+	"overlay":   "string",
+	"blocker":   "string",
+	"streaming": "bool",
 }
 
 func stateMatcherKeys() []string {

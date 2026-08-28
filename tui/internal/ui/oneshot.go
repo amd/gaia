@@ -552,6 +552,29 @@ func ReportReadiness(
 	return rep
 }
 
+// ReportLocalReadiness is the same gate for an agent the TUI spawns itself.
+//
+// It is what makes `gaia-tui chat --agent gaia --query …` on a machine with no
+// gaia-agent print the same three-part refusal a person sees on the readiness
+// screen, and exit 1 — instead of failing at exec with a message that names
+// neither the program nor where to get it.
+//
+// No ensure step: there is no daemon to ask, and starting the child IS the
+// launch this is gating.
+func ReportLocalReadiness(
+	ctx context.Context,
+	local preflight.LocalOptions,
+	cfg preflight.Config,
+	errW io.Writer,
+) preflight.Report {
+	checkCtx, cancel := context.WithTimeout(ctx, readinessCheckTimeout)
+	defer cancel()
+
+	rep := preflight.NewLocalRunner(local).Check(checkCtx, cfg)
+	writeReadiness(errW, rep)
+	return rep
+}
+
 // writeReadiness renders a report for a terminal that nobody is watching.
 func writeReadiness(errW io.Writer, rep preflight.Report) {
 	blocker, blocked := rep.Blocker()
