@@ -109,11 +109,10 @@ func (m *FlagshipModel) closeGate() {
 
 func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	agent := *m.pending
-	// The gate has just proved the models are downloaded, so the chat's own
-	// first-boot check must not spawn a SECOND `gaia init --check` — each costs
-	// a fresh Python interpreter for up to 30s, and a cold launch was paying
-	// that twice.
-	verified := gateProvedSetup(m.preflight.Report())
+	// The gate has just asked whether setup is ready, so the chat's own
+	// first-boot check must not ask again — each costs a fresh Python
+	// interpreter for up to 30s, and a cold launch was paying that twice.
+	verified := gateAskedAboutSetup(m.preflight.Report())
 	// Before closeGate clears halted: proceeding IS the deliberate choice
 	// the halt exists to gate, so mark these StepIDs accepted for the rest
 	// of the session before the record of them is gone.
@@ -122,13 +121,22 @@ func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	return m.launchAgent(agent, verified)
 }
 
-// gateProvedSetup reports whether the AI model row passed OUTRIGHT. Anything
-// else — indeterminate, skipped behind an earlier failure, or a daemon report
-// whose model row means something different — leaves the chat's own first-boot
-// check to ask. Only a pass is a pass.
-func gateProvedSetup(rep preflight.Report) bool {
+// gateAskedAboutSetup reports whether the AI model row was actually PROBED —
+// not whether it passed.
+//
+// Suppressing only on a pass looked stricter and was worse. An indeterminate
+// row (`gaia` not on PATH, so `gaia init --check` cannot answer) is a state the
+// gate already resolved, named on screen, and deliberately proceeded past. The
+// chat then re-ran the identical doomed probe and reported the identical
+// finding a second time — as a red ERROR, which is louder than the notice the
+// gate gave. One question, asked once, answered once.
+//
+// A StateFailed row never reaches here: the gate blocks on it. StatePending
+// means the walk stopped at an earlier failure and never got to this row, so
+// nothing was asked and the chat still should.
+func gateAskedAboutSetup(rep preflight.Report) bool {
 	row, ok := rep.Find(preflight.KeyModel)
-	return ok && row.State == preflight.StateOK
+	return ok && row.State != preflight.StatePending
 }
 
 // cancelFromGate leaves. There is no screen behind the gate to go back to: the

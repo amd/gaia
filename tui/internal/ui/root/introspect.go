@@ -62,3 +62,8 @@ func (m FlagshipModel) PreflightReport() (preflight.Report, bool) {
 	}
 	return m.preflight.Report(), true
 }
+
+// GateAskedAboutSetupForTest exposes gateAskedAboutSetup to the integration
+// test package, which drives the real report the real runner produces rather
+// than a hand-built one.
+func GateAskedAboutSetupForTest(rep preflight.Report) bool { return gateAskedAboutSetup(rep) }

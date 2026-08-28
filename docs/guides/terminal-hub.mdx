@@ -11,8 +11,8 @@ otherwise make the agent fail. Where it can fix a problem itself, one key does i
 Where it can't, it says so and gives you the exact command.
 
 ```bash
-cd tui && make build     # -> tui/bin/gaia
-./tui/bin/gaia
+cd tui && make build     # -> tui/bin/gaia-tui
+./tui/bin/gaia-tui
 ```
 
 <Info>
@@ -23,9 +23,11 @@ cd tui && make build     # -> tui/bin/gaia
 </Info>
 
 <Note>
-  `gaia tui` is the Go terminal binary. Building from source it is `tui/bin/gaia`
-  (`cd tui && make build`) — it accepts a leading `tui` word and drops it, so
-  `./tui/bin/gaia` and `./tui/bin/gaia tui` open the same session. See the
+  `gaia tui` is the Go terminal binary. Building from source it is
+  `tui/bin/gaia-tui` (`cd tui && make build`) — never `gaia`, which is the Python
+  CLI's name and has entirely different subcommands. It accepts a leading `tui`
+  word and drops it, so `./tui/bin/gaia-tui` and `./tui/bin/gaia-tui tui` open the
+  same session. See the
   [CLI reference](/reference/cli#terminal-ui-gaia-tui) for its non-interactive
   subcommands.
 </Note>

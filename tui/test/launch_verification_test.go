@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,11 @@ func TestAMissingAgentBinaryHaltsAtPreflightAndNeverReachesChat(t *testing.T) {
 func TestAResolvableBinaryPassesTheBinaryRow(t *testing.T) {
 	isolateGaiaHome(t)
 	stubSetupCheck(t, 0)
+	// A port nothing serves, so the walk always stops at Local AI and the gate
+	// is still on screen to be read. Without this the test passes or fails on
+	// whether the DEVELOPER's machine happens to be running Lemonade: with it
+	// up, the gate goes all-green and hands off to chat before the assertion.
+	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
 
 	d := newLocalDriver(t, mockBinaryPath(t), 120, 40)
 	d.launch()
@@ -145,5 +151,53 @@ func writeStub(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The gate asked whether setup was ready and could not tell — `gaia` is not on
+// PATH, so `gaia init --check` cannot answer. It said so and proceeded, which
+// is right. What was wrong: the chat then re-ran the identical doomed probe and
+// reported the identical finding a second time, as a red ERROR louder than the
+// notice the gate had just given.
+//
+// One question, asked once. Suppression keys off the row having been PROBED,
+// not off it having passed.
+func TestAnIndeterminateSetupRowIsNotReAskedInTheChat(t *testing.T) {
+	isolateGaiaHome(t)
+	// Exit 2 is what an installed gaia older than --check returns, and a
+	// missing gaia produces the same "unanswered" shape.
+	stubSetupCheck(t, 2)
+	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
+
+	rep := preflight.NewLocalRunner(preflight.LocalOptions{
+		Binary: mockBinaryPath(t), ClaudeMode: true, // claude mode: a down Lemonade must not block
+	}).Check(context.Background(), preflight.ConfigFor("gaia", "GAIA"))
+
+	row, ok := rep.Find(preflight.KeyModel)
+	if !ok {
+		t.Fatal("the local gate produced no AI model row")
+	}
+	if row.State != preflight.StateUnknown {
+		t.Fatalf("test setup: model row is %s, want unknown", row.State.Word())
+	}
+	if rep.Blocked() {
+		t.Fatal("test setup: an indeterminate row blocked the launch")
+	}
+	if !root.GateAskedAboutSetupForTest(rep) {
+		t.Error("the chat will ask `gaia init --check` again and report the same " +
+			"failure a second time, as an error")
+	}
+}
+
+// A row the walk never reached IS still worth asking about: nothing was
+// answered, so the chat's own check is the only one there is.
+func TestASkippedSetupRowIsStillAskedInTheChat(t *testing.T) {
+	isolateGaiaHome(t)
+	rep := preflight.NewLocalRunner(preflight.LocalOptions{
+		Binary: "gaia-agent-that-was-never-installed",
+	}).Check(context.Background(), preflight.ConfigFor("gaia", "GAIA"))
+
+	if root.GateAskedAboutSetupForTest(rep) {
+		t.Error("a model row the walk never reached was treated as answered")
 	}
 }
