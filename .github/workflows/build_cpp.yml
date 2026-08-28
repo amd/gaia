@@ -101,6 +101,7 @@ jobs:
         with:
           path: cpp/build/_deps
           key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-${{ matrix.os }}-
 
       - name: Configure CMake
         run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF
@@ -134,6 +135,7 @@ jobs:
         with:
           path: cpp/build/_deps
           key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-install-${{ matrix.os }}-
 
       - name: Install OpenSSL (Windows)
         if: runner.os == 'Windows'
@@ -187,6 +189,7 @@ jobs:
         with:
           path: cpp/build-shared/_deps
           key: fetchcontent-shared-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-shared-${{ matrix.os }}-
 
       - name: Build shared library
         shell: bash
@@ -234,6 +237,7 @@ jobs:
         with:
           path: cpp/build-integration/_deps
           key: fetchcontent-integration-windows-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-integration-windows-
 
       - name: Configure and build integration tests
         shell: powershell
