@@ -10,8 +10,8 @@ Run with:
     pytest tests/integration/test_sd_integration.py -v
 
 Prerequisites:
-    lemonade-server serve
-    lemonade-server pull SD-Turbo
+    gaia daemon start
+    gaia init
 """
 
 from pathlib import Path

@@ -224,6 +224,8 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     registry.shutdown_all.side_effect = lambda: calls.append("registry.shutdown_all")
     custody_store = mock.Mock()
     custody_store.close.side_effect = lambda: calls.append("custody_store.close")
+    lemonade = mock.Mock()
+    lemonade.shutdown.side_effect = lambda: calls.append("lemonade.shutdown")
 
     deregister = daemon_server._build_deregister(
         registry=registry,
@@ -231,13 +233,19 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
         pid=555,
         refresher=refresher,
         clock=clock,
+        lemonade=lemonade,
     )
     deregister()
 
+    # The model server is reaped AFTER the sidecars, never before: an agent
+    # mid-teardown may still be finishing a model call, and pulling the server
+    # out from under it turns a clean shutdown into a wave of connection errors
+    # in the logs.
     assert calls == [
         "refresher.stop",
         "clock.stop",
         "registry.shutdown_all",
+        "lemonade.shutdown",
         "custody_store.close",
     ]
     assert instance_mod.read_instance() is None
