@@ -76,8 +76,13 @@ _SHUTDOWN_TIMEOUT_S = 5.0
 # ACCEPTS and then never answers — a Lemonade mid-model-load, or the stranger on
 # the port that ``_start_locked`` exists to detect — would otherwise turn "poll
 # every half second for 20s" into a single 15-minute call holding the lock.
-# Mirrors readiness.PROBE_CONNECT_TIMEOUT / PROBE_READ_TIMEOUT.
-_PROBE_TIMEOUT = (2.0, 5.0)
+#
+# The connect leg is deliberately tighter than readiness.PROBE_CONNECT_TIMEOUT:
+# this probe only ever dials loopback, where a connection is refused or accepted
+# in microseconds, and it is paid TWICE per probe because `localhost` resolves
+# to both ::1 and 127.0.0.1. At 2s that is 4 seconds to learn "not running" —
+# on every down-path call, in every test that constructs an agent.
+_PROBE_TIMEOUT = (0.5, 5.0)
 
 
 class LemonadeStartError(RuntimeError):

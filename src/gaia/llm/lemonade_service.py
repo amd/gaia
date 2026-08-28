@@ -14,10 +14,17 @@ and not a configuration knob:
   :func:`install_supervisor` puts it in reach and the call goes straight to it.
   Posting to ourselves would be a loopback round-trip to reach an object in the
   same address space.
-* **Everywhere else** — a CLI invocation, a sidecar agent, the Agent UI server —
-  the daemon is started-or-attached and asked. That is what makes the single
+* **Everywhere else** — a sidecar agent, the Agent UI server, a library caller —
+  the RUNNING daemon is attached to and asked. That is what makes the single
   instance real: no second process ever spawns a server, so two front-ends
   launching at once cannot race into two servers fighting over the port.
+
+It attaches; it never *starts* a daemon. Bringing up a machine-wide background
+service is not something a readiness check may do as a side effect — that is a
+front-end's decision, made once, where a user can see it. Getting this wrong is
+not theoretical: an earlier revision start-or-attached here, and constructing an
+agent in a unit test then spawned a daemon and a model server and took 30
+seconds. :func:`ensure_daemon_owns_lemonade` is the opt-in a front-end calls.
 
 The fast path never reaches either branch. A server that is already answering
 costs one probe and returns, because this sits in front of every agent
@@ -42,6 +49,7 @@ log = get_logger(__name__)
 __all__ = [
     "LemonadeStartError",
     "LemonadeState",
+    "ensure_daemon_owns_lemonade",
     "ensure_lemonade_running",
     "install_supervisor",
     "installed_supervisor",
@@ -132,23 +140,47 @@ def _ask_the_daemon(
     )
 
 
+def ensure_daemon_owns_lemonade() -> None:
+    """Make sure a daemon exists, so the model server has an owner.
+
+    A front-end calls this ONCE at startup. It is the opt-in that lets a
+    user-facing command bring up the machine's background service —
+    :func:`ensure_lemonade_running` deliberately will not, because a readiness
+    check that boots a daemon behind the caller's back surprises every library
+    and test caller, and costs them 30 seconds to do it.
+
+    Cheap when a daemon is already running (one status probe). A failure is
+    logged, not raised: the ``ensure_lemonade_running`` call that follows
+    produces the actionable error, and raising here would report the same
+    problem twice in different words.
+    """
+    from gaia.daemon import client as daemon_client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        daemon_client.start_or_attach()
+    except DaemonError as e:
+        log.warning("Could not start the GAIA background service: %s", e)
+
+
 def _post_start(payload: dict, timeout: float) -> dict:
     """POST ``/daemon/v1/lemonade/start``, translating every failure loudly."""
     import requests
 
     from gaia.daemon import client as daemon_client
     from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME
-    from gaia.daemon.errors import DaemonError
 
-    try:
-        inst = daemon_client.start_or_attach()
-    except DaemonError as e:
+    # ATTACH, never start-or-attach. See the module docstring: bringing up a
+    # machine-wide daemon is a front-end's decision, not something a readiness
+    # check does behind the caller's back.
+    inst = daemon_client.attach()
+    if inst is None:
         raise LemonadeStartError(
-            "The local model server is not running, and GAIA could not reach "
-            f"the background service that owns it: {e}\n"
-            "To fix: start it with `gaia daemon start`, then retry.\n"
+            "The local model server is not running, and neither is the GAIA "
+            "background service that owns it — so nothing can start it.\n"
+            "To fix: run `gaia daemon start`, then retry.\n"
             "Where to look: `gaia daemon logs`"
-        ) from e
+        )
 
     url = f"http://{inst.host}:{inst.port}{API_PREFIX}/lemonade/start"
     headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}

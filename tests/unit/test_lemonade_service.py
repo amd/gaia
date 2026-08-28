@@ -130,23 +130,36 @@ def test_a_running_server_asks_nobody(monkeypatch):
     assert up.probes == 1
 
 
-def test_an_unreachable_daemon_is_a_loud_error_naming_how_to_start_it(
-    monkeypatch, down_client
-):
+def test_no_daemon_is_a_loud_error_naming_how_to_start_it(monkeypatch, down_client):
     """The failure must name the background service, not Lemonade: a user sent
     to restart the wrong process gets nowhere."""
-    from gaia.daemon.errors import DaemonError
-
-    def refuse():
-        raise DaemonError("the daemon did not come up within 30s")
-
-    monkeypatch.setattr("gaia.daemon.client.start_or_attach", refuse)
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: None)
 
     with pytest.raises(LemonadeStartError) as e:
         ensure_lemonade_running(ctx_size=65536)
 
     assert "background service" in str(e.value)
     assert "gaia daemon start" in str(e.value)
+
+
+def test_a_readiness_check_never_boots_a_daemon(monkeypatch, down_client):
+    """The bug this rule exists to prevent, and it was real.
+
+    An earlier revision start-or-attached here. Constructing an agent in a unit
+    test then spawned a machine-wide daemon AND a model server, took 30 seconds
+    a call, and pushed the email agent's CI job past its 10-minute ceiling —
+    while every assertion still passed. Bringing up background infrastructure is
+    a front-end's decision, made once and visibly; a readiness check may only
+    attach to what is already there.
+    """
+    monkeypatch.setattr(
+        "gaia.daemon.client.start_or_attach",
+        lambda *a, **k: pytest.fail("a readiness check tried to start a daemon"),
+    )
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: None)
+
+    with pytest.raises(LemonadeStartError):
+        ensure_lemonade_running(ctx_size=65536)
 
 
 def test_a_daemon_refusal_reaches_the_caller_verbatim(monkeypatch, down_client):
@@ -163,7 +176,7 @@ def test_a_daemon_refusal_reaches_the_caller_verbatim(monkeypatch, down_client):
     class FakeInstance:
         host, port, token = "127.0.0.1", 51234, "tok"
 
-    monkeypatch.setattr("gaia.daemon.client.start_or_attach", lambda: FakeInstance())
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: FakeInstance())
     monkeypatch.setattr("requests.post", lambda *a, **k: FakeResponse())
 
     with pytest.raises(LemonadeStartError) as e:
@@ -202,7 +215,7 @@ def test_the_request_is_addressed_and_authorized_the_way_the_daemon_expects(
         sent.update(url=url, json=json, headers=headers, timeout=timeout)
         return FakeResponse()
 
-    monkeypatch.setattr("gaia.daemon.client.start_or_attach", lambda: FakeInstance())
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: FakeInstance())
     monkeypatch.setattr("requests.post", capture)
 
     state = ensure_lemonade_running(ctx_size=65536, timeout=120.0)
