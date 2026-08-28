@@ -197,7 +197,7 @@ class TestCollect:
 class TestBoundedTable:
     def test_a_request_under_the_bound_is_charged_what_it_costs(self):
         """Charging it the full bound invents tokens and hides the saving."""
-        out = bounded_table({"tokens": {"total": 1}}, [1000] * 10)
+        out = bounded_table([1000] * 10)
         assert "| 16K | 0.00 B | **0%** | 100.0% |" in out
 
 

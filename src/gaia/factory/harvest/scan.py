@@ -48,11 +48,8 @@ def price_for(model: str) -> Optional[Dict[str, float]]:
     pseudo-models must not be silently priced as a real tier.
     """
     lowered = model.lower()
-    best = None
-    for key, rate in PRICING.items():
-        if lowered.startswith(key) and (best is None or len(key) > len(best[0])):
-            best = (key, rate)
-    return best[1] if best else None
+    matches = [key for key in PRICING if lowered.startswith(key)]
+    return PRICING[max(matches, key=len)] if matches else None
 
 
 def estimate_cost(trace: Trace) -> Dict[str, float]:

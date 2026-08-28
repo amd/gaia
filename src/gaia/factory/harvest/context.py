@@ -167,8 +167,13 @@ def collect(
 
 
 def load_labels(path: Optional[Path]) -> Dict[str, str]:
-    if not path or not path.exists():
+    if not path:
         return {}
+    if not path.exists():
+        raise SystemExit(
+            f"label file {path} not found. Generate it as described in "
+            ".claude/skills/analyzing-claude-sessions/SKILL.md, or drop --labels."
+        )
     out = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.split()

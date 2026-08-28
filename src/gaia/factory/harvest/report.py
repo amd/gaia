@@ -59,11 +59,11 @@ def load_labels(path: Optional[Path]) -> Dict[str, str]:
     return labels
 
 
-def _pct(n: float, d: float) -> str:
-    return f"{100 * n / d:.1f}%" if d else "—"
+def _pct(n: float, d: float, places: int = 1) -> str:
+    return f"{100 * n / d:.{places}f}%" if d else "—"
 
 
-def corpus_table(traces: List[dict], stats: dict) -> str:
+def corpus_table(stats: dict) -> str:
     tok = stats["tokens"]
     out = ["| Measure | Value | Share |", "|---|---:|---:|"]
     rows = [
@@ -401,7 +401,7 @@ def main() -> None:
     labels = load_labels(args.labels)
 
     print("## Corpus\n")
-    print(corpus_table(traces, stats))
+    print(corpus_table(stats))
     print("\n## Tool families\n")
     print(family_table(stats))
     print("\n## Binary frequency\n")
@@ -1398,7 +1398,12 @@ any session using the longer TTL is under-priced here."""
 def agent_loop_primer(stats: dict, traces: List[dict]) -> str:
     """What an agentic coding session is, for a reader who has never seen one."""
     tok = stats["tokens"]
-    ratio = (tok["input"] + tok["cache_read"] + tok["cache_write"]) / tok["output"]
+    read_tok = tok["input"] + tok["cache_read"] + tok["cache_write"]
+    ratio = (
+        f"~{read_tok / tok['output']:.0f}:1 here"
+        if tok["output"]
+        else "by a ratio this corpus records no output tokens to measure"
+    )
     cmds = [
         x["arg_digest"]
         for x in all_steps(traces)
@@ -1418,9 +1423,16 @@ def agent_loop_primer(stats: dict, traces: List[dict]) -> str:
     p50 = stats["steps_per_session"]["p50"]
     fail_pct = 100 * stats["failure_rate"]
     tcpm = stats["tool_calls_per_model_call"]
-    trunc_pct = 100 * trunc / len(cmds)
-    sub_call_pct = 100 * sub_calls / stats["total_tool_calls"]
-    sub_tok_pct = 100 * sub_tok / tok["total"]
+    trunc_clause = (
+        f"which is why the corpus shows the model truncating its own command "
+        f"output {_pct(trunc, len(cmds))} of the time — it is rationing space it "
+        "cannot see."
+        if cmds
+        else "though this corpus records no shell commands, so it cannot show "
+        "the model rationing its own output."
+    )
+    sub_call_pct = _pct(sub_calls, stats["total_tool_calls"], places=0)
+    sub_tok_pct = _pct(sub_tok, tok["total"], places=0)
     return f"""Everything in this report describes **agentic coding sessions**. If that term is
 new, this section is the minimum needed to read the rest.
 
@@ -1446,7 +1458,7 @@ and emits another call. This repeats until the model stops asking.
 **Why the token numbers look the way they do.** The API is stateless: the model has no
 memory between calls, so the harness resends the *entire* conversation every time — the
 instruction, every prior tool call, and every result. A session 100 calls deep resends all
-100. That is why input tokens outnumber output tokens ~{ratio:.0f}:1 here, and why prompt caching
+100. That is why input tokens outnumber output tokens {ratio}, and why prompt caching
 (Appendix B) dominates the cost.
 
 **Tool call vs model call.** One model call is one API response. That response may contain
@@ -1456,12 +1468,11 @@ several tool calls (run three greps at once), or none (just text). This corpus a
 **Subagents.** The model can delegate: spawn a second agent with its own fresh context,
 give it a task, and receive only its conclusion. The delegating session never sees the
 subagent's intermediate work, which is the point — a 40-call investigation returns as one
-paragraph. Subagents here carry {sub_call_pct:.0f}% of all tool calls but only {sub_tok_pct:.0f}% of tokens, because each
+paragraph. Subagents here carry {sub_call_pct} of all tool calls but only {sub_tok_pct} of tokens, because each
 starts small instead of inheriting the parent's accumulated history.
 
 **Context window.** The model can only hold so much at once — 1M tokens for Opus 5, Opus 4.8 and
-Sonnet 5, but 200K for Haiku 4.5, which ran {haiku_subs} of the subagent traces here. Long sessions push against it, which is why the corpus shows the model truncating
-its own command output {trunc_pct:.1f}% of the time — it is rationing space it cannot see.
+Sonnet 5, but 200K for Haiku 4.5, which ran {haiku_subs} of the subagent traces here. Long sessions push against it, {trunc_clause}
 
 **Why failures are normal.** A tool call can fail — a command exits non-zero, a path does
 not exist, a timeout fires. The failure is returned like any other result and the model
@@ -1478,14 +1489,18 @@ def methodology_primer(stats: dict, traces: List[dict]) -> str:
     ]
     lead_cd = sum(1 for c in cmds if _binaries(c)[:1] == ["cd"])
     n_cmds = len(cmds)
-    cd_pct = 100 * lead_cd / n_cmds
+    cd_pct = _pct(lead_cd, n_cmds)
     total_calls = stats["total_tool_calls"]
     stamps = sorted(
         s for t in traces for s in (t.get("started_at"), t.get("last_at")) if s
     )
-    first = datetime.fromisoformat(stamps[0].replace("Z", "+00:00"))
-    last = datetime.fromisoformat(stamps[-1].replace("Z", "+00:00"))
-    days = (last.date() - first.date()).days + 1
+    if stamps:
+        first = datetime.fromisoformat(stamps[0].replace("Z", "+00:00"))
+        last = datetime.fromisoformat(stamps[-1].replace("Z", "+00:00"))
+        days = (last.date() - first.date()).days + 1
+        span = f"{days} days ({first:%d %b} to {last:%d %b %Y})"
+    else:
+        span = "an unknown span — the corpus carries no timestamps"
     roots = {re.sub(r"--claudia-worktrees.*$", "", t["project"]) for t in traces}
     n_repos = len(roots)
     sub_pct = stats["subagent_share_pct"]
@@ -1518,13 +1533,12 @@ transcripts.
 2. **Whether friction was real.** `Corr%` and `Intr%` are pattern matches on user turns —
    phrases like "that's not what I asked", or a run being stopped. They are evidence of
    friction, not proof. Compare them *between* use-cases; do not read absolutes.
-3. **Whether this generalises.** One developer, ~{n_repos} repositories, {days} days
-   ({first:%d %b} to {last:%d %b %Y}). It is a portrait of one person's usage, not of
-   developers.
+3. **Whether this generalises.** One developer, ~{n_repos} repositories, {span}.
+   It is a portrait of one person's usage, not of developers.
 
 **How to read a percentage here.** Every table states its denominator, because the same raw
 count means different things against different bases. "{sub_pct:.0f}% of tool calls" is out of {total_calls:,}
-corpus-wide including subagents; "{cd_pct:.1f}% of shell commands start with `cd`" is out of
+corpus-wide including subagents; "{cd_pct} of shell commands start with `cd`" is out of
 {n_cmds:,} shell commands only. When two figures seem to disagree, check which population each is
 over.
 

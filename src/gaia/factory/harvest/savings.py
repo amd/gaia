@@ -51,6 +51,16 @@ SCHEMA_TOKENS = 4000
 RESULT_CAP_TOKENS = 2000
 
 
+def _pct(n: float, d: float, places: int = 1) -> str:
+    """A share, or an em-dash when the denominator is zero."""
+    return f"{100 * n / d:.{places}f}%" if d else "—"
+
+
+def _inflation(unadjusted: float, adjusted: float) -> str:
+    """How much larger ``unadjusted`` is than ``adjusted``, as a percentage."""
+    return f"{100 * unadjusted / adjusted - 100:.0f}%" if adjusted else "—"
+
+
 def units(trace: dict) -> Iterator[Tuple[List[dict], int]]:
     """Every independent context in a trace: the session, then each subagent.
 
@@ -221,17 +231,17 @@ def mechanism_table(stats: dict, attr: Dict[str, float]) -> str:
     for name, what, saved, basis in rows:
         out.append(
             f"| **{name}** | {what} | {saved / 1e6:,.0f}M | "
-            f"{100 * saved / total:.2f}% | {basis} |"
+            f"{_pct(saved, total, places=2)} | {basis} |"
         )
     combined = sum(r[2] for r in rows)
     out.append(
         f"| **Combined** | made disjoint — see the module docstring | "
-        f"**{combined / 1e6:,.0f}M** | **{100 * combined / total:.2f}%** | |"
+        f"**{combined / 1e6:,.0f}M** | **{_pct(combined, total, places=2)}** | |"
     )
     return "\n".join(out)
 
 
-def bounded_table(stats: dict, requests: List[int]) -> str:
+def bounded_table(requests: List[int]) -> str:
     """What holding every request under a fixed window would have cost."""
 
     total = sum(requests)
@@ -246,21 +256,12 @@ def bounded_table(stats: dict, requests: List[int]) -> str:
         # A request already under the bound is unchanged; charging it the full
         # bound would invent tokens and understate the saving.
         bounded = sum(min(r, cap) for r in requests)
-        under = 100 * sum(1 for r in requests if r <= cap) / len(requests)
+        under = _pct(sum(1 for r in requests if r <= cap), len(requests))
         out.append(
             f"| {cap // 1024}K | {bounded / 1e9:.2f} B | "
-            f"**{100 * (1 - bounded / total):.0f}%** | {under:.1f}% |"
+            f"**{_pct(total - bounded, total, places=0)}** | {under} |"
         )
     return "\n".join(out)
-
-
-def price_delta(stats: dict, saved_tokens: float) -> str:
-    """Dollar value of a token saving, at the corpus's own realised blend."""
-
-    total = stats["tokens"]["total"]
-    cost = stats["cost_usd"]["total_est"]
-    per_tok = cost / total
-    return f"${saved_tokens * per_tok:,.0f}"
 
 
 def warm_cold_table(sessions: List[dict], d: int = 20640, t0: int = 10930) -> str:
@@ -289,6 +290,11 @@ def warm_cold_table(sessions: List[dict], d: int = 20640, t0: int = 10930) -> st
         warm = sum(growth * (1 + x / d) / t0 for x in series) / len(series)
         ratios.append(cold / warm)
     ratios.sort()
+    if not ratios:
+        return (
+            "_No session in this corpus has at least 5 requests with net context "
+            "growth, so the cold/warm prefill ratio is not measurable here._"
+        )
 
     def q(p: float) -> float:
         return ratios[int(p * (len(ratios) - 1))]
@@ -329,24 +335,25 @@ def main() -> None:
     print(
         f"\n_Tool results carry {attr['carried_results'] / 1e9:.2f} B of the "
         f"corpus's {stats['tokens']['total'] / 1e9:.2f} B "
-        f"({100 * attr['carried_results'] / stats['tokens']['total']:.0f}%). "
+        f"({_pct(attr['carried_results'], stats['tokens']['total'], places=0)}). "
         "The rest is system prompt, tool schemas, user turns and the model's own "
         "prior output, carried the same way. A mechanism that touches only tool "
         "results cannot save more than that share._"
     )
     flat = attribute(traces)  # same model, no reset detection
+    attr_carry = attr["over_cap"] + attr["repeat_reads"]
     print(
         f"\n_Carry stops at a context reset — {attr['resets']} were detected "
         "corpus-wide, as a drop in prompt size to below half the running maximum. "
         "Ignoring them would inflate the combined saving by "
-        f"{100 * (flat['over_cap'] + flat['repeat_reads']) / (attr['over_cap'] + attr['repeat_reads']) - 100:.0f}% "
+        f"{_inflation(flat['over_cap'] + flat['repeat_reads'], attr_carry)} "
         "and the carried-results figure by "
-        f"{100 * flat['carried_results'] / attr['carried_results'] - 100:.0f}%. "
+        f"{_inflation(flat['carried_results'], attr['carried_results'])}. "
         "The schema row is unaffected: it scales with model calls, not carry._"
     )
 
     print("\n## Structural saving — bounding the working set (upper bound)\n")
-    print(bounded_table(stats, requests))
+    print(bounded_table(requests))
     print("\n## How much prefix caching changes the answer\n")
     print(warm_cold_table(sessions))
 

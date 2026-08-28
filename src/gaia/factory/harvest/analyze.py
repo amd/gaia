@@ -99,9 +99,10 @@ def duration_minutes(trace: Trace) -> Optional[float]:
     try:
         a = datetime.fromisoformat(trace.started_at.replace("Z", "+00:00"))
         b = datetime.fromisoformat(trace.last_at.replace("Z", "+00:00"))
-    except ValueError:
+        delta = (b - a).total_seconds() / 60.0
+    # TypeError: one stamp carried a zone offset and the other did not.
+    except (TypeError, ValueError):
         return None
-    delta = (b - a).total_seconds() / 60.0
     return delta if delta >= 0 else None
 
 
