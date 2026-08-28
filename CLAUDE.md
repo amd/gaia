@@ -462,8 +462,9 @@ python -m pytest tests/ --hybrid   # Cloud + local testing
 
 ### Running GAIA
 ```bash
-gaia init                          # Install Lemonade Server + models, and start it (first run)
-gaia llm "Hello"                   # Test LLM
+gaia init                          # Install Lemonade Server + models (first run)
+gaia daemon start                  # Starts and supervises the LLM backend
+gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
 ```
@@ -471,10 +472,11 @@ gaia chat --ui                     # Agent UI (browser-based)
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
 CLI, so the binary does not exist on a current install. There is no portable command to
 substitute: how the server starts depends on the install (Windows tray, macOS app, Linux
-`systemctl --user start lemond`, legacy CLI). `gaia init` is the only thing in the tree
-that auto-starts the server; the normal runtime path (`LemonadeManager.ensure_ready`)
-merely *checks*, and errors out on a stopped server rather than launching one. When you
-need to print a start instruction, call `describe_start_hint()`
+`systemctl --user start lemond`, legacy CLI). The daemon starts and supervises the
+server, and `LemonadeManager.ensure_ready` auto-starts it through that supervisor, so
+the runtime path no longer errors out on a stopped server. A start instruction is still
+needed whenever GAIA cannot own the process — a non-default port or a remote
+`LEMONADE_BASE_URL`. To print one, call `describe_start_hint()`
 ([`src/gaia/llm/lemonade_launcher.py`](src/gaia/llm/lemonade_launcher.py)) instead of
 hard-coding a command — it resolves the installed tooling and never names a binary the
 host lacks.

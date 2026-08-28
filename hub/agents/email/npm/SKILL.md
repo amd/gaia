@@ -405,7 +405,8 @@ back to production by using `startSidecar` (frozen binary) instead of
 The sidecar runs the LLM via **Lemonade Server**, which this package does **not**
 install. Before `triage`/`draft`/`send` succeed, the host must have:
 
-1. A running Lemonade Server (`lemonade-server serve`).
+1. A running Lemonade Server. GAIA's daemon starts and supervises one, so
+   `gaia daemon start` is normally all that is needed.
 2. The model pulled (`gaia init` installs Lemonade and downloads the default model).
 
 Until then the binary boots, but the first `triage` returns **HTTP 502**.

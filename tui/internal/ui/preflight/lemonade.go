@@ -434,6 +434,35 @@ func lemonadeStartRemedy() Remedy {
 	}
 }
 
+// lemonadeAutoStartFailedRemedy is what to do after GAIA has ALREADY tried to
+// start the server and the daemon refused.
+//
+// The daemon's own message is kept as the action rather than replaced, because
+// it is strictly more specific than anything resolvable from here: it knows
+// whether the port was held by a stranger, whether the server died on launch,
+// or whether there was nothing to launch. "Start it" is the wrong remedy for
+// two of those three.
+//
+// A command is attached only when the machine has no Lemonade at all — there
+// the next step really is the installer, and it is the same one the never-tried
+// remedy names. Where a server IS installed, the refusal text carries its own
+// next step and adding a start command on top would contradict it.
+func lemonadeAutoStartFailedRemedy(detail string) Remedy {
+	if strings.TrimSpace(detail) == "" {
+		// The daemon said nothing usable, so fall back to the resolved advice
+		// rather than showing an empty row.
+		return lemonadeStartRemedy()
+	}
+	if l := resolveLemonade(); !l.Found {
+		return Remedy{
+			Action:  detail,
+			Command: "gaia init",
+			Where:   "https://amd-gaia.ai/docs/guides/install",
+		}
+	}
+	return Remedy{Action: detail, Where: lemonadeDocs}
+}
+
 // lemonadeRestartRemedy is what to do about one that is up but not answering
 // properly.
 func lemonadeRestartRemedy() Remedy {

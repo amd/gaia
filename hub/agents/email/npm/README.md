@@ -42,8 +42,8 @@ a cloud service, and that's enforced when the agent starts up.
 
 A local AI model has to be running before triage or drafting works:
 
-1. Install and start it with **`gaia init`** (downloads the default model) and
-   **`lemonade-server serve`**.
+1. Install it with **`gaia init`** (downloads the default model). GAIA starts
+   the model server itself — **`gaia daemon start`** is enough.
 2. On a fresh machine the agent still starts, but triage won't return results
    until that local model is up. Call `client.init()` to check readiness.
 

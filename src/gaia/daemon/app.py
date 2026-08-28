@@ -84,6 +84,7 @@ def create_app(
     custody_auth=None,
     custody_store=None,
     clock=None,
+    lemonade=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -107,6 +108,11 @@ def create_app(
     its OWN per-spawn secrets (bound at mint), NOT the client ``token`` — it is a
     separate surface with its own MAJOR (§0.31), so it is not behind
     ``require_token``.
+
+    *lemonade* (a :class:`gaia.llm.lemonade_supervisor.LemonadeSupervisor`) mounts
+    ``/daemon/v1/lemonade/*``, through which a front-end asks the daemon to start
+    the local model server. The daemon owns that process — no front-end spawns
+    one — so this router is the only way in. ``None`` leaves it unmounted.
 
     *clock* (a :class:`gaia.daemon.scheduler.clock.DaemonClock`) additively
     reports its running state, last poll time, and pending/failed job counts
@@ -174,6 +180,14 @@ def create_app(
             )
         server.should_exit = True
         return {"service": SERVICE_ID, "status": "stopping", "pid": pid}
+
+    if lemonade is not None:
+        # The model server's control plane. Mounted whenever a supervisor was
+        # given, which server.run() always does — the ``None`` case exists so a
+        # skeleton/test daemon can run without owning a model server.
+        from gaia.daemon.lemonade_routes import build_lemonade_router
+
+        app.include_router(build_lemonade_router(token, lemonade))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

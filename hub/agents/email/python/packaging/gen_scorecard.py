@@ -395,10 +395,11 @@ def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str
     """
     limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
     return (
-        "# Prerequisites: install the eval extras and start a Lemonade Server\n"
-        "# with the model on AMD Ryzen AI hardware (Strix Halo recommended).\n"
+        "# Prerequisites: the eval extras, and the model on AMD Ryzen AI\n"
+        "# hardware (Strix Halo recommended). GAIA's daemon starts and\n"
+        "# supervises the model server itself.\n"
         'uv pip install -e ".[dev,eval,api]"\n'
-        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "gaia daemon start       # starts and supervises the model server\n\n"
         "# Step 0: build the corpus from the committed seed. The mbox +\n"
         "# ground_truth are GENERATED artifacts (gitignored), so a fresh\n"
         "# checkout must materialise them before the benchmark can read them.\n"

@@ -72,6 +72,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gaia.agents.base.readiness import start_advice
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -436,8 +437,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
     raw = str(exc) or type(exc).__name__
     return (
         f"Local Lemonade Server is not reachable at {target}. The email agent "
-        "runs local inference, so it needs Lemonade Server running. Start it "
-        "with `lemonade-server serve` (or run `gaia init`), then retry. "
+        "runs local inference, so it needs Lemonade Server running. "
+        f"{start_advice()} "
         f"Docs: {_LEMONADE_DOCS_URL}"
         f"\n\nTechnical details: {raw}"
     )
