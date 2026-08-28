@@ -70,3 +70,10 @@ class TestUnhandledEmailExceptionJson:
         assert resp.status_code == 403, resp.text
         assert resp.json()["detail"] == str(exc)
         assert "installed:email" in resp.json()["detail"]
+
+    def test_sidecar_app_installs_the_handler(self):
+        # The tests above build their own app, so they stay green even if the
+        # real server stops installing the handler. Pin the wiring itself.
+        from gaia_agent_email.server import build_app
+
+        assert Exception in build_app().exception_handlers

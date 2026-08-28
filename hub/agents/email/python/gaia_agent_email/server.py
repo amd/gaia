@@ -58,10 +58,12 @@ _APP_IMPORT_STRING = "gaia_agent_email.server:app"
 def install_email_unhandled_exception_handler(app):
     """Return structured JSON for unexpected /v1/email/* exceptions (#3000).
 
-    HTTPException and request validation keep their status and detail.
+    Registered for ``Exception``, so it runs as ``ServerErrorMiddleware``'s
+    handler — outside the ``ExceptionMiddleware`` that already converts
+    route-raised HTTPException and validation errors. Those never reach here;
+    the passthrough branches cover the same errors raised from outer middleware.
     Anything else is a 500 with an error_id; the traceback is logged only.
     """
-    from fastapi import HTTPException
     from fastapi.exception_handlers import request_validation_exception_handler
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
@@ -69,10 +71,7 @@ def install_email_unhandled_exception_handler(app):
 
     @app.exception_handler(Exception)
     async def _unhandled_email_exception(request, exc):
-        if isinstance(exc, HTTPException):
-            return JSONResponse(
-                status_code=exc.status_code, content={"detail": exc.detail}
-            )
+        # fastapi.HTTPException subclasses the Starlette one, so this covers both.
         if isinstance(exc, StarletteHTTPException):
             return JSONResponse(
                 status_code=exc.status_code, content={"detail": exc.detail}
@@ -80,7 +79,12 @@ def install_email_unhandled_exception_handler(app):
         if isinstance(exc, RequestValidationError):
             return await request_validation_exception_handler(request, exc)
         error_id = uuid.uuid4().hex[:12]
-        log.exception("Unhandled email API exception error_id=%s", error_id)
+        log.exception(
+            "Unhandled email API exception on %s %s error_id=%s",
+            request.method,
+            request.url.path,
+            error_id,
+        )
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error", "error_id": error_id},
