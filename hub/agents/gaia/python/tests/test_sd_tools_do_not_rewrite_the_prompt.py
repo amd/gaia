@@ -55,9 +55,18 @@ def flagship():
 
 
 def _select_fresh(agent, query):
-    """First-turn selection for ``query``, independent of test order."""
+    """First-turn selection for ``query``, independent of test order.
+
+    Skips when the embedder is unreachable: scoring a real query against real
+    tool descriptions needs live embeddings, and a plain CI runner has no
+    Lemonade. Keyed off the loader's own ``session_disabled`` flag rather than
+    a bare ``None``, so a genuine selection regression still fails here.
+    """
     agent.tool_loader.reset_session()
-    return agent.tool_loader.select(query, agent._registry_snapshot)
+    selected = agent.tool_loader.select(query, agent._registry_snapshot)
+    if selected is None and agent.tool_loader.session_disabled:
+        pytest.skip("semantic tool selection needs a reachable embedder")
+    return selected
 
 
 def test_image_generation_is_reachable_out_of_the_box(flagship):
@@ -107,7 +116,6 @@ def test_an_image_request_selects_the_tools_without_any_skill_loaded(flagship, q
     """
     selected = _select_fresh(flagship, query)
 
-    assert selected is not None, "selection disabled — embedder down?"
     assert SD_TOOLS <= set(selected)
 
 
@@ -120,5 +128,4 @@ def test_a_document_question_does_not_drag_in_the_image_tools(flagship):
     """
     selected = _select_fresh(flagship, "what does my document say about revenue")
 
-    assert selected is not None
     assert not SD_TOOLS & set(selected)
