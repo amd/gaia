@@ -335,9 +335,11 @@ env-var names and exempt paths onto the shared mechanism in
    sits in the environment — or `GAIA_GAIA_SIDECAR_TOKEN`, the token itself, the
    legacy delivery. A request without it is **401**, with a `detail` naming both
    env vars.
-2. **Host allowlist.** The `Host` header must be loopback (`127.0.0.1`,
-   `localhost`, `::1`); anything else is **400**. This is what defeats DNS
-   rebinding, where the rebound request arrives with `Host: evil.com`.
+2. **Host allowlist.** The `Host` header must be present *and* loopback
+   (`127.0.0.1`, `localhost`, `::1`); anything else — including an absent or
+   empty header — is **400**. This is what defeats DNS rebinding, where the
+   rebound request arrives with `Host: evil.com`, so it fails closed rather
+   than letting a caller opt out by omitting the header.
 3. **Origin rejection.** A request carrying a non-loopback browser `Origin` is
    **403**. Non-browser clients send no `Origin` and are unaffected.
 

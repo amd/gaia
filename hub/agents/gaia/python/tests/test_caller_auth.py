@@ -21,6 +21,8 @@ unauthenticated request is actually refused by the app the binary serves.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 pytest.importorskip("gaia_agent")
@@ -229,6 +231,57 @@ def test_the_missing_host_check_also_covers_the_probes(monkeypatch):
     """Same rule for the token-free paths — they skip the token, not transport."""
     client = _client(monkeypatch, token=_TOKEN)
     assert client.get("/health", headers={"Host": ""}).status_code == 400
+
+
+def _reject_body_for(headers: list) -> bytes:
+    """Drive the middleware over a raw ASGI scope and return the refusal body.
+
+    ``TestClient`` normalises the header, so a malformed value is unreachable
+    through it.
+    """
+    caller_auth.configure(caller_auth.CallerAuthConfig(token=_TOKEN))
+    sent: list = []
+
+    async def app(scope, receive, send):  # pragma: no cover - must never run
+        raise AssertionError("a request with a bad Host reached the app")
+
+    async def _send(message):
+        sent.append(message)
+
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health",
+        "query_string": b"",
+        "headers": headers,
+    }
+    asyncio.run(caller_auth.HostOriginMiddleware(app)(scope, _receive, _send))
+
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 400
+    return b"".join(
+        m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+    )
+
+
+@pytest.mark.parametrize("raw", [b":8141", b"::1"])
+def test_malformed_host_is_rejected_and_quoted_back(raw):
+    """A Host that parses to nothing is still a Host the caller sent.
+
+    ``_host_only`` returns ``""`` for these, so keying the message on the parsed
+    value would tell someone debugging their client it sent no Host at all.
+    """
+    body = _reject_body_for([(b"host", raw)])
+    assert b"no Host header" not in body
+    assert raw in body
+
+
+def test_whitespace_only_host_reads_as_absent():
+    """Nothing useful to quote back, so it is reported the way it presents."""
+    assert b"no Host header" in _reject_body_for([(b"host", b"   ")])
 
 
 # -- EXEMPT_PATHS is a real declaration, not decoration -----------------------
