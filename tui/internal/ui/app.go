@@ -296,7 +296,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// missing daemon as a failed first message.
 	m := root.NewFlagshipModel(*agent, dev).
 		WithBypassPermissions(bypassPermissions).
-		WithClaude(useClaude, claudeModel)
+		WithClaude(useClaude, claudeModel).
+		WithModel(model)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
 	}

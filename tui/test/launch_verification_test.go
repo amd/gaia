@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,12 +124,53 @@ func (d *rootDriver) report() preflight.Report {
 // isolateGaiaHome points the install-root lookup at a temp dir, so a developer
 // box with a real ~/.gaia/agents cannot decide whether a "nothing is installed"
 // test passes.
+//
+// It moves HOME, which is a blunt instrument: on Linux that is also where the
+// Go toolchain keeps its module cache, so anything shelling out to `go build`
+// after this re-downloads every dependency into the temp dir — and cleanup then
+// fails, because module-cache files are read-only. buildBinaries is compiled
+// once up front for exactly that reason; warm it here so the ordering cannot be
+// got wrong by a caller that asks for the mock binary later.
 func isolateGaiaHome(t *testing.T) {
 	t.Helper()
+	buildBinaries(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	// GOMODCACHE/GOCACHE default to $HOME on Linux. Pin them to where they
+	// already are, so a moved HOME cannot redirect them even if something does
+	// shell out to the toolchain.
+	t.Setenv("GOMODCACHE", goEnv(t, "GOMODCACHE"))
+	t.Setenv("GOCACHE", goEnv(t, "GOCACHE"))
 }
+
+// goEnv reads one `go env` value, memoised.
+//
+// One variable per call rather than parsing a multi-value response: these are
+// paths, and a Windows path routinely contains a space, so splitting on
+// whitespace would corrupt exactly the machines this matters on.
+func goEnv(t *testing.T, name string) string {
+	t.Helper()
+	goEnvMu.Lock()
+	defer goEnvMu.Unlock()
+	if got, ok := goEnvCache[name]; ok {
+		return got
+	}
+	out, err := exec.Command("go", "env", name).Output()
+	if err != nil {
+		// Nothing to pin to. The caller's Setenv of "" is a no-op the toolchain
+		// treats as "use the default", which is the behaviour without this.
+		goEnvCache[name] = ""
+		return ""
+	}
+	goEnvCache[name] = strings.TrimSpace(string(out))
+	return goEnvCache[name]
+}
+
+var (
+	goEnvMu    sync.Mutex
+	goEnvCache = map[string]string{}
+)
 
 // stubSetupCheck replaces `gaia init` with a script that exits with code, so
 // the model row answers without spawning a Python interpreter.
@@ -199,5 +242,21 @@ func TestASkippedSetupRowIsStillAskedInTheChat(t *testing.T) {
 
 	if root.GateAskedAboutSetupForTest(rep) {
 		t.Error("a model row the walk never reached was treated as answered")
+	}
+}
+
+// `gaia tui run email --model X` used to pass the model through. The
+// interactive path was rewritten to build its client inside the router, which
+// never received it — so the flag was accepted and the run quietly used the
+// agent's default. Accepting a flag and changing nothing is the silent
+// fallback the rules forbid, and the CLI reference still advertises it.
+func TestTheModelOverrideReachesTheInteractiveClient(t *testing.T) {
+	agent := catalog.Agent{
+		ID: "email", Name: "Email", Transport: catalog.TransportDaemon,
+	}
+	m := root.NewFlagshipModel(agent, false).WithModel("some-other-model")
+
+	if got := root.ModelForTest(m); got != "some-other-model" {
+		t.Errorf("the router carries model %q; --model would be silently dropped", got)
 	}
 }

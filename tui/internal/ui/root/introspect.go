@@ -67,3 +67,8 @@ func (m FlagshipModel) PreflightReport() (preflight.Report, bool) {
 // test package, which drives the real report the real runner produces rather
 // than a hand-built one.
 func GateAskedAboutSetupForTest(rep preflight.Report) bool { return gateAskedAboutSetup(rep) }
+
+// ModelForTest is the --model override the router will hand to the client it
+// builds after the gate passes. Exposed so a test can prove the flag is not
+// silently dropped on the way through.
+func ModelForTest(m FlagshipModel) string { return m.model }

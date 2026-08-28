@@ -57,6 +57,9 @@ type FlagshipModel struct {
 	// Claude model.
 	useClaude   bool
 	claudeModel string
+	// model overrides the agent's own default (--model). Only a daemon-backed
+	// agent can honour it; cli.checkModelSupported refuses it for the rest.
+	model string
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -83,6 +86,9 @@ type FlagshipModel struct {
 	suppressed map[string]bool
 	// listeners decide whether an Outcome halts.
 	listeners []Listener
+	// beginPending is set when the launch was asked to start before the
+	// terminal size was known. See beginMsg.
+	beginPending bool
 }
 
 // clientBox owns the agent client across the copies Bubble Tea makes of the
@@ -171,15 +177,34 @@ func (m FlagshipModel) WithClaude(enabled bool, model string) FlagshipModel {
 	return m
 }
 
+// WithModel overrides the agent's own default model (--model).
+//
+// It has to be threaded all the way here because the router builds the client
+// AFTER the gate passes: dropping it made `gaia tui run email --model X` accept
+// the flag and quietly run the default instead, which is the silent-fallback
+// shape the rules forbid.
+func (m FlagshipModel) WithModel(model string) FlagshipModel {
+	m.model = model
+	return m
+}
+
 // Init opens the gate immediately. The splash is what is on screen while the
 // first probe runs, not a screen the user has to dismiss.
-func (m FlagshipModel) Init() tea.Cmd {
-	return func() tea.Msg { return beginMsg{} }
-}
+func (m FlagshipModel) Init() tea.Cmd { return beginCmd() }
+
+func beginCmd() tea.Cmd { return func() tea.Msg { return beginMsg{} } }
 
 // beginMsg leaves the splash and starts the readiness gate. A message rather
 // than a direct call so the splash gets at least one rendered frame — Init's
 // command runs after the first View.
+//
+// It waits for the terminal size before acting. Bubble Tea's first View happens
+// before the first WindowSizeMsg, so acting immediately would race: the splash
+// would render once at an unknown size — where the banner is deliberately
+// compact, since an over-tall frame there scrolls the terminal and misaligns
+// every frame after it — and the gate would replace it before the real size
+// ever arrived. Whether the mascot appeared at all came down to which message
+// won. Now it always does, at the size it was measured for.
 type beginMsg struct{}
 
 func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -187,6 +212,15 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.beginPending {
+			// Re-emit rather than starting here: Bubble Tea renders between
+			// messages, so bouncing through the queue is what gives the splash
+			// its one frame at the real size. Starting inline would set the
+			// size and switch the view in the same update, and the mascot would
+			// never be drawn at all.
+			m.beginPending = false
+			return m, beginCmd()
+		}
 		switch m.activeView {
 		case viewPreflight:
 			return m.updatePreflight(msg)
@@ -201,6 +235,11 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case beginMsg:
+		if m.width == 0 || m.height == 0 {
+			// No size yet — the WindowSizeMsg branch starts the gate instead.
+			m.beginPending = true
+			return m, nil
+		}
 		return m.beginPreflight(m.agent)
 
 	case preflight.ProceedMsg:
@@ -318,6 +357,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
+		Model:             m.model,
 		BypassPermissions: m.bypassPermissions,
 		UseClaude:         m.useClaude,
 		ClaudeModel:       m.claudeModel,

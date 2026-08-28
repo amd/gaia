@@ -352,7 +352,7 @@ func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) 
 		t.Fatal("an indeterminate row was counted as ready")
 	}
 	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
-	if !strings.Contains(screen, "Starting anyway") || !strings.Contains(screen, "Local AI") {
+	if !strings.Contains(screen, "Starting anyway") || !strings.Contains(screen, "Lemonade") {
 		t.Errorf("the hand-off does not name what could not be verified:\n%s", screen)
 	}
 	if _, ok := cmd().(proceedTickMsg); !ok {

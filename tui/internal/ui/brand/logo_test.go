@@ -91,12 +91,17 @@ func TestBannerCompactsOnANarrowTerminal(t *testing.T) {
 	}
 }
 
-// The first frame arrives before Bubble Tea reports a size. Compacting on the
-// zero value would make the banner visibly change under the user a moment
-// after launch.
-func TestBannerTreatsAnUnknownSizeAsRoomy(t *testing.T) {
-	if lines := strings.Count(ansi.Strip(Banner(0, 0)), "\n"); lines < robotRows {
-		t.Errorf("banner compacted on an unknown terminal size (%d lines)", lines)
+// Bubble Tea renders once BEFORE the first WindowSizeMsg, against an assumed
+// 80x24. A 23-row banner there overflows, scrolls the terminal, and misaligns
+// the cursor-relative repaint for the whole session — the chat view then draws
+// in the wrong place and looks broken. An unknown size must stay small.
+func TestBannerCompactsOnAnUnknownSize(t *testing.T) {
+	banner := ansi.Strip(Banner(0, 0))
+	if lines := strings.Count(banner, "\n") + 1; lines > 1 {
+		t.Errorf("banner rendered %d lines at an unknown size:\n%s", lines, banner)
+	}
+	if !strings.Contains(banner, "G A I A") {
+		t.Error("the compact banner dropped the wordmark")
 	}
 }
 

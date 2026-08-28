@@ -416,7 +416,7 @@ func (c *Catalog) warn(format string, args ...any) {
 
 // LocalInstalls reads the ~/.gaia/agents/*/.installed sentinels — the local
 // record of what is installed. It needs no daemon and no network, which is what
-// makes `gaia tui list --installed` answerable offline.
+// makes `gaia tui status` answerable without a network.
 //
 // The second return is warnings: every one of them makes an installed agent
 // silently disappear, which looks identical to "never installed", so callers

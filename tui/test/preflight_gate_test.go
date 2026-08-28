@@ -573,9 +573,19 @@ func TestFixingAStoppedSidecarFromTheGateReachesChat(t *testing.T) {
 	if g.ensures != 1 {
 		t.Fatalf("f asked the daemon to start the agent %d times, want 1", g.ensures)
 	}
-	// The fix re-checks and everything else was already green, so it hands off.
+	// The fix re-checks and everything else was already green — but a gate that
+	// has just CHANGED something holds for a keypress rather than handing off,
+	// so the user can read what the fix did before chat replaces the screen.
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("the gate handed off to %q without letting the fix be read\n%s", got, d.screen())
+	}
+	if !strings.Contains(d.flat(), "enter continue") {
+		t.Errorf("the held gate does not advertise the way on:\n%s", d.screen())
+	}
+
+	d.send(keyEnter())
 	if got := d.view(); got != "chat" {
-		t.Fatalf("after the fix the gate landed on %q, want chat\n%s", got, d.screen())
+		t.Fatalf("enter on the held gate landed on %q, want chat\n%s", got, d.screen())
 	}
 }
 

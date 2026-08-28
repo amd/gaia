@@ -100,9 +100,12 @@ const TaglineText = "Your local AI agent — by AMD"
 // Banner is the header for a full-screen view: the mascot over the wordmark
 // where there is room, and the wordmark alone where there is not.
 //
-// A zero width or height means "unknown", which renders the full form — the
-// first frame arrives before Bubble Tea reports a size, and opening on the
-// compact header would make the banner visibly change under the user.
+// An UNKNOWN size (zero width or height) gets the compact form. Bubble Tea
+// renders once before the first WindowSizeMsg and assumes 80x24 until then, so
+// a 23-row banner drawn at that moment overflows, scrolls the terminal, and
+// leaves the cursor-relative repaint misaligned for the rest of the session —
+// every later frame, chat included, then draws in the wrong place. The banner
+// growing on the first resize costs far less than that.
 func Banner(width, height int) string {
 	if compact(width, height) {
 		return truncate(Wordmark()+Tagline(), width)
@@ -110,12 +113,10 @@ func Banner(width, height int) string {
 	return Robot() + "\n" + Wordmark() + "  " + Tagline() + "\n"
 }
 
-// compact reports whether this terminal is too small for the mascot.
+// compact reports whether the mascot fits. An unknown dimension counts as not
+// fitting — see Banner.
 func compact(width, height int) bool {
-	if height > 0 && height < CompactHeightRows {
-		return true
-	}
-	return width > 0 && width < ArtWidth+2
+	return height < CompactHeightRows || width < ArtWidth+2
 }
 
 func truncate(s string, width int) string {

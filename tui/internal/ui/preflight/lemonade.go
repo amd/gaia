@@ -42,6 +42,14 @@ var legacyBinaries = []string{"lemonade-server", "lemonade-server-dev"}
 // named a binary meant that binary.
 const serverPathEnv = "LEMONADE_SERVER_PATH"
 
+// lemonadeRowLabel names the local model server on the checklist.
+//
+// "Local AI" said what it does and not what it IS, so every remedy under it —
+// and every doc, log line and support answer — talked about Lemonade while the
+// row the user was looking at never used the word. Naming it is what makes the
+// row searchable.
+const lemonadeRowLabel = "Lemonade"
+
 // lemonadeDocs is where the run instructions for every platform live.
 const lemonadeDocs = "https://lemonade-server.ai/docs/guide/"
 

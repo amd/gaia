@@ -84,7 +84,6 @@ type Agent struct {
 	// switch into a launch failure. Empty means "no developer mode", the safe
 	// default for every entry that has not declared one.
 	DevArgs []string
-	Votes   int // for coming-soon agents
 
 	// --- Agent Hub fields, populated from GET /daemon/v1/catalog ---
 

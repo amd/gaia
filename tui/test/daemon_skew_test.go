@@ -44,8 +44,10 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	if !strings.Contains(text, "daemon log") {
 		t.Errorf("the error does not say where to look next:\n%s", text)
 	}
-	// The way through that needs no daemon at all.
-	if !strings.Contains(text, "--installed") {
+	// The way through that needs no daemon at all. It used to be
+	// `gaia tui list --installed`; that subcommand is gone, and `status` is what
+	// reads the install sentinels straight off disk now.
+	if !strings.Contains(text, "gaia tui status") {
 		t.Errorf("the error does not mention the offline way through:\n%s", text)
 	}
 	// And it must NOT send the user to the Agent Hub.

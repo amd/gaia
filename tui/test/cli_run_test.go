@@ -2,11 +2,13 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/ui"
@@ -19,28 +21,72 @@ const altScreenEnter = "\x1b[?1049h"
 // buildBinaries compiles the CLI and the mock agent into a temp dir, naming the
 // mock `gaia-agent` so the catalog's PATH lookup finds it as the flagship. This
 // exercises the real command the user runs, not an in-process shortcut.
+// buildBinaries compiles the CLI and the mock agent ONCE per test binary and
+// returns their shared directory. The mock is named `gaia-agent` so the
+// catalog's PATH lookup finds it as the flagship. This exercises the real
+// command the user runs, not an in-process shortcut.
+//
+// Built once, into a directory that is NOT a t.TempDir, for two reasons. It was
+// costing a fresh ~13s compile per test. And `go build` writes its module cache
+// under $HOME — which isolateGaiaHome moves — so a per-test build re-downloaded
+// every dependency into a temp dir that cleanup then could not remove, because
+// module-cache files are read-only. TestMain removes the shared dir at the end.
+var (
+	buildOnce sync.Once
+	builtBin  string
+	builtDir  string
+	buildErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtDir != "" {
+		_ = os.RemoveAll(builtDir)
+	}
+	os.Exit(code)
+}
+
 func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the CLI binary; skipped under -short")
 	}
 
-	binDir = t.TempDir()
-	suffix := ""
-	if runtime.GOOS == "windows" {
-		suffix = ".exe"
-	}
-	gaiaBin = filepath.Join(binDir, "gaia-tui"+suffix)
-	mockBin := filepath.Join(binDir, "gaia-agent"+suffix)
-
-	for target, out := range map[string]string{"./cmd/gaia": gaiaBin, "./test/mockagent": mockBin} {
-		cmd := exec.Command("go", "build", "-o", out, target)
-		cmd.Dir = repoTUIDir(t)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("go build %s: %v\n%s", target, err, output)
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "gaia-tui-build")
+		if err != nil {
+			buildErr = err
+			return
 		}
+		builtDir = dir
+
+		suffix := ""
+		if runtime.GOOS == "windows" {
+			suffix = ".exe"
+		}
+		builtBin = filepath.Join(dir, "gaia-tui"+suffix)
+		mockBin := filepath.Join(dir, "gaia-agent"+suffix)
+
+		root, rerr := os.Getwd()
+		if rerr != nil {
+			buildErr = rerr
+			return
+		}
+		root = filepath.Dir(root)
+
+		for target, out := range map[string]string{"./cmd/gaia": builtBin, "./test/mockagent": mockBin} {
+			cmd := exec.Command("go", "build", "-o", out, target)
+			cmd.Dir = root
+			if output, err := cmd.CombinedOutput(); err != nil {
+				buildErr = fmt.Errorf("go build %s: %w\n%s", target, err, output)
+				return
+			}
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	return gaiaBin, binDir
+	return builtBin, builtDir
 }
 
 // oneShotEnv is the environment a gated one-shot needs to get past readiness:

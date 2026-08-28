@@ -63,7 +63,7 @@ func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 	}
 	msg := flatten(errW.String())
 	for _, want := range []string{
-		"Local AI",                            // which precondition
+		"Lemonade",                            // which precondition
 		"not running at",                      // what is wrong with it
 		"run: ",                               // how to fix it
 		"Nothing was sent to the Email agent", // and that nothing half-ran
@@ -340,7 +340,7 @@ func TestRunQueryRefusesInSecondsWhenAPreconditionIsUnmet(t *testing.T) {
 	if stdout.String() != "" {
 		t.Errorf("stdout must stay empty so `> answer.txt` never captures a failure, got %q", stdout.String())
 	}
-	for _, want := range []string{"not ready", "Local AI", "run: "} {
+	for _, want := range []string{"not ready", "Lemonade", "run: "} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr is missing %q:\n%s", want, stderr.String())
 		}

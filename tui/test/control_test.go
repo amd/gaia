@@ -229,11 +229,15 @@ func TestFlagshipBootReachesChat(t *testing.T) {
 	tui.waitFor(map[string]any{
 		"state": map[string]any{"view": control.ViewChat}, "timeout_ms": 20000})
 
-	splash := tui.frameContaining("G A I A")
-	if splash == "" {
+	// The mascot ROW, not the wordmark: the very first frame is drawn before
+	// the terminal size is known and is deliberately compact, so it carries the
+	// wordmark alone. What matters is that the full splash was reached once the
+	// size arrived — that the gate does not race past it.
+	if tui.frameContaining("G A I A") == "" {
 		t.Error("no recorded frame carried the wordmark; the launch never showed a splash")
-	} else if !strings.Contains(splash, "+#############*=") {
-		t.Errorf("the splash frame does not carry the mascot:\n%s", splash)
+	}
+	if tui.frameContaining("+#############*=") == "" {
+		t.Error("no recorded frame carried the mascot; the gate raced past the splash")
 	}
 	if tui.frameContaining("Getting GAIA ready") == "" {
 		t.Error("no recorded frame showed the readiness gate; the launch skipped it")

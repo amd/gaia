@@ -42,7 +42,7 @@ var chatCmd = &cobra.Command{
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
 						"--%s is not supported with --subprocess: %s. Use `gaia tui chat --agent <id> --%s …` "+
-							"(see `gaia tui list` for ids), or drop --%s",
+							"(the ids are `gaia` and `email`), or drop --%s",
 						f.name, f.why, f.name, f.name)
 				}
 			}

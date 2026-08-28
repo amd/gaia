@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Colour is ADDITIVE here. Every state is already carried by its text marker
@@ -98,7 +99,38 @@ func (m Model) render() string {
 	out := []string{head, pad(dividerStyle.Render(div))}
 	out = append(out, body...)
 	out = append(out, pad(dividerStyle.Render(div)), foot)
-	return strings.Join(out, "\n")
+	return clipToTerminal(out, m.width, m.height)
+}
+
+// clipToTerminal is the last thing every frame passes through.
+//
+// dims() floors the layout at minW x minH so the column arithmetic cannot go
+// negative, which means a terminal SMALLER than the floor gets a frame laid out
+// for a screen it does not have. Emitting that verbatim is worse than an ugly
+// screen: an over-wide line soft-wraps and an over-tall frame scrolls, and
+// Bubble Tea's repaint is cursor-relative — so from then on every frame, this
+// one and the chat that follows it, lands in the wrong place.
+//
+// A 30-column terminal is below anything this screen can lay out usefully. It
+// still has to stay a screen rather than corrupt the session.
+func clipToTerminal(lines []string, cols, rows int) string {
+	if cols > 0 {
+		for i, line := range lines {
+			if ansi.StringWidth(line) > cols {
+				lines[i] = ansi.Truncate(line, cols, "…")
+			}
+		}
+	}
+	// The last line is the footer and carries the way out, so height is trimmed
+	// from the BODY: keep the head, keep the tail, drop the middle.
+	if rows > 0 && len(lines) > rows {
+		if rows < 3 {
+			lines = lines[:rows]
+		} else {
+			lines = append(append([]string{}, lines[:rows-2]...), lines[len(lines)-2:]...)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) header(w int) string {
@@ -121,17 +153,43 @@ func (m Model) footer(w int) string {
 	}
 	keys = append(keys, [2]string{"r", "re-check"})
 	keys = append(keys, [2]string{"d", "details"})
-	if !m.Busy() && !m.rep.Ready() &&
-		(!m.rep.Blocked() || m.rep.OfferableDespiteFailure()) {
+	// `enter` is offered whenever pressing it would actually do something:
+	// when a report is neither ready nor refusing, and when the screen is
+	// holding after a fix so the user can read what it did.
+	if m.HeldForReview() ||
+		(!m.Busy() && !m.rep.Ready() &&
+			(!m.rep.Blocked() || m.rep.OfferableDespiteFailure())) {
 		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})
 
+	// Fitted against the REAL terminal, not the floored layout width, and
+	// narrowed by dropping whole hints from the FRONT.
+	//
+	// Truncating the joined string instead would cut from the right, and the
+	// rightmost hint is `esc` — the way out. A screen that has run out of room
+	// to advertise anything else still has to advertise that.
+	avail := w
+	if m.width > 0 && m.width < avail {
+		avail = m.width
+	}
+	avail -= 2 * indentW
+
+	for first := 0; first < len(keys); first++ {
+		line := renderKeys(keys[first:])
+		if first == len(keys)-1 || lipgloss.Width(line) <= avail {
+			return pad(truncateStyled(line, avail))
+		}
+	}
+	return pad("")
+}
+
+func renderKeys(keys [][2]string) string {
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, keyStyle.Render(k[0])+" "+dimStyle.Render(k[1]))
 	}
-	return pad(truncateStyled(strings.Join(parts, dimStyle.Render(" · ")), w-2*indentW))
+	return strings.Join(parts, dimStyle.Render(" · "))
 }
 
 func (m Model) focusedFix() FixKind {
@@ -226,6 +284,13 @@ func (m Model) trailerLines(w int) []string {
 			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.provisionLine, w-2*indentW))),
 			pad(dimStyle.Render("Leaving this screen cancels the download.")),
 		}
+	case m.HeldForReview() && m.rep.Ready():
+		// A fix just ran and everything passed. Say so, and say the screen is
+		// waiting — a green checklist that sits there with no explanation
+		// reads as frozen.
+		return []string{"", pad(noteStyle.Render(
+			"Setup finished and everything checks out. Press enter to start " +
+				m.cfg.AgentName + "."))}
 	case m.note != "":
 		return append([]string{""}, indentAll(wrap(m.note, w-2*indentW), indentW)...)
 	case m.phase == phaseDone:

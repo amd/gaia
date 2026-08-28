@@ -2572,12 +2572,12 @@ under [Agent Command](#agent-command).
 
 `gaia tui` is the Go/Bubble Tea terminal client: it boots straight into the
 flagship `gaia` agent's chat, behind a readiness gate. Building from source the
-binary is `tui/bin/gaia` (`cd tui && make build`).
+binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
   The binary accepts a leading `tui` word and drops it, so `gaia tui status`
   and `gaia status` are the same command. Running the source build directly,
-  both `./tui/bin/gaia tui status` and `./tui/bin/gaia status` work.
+  both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
 </Note>
 
 ```bash
@@ -2725,7 +2725,7 @@ gaia tui --control --debug         # log every injected key, state change, and w
 <Note>
   These are persistent flags on the TUI binary's root command, so they apply to
   the bare launch, `run`, and `chat` alike. Building from source, that binary is
-  `tui/bin/gaia` (`cd tui && make build`).
+  `tui/bin/gaia-tui` (`cd tui && make build`).
 </Note>
 
 | Flag | Type | Default | Description |

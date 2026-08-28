@@ -76,7 +76,7 @@ func (l localRunner) Label() string { return "local" }
 func (l localRunner) Rows(cfg Config) []Row {
 	rows := []Row{
 		{Key: KeyBinary, Label: cfg.AgentName + " agent"},
-		{Key: KeyLemonade, Label: "Local AI"},
+		{Key: KeyLemonade, Label: lemonadeRowLabel},
 		{Key: KeyModel, Label: "AI model"},
 	}
 	for i := range rows {

@@ -114,6 +114,17 @@ type Model struct {
 	provisionCh   chan provisionEvent
 	provisionLine string
 	cancel        *cancelBox
+
+	// fixApplied is true once a fix has changed something on this machine —
+	// setup ran, a daemon or sidecar started, a model downloaded.
+	//
+	// It stops the re-check that follows from handing off on its own. A fix can
+	// run for minutes and then print the one line that says whether it worked;
+	// auto-proceeding ~800ms later replaces that line with a chat prompt, so
+	// the user never learns what the thing they waited for actually did. After
+	// a fix the screen waits for enter. A launch that needed no fix is
+	// untouched — nothing happened there worth pausing over.
+	fixApplied bool
 }
 
 // New builds the gate for an agent the GAIA daemon supervises.
@@ -199,6 +210,14 @@ func (m Model) Cancel() {
 
 // RunnerLabel names the machinery behind this screen, for logs and snapshots.
 func (m Model) RunnerLabel() string { return m.r.Label() }
+
+// HeldForReview reports whether the screen is deliberately waiting for enter
+// rather than handing off. The renderer asks this rather than re-deriving it,
+// so the footer and the hand-off can never disagree about whether the launch
+// is about to start.
+func (m Model) HeldForReview() bool {
+	return (m.opts.ManualProceed || m.fixApplied) && !m.Busy() && !m.rep.Blocked()
+}
 
 // --- messages --------------------------------------------------------------
 
@@ -365,7 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A row the user can fix with one keypress holds the screen even when it
 		// does not block: the mailbox row is exactly that, and handing off past it
 		// would take `f connect a mailbox` away with the screen it was on.
-		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.rep.HasOneKeyFix() {
+		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.fixApplied && !m.rep.HasOneKeyFix() {
 			if m.rep.HasHalt() {
 				// Three edits together: the tick, the phase, and the note each
 				// independently claim the launch is starting.
@@ -397,6 +416,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.proceed()
 
 	case fixDoneMsg:
+		if msg.err == nil {
+			m.fixApplied = true
+		}
 		if msg.err != nil {
 			d := Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
 			m.note = "Fix failed. " + d.String()
@@ -421,6 +443,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Cancel()
 		res := msg.event.result
 		if res.OK {
+			m.fixApplied = true
 			m.note = "Download complete. Re-checking…"
 			m.phase = phaseChecking
 			return m, tea.Batch(m.checkCmd(), m.spin.Tick)
@@ -477,6 +500,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.note = ""
 		m.details = false
+		m.fixApplied = false
 		m.phase = phaseChecking
 		m.rep.Rows = checkingRows(m.r, m.cfg)
 		return m, tea.Batch(m.checkCmd(), m.spin.Tick)
