@@ -852,8 +852,13 @@ def main():
         print("\n🚀 GAIA TUI MCP Server")
         print(f"   Control file: {_display_path()}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
-        tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
-        print(f"   Tools: {tool_count} registered\n")
+        try:
+            tool_count = len(
+                mcp._tool_manager._tools
+            )  # pylint: disable=protected-access
+            print(f"   Tools: {tool_count} registered\n")
+        except AttributeError:
+            logger.debug("MCPServer tool registry layout changed; skipping tool count")
         mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 

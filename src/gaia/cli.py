@@ -7734,8 +7734,8 @@ def handle_mcp_serve(args):
                     mcp._tool_manager._tools
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
-            except Exception:
-                pass
+            except AttributeError:
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
             mcp.run(transport="streamable-http", host=args.host, port=args.port)
@@ -7781,7 +7781,7 @@ def handle_mcp_tui(args):
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
             except AttributeError:
-                log.debug("FastMCP tool registry layout changed; skipping tool count")
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
             mcp.run(transport="streamable-http", host=args.host, port=args.port)
