@@ -474,10 +474,9 @@ if(GAIA_BUILD_TESTS)
 
     target_compile_definitions(tests_mock PRIVATE
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-        # The SKILL.md conformance corpus is shared with the Python runtime and
-        # lives at the repo root. test_skill.cpp discovers the skills from the
-        # directory, so new corpora (e.g. openclaw_skills/) are picked up
-        # automatically instead of needing a hardcoded list here.
+        # The SKILL.md corpora are shared with the Python runtime and live at
+        # the repo root. test_skill.cpp discovers them from disk: skills/ must
+        # conform, <vendor>_skills/ are third-party inputs that need not.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
