@@ -462,8 +462,8 @@ python -m pytest tests/ --hybrid   # Cloud + local testing
 
 ### Running GAIA
 ```bash
-lemonade-server serve              # Start LLM backend
-gaia llm "Hello"                   # Test LLM
+gaia daemon start                  # Starts and supervises the LLM backend
+gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
 ```

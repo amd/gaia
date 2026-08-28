@@ -157,17 +157,29 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="LLM not responding" icon="robot">
-    Check if Lemonade Server is running:
+    You shouldn't have to start the model server yourself — `gaia daemon`
+    resolves, starts and supervises it, and every front-end asks the daemon
+    instead of making you launch anything. So the question is why that didn't
+    happen.
+
+    Start with the daemon, which reports the model server it supervises:
     ```bash
-    curl http://localhost:13305/api/v1/models
+    gaia daemon status
     ```
 
-    If not running, start it via the Lemonade tray icon (Windows) or:
+    If no daemon is running, start it:
     ```bash
-    lemonade-server serve
+    gaia daemon start
     ```
 
-    If Lemonade is not installed, run:
+    If the daemon is up but the model server isn't, the start attempt failed
+    and the reason is in the daemon log:
+    ```bash
+    gaia daemon logs --lines 100
+    ```
+
+    The usual cause is that Lemonade isn't installed at all. `gaia init`
+    installs the server and pulls the model:
     ```bash
     gaia init
     ```
@@ -214,9 +226,10 @@ icon: "bug"
        ```bash
        gaia chat --max-chunks 2 --index your_document.pdf
        ```
-    3. Restart Lemonade cleanly:
+    3. Restart the model server cleanly. This stops it and its child
+       processes; the daemon starts a fresh one on the next request:
        ```bash
-       gaia kill --lemonade && lemonade-server serve
+       gaia kill --lemonade
        ```
     4. Close other GPU/NPU-heavy apps competing for the device (image
        generators, other LLM servers, GPU benchmarks).
@@ -260,10 +273,15 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Agent processing failed" icon="triangle-exclamation">
-    Ensure Lemonade is running with sufficient context size:
+    Confirm the model server is up — the daemon starts it and reports it here:
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia daemon status
     ```
+
+    You don't need to set a context size. GAIA pins the context window to your
+    machine's device profile and starts the server with it, so a mismatch means
+    the profile is wrong rather than the flag is missing. Check it with
+    `gaia config get default_device`.
   </Accordion>
 
   <Accordion title="Port already in use" icon="ban">

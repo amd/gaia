@@ -160,7 +160,13 @@ def test_unreachable_backend_names_whose_job_the_fix_is(monkeypatch, reqs):
     assert status.lemonade.reachable is False
     # Indeterminate, not a failure: an unreachable server has no version to compare.
     assert status.lemonade.compatible is None
-    assert "lemonade-server serve" in status.hint
+    # A real next step, asserted as "names the one command that always exists"
+    # rather than as a launch command. Pinning a literal launcher here is
+    # precisely how `lemonade-server serve` stayed asserted-as-real for
+    # releases after Lemonade 10.7 removed it — the manual fallback is resolved
+    # per machine (CLAUDE.md, "Never hardcode how Lemonade is started"), so
+    # there is no single launch string to assert.
+    assert "gaia daemon start" in status.hint
     # The boundary must be explicit — the agent cannot bootstrap the backend.
     assert "host prerequisite" in status.hint
 

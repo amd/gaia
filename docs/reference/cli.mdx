@@ -27,28 +27,21 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
   <Tab title="Windows">
     1. Follow the [Quickstart](/quickstart) to install GAIA
     2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
-    3. GAIA automatically starts Lemonade Server when needed, or start manually:
 
-    ```bash
-    lemonade-server serve
-    ```
+    GAIA starts Lemonade Server when it needs it, so there is nothing to launch first.
   </Tab>
 
   <Tab title="Linux">
     1. Install from source: Follow [Linux Installation](/quickstart)
-    2. Install Lemonade Server from [lemonade-server.ai](https://www.lemonade-server.ai)
-    3. Start the server:
-
-    ```bash
-    lemonade-server serve
-    ```
-
-    4. Verify installation:
+    2. Install Lemonade Server with `gaia init`, or from [lemonade-server.ai](https://www.lemonade-server.ai)
+    3. Verify installation:
 
     ```bash
     gaia -v
     gaia llm "Hello, world!"
     ```
+
+    `gaia llm` starts Lemonade Server through the daemon on first use.
   </Tab>
 </Tabs>
 
@@ -1026,17 +1019,13 @@ gaia telegram stop
 
 ### Quick Start
 
-1. Start Lemonade with extended context:
-```bash
-lemonade-server serve --ctx-size 32768
-```
-
-2. Start GAIA API server:
+1. Start GAIA API server — it brings up Lemonade through the daemon, at the
+   context size your device profile pins:
 ```bash
 gaia api start
 ```
 
-3. Test the server:
+2. Test the server:
 ```bash
 curl http://localhost:8080/health
 ```
@@ -2766,7 +2755,7 @@ $ gaia tui run email --query "triage my inbox"   # with the model server down
 ❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
    GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
 …
-        run: lemonade-server serve
+        run: <the start command resolved for this machine>
 $ echo $?   # 1, after about a second
 ```
 
@@ -3077,11 +3066,16 @@ All commands support these global options:
 
 <AccordionGroup>
   <Accordion title="Connection Errors" icon="link-slash">
-    If you get connection errors, ensure Lemonade server is running:
+    Connection errors mean the model server isn't up. The daemon owns it, so
+    check there first, then start it:
 
     ```bash
-    lemonade-server serve
+    gaia daemon status
+    gaia daemon start
     ```
+
+    If it still won't come up, `gaia daemon logs --lines 100` has the reason —
+    most often that Lemonade isn't installed, which `gaia init` fixes.
   </Accordion>
 
   <Accordion title="Model Issues" icon="circle-exclamation">

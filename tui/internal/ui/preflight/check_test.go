@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -239,6 +240,10 @@ type fakeTransport struct {
 	// the screen's context really reaches it.
 	ensureFn func(context.Context) error
 
+	// How the daemon answers "start the local model server".
+	startLemonadeErr error
+	startLemonadeFn  func(context.Context) error
+
 	calls []call
 }
 
@@ -281,6 +286,19 @@ func (f *fakeTransport) EnsureAgent(ctx context.Context, _ string) error {
 		return f.ensureFn(ctx)
 	}
 	return f.ensureErr
+}
+
+// StartLemonade defaults to succeeding WITHOUT changing the /init answer, which
+// is the realistic shape of "the daemon started a server and the agent still
+// cannot use it" — and keeps every pre-existing expectation about the down-row's
+// wording intact. A test that wants the repaired path sets startLemonadeFn to
+// rewrite the body the way a real start would.
+func (f *fakeTransport) StartLemonade(ctx context.Context) error {
+	f.calls = append(f.calls, call{http.MethodPost, daemon.APIPrefix + "/lemonade/start"})
+	if f.startLemonadeFn != nil {
+		return f.startLemonadeFn(ctx)
+	}
+	return f.startLemonadeErr
 }
 
 func (f *fakeTransport) Do(_ context.Context, method, path string, _ []byte) (Response, error) {

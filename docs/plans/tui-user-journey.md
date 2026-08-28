@@ -314,7 +314,7 @@ Blocked — the first failure is focused and carries its own fix key:
   > [!]   Local AI               not running
           GAIA needs a local model server. It runs on your machine;
           no email text ever leaves it.
-          f  start it for me            c  copy `lemonade-server serve`
+          f  start it for me            c  copy the start command
 
     [  ]  AI model               —  (checked after the server is up)
     [  ]  Mailbox                —
@@ -906,7 +906,7 @@ lives in one Go function used by preflight, chat, and the activity screen alike.
 
 | Failure | What the user sees | Key |
 |---|---|---|
-| Lemonade down | `Local AI isn't running. GAIA needs it to read your mail — it runs on this machine.` | `f` start it · `c` copy `lemonade-server serve` |
+| Lemonade down | `Local AI isn't running. GAIA needs it to read your mail — it runs on this machine.` | `f` start it · `c` copy the start command (resolved per machine, never hardcoded) |
 | Lemonade too old | `Local AI is version 10.0.1; Email needs 10.2.0 or newer.` | `f` upgrade · `c` copy `gaia init` |
 | Model missing | `The AI model isn't downloaded yet (about 4 GB, reused by every agent).` | `f` download here · `c` copy `gaia init` |
 | Model list unreadable | `Local AI answered but its model list couldn't be read. It may still be starting.` | `r` re-check · `d` details |

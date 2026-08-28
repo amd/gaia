@@ -147,7 +147,13 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
         "model is still warming up (cold KV cache) or the prompt is too "
         "large for the current hardware on a fresh load. Try:\n"
         "  • Wait 30s and resend the same query — KV cache will be primed.\n"
-        "  • Restart Lemonade cleanly:  gaia kill  &&  lemonade-server serve\n"
+        # Never name a launch command here: `lemonade-server serve` was dropped
+        # in 10.7 and the surviving forms differ per machine (CLAUDE.md).
+        # `gaia kill` rather than `gaia daemon restart`: the daemon reaps only a
+        # server it started itself, so a restart is a no-op against a wedged one
+        # the user launched from the tray. Clearing the port works either way,
+        # and GAIA starts a fresh supervised server on the next request.
+        "  • Clear the wedged server:  gaia kill  (GAIA restarts it on the next query)\n"
         "  • Reduce retrieved RAG chunks:  gaia chat --max-chunks 2 ...\n"
         "  • Close other GPU/NPU-heavy apps competing for the device."
     )

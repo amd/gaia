@@ -155,11 +155,10 @@ Pick the install path that fits you best:
 
     **Prerequisites (Python path only):**
 
-    The Python CLI path requires you to set up the backend manually:
+    The Python CLI path needs the model backend installed first:
 
     ```bash
     gaia init                   # Downloads Lemonade Server + models
-    lemonade-server serve       # Start the LLM server
     ```
 
     Use `--profile minimal` for a smaller download (~400 MB).
@@ -316,11 +315,15 @@ The agent supports the **Model Context Protocol** in both directions — connect
 
 <AccordionGroup>
   <Accordion title="Lemonade Server not running">
+    You shouldn't have to start the model server yourself — `gaia daemon` starts and supervises it. So the question is why that didn't happen.
+
     ```bash
-    lemonade-server serve
+    gaia daemon status            # the daemon reports the model server it supervises
+    gaia daemon start             # if no daemon is running
+    gaia daemon logs --lines 100  # daemon up but no model server — the reason is here
     ```
 
-    If not installed, run `gaia init --profile minimal` or follow the [Setup Guide](/setup).
+    The usual cause is that Lemonade isn't installed at all. Run `gaia init --profile minimal` or follow the [Setup Guide](/setup).
   </Accordion>
 
   <Accordion title="No model loaded">

@@ -67,10 +67,19 @@ _TOY_B = AgentSidecarSpec(
 # ===========================================================================
 
 
-def test_daemon_api_version_is_1_1():
+def test_daemon_api_version_is_at_least_1_1():
+    """#2142's contract is a FLOOR, not a pin.
+
+    The agents control plane needs MINOR >= 1; later additive routes (MINOR 2
+    is ``/daemon/v1/lemonade/start``) keep satisfying it. Pinning the exact
+    string here would turn every additive route into a test failure and push
+    the next author toward not bumping MINOR at all — which is what actually
+    breaks a client's floor check.
+    """
     from gaia.daemon.constants import DAEMON_API_VERSION
 
-    assert DAEMON_API_VERSION == "1.1"
+    major, minor = (int(p) for p in DAEMON_API_VERSION.split(".")[:2])
+    assert (major, minor) >= (1, 1)
 
 
 def test_daemon_api_version_major_still_parses_to_1():

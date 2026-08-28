@@ -50,11 +50,13 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
     If not installed, see [Claude Code installation](https://docs.anthropic.com/en/docs/claude-code).
   </Step>
 
-  <Step title="Start the LLM backend">
-    Lemonade Server provides the local LLM and embeddings:
+  <Step title="Install the local LLM backend">
+    The benchmark runs against a local model, so Lemonade and the model have to be on
+    the machine. `gaia init` installs both — you don't have to start anything, the
+    daemon does that:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
   </Step>
 
