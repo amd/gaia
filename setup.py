@@ -207,13 +207,10 @@ setup(
             "torchaudio",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
-            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
-            # mcp.server.mcpserver), breaking every FastMCP-based server
-            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
-            # servers/tui_mcp.py). Lift the cap only in a change that
-            # ports them.
-            "mcp>=1.1.0,<2.0",
+            # Supports mcp 2.x: its public MCPServer API replaced
+            # mcp.server.fastmcp (FastMCP). Keep the upper bound below the next
+            # incompatible major release.
+            "mcp>=2.0.0,<3.0",
             "starlette",
             "uvicorn",
         ],

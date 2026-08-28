@@ -8,6 +8,13 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
+
+try:
+    from mcp.server import MCPServer  # noqa: F401
+except ImportError:
+    pytest.skip("mcp 2.x SDK not installed", allow_module_level=True)
+
 from gaia.mcp.client.mcp_client import MCPClient
 
 
