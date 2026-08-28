@@ -85,7 +85,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **67 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **70 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 3 image-generation tools, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -94,7 +94,7 @@ The default construction registers **67 tools** — the 55 of the Chat agent's `
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
-| Images | `analyze_image`, `answer_question_about_image` |
+| Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |

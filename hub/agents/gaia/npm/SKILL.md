@@ -327,7 +327,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Six of the agent's 67 tools mutate the machine and need explicit approval before
+Six of the agent's 70 tools mutate the machine and need explicit approval before
 they run. Four sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**, and
 **`execute_python_file`** — and the flagship adds two of its own,
