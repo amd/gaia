@@ -360,6 +360,30 @@ jobs:
       # contract as installer/nsis/installer.nsh's customInstall (issue #774):
       # a non-zero msiexec exit is reported, never fatal, and `gaia init`
       # remains the recovery path.
+      # windows-latest does NOT ship makensis. The Agent UI path never needed it
+      # because electron-builder downloads its own copy; this workflow drives
+      # makensis directly, so it has to be installed. build.ps1 looks on PATH and
+      # in both Program Files locations, which is where choco puts it.
+      - name: Install NSIS (Windows)
+        if: matrix.label == 'windows-x64'
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::choco could not install NSIS, so makensis is unavailable and the Windows installer cannot be built."
+            exit 1
+          }
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            "$env:ProgramFiles\NSIS\makensis.exe"
+          )
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            Write-Host "::error::NSIS installed but makensis.exe is in none of: $($candidates -join ', '). build.ps1 searches PATH and both of those."
+            exit 1
+          }
+          & $makensis /VERSION
+
       - name: Build NSIS installer (Windows)
         if: matrix.label == 'windows-x64'
         shell: pwsh
