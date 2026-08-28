@@ -3,6 +3,7 @@ package test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,42 @@ func TestNoSourceStillSpeaksHub(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walking %s: %v", root, err)
+	}
+}
+
+// The dev build output is `gaia-tui`, never `gaia` — the Python CLI owns that
+// name, the two have entirely different subcommands, and a build called `gaia`
+// shadows the real CLI on PATH. That reads as the Python CLI having silently
+// lost every command it has, which is exactly the confusion this rename fixes.
+//
+// The Makefile was corrected and tui/README.md was not, because nothing checked
+// the docs. This does.
+func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
+	repo := filepath.Dir(repoTUIDir(t))
+	docs := []string{
+		filepath.Join(repo, "tui", "README.md"),
+		filepath.Join(repo, "docs", "guides", "terminal-hub.mdx"),
+		filepath.Join(repo, "docs", "reference", "cli.mdx"),
+		filepath.Join(repo, "tui", "Makefile"),
+	}
+	// `bin/gaia` NOT followed by another name-forming character: bin/gaia-tui,
+	// bin/gaia-agent and bin/gaia-linux-amd64 are all fine.
+	bare := regexp.MustCompile(`bin/gaia(?:[^-\w]|$)`)
+
+	for _, path := range docs {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			// The Python CLI genuinely does live at <venv>/bin/gaia.
+			if strings.Contains(line, "venv/bin/gaia") || strings.Contains(line, ".local/bin/gaia ") {
+				continue
+			}
+			if bare.MatchString(line) {
+				t.Errorf("%s:%d builds or names the TUI as `gaia`, which shadows the "+
+					"Python CLI: %q", filepath.Base(path), i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }

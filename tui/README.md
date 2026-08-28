@@ -65,8 +65,8 @@ For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia
-cp bin/gaia ~/.local/bin/gaia-tui   # somewhere on your PATH
+cd tui && make build                # -> tui/bin/gaia-tui
+cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
 
 ## Your first run
@@ -202,7 +202,7 @@ or name a Claude id), never silently answered somewhere else.
 
 Three independent layers, and only one of them has a flag.
 
-**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia ./cmd/gaia`.
+**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia-tui ./cmd/gaia`.
 
 **GAIA core / the daemon** — no flag exists. The daemon serves whichever
 checkout launched it, so you point it at your clone by launching it from an
