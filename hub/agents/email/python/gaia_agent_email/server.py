@@ -64,18 +64,21 @@ def install_email_unhandled_exception_handler(app):
     the passthrough branches cover the same errors raised from outer middleware.
     Anything else is a 500 with an error_id; the traceback is logged only.
     """
-    from fastapi.exception_handlers import request_validation_exception_handler
+    from fastapi.exception_handlers import (
+        http_exception_handler,
+        request_validation_exception_handler,
+    )
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
     @app.exception_handler(Exception)
     async def _unhandled_email_exception(request, exc):
+        # Delegate rather than re-render: FastAPI's handler also forwards
+        # exc.headers and drops the body on statuses that forbid one.
         # fastapi.HTTPException subclasses the Starlette one, so this covers both.
         if isinstance(exc, StarletteHTTPException):
-            return JSONResponse(
-                status_code=exc.status_code, content={"detail": exc.detail}
-            )
+            return await http_exception_handler(request, exc)
         if isinstance(exc, RequestValidationError):
             return await request_validation_exception_handler(request, exc)
         error_id = uuid.uuid4().hex[:12]
