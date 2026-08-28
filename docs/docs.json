@@ -67,6 +67,7 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/install-agent",
               "guides/install",
               "guides/agent-ui",
               "guides/terminal-hub",

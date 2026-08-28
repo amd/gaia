@@ -1,0 +1,1056 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Builds the one-click installer for the FLAGSHIP GAIA AGENT — the Go terminal
+# UI (`gaia-tui`) plus the frozen Python agent sidecar (`gaia-agent`), with
+# Lemonade Server installed during Windows setup. The user runs one file and
+# has a working agent: no repo clone, no Python, no Node, no venv.
+#
+# This is a SIBLING of build-installers.yml, not a replacement. That workflow
+# packages the Electron Agent UI and still ships; this one packages a different
+# product from different sources (installer/tui/**). Nothing here reads or
+# writes installer/nsis/**, installer/macos/**, installer/debian/**,
+# installer/linux/**, or src/gaia/apps/webui/**.
+#
+# WHAT GETS PACKAGED — the payload is downloaded, never built here
+#   Both binaries are already published and SHA-256-pinned by
+#   `@amd-gaia/gaia`'s binaries.lock.json (schemaVersion 3.0, two lanes):
+#     tui     -> hub.amd-gaia.ai/agents/terminal-hub/<tuiVersion>/  -> gaia-tui[.exe]
+#     sidecar -> hub.amd-gaia.ai/agents/gaia/<sidecarVersion>/      -> gaia-agent[.exe]
+#   `resolve-payload` reads that lock FROM npm — the published package is the
+#   source of truth, because the in-repo copy carries placeholder hashes until
+#   a release rewrites it. Every build leg then re-verifies each downloaded
+#   byte against it via installer/tui/fetch_payload.py BEFORE packaging. A
+#   digest mismatch fails the job loudly; there is no "package it anyway" path.
+#
+#   The installer BUNDLES the binaries rather than fetching them at install
+#   time — the same call the Agent UI installer makes. It costs 92-140 MB of
+#   download once, depending on platform, and buys an install that works offline
+#   and cannot half-succeed because the hub was unreachable at the wrong moment.
+#
+# VERSION
+#   `agentVersion` from that lock, NOT src/gaia/version.py. The installer ships
+#   the agent, so it is named for the agent.
+#
+# ARTIFACT NAMES — the contract the website's download button resolves against.
+# Changing one of these breaks the button, so change both together (see
+# INSTALLER_ASSETS in website/src/scripts/download-target.ts):
+#   gaia-<version>-x64-setup.exe
+#   gaia-<version>-arm64.dmg   gaia-<version>-x64.dmg
+#   gaia-<version>-x64.deb     gaia-<version>-x64.AppImage
+#
+# WHICH of these get built is decided per-run from the lock, not hard-coded:
+# release_agent_gaia.yml treats the Intel-macOS sidecar as best-effort and drops
+# darwin-x64 from the lock when its freeze fails, so `resolve-payload` builds the
+# matrix from what the lock actually carries. An optional platform's absence must
+# never fail the platforms that are present.
+#
+# Design notes, mirroring build-installers.yml for the same reasons:
+#   - Runs WITHOUT any secrets and produces unsigned installers for free.
+#     Signing is opt-in by secret PRESENCE, never a hard requirement: a missing
+#     secret skips the signing step and the artifact still ships. See section
+#     9.2 of docs/plans/flagship-installer.mdx for what unsigned costs a user.
+#   - fail-fast: false, so one platform's failure does not abort the others.
+#   - cancel-in-progress: false for release runs — a mid-build cancel on a tag
+#     leaves the draft release half-populated.
+#   - Release upload is a separate job holding its own `contents: write`, so
+#     the build matrix itself never has write access.
+#
+# Per docs/plans/flagship-installer.mdx section 9 and issue #2804.
+
+name: Build Flagship Installers
+
+on:
+  # Note: there is intentionally NO `push: tags` trigger, for the same reason
+  # build-installers.yml has none. publish.yml is the canonical entry point for
+  # a tagged release, and this workflow is built to be invoked from it via
+  # `workflow_call`. A direct tag trigger would run this workflow twice on every
+  # tag — once directly, once from publish.yml — and the two runs would race
+  # each other uploading assets to the same draft GitHub Release.
+  #
+  # That call site does NOT exist yet: publish.yml currently invokes only
+  # build-installers.yml. Until it is added alongside, no installer is attached
+  # to any release and the download button on amd-gaia.ai stays on its
+  # raw-binary fallback. Tracked in docs/plans/flagship-installer.mdx section 10.
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: 'npm version of @amd-gaia/gaia to read binaries.lock.json from (blank = latest)'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to upload the installers to'
+        required: false
+        type: string
+        default: ''
+      publish_to_release:
+        description: 'Upload artifacts to the GitHub Release matching the tag'
+        required: false
+        type: boolean
+        default: false
+      package_version:
+        description: 'npm version of @amd-gaia/gaia to read binaries.lock.json from (blank = latest)'
+        required: false
+        type: string
+        default: ''
+    # Explicit secret declarations — callers forward each one by name. We do
+    # NOT want `secrets: inherit` on the caller side, so a fork or PR run can
+    # never leak unrelated repo secrets into this workflow. Every one is
+    # optional; a missing secret degrades to an unsigned build.
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: false
+      SIGNPATH_ORG_ID:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+  # Validate on any PR that touches the flagship installer sources. Path-gated
+  # so an unrelated PR does not pay the multi-platform build cost.
+  pull_request:
+    paths:
+      - '.github/workflows/build-flagship-installers.yml'
+      - 'installer/tui/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  # PR runs cancel — a stale build is wasted minutes. Release runs and manual
+  # dispatches do not: cancelling mid-upload leaves a half-populated release.
+  group: build-flagship-installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # --- Stage 1: resolve the payload contract --------------------------
+  # Reads binaries.lock.json out of the PUBLISHED npm package and republishes
+  # it as a workflow artifact, so every build leg packages the same pinned bytes
+  # even if npm's `latest` moves mid-run. It also derives the platform matrix
+  # from that lock. Runs first and cheap: a bad lock fails here in seconds
+  # rather than after a full matrix of platform builds.
+  resolve-payload:
+    name: Resolve payload lock
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.lock.outputs.version }}
+      tui_version: ${{ steps.lock.outputs.tui_version }}
+      sidecar_version: ${{ steps.lock.outputs.sidecar_version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      expected: ${{ steps.matrix.outputs.expected }}
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Fetch binaries.lock.json from the published package
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="@amd-gaia/gaia@${{ inputs.package_version || 'latest' }}"
+          echo "Reading the payload lock from ${SPEC}"
+          workdir="$(mktemp -d)"
+          # `npm pack` resolves the dist-tag and downloads the exact tarball
+          # `npx @amd-gaia/gaia` would run, so CI and a user's npx invocation
+          # package the same binaries by construction.
+          if ! tarball="$(npm pack "${SPEC}" --pack-destination "${workdir}" --silent)"; then
+            echo "::error::Could not resolve ${SPEC} from npm. The flagship installer packages the PUBLISHED agent — check https://www.npmjs.com/package/@amd-gaia/gaia for the versions that exist."
+            exit 1
+          fi
+          tar -xzf "${workdir}/${tarball}" -C "${workdir}"
+          lock="${workdir}/package/binaries.lock.json"
+          if [ ! -f "${lock}" ]; then
+            echo "::error::${SPEC} ships no binaries.lock.json. The installer cannot resolve or verify its payload without it — see .github/workflows/release_agent_gaia.yml for how the lock is generated."
+            exit 1
+          fi
+          cp "${lock}" binaries.lock.json
+
+          if grep -q 'PENDING-replace-with-real-sha256' binaries.lock.json; then
+            echo "::error::${SPEC}'s lock still carries placeholder hashes, so its binaries were never published. Release the agent first (tag agent-pkg-gaia-v*), then build the installer against that version."
+            exit 1
+          fi
+
+          version="$(node -p "require('./binaries.lock.json').agentVersion")"
+          tui_version="$(node -p "require('./binaries.lock.json').components.tui.componentVersion")"
+          sidecar_version="$(node -p "require('./binaries.lock.json').components.sidecar.componentVersion")"
+          echo "version=${version}"                 >> "$GITHUB_OUTPUT"
+          echo "tui_version=${tui_version}"         >> "$GITHUB_OUTPUT"
+          echo "sidecar_version=${sidecar_version}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Flagship installer payload"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| npm spec | \`${SPEC}\` |"
+            echo "| agent version | \`${version}\` |"
+            echo "| tui (terminal-hub) | \`${tui_version}\` |"
+            echo "| sidecar | \`${sidecar_version}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Build the platform matrix FROM the lock rather than hard-coding it.
+      #
+      # This exists because of one asymmetry: release_agent_gaia.yml treats the
+      # Intel-macOS sidecar freeze as BEST-EFFORT and deletes darwin-x64 from the
+      # published lock when that leg does not produce a binary. With a static
+      # matrix, that optional absence would fail the macos-x64 leg, skip
+      # validate-artifacts, and publish ZERO installers — three healthy platforms
+      # held hostage by one deliberately-optional platform.
+      #
+      # So: a platform the lock does not carry is simply not built. The REQUIRED
+      # set is still required, and its absence is a hard error here, before any
+      # runner minutes are spent.
+      - name: Derive the platform matrix from the lock
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE' > matrix.json
+          const lock = require('./binaries.lock.json');
+          const have = new Set(Object.keys(lock.components.sidecar.platforms));
+          const version = lock.agentVersion;
+
+          // Every platform the installer CAN be built for, and what it produces.
+          // `required: false` means the release is allowed to omit it.
+          const ALL = [
+            { label: 'windows-x64', runner: 'windows-latest', lock_platform: 'win32-x64',
+              arch: 'x64', required: true,
+              artifacts: [`gaia-${version}-x64-setup.exe`] },
+            { label: 'macos-arm64', runner: 'macos-latest', lock_platform: 'darwin-arm64',
+              arch: 'arm64', required: true,
+              artifacts: [`gaia-${version}-arm64.dmg`] },
+            // Intel macOS is best-effort upstream, so it is optional here too.
+            { label: 'macos-x64', runner: 'macos-26-intel', lock_platform: 'darwin-x64',
+              arch: 'x64', required: false,
+              artifacts: [`gaia-${version}-x64.dmg`] },
+            { label: 'linux-x64', runner: 'ubuntu-latest', lock_platform: 'linux-x64',
+              arch: 'x64', required: true,
+              artifacts: [`gaia-${version}-x64.deb`, `gaia-${version}-x64.AppImage`] },
+          ];
+
+          const missingRequired = ALL.filter((p) => p.required && !have.has(p.lock_platform));
+          if (missingRequired.length) {
+            const names = missingRequired.map((p) => p.lock_platform).join(', ');
+            console.error(`::error::The published lock has no sidecar for ${names}, which the installer requires. Published: ${[...have].sort().join(', ')}. Release those platforms before building installers — see .github/workflows/release_agent_gaia.yml.`);
+            process.exit(1);
+          }
+
+          const include = ALL.filter((p) => have.has(p.lock_platform))
+            .map(({ required, artifacts, ...rest }) => ({
+              ...rest,
+              // upload-artifact takes a newline-separated path list.
+              artifacts: artifacts.map((a) => `dist-installer/${a}`).join('\n'),
+            }));
+
+          for (const p of ALL) {
+            if (!have.has(p.lock_platform)) {
+              console.error(`::warning::No installer for ${p.label}: the published lock carries no ${p.lock_platform} sidecar. Those visitors keep the raw-binary download on amd-gaia.ai.`);
+            }
+          }
+
+          const expected = ALL.filter((p) => have.has(p.lock_platform))
+            .flatMap((p) => p.artifacts);
+          console.error(`expected artifacts: ${expected.join(' ')}`);
+          process.stdout.write(JSON.stringify({ include, expected }));
+          NODE
+
+          echo "matrix=$(node -p 'JSON.stringify({include: require("./matrix.json").include})')" >> "$GITHUB_OUTPUT"
+          echo "expected=$(node -p 'require("./matrix.json").expected.join(" ")')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload payload lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-binaries-lock
+          path: binaries.lock.json
+          retention-days: 14
+          if-no-files-found: error
+
+  # --- Stage 2: build one installer per platform ----------------------
+  build:
+    name: Build ${{ matrix.label }} installer
+    needs: resolve-payload
+    runs-on: ${{ matrix.runner }}
+    # Read-only. The build produces workflow-run artifacts; only
+    # publish-release-assets below is granted `contents: write`.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Derived in resolve-payload from what the published lock actually carries,
+      # so an optional platform the release omitted is not built rather than
+      # failing. Runner choices live there too, next to the platform they serve
+      # — including macos-26-intel for Intel Macs (macos-13 retired Dec 2025;
+      # macos-26-intel is what release_agent_gaia.yml freezes darwin-x64 on).
+      matrix: ${{ fromJson(needs.resolve-payload.outputs.matrix) }}
+
+    # Job-level env so step `if:` conditions can read secret-derived values.
+    # Secrets cannot appear in `if:` directly, and step-level env is evaluated
+    # AFTER `if:` — only workflow- and job-level env is visible to it. Any
+    # secret that gates a step via `env.X != ''` MUST be declared here. An
+    # unset secret expands to '' and the step is skipped: that IS the opt-in.
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      GAIA_VERSION: ${{ needs.resolve-payload.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      # build.ps1 resolves the lock with `npm pack`. The runner image ships
+      # Node, but pinning it here makes that dependency explicit rather than
+      # something that breaks the day an image drops it.
+      - name: Setup Node.js (Windows)
+        if: matrix.label == 'windows-x64'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Download payload lock
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-binaries-lock
+
+      # --- The integrity gate, part 1: macOS and Linux ------------------
+      # Downloads gaia-tui + gaia-agent for this platform and verifies BOTH
+      # digests against the lock. Nothing downstream runs if this fails.
+      #
+      # Windows is deliberately absent: installer/tui/build.ps1 performs the
+      # identical fetch-and-verify itself, and it is the script a maintainer
+      # runs by hand. Duplicating it here would download ~110 MB twice and,
+      # worse, create a second place where the verification rule lives.
+      - name: Stage and verify payload binaries (macOS, Linux)
+        if: matrix.label != 'windows-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python installer/tui/fetch_payload.py \
+            --lock binaries.lock.json \
+            --platform "${{ matrix.lock_platform }}" \
+            --dest installer/tui/payload
+          ls -l installer/tui/payload
+
+      # --- Windows: NSIS, via the script maintainers run by hand -------
+      # build.ps1 is self-contained on purpose — it resolves binaries.lock.json
+      # from the published npm package, SHA-256-verifies both binaries, fetches
+      # the Lemonade MSI pinned by src/gaia/version.py, and runs makensis. The
+      # MSI is installed silently during setup under the same graceful-failure
+      # contract as installer/nsis/installer.nsh's customInstall (issue #774):
+      # a non-zero msiexec exit is reported, never fatal, and `gaia init`
+      # remains the recovery path.
+      - name: Build NSIS installer (Windows)
+        if: matrix.label == 'windows-x64'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'installer/tui/build.ps1')) {
+            Write-Host "::error::installer/tui/build.ps1 is missing. It is the Windows packaging entry point for the flagship installer."
+            exit 1
+          }
+          ./installer/tui/build.ps1 -Version $env:GAIA_VERSION -OutDir 'dist-installer'
+
+      # build.ps1 resolves its own lock from npm's `latest`. When this run was
+      # dispatched against a pinned package_version, those two can disagree —
+      # and the result would be an installer NAMED for one version carrying
+      # another's binaries. Catch it here rather than shipping it.
+      - name: Confirm Windows payload matches the resolved version
+        if: matrix.label == 'windows-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCK=installer/tui/build/binaries.lock.json
+          if [ ! -f "${LOCK}" ]; then
+            echo "::error::${LOCK} was not written by build.ps1, so there is no way to confirm which release's binaries were bundled."
+            exit 1
+          fi
+          BUILT=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['agentVersion'])" "${LOCK}")
+          if [ "${BUILT}" != "${GAIA_VERSION}" ]; then
+            echo "::error::build.ps1 bundled @amd-gaia/gaia ${BUILT} but this run resolved ${GAIA_VERSION}. The installer would be named for a version it does not contain. Re-run without a package_version pin, or teach build.ps1 to read the lock this workflow resolved."
+            exit 1
+          fi
+          echo "ok  Windows payload is @amd-gaia/gaia ${BUILT}"
+
+      # --- macOS signing, part 1: the payload binaries -----------------
+      # Must happen BEFORE the DMG is built. notarytool rejects a submission
+      # containing unsigned Mach-O executables, so signing the disk image alone
+      # would fail notarization with a confusing "binary is not signed" error.
+      #
+      # NOTE: this path has never run against real credentials — AMD has no
+      # Apple Developer ID yet (docs/plans/flagship-installer.mdx section 9.2).
+      # It is the standard recipe, wired so that provisioning the certificate is
+      # the only remaining step, but treat its first real run as unproven.
+      - name: Import Apple signing certificate (macOS)
+        if: startsWith(matrix.label, 'macos-') && env.APPLE_ID != '' && env.CSC_LINK != ''
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/gaia-signing.keychain-db"
+          # Ephemeral password for an ephemeral keychain that dies with the runner.
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::CSC_LINK imported but it carries no 'Developer ID Application' identity. Notarization needs that specific certificate type — a Mac Developer or Installer certificate will not do."
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=${IDENTITY}" >> "$GITHUB_ENV"
+          echo "Imported signing identity ${IDENTITY}"
+
+      - name: Sign payload binaries (macOS)
+        if: startsWith(matrix.label, 'macos-') && env.APPLE_ID != '' && env.CSC_LINK != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          for bin in installer/tui/payload/gaia-tui installer/tui/payload/gaia-agent; do
+            # --options runtime is required for notarization; --timestamp binds a
+            # trusted timestamp so the signature outlives the certificate.
+            codesign --force --timestamp --options runtime \
+              --sign "${SIGNING_IDENTITY}" "${bin}"
+            codesign --verify --strict --verbose=2 "${bin}"
+          done
+
+      - name: Build DMG (macOS)
+        if: startsWith(matrix.label, 'macos-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer/tui/macos/build-dmg.sh \
+            --payload installer/tui/payload \
+            --version "${GAIA_VERSION}" \
+            --arch "${{ matrix.arch }}" \
+            --out dist-installer
+
+      - name: Build .deb and .AppImage (Linux)
+        if: matrix.label == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer/tui/linux/build-deb.sh \
+            --payload installer/tui/payload --version "${GAIA_VERSION}" \
+            --arch "${{ matrix.arch }}" --out dist-installer
+          installer/tui/linux/build-appimage.sh \
+            --payload installer/tui/payload --version "${GAIA_VERSION}" \
+            --arch "${{ matrix.arch }}" --out dist-installer
+
+      # --- macOS signing, part 2: the disk image -----------------------
+      # Signs the DMG itself, then notarizes and staples the ticket so the
+      # image opens with no Gatekeeper prompt even offline.
+      - name: Sign, notarize, and staple DMG (macOS)
+        if: startsWith(matrix.label, 'macos-') && env.APPLE_ID != '' && env.CSC_LINK != ''
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG=$(ls dist-installer/*.dmg | head -1)
+          codesign --force --timestamp --sign "${SIGNING_IDENTITY}" "${DMG}"
+          echo "Notarizing ${DMG}"
+          xcrun notarytool submit "${DMG}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${DMG}"
+          xcrun stapler validate "${DMG}"
+
+      - name: Note unsigned macOS build
+        if: startsWith(matrix.label, 'macos-') && (env.APPLE_ID == '' || env.CSC_LINK == '')
+        shell: bash
+        run: |
+          echo "::warning::No Apple Developer ID secrets are set, so this DMG is unsigned and un-notarized. Gatekeeper will refuse to open it without a right-click -> Open. See docs/plans/flagship-installer.mdx section 9.2."
+
+      - name: List build artifacts
+        if: always()
+        shell: bash
+        run: |
+          if [ -d dist-installer ]; then
+            ls -lh dist-installer/
+          else
+            echo "::warning::dist-installer/ does not exist — the packaging step produced no installer."
+          fi
+
+      # --- Verify the artifact contract before anyone depends on it ----
+      - name: Verify artifact name matches the published contract
+        shell: bash
+        env:
+          # Newline-separated, straight from the matrix entry resolve-payload
+          # built — so this check and the upload below can never disagree about
+          # what this platform produces.
+          EXPECTED_PATHS: ${{ matrix.artifacts }}
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r path; do
+            [ -n "${path}" ] || continue
+            if [ ! -f "${path}" ]; then
+              echo "::error::${path} was not produced. The download button on amd-gaia.ai resolves installers by this exact name — see the ARTIFACT NAMES block at the top of this workflow and website/src/components/TuiDownload.astro. Present: $(ls dist-installer 2>/dev/null | tr '\n' ' ')"
+              fail=1
+            else
+              echo "ok  ${path}  ($(wc -c < "${path}") bytes)"
+            fi
+          done <<< "${EXPECTED_PATHS}"
+          [ "$fail" -eq 0 ]
+
+      # Ordering matters: `id` must be populated before the SignPath step reads
+      # steps.upload-artifacts.outputs.artifact-id. Reordering these two
+      # silently disables Windows signing.
+      - name: Upload installer artifact
+        id: upload-artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-${{ matrix.label }}-installer
+          path: ${{ matrix.artifacts }}
+          retention-days: 14
+          if-no-files-found: error
+
+      # --- SignPath (Windows) — opt-in via secrets ---------------------
+      # Uploads the unsigned .exe to SignPath and writes the signed one back
+      # over the same artifact. Until both secrets exist this is skipped and
+      # the installer ships unsigned: users see a SmartScreen interstitial
+      # ("More info" -> "Run anyway") the first time they run it.
+      #
+      # .signpath/policies/gaia.policy currently scopes trusted_build_systems
+      # to build-installers.yml on refs/tags/v*, so a request from THIS
+      # workflow is rejected by that policy until it is extended to name this
+      # file — see docs/plans/flagship-installer.mdx section 9.2. The step is
+      # wired so that extension is the only change needed, not a rewrite.
+      - name: Sign Windows installer (SignPath)
+        id: signpath
+        if: matrix.label == 'windows-x64' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORG_ID }}
+          project-slug: gaia-flagship
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: gaia-flagship-installer
+          github-artifact-id: ${{ steps.upload-artifacts.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist-installer/
+
+      # The signing action writes the SIGNED .exe back to the RUNNER's disk, not
+      # to the uploaded artifact. Without this re-upload, publish-release-assets
+      # downloads the artifact uploaded before signing and attaches UNSIGNED
+      # bytes — while the log says signing succeeded. Silent, and exactly the
+      # failure a user would report as "you said it was signed".
+      #
+      # (build-installers.yml has the same shape and looks like it has the same
+      # bug. Not touched here — it is the Agent UI's pipeline.)
+      - name: Re-upload the signed Windows installer
+        if: steps.signpath.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-${{ matrix.label }}-installer
+          path: ${{ matrix.artifacts }}
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Confirm the published artifact is the signed one
+        if: steps.signpath.outcome == 'success'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem 'dist-installer/*.exe' | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host "Authenticode status: $($sig.Status)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Host "::error::SignPath reported success but $($exe.Name) has Authenticode status '$($sig.Status)'. Do not ship it as signed — users would still see SmartScreen. Check the SignPath request in the step above."
+            exit 1
+          }
+          Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+
+      - name: Note unsigned Windows build
+        if: matrix.label == 'windows-x64' && (env.SIGNPATH_API_TOKEN == '' || env.SIGNPATH_ORG_ID == '')
+        shell: bash
+        run: |
+          echo "::warning::No SignPath secrets are set, so this installer is unsigned. Windows SmartScreen will show an unrecognized-publisher warning on first run. See docs/plans/flagship-installer.mdx section 9.2."
+
+  # --- Stage 3: cross-platform artifact validation --------------------
+  # Downloads everything the matrix produced and checks the SET, which no
+  # single build leg can see: every expected artifact is present, none is
+  # implausibly small, and all agree on one version.
+  validate-artifacts:
+    name: Validate installer set
+    needs: [resolve-payload, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: flagship-*-installer
+          path: artifacts
+          merge-multiple: true
+
+      - name: Validate the artifact set
+        shell: bash
+        env:
+          # Space-separated, from the same lock-derived list that built the
+          # matrix — so a platform the release legitimately omitted is not
+          # demanded here, and one it carries cannot be silently skipped.
+          EXPECTED: ${{ needs.resolve-payload.outputs.expected }}
+        run: |
+          set -euo pipefail
+          V="${{ needs.resolve-payload.outputs.version }}"
+          cd artifacts
+          ls -lh
+          read -r -a expected <<< "${EXPECTED}"
+          if [ "${#expected[@]}" -eq 0 ]; then
+            echo "::error::resolve-payload produced an empty expected-artifact list, so this job would pass without checking anything."
+            exit 1
+          fi
+          fail=0
+          for name in "${expected[@]}"; do
+            if [ ! -f "${name}" ]; then
+              echo "::error::Missing ${name}. The download button on amd-gaia.ai resolves this exact name for its platform; shipping the set without it leaves that platform's visitors on the raw-binary fallback."
+              fail=1
+              continue
+            fi
+            size=$(wc -c < "${name}")
+            # Smallest published payload is macOS arm64: a 17.9 MB TUI plus a
+            # 74.2 MB sidecar, ~92 MB raw, from the lock's own byte counts.
+            # Compression varies by format, so the floor sits well below all of
+            # them — it is a stub detector, not a size assertion.
+            if [ "${size}" -lt 41943040 ]; then
+              echo "::error::${name} is only ${size} bytes. Every installer bundles a TUI and a sidecar totalling 92-140 MB raw, so this artifact does not contain its payload."
+              fail=1
+            else
+              echo "ok  ${name}  ${size} bytes"
+            fi
+          done
+          [ "$fail" -eq 0 ]
+          echo "All ${#expected[@]} expected flagship installer artifacts present at v${V}."
+
+  # --- Stage 3b: install the thing, on the OS it targets --------------
+  #
+  # validate-artifacts only proves a file of roughly the right size exists under
+  # the right name. These jobs prove the installer WORKS: that it carries the
+  # exact bytes the lock pins (fetch_payload.py --verify, which is why that mode
+  # exists), that the binaries run, and that uninstalling puts the machine back.
+  #
+  # Modelled on build-installers.yml's appimage-/dmg-structural-smoke, adapted
+  # to this product: no Electron, no chrome-sandbox, no bundled uv — just two
+  # binaries and the PATH wiring around them.
+  #
+  # Every one of these MUST stay in flagship-installers-complete's `needs:`, or
+  # a broken installer that still builds sails past the gate.
+
+  linux-install-smoke:
+    name: Linux .deb + AppImage smoke
+    needs: [resolve-payload, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download Linux installers
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-linux-x64-installer
+          path: ${{ runner.temp }}/linux
+
+      - name: Download payload lock
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-binaries-lock
+
+      # --- AppImage ---------------------------------------------------
+      - name: AppImage unpacks and carries the pinned binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux"/*.AppImage | head -n1)
+          chmod +x "${APPIMAGE}"
+          cd "${RUNNER_TEMP}"
+          # No FUSE on the runner, so extract rather than mount.
+          "${APPIMAGE}" --appimage-extract >/dev/null
+          root="${RUNNER_TEMP}/squashfs-root"
+          for f in AppRun gaia.desktop gaia.png usr/bin/gaia-tui usr/bin/gaia-agent; do
+            if [ ! -e "${root}/${f}" ]; then
+              echo "::error::The AppImage is missing ${f}. installer/tui/linux/build-appimage.sh stages it; a build that drops it produces an image that cannot launch."
+              exit 1
+            fi
+          done
+          [ -x "${root}/AppRun" ] || { echo "::error::AppRun is not executable, so the AppImage cannot start."; exit 1; }
+
+      - name: AppImage binaries match the lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python installer/tui/fetch_payload.py --verify \
+            --lock binaries.lock.json --platform linux-x64 \
+            --dest "${RUNNER_TEMP}/squashfs-root/usr/bin"
+
+      - name: AppImage runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AppRun puts its own bin dir on PATH so the TUI can find gaia-agent;
+          # exercise it through AppRun rather than the binary directly, because
+          # that wiring is the part this script owns.
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux"/*.AppImage | head -n1)
+          out="$(APPIMAGE_EXTRACT_AND_RUN=1 "${APPIMAGE}" version 2>&1)" || {
+            echo "::error::The AppImage did not run: ${out}"
+            exit 1
+          }
+          echo "gaia-tui version -> ${out}"
+
+      # --- .deb -------------------------------------------------------
+      - name: .deb installs, puts both binaries on PATH, and runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB=$(ls "${RUNNER_TEMP}/linux"/*.deb | head -n1)
+          sudo apt-get install -y "${DEB}"
+
+          for bin in gaia-tui gaia-agent; do
+            path="$(command -v "${bin}" || true)"
+            if [ -z "${path}" ]; then
+              echo "::error::${bin} is not on PATH after installing the .deb. build-deb.sh ships /usr/bin symlinks into /opt/gaia/bin; check they are in the data archive."
+              exit 1
+            fi
+            echo "  ${bin} -> ${path} -> $(readlink -f "${path}")"
+          done
+
+          out="$(gaia-tui version 2>&1)" || {
+            echo "::error::gaia-tui installed from the .deb does not run: ${out}"
+            exit 1
+          }
+          echo "gaia-tui version -> ${out}"
+
+      - name: Installed .deb binaries match the lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python installer/tui/fetch_payload.py --verify \
+            --lock binaries.lock.json --platform linux-x64 --dest /opt/gaia/bin
+
+      # docs/guides/install-agent.mdx tells users `apt remove gaia` takes
+      # everything back out. This is that claim, tested.
+      - name: apt remove leaves nothing behind
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get remove -y gaia
+          fail=0
+          for p in /usr/bin/gaia-tui /usr/bin/gaia-agent /opt/gaia/bin/gaia-tui /opt/gaia/bin/gaia-agent; do
+            if [ -e "${p}" ] || [ -L "${p}" ]; then
+              echo "::error::${p} survived 'apt remove gaia'. The docs promise a clean removal; a leftover symlink also shadows a later install."
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
+          echo "Clean uninstall confirmed."
+
+  appimage-distro-matrix:
+    name: AppImage on ${{ matrix.image }}
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The point of shipping an AppImage at all is the distros the .deb
+        # cannot serve, so prove it there rather than only on the build host.
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'fedora:41', 'debian:12']
+    steps:
+      - name: Download Linux installers
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-linux-x64-installer
+          path: ${{ runner.temp }}/linux
+
+      - name: Run the AppImage under ${{ matrix.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux"/*.AppImage | head -n1)
+          chmod +x "${APPIMAGE}"
+          # No --privileged and no FUSE: extract-and-run is the mode a locked-down
+          # container gives you, and it is the harsher of the two.
+          docker run --rm \
+            -v "${APPIMAGE}:/tmp/gaia.AppImage:ro" \
+            -e APPIMAGE_EXTRACT_AND_RUN=1 \
+            "${{ matrix.image }}" \
+            /tmp/gaia.AppImage version
+
+  macos-install-smoke:
+    name: macOS DMG smoke
+    needs: [resolve-payload, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: macos-latest  # Apple Silicon — matches the arm64 build leg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download macOS installer
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-macos-arm64-installer
+          path: ${{ runner.temp }}/macos
+
+      - name: Download payload lock
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-binaries-lock
+
+      - name: DMG mounts and carries what the README promises
+        id: mount
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG=$(ls "${RUNNER_TEMP}/macos"/*.dmg | head -n1)
+          MNT="${RUNNER_TEMP}/mnt"
+          mkdir -p "${MNT}"
+          hdiutil attach "${DMG}" -mountpoint "${MNT}" -nobrowse -readonly
+          echo "mnt=${MNT}" >> "$GITHUB_OUTPUT"
+          ls -la "${MNT}"
+          for f in "GAIA/gaia-tui" "GAIA/gaia-agent" "Install GAIA.command" "README.txt"; do
+            if [ ! -e "${MNT}/${f}" ]; then
+              echo "::error::The DMG is missing '${f}'. installer/tui/macos/build-dmg.sh stages it, and docs/guides/install-agent.mdx tells users to double-click 'Install GAIA.command'."
+              exit 1
+            fi
+          done
+          [ -x "${MNT}/Install GAIA.command" ] || { echo "::error::'Install GAIA.command' is not executable, so double-clicking it does nothing."; exit 1; }
+
+      - name: DMG binaries match the lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 installer/tui/fetch_payload.py --verify \
+            --lock binaries.lock.json --platform darwin-arm64 \
+            --dest "${{ steps.mount.outputs.mnt }}/GAIA"
+
+      - name: The bundled binary runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Copy off the read-only image first: a binary executed straight from a
+          # mounted DMG is not what a user ends up running either.
+          cp "${{ steps.mount.outputs.mnt }}/GAIA/gaia-tui" "${RUNNER_TEMP}/gaia-tui"
+          chmod +x "${RUNNER_TEMP}/gaia-tui"
+          out="$("${RUNNER_TEMP}/gaia-tui" version 2>&1)" || {
+            echo "::error::The bundled gaia-tui did not run: ${out}"
+            exit 1
+          }
+          echo "gaia-tui version -> ${out}"
+
+      - name: Detach
+        if: always()
+        shell: bash
+        run: hdiutil detach "${{ steps.mount.outputs.mnt }}" || true
+
+  windows-install-smoke:
+    name: Windows installer smoke
+    needs: [resolve-payload, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-windows-x64-installer
+          path: ${{ runner.temp }}/windows
+
+      - name: Download payload lock
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-binaries-lock
+
+      # /S is NSIS's silent mode. This is the only place CI actually RUNS the
+      # installer rather than inspecting it — everything the wizard does (PATH,
+      # shortcuts, the Lemonade MSI, the uninstaller registration) happens here.
+      - name: Installer runs silently
+        id: install
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem "$env:RUNNER_TEMP/windows/*.exe" | Select-Object -First 1).FullName
+          Write-Host "Installing $exe"
+          $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::The installer exited $($p.ExitCode) in silent mode. A non-zero silent install is a broken install, even though the wizard may look fine interactively."
+            exit 1
+          }
+
+      - name: Both binaries land, and match the lock
+        shell: pwsh
+        run: |
+          $roots = @(
+            "$env:LOCALAPPDATA\Programs\GAIA",
+            "$env:ProgramFiles\GAIA",
+            "${env:ProgramFiles(x86)}\GAIA"
+          )
+          $dir = $roots | Where-Object { Test-Path (Join-Path $_ 'gaia-tui.exe') } | Select-Object -First 1
+          if (-not $dir) {
+            Write-Host "::error::gaia-tui.exe was not found in any of: $($roots -join ', '). The installer reported success, so either it installed somewhere else or it installed nothing."
+            exit 1
+          }
+          Write-Host "Installed into $dir"
+          Get-ChildItem $dir | Format-Table Name, Length
+          python installer/tui/fetch_payload.py --verify `
+            --lock binaries.lock.json --platform win32-x64 --dest $dir
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = & (Join-Path $dir 'gaia-tui.exe') version 2>&1
+          Write-Host "gaia-tui version -> $out"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::The installed gaia-tui.exe did not run: $out"
+            exit 1
+          }
+
+      - name: Uninstaller runs and removes the binaries
+        shell: pwsh
+        run: |
+          $roots = @("$env:LOCALAPPDATA\Programs\GAIA", "$env:ProgramFiles\GAIA", "${env:ProgramFiles(x86)}\GAIA")
+          $dir = $roots | Where-Object { Test-Path (Join-Path $_ 'gaia-tui.exe') } | Select-Object -First 1
+          $un = Get-ChildItem $dir -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $un) {
+            Write-Host "::error::No uninstaller in $dir. Windows requires one for Add/Remove Programs, and docs/guides/install-agent.mdx tells users to uninstall from there."
+            exit 1
+          }
+          $p = Start-Process -FilePath $un.FullName -ArgumentList '/S' -Wait -PassThru
+          Start-Sleep -Seconds 5   # NSIS uninstallers detach a copy of themselves
+          if (Test-Path (Join-Path $dir 'gaia-tui.exe')) {
+            Write-Host "::error::gaia-tui.exe survived the silent uninstall."
+            exit 1
+          }
+          Write-Host "Clean uninstall confirmed."
+
+  # --- Stage 4: publish to the GitHub Release -------------------------
+  # Isolated so `contents: write` never applies to the build matrix.
+  #
+  # The gate is `inputs.publish_to_release`, and that alone is enough to keep
+  # dispatch and PR runs artifact-only: `publish_to_release` is declared ONLY
+  # under `workflow_call`, so on a manual dispatch or a pull_request it does not
+  # exist and can never equal true. Do NOT rewrite this as
+  # `github.event_name == 'workflow_call'` — a called workflow reports the
+  # CALLER's event ('push', 'workflow_dispatch', …), never 'workflow_call', so
+  # that condition is false on the one path that must publish.
+  publish-release-assets:
+    name: Publish flagship installers to the release
+    # The smoke jobs are in `needs` deliberately: an installer that builds but
+    # does not install is exactly what must not reach a release.
+    needs:
+      - resolve-payload
+      - build
+      - validate-artifacts
+      - linux-install-smoke
+      - appimage-distro-matrix
+      - macos-install-smoke
+      - windows-install-smoke
+    if: >-
+      inputs.publish_to_release == true &&
+      inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: flagship-*-installer
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload to GitHub Release (draft)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          # Draft, like build-installers.yml: publish.yml promotes the release
+          # once its single approval gate passes. Two workflows uploading to
+          # one release must both leave it draft, or the first to finish
+          # publishes a release the other is still filling in.
+          draft: true
+          prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
+
+  # --- Gate job -------------------------------------------------------
+  # The single job a caller should wait on. Every build and smoke job belongs
+  # in `needs:` — a job missing from here can fail without blocking a release,
+  # which is the whole failure mode this job exists to prevent.
+  flagship-installers-complete:
+    name: Flagship installers complete
+    runs-on: ubuntu-latest
+    needs:
+      - resolve-payload
+      - build
+      - validate-artifacts
+      - linux-install-smoke
+      - appimage-distro-matrix
+      - macos-install-smoke
+      - windows-install-smoke
+    if: always()
+    steps:
+      - name: Verify every leg succeeded
+        shell: bash
+        env:
+          RESULTS: |
+            resolve-payload=${{ needs.resolve-payload.result }}
+            build=${{ needs.build.result }}
+            validate-artifacts=${{ needs.validate-artifacts.result }}
+            linux-install-smoke=${{ needs.linux-install-smoke.result }}
+            appimage-distro-matrix=${{ needs.appimage-distro-matrix.result }}
+            macos-install-smoke=${{ needs.macos-install-smoke.result }}
+            windows-install-smoke=${{ needs.windows-install-smoke.result }}
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS='=' read -r job result; do
+            [ -n "${job}" ] || continue
+            echo "  ${job}: ${result}"
+            # `skipped` is never acceptable here: every one of these jobs is
+            # gated on `needs.build.result == 'success'`, so a skip means the
+            # build did not succeed — which the build entry already reports.
+            if [ "${result}" != "success" ]; then
+              echo "::error::${job} did not succeed (status: ${result}). Do not publish this installer set: either a platform is missing — which silently downgrades that platform's visitors on amd-gaia.ai to the raw binary — or an installer builds but does not install."
+              fail=1
+            fi
+          done <<< "${RESULTS}"
+          [ "$fail" -eq 0 ]
+          echo "Flagship installers built, validated, and installed on every target OS."

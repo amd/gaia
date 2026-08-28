@@ -44,6 +44,15 @@ The agent runs local inference only: the sidecar's `/query` endpoint rejects any
 ## Install and launch
 
 <Tabs>
+  <Tab title="One-click installer">
+    Download one file from [amd-gaia.ai](https://amd-gaia.ai) and run it. It installs the agent and its terminal UI on your `PATH` — and on Windows, Lemonade Server too — with no Node.js, no Python, and no repo clone. Then:
+
+    ```bash
+    gaia-tui
+    ```
+
+    Full walkthrough per platform, plus the first-launch SmartScreen/Gatekeeper prompts: [Install the GAIA agent](/guides/install-agent).
+  </Tab>
   <Tab title="One command (npx)">
     ```bash
     npx @amd-gaia/gaia
@@ -225,6 +234,7 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 ## Limitations (v0.1.1)
 
+- **No arm64 sidecar** — the agent is frozen for Windows x64, Linux x64, and both macOS architectures. Linux arm64 and Windows arm64 get the terminal UI but no agent, so they have no installer; the run stops with an error naming the supported set rather than opening a UI with nothing behind it.
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
 - **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.

@@ -5,14 +5,36 @@ icon: "rocket"
 ---
 
 <Info>
-  **Not a developer?** Start with the [Desktop Installer](/guides/install) — one download, one double-click, and you're chatting with a GAIA agent in under 10 minutes. No terminal required.
+  **Not a developer?** Start with the [GAIA agent installer](/guides/install-agent) — one download, one double-click, and you're talking to the flagship agent in your terminal. Prefer a windowed app? The [Agent UI installer](/guides/install) is the desktop alternative.
 </Info>
 
 Run AI agents **100% locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud.
 
-## Recommended: Desktop Installer
+## Recommended: the GAIA agent installer
 
-The **GAIA Agent UI** desktop app is the primary install path for end users. It ships as a native installer for Windows, macOS, and Linux, handles the Python backend setup automatically on first launch, and auto-updates.
+The **flagship GAIA agent** is what most people want, and it installs from one file on
+Windows, macOS, and Linux. It carries the agent and its terminal UI, puts both on your
+`PATH`, and on Windows installs the local model server too — no Node.js, no Python, no
+repo clone.
+
+<CardGroup cols={2}>
+  <Card title="Download it" icon="download" href="https://amd-gaia.ai">
+    The button on amd-gaia.ai picks the file for your machine
+  </Card>
+  <Card title="Install guide" icon="book" href="/guides/install-agent">
+    Per-platform steps, first-launch warnings, uninstall
+  </Card>
+</CardGroup>
+
+Then run `gaia-tui`. `npx @amd-gaia/gaia` is the same thing without an installer, if
+you already have Node — and until the first release attaches the installers, it is the
+one that works today ([why](/guides/install-agent#download)).
+
+## Alternative: the Agent UI desktop app
+
+The **GAIA Agent UI** is the windowed alternative — a browser-style chat app rather
+than a terminal. It ships as a native installer for Windows, macOS, and Linux, handles
+the Python backend setup automatically on first launch, and auto-updates.
 
 <CardGroup cols={3}>
   <Card title="Windows" icon="windows" href="https://github.com/amd/gaia/releases/latest">
@@ -36,7 +58,7 @@ After installing the desktop app, launch it and start chatting with agents right
 
 ## For developers
 
-The rest of this page covers the **developer install paths** (npm CLI, pip, clone-and-install) for people who want to build agents, extend GAIA, or run it from source. End users should use the [desktop installer](/guides/install) above.
+The rest of this page covers the **developer install paths** (npm CLI, pip, clone-and-install) for people who want to build agents, extend GAIA, or run it from source. End users should use one of the installers above.
 
 ### Agent UI (npm)
 

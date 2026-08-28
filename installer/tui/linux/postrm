@@ -1,0 +1,38 @@
+#!/bin/sh
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Remove what dpkg cannot: files created AFTER installation, which are not in
+# the package manifest and therefore survive `apt remove` and even `apt purge`.
+#
+# `gaia-tui update` writes .installed next to the binaries when it swaps them,
+# and on a locked replace can leave a .old behind. Without this, a machine that
+# had ever updated kept /opt/gaia/bin/.installed and, because the directory was
+# no longer empty, /opt/gaia itself -- reporting a clean removal over a folder
+# that was still there.
+set -e
+
+CLEAN_DIR=/opt/gaia/bin
+
+case "$1" in
+    remove|purge|abort-install|abort-upgrade|disappear)
+        # Named explicitly rather than wildcarded: only files this product's own
+        # updater creates. Anything else in there was not put there by us and is
+        # left alone.
+        rm -f "${CLEAN_DIR}/.installed" \
+              "${CLEAN_DIR}/gaia-tui.old" \
+              "${CLEAN_DIR}/gaia-agent.old"
+
+        # Non-recursive on purpose: rmdir removes these only if they are empty,
+        # so an unexpected file keeps the directory and nothing of the user's is
+        # ever swept up. `|| true` because a non-empty directory is a legitimate
+        # outcome, not a failed removal.
+        rmdir "${CLEAN_DIR}" 2>/dev/null || true
+        rmdir /opt/gaia 2>/dev/null || true
+        ;;
+    upgrade|failed-upgrade)
+        # The new version is about to take over; leave its state alone.
+        ;;
+esac
+
+exit 0

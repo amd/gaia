@@ -14,6 +14,7 @@ $PYTHON_VERSION = "3.12"
 $GAIA_HUB_BASE_URL = if ($env:GAIA_HUB_BASE_URL) { $env:GAIA_HUB_BASE_URL } else { "https://hub.amd-gaia.ai" }
 $GAIA_HUB_BASE_URL = $GAIA_HUB_BASE_URL.TrimEnd('/')
 $TERMINAL_HUB_ID = "terminal-hub"
+$FLAGSHIP_AGENT_ID = "gaia"
 
 # Network limit: a black-holed connection must fail, not hang silently.
 $HTTP_TIMEOUT_SEC = 900
@@ -36,12 +37,12 @@ function Write-Step {
 
 function Write-Success {
     param([string]$Message)
-    Write-Host "[✓] $Message" -ForegroundColor $COLOR_GREEN
+    Write-Host "[OK] $Message" -ForegroundColor $COLOR_GREEN
 }
 
 function Write-Error {
     param([string]$Message)
-    Write-Host "[✗] $Message" -ForegroundColor $COLOR_RED
+    Write-Host "[X] $Message" -ForegroundColor $COLOR_RED
 }
 
 function Write-Warning {
@@ -158,6 +159,148 @@ function Get-TerminalHubPlatform {
 }
 
 # A missing terminal hub fails the install - it is the advertised entry point.
+# Resolve one artifact's version and SHA-256 from a hub manifest. The manifest
+# is the only source for both, so each installer reads it the same way.
+# Returns @{Version; Sha256; Url}, or $null when the platform is unpublished.
+function Resolve-HubArtifact {
+    param(
+        [Parameter(Mandatory)][string]$AgentId,
+        [Parameter(Mandatory)][string]$Filename,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $manifestUrl = "$GAIA_HUB_BASE_URL/agents/$AgentId/manifest.json"
+    try {
+        $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
+    }
+    catch {
+        Write-Error "Could not fetch the $Label manifest: $_"
+        Write-Host "  URL:  $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        Write-Host "  Fix:  check your network, then retry." -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+
+    $version = $manifest.latest_version
+    if (-not $version) {
+        Write-Error "The hub manifest at $manifestUrl declares no latest_version."
+        return $null
+    }
+
+    $entry = $manifest.versions.$version
+    if (-not $entry) {
+        Write-Error "The hub manifest names latest_version $version but publishes no such version."
+        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+
+    $artifacts = @($entry.artifacts)
+    if (-not $artifacts -or $artifacts.Count -eq 0) {
+        $artifacts = if ($entry.artifact) { @($entry.artifact) } else { @() }
+    }
+
+    $match = $artifacts | Where-Object { $_.filename -eq $Filename } | Select-Object -First 1
+    if (-not $match) {
+        $listed = ($artifacts | ForEach-Object { $_.filename } | Sort-Object) -join ", "
+        if (-not $listed) { $listed = "none" }
+        Write-Error "$Label $version publishes no $Filename (it publishes: $listed)."
+        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+
+    if (-not $match.sha256) {
+        Write-Error "$Label $version publishes $Filename with no SHA-256 - refusing to install unverified."
+        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+
+    return @{
+        Version = $version
+        Sha256  = $match.sha256
+        Url     = "$GAIA_HUB_BASE_URL/agents/$AgentId/$version/$Filename"
+    }
+}
+
+# Download one hub artifact into $GAIA_BIN, refusing anything whose SHA-256 does
+# not match what the manifest published. Shared by the terminal hub and the
+# flagship agent so there is exactly one place the verification rule lives.
+#
+# -Optional turns a missing platform build or an unreachable manifest into a
+# warning instead of exiting: the hub is still usable without a given agent.
+# A CHECKSUM MISMATCH is never softened that way -- it always exits.
+function Install-HubBinary {
+    param(
+        [Parameter(Mandatory)][string]$AgentId,
+        [Parameter(Mandatory)][string]$Filename,
+        [Parameter(Mandatory)][string]$DestName,
+        [Parameter(Mandatory)][string]$Label,
+        [switch]$Optional
+    )
+
+    $resolved = Resolve-HubArtifact -AgentId $AgentId -Filename $Filename -Label $Label
+    if (-not $resolved) {
+        if ($Optional) {
+            Write-Warning "Skipping $Label - see above. The terminal hub still works."
+            return $false
+        }
+        exit 1
+    }
+
+    $tmpDir = Join-Path $env:TEMP ("gaia-dl-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    $tmpFile = Join-Path $tmpDir $Filename
+
+    try {
+        Write-Step "Downloading $Label $($resolved.Version)"
+        try {
+            $prevProgress = $ProgressPreference
+            $ProgressPreference = "SilentlyContinue"
+            try {
+                Invoke-WebRequest -Uri $resolved.Url -OutFile $tmpFile -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
+            }
+            finally {
+                $ProgressPreference = $prevProgress
+            }
+        }
+        catch {
+            Write-Error "Could not download the $Label binary: $_"
+            Write-Host "  URL:  $($resolved.Url)" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  Fix:  check your network and retry." -ForegroundColor $COLOR_YELLOW
+            if ($Optional) { return $false }
+            exit 1
+        }
+
+        # No checksum, no install.
+        $got = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash
+        if ($got -ne $resolved.Sha256.ToUpper()) {
+            Write-Error "Checksum mismatch for $Filename - refusing to install."
+            Write-Host "  expected $($resolved.Sha256.ToUpper())" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  got      $got" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
+            exit 1
+        }
+
+        if (-not (Test-Path $GAIA_BIN)) {
+            New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
+        }
+        try {
+            Move-Item -Path $tmpFile -Destination "$GAIA_BIN\$DestName" -Force
+        }
+        catch {
+            Write-Error "Downloaded and verified, but could not write $GAIA_BIN\$DestName`: $_"
+            Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
+            Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
+            if ($Optional) { return $false }
+            exit 1
+        }
+        Write-Success "$Label $($resolved.Version) installed to $GAIA_BIN\$DestName"
+        return $true
+    }
+    finally {
+        if (Test-Path $tmpDir) { Remove-Item -Path $tmpDir -Recurse -Force }
+    }
+}
+
+# A missing terminal hub fails the install - it is the advertised entry point.
 function Install-Tui {
     Write-Step "Installing the GAIA terminal hub"
 
@@ -169,116 +312,32 @@ function Install-Tui {
         Write-Host "  darwin-x64, darwin-arm64. See $GAIA_HUB_BASE_URL/index.json" -ForegroundColor $COLOR_YELLOW
         exit 1
     }
-    $filename = "gaia-$platform.exe"
 
-    # The manifest is the only source for the version, the per-platform
-    # filename, and the Worker-computed SHA-256.
-    $manifestUrl = "$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/manifest.json"
-    try {
-        $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
+    # Never `gaia.exe`: tui/internal/daemon/client.go resolves `gaia` on PATH to
+    # start the Python-owned daemon, so a Go binary by that name finds itself.
+    [void](Install-HubBinary -AgentId $TERMINAL_HUB_ID -Filename "gaia-$platform.exe" -DestName "gaia-tui.exe" -Label "terminal hub")
+}
+
+# The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
+# child process, so without this binary the flagship cannot run -- which is what
+# this one-liner left behind before: a UI with no agent under it.
+#
+# Installed BESIDE gaia-tui.exe on purpose. The hub resolves its agent from its
+# own directory before consulting PATH (catalog.resolveAgentBinary), so a stale
+# gaia-agent elsewhere cannot shadow the one this script just verified.
+function Install-FlagshipAgent {
+    Write-Step "Installing the GAIA flagship agent"
+
+    $platform = Get-TerminalHubPlatform
+    if (-not $platform) {
+        Write-Warning "No flagship agent build for this architecture - skipping."
+        return
     }
-    catch {
-        Write-Error "Could not fetch the terminal hub manifest: $_"
-        Write-Host "  URL:  $manifestUrl" -ForegroundColor $COLOR_YELLOW
-        Write-Host "  Fix:  check your network, then retry. If the component is not yet" -ForegroundColor $COLOR_YELLOW
-        Write-Host "        published for this release, build from source:" -ForegroundColor $COLOR_YELLOW
-        Write-Host "          git clone https://github.com/amd/gaia; cd gaia\tui; make build" -ForegroundColor $COLOR_YELLOW
-        Write-Host "  Look: $GAIA_HUB_BASE_URL/index.json lists what the hub serves." -ForegroundColor $COLOR_YELLOW
-        exit 1
-    }
+    # The sidecar is published under win32-x64; the terminal hub uses win-x64.
+    $lockPlatform = $platform -replace '^win-', 'win32-'
+    $suffix = if ($lockPlatform -like 'win32-*') { ".exe" } else { "" }
 
-    $version = $manifest.latest_version
-    if (-not $version) {
-        Write-Error "The hub manifest at $manifestUrl declares no latest_version."
-        exit 1
-    }
-
-    $entry = $manifest.versions.$version
-    if (-not $entry) {
-        Write-Error "The hub manifest names latest_version $version but publishes no such version."
-        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
-        exit 1
-    }
-
-    $artifacts = @($entry.artifacts)
-    if (-not $artifacts -or $artifacts.Count -eq 0) {
-        $artifacts = if ($entry.artifact) { @($entry.artifact) } else { @() }
-    }
-
-    $match = $artifacts | Where-Object { $_.filename -eq $filename } | Select-Object -First 1
-    if (-not $match) {
-        $listed = ($artifacts | ForEach-Object { $_.filename } | Sort-Object) -join ", "
-        if (-not $listed) { $listed = "none" }
-        Write-Error "Terminal hub $version publishes no $filename (it publishes: $listed)."
-        Write-Host "  Fix:  if your platform is genuinely unpublished, build from source:" -ForegroundColor $COLOR_YELLOW
-        Write-Host "          git clone https://github.com/amd/gaia; cd gaia\tui; make build" -ForegroundColor $COLOR_YELLOW
-        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
-        exit 1
-    }
-
-    $want = $match.sha256
-    if (-not $want) {
-        Write-Error "Terminal hub $version publishes $filename with no SHA-256 - refusing to install unverified."
-        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
-        exit 1
-    }
-
-    $binaryUrl = "$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
-    $tmpDir = Join-Path $env:TEMP ("gaia-tui-" + [guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-    $tmpFile = Join-Path $tmpDir $filename
-
-    try {
-        Write-Step "Downloading terminal hub $version for $platform"
-        try {
-            $prevProgress = $ProgressPreference
-            $ProgressPreference = "SilentlyContinue"
-            try {
-                Invoke-WebRequest -Uri $binaryUrl -OutFile $tmpFile -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
-            }
-            finally {
-                $ProgressPreference = $prevProgress
-            }
-        }
-        catch {
-            Write-Error "Could not download the terminal hub binary: $_"
-            Write-Host "  URL:  $binaryUrl" -ForegroundColor $COLOR_YELLOW
-            Write-Host "  Fix:  check your network and retry." -ForegroundColor $COLOR_YELLOW
-            Write-Host "  Look: $manifestUrl lists what is published for $version." -ForegroundColor $COLOR_YELLOW
-            exit 1
-        }
-
-        # No checksum, no install.
-        $got = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash
-        if ($got -ne $want.ToUpper()) {
-            Write-Error "Checksum mismatch for $filename - refusing to install."
-            Write-Host "  expected $($want.ToUpper())" -ForegroundColor $COLOR_YELLOW
-            Write-Host "  got      $got" -ForegroundColor $COLOR_YELLOW
-            Write-Host "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
-            Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
-            exit 1
-        }
-
-        # Never `gaia.exe`: tui/internal/daemon/client.go resolves `gaia` on PATH
-        # to start the Python-owned daemon, so a Go binary by that name finds
-        # itself.
-        if (-not (Test-Path $GAIA_BIN)) {
-            New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
-        }
-        try {
-            Move-Item -Path $tmpFile -Destination "$GAIA_BIN\gaia-tui.exe" -Force
-        }
-        catch {
-            Write-Error "Downloaded and verified, but could not write $GAIA_BIN\gaia-tui.exe`: $_"
-            Write-Host "  Fix:  close any running gaia-tui (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
-            Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
-            exit 1
-        }
-        Write-Success "Terminal hub $version installed to $GAIA_BIN\gaia-tui.exe"
-    }
-    finally {
-        if (Test-Path $tmpDir) { Remove-Item -Path $tmpDir -Recurse -Force }
-    }
+    [void](Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform$suffix" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional)
 }
 
 function Add-ToPath {
@@ -329,8 +388,11 @@ function Show-NextSteps {
     Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
     Write-Host " to set up Lemonade Server and download models" -ForegroundColor White
     Write-Host "     (the Lemonade installer asks for administrator approval)" -ForegroundColor White
-    Write-Host "  3. Open the terminal hub: " -ForegroundColor White -NoNewline
+    Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
     Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+    Write-Host "     (it opens the GAIA agent; type " -ForegroundColor White -NoNewline
+    Write-Host "/hub" -ForegroundColor $COLOR_GREEN -NoNewline
+    Write-Host " for the agent hub)" -ForegroundColor White
     Write-Host "`n"
 
     Write-Host "Documentation: https://amd-gaia.ai" -ForegroundColor $COLOR_CYAN
@@ -368,6 +430,10 @@ function Main {
 
     # Install the terminal hub binary
     Install-Tui
+
+    # After Install-Tui so it lands in the same directory, which is where
+    # the hub looks for its agent first.
+    Install-FlagshipAgent
 
     # Show next steps
     Show-NextSteps

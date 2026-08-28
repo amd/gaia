@@ -316,6 +316,27 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
 
+  # Build the FLAGSHIP AGENT's installers (a different product from the Agent
+  # UI above: the Go terminal UI plus the frozen agent sidecar). Same contract —
+  # publish_to_release=false, so it uploads workflow artifacts named
+  # "flagship-<platform>-installer" and the github-release job below attaches
+  # them. Two workflows must never both write to one draft release.
+  #
+  # Its payload comes from the PUBLISHED @amd-gaia/gaia npm package, not from
+  # this checkout, so it is deliberately NOT pinned to this release's tag: the
+  # core release and the agent release have independent version lines.
+  build-flagship-installers:
+    name: Build Flagship Installers
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write   # SignPath OIDC — the step is still secret-gated
+    secrets: inherit
+    uses: ./.github/workflows/build-flagship-installers.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag_name }}
+      publish_to_release: false
+
   # ── Email eval suite (release gate, self-hosted) ────────────────────
   # Runs the SAME triage + drafting + action-item eval suite as the nightly
   # (test_email_agent_eval.yml) on the [self-hosted, lemonade-eval] AMD runner,
@@ -551,12 +572,19 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui]
+    needs:
+      - validate
+      - post-publish-smoke
+      - publish-npm
+      - build-desktop-installers
+      - build-flagship-installers
+      - build-tui
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success'
+      needs.build-desktop-installers.result == 'success' &&
+      needs.build-flagship-installers.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -590,9 +618,22 @@ jobs:
 
           ## Installation
 
-          ### Desktop installer (recommended for end users)
+          ### GAIA agent installer (recommended)
 
-          Download the installer for your platform from the assets below:
+          One file. It installs the GAIA agent and its terminal UI on your `PATH` —
+          and on Windows, Lemonade Server too. No Python, no Node, no repo clone.
+          Run `gaia-tui` when it finishes.
+
+          - **Windows** — `gaia-*-x64-setup.exe`
+          - **macOS** — `gaia-*-arm64.dmg` (Apple Silicon) or `gaia-*-x64.dmg` (Intel)
+          - **Linux** — `gaia-*-x64.deb` (Debian/Ubuntu) or `gaia-*-x64.AppImage` (any distro)
+
+          See the [install guide](https://amd-gaia.ai/docs/guides/install-agent) for
+          per-platform steps and the first-launch SmartScreen/Gatekeeper prompts.
+
+          ### Agent UI desktop app
+
+          The windowed alternative — a browser-style chat app rather than a terminal.
 
           - **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
           - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
@@ -665,6 +706,35 @@ jobs:
           name: linux-installer
           path: release-assets
         continue-on-error: true
+
+      # The flagship agent's installers, from build-flagship-installers. One
+      # pattern rather than a step per platform: that workflow builds its matrix
+      # from the published lock, so which platforms exist is decided per-run
+      # (Intel macOS is best-effort upstream and can legitimately be absent).
+      #
+      # NOT continue-on-error, unlike the Agent UI steps above: the flagship is
+      # what amd-gaia.ai's download button points at, and a release that quietly
+      # ships without its installers sends every visitor to the raw binary. The
+      # job already gates on build-flagship-installers succeeding, so a missing
+      # artifact here means something is wrong that a human should see.
+      - name: Download Flagship Installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: flagship-*-installer
+          merge-multiple: true
+          path: release-assets
+
+      - name: Confirm the flagship installers are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=$(find release-assets -maxdepth 1 -type f             \( -name 'gaia-[0-9]*-setup.exe' -o -name 'gaia-[0-9]*.dmg'                -o -name 'gaia-[0-9]*.deb' -o -name 'gaia-[0-9]*.AppImage' \) | sort)
+          if [ -z "${found}" ]; then
+            echo "::error::No flagship installer artifacts were downloaded, so this release would publish without them and amd-gaia.ai's download button would keep serving the raw binary. Check the Build Flagship Installers job."
+            exit 1
+          fi
+          echo "Flagship installers to attach:"
+          echo "${found}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

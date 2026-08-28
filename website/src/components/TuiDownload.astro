@@ -2,17 +2,26 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Direct download of the agent's terminal entry point, OS-detected.
+// Download of the agent, OS-detected. Two things are on offer:
+//
+//   1. The ONE-CLICK INSTALLER — a GitHub Release asset built by
+//      .github/workflows/build-flagship-installers.yml. It bundles the terminal
+//      UI, the frozen agent sidecar, and (on Windows) Lemonade Server. This is
+//      the primary button whenever the release carries one for this machine.
+//   2. The RAW BINARY — the terminal entry point alone, from the hub. It needs
+//      the `gaia` CLI for the local model, a caveat that lives in the page's
+//      terminal-install section rather than under the button.
 //
 // Every published platform is rendered server-side, so a no-JS visitor gets the
-// whole list and a working link. JS promotes the one this machine can run into
-// the primary button and collapses the rest; a machine it cannot place
-// (Apple Silicon behind Safari, an unknown arch) keeps the full list rather
-// than guessing — see scripts/download-target.ts.
+// whole list and a working link. The raw binaries come from the hub manifest,
+// a hard build-time dependency the site already fails loudly on; the installers
+// live on a GitHub Release that may not carry them yet, so they are resolved in
+// the BROWSER — a missing asset must never fail the build or render a dead
+// button. Before the first release cuts one, this behaves exactly as it did.
 //
-// The binary is the raw artifact, not an installer: it needs the `gaia` CLI for
-// the local model. That caveat lives in the page's terminal-install section
-// rather than under the button, which stays a single uncluttered action.
+// A machine that cannot be placed exactly still gets an offer: macOS Safari
+// reports no architecture, so those visitors are shown both Mac builds rather
+// than nothing — see scripts/download-target.ts.
 
 import { getComponentRelease } from '../data/catalog';
 import { PLATFORM_LABELS, type PlatformKey } from '../scripts/download-target';
@@ -50,6 +59,15 @@ const downloads = release.binaries
   <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
     {/* The resolved-platform CTA. Hidden until JS places the machine — with no
         JS the list below is the whole interface. */}
+    {/* The installer CTA. Never rendered with a placeholder href, so it cannot
+        become a dead button if the release carries no installer. */}
+    <a data-dl-installer hidden class="g-btn g-btn-primary px-6 py-3 text-[15px]">
+      <svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      <span data-dl-installer-label>Download the GAIA installer</span>
+    </a>
+
     <a
       data-dl-primary
       hidden
@@ -62,6 +80,13 @@ const downloads = release.binaries
       <span data-dl-label>Install the GAIA agent</span>
     </a>
   </div>
+
+  {/* The second option, where there is one: the other FORMAT on Linux (.deb
+      beside .AppImage), or the other MACHINE on a Mac we could not place. */}
+  <a data-dl-installer-alt hidden class:list={['mono mt-3 inline-flex items-baseline gap-2 text-[12.5px] text-g-muted transition-colors hover:text-g-gold-text']}>
+    <span class="text-g-gold-text" aria-hidden="true">↓</span>
+    <span data-dl-installer-alt-label></span>
+  </a>
 
   <div data-dl-list class="mt-4">
     <div class="g-label mb-2.5" data-dl-list-label>Download for your platform · v{release.version}</div>
@@ -84,8 +109,26 @@ const downloads = release.binaries
 
 </div>
 
+<style>
+  /* The CTAs carry .g-btn, whose display:inline-flex outranks the user agent's
+     [hidden] { display: none }. Without this the buttons hidden until JS places
+     the machine are laid out anyway, and a no-JS visitor gets duplicates. */
+  [hidden] {
+    display: none !important;
+  }
+</style>
+
 <script>
-  import { resolvePlatform, PLATFORM_LABELS } from '../scripts/download-target';
+  import {
+    findInstallers,
+    findInstallersForOs,
+    placeOs,
+    resolvePlatform,
+    PLATFORM_LABELS,
+    type ReleaseAssetLike,
+  } from '../scripts/download-target';
+
+  const LATEST_RELEASE = 'https://api.github.com/repos/amd/gaia/releases/latest';
 
   document.querySelectorAll<HTMLElement>('[data-tui-download]').forEach(async (root) => {
     const options = Array.from(
@@ -93,32 +136,99 @@ const downloads = release.binaries
     );
     if (!options.length) return;
 
+    // Start the release lookup immediately, but never await it before the raw
+    // path is on screen. api.github.com is unauthenticated here, so it can be
+    // rate-limited, slow, or blocked — and a visitor staring at no button while
+    // that resolves is worse than one who briefly sees the binary and is then
+    // offered the installer. Any failure means "no installer", the same outcome
+    // as a release that has not published one yet.
+    const assetsPromise = fetch(LATEST_RELEASE)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((rel) => (rel?.assets ?? []) as ReleaseAssetLike[])
+      .catch(() => [] as ReleaseAssetLike[]);
+
+    // Two levels, because they succeed at different rates. `os` is nearly always
+    // knowable; `platform` needs the architecture, which macOS Safari does not
+    // report. A Mac we cannot place is still offered both Mac builds.
+    const os = placeOs(navigator);
     const platform = await resolvePlatform(navigator).catch(() => null);
-    if (!platform) return;   // Unplaceable machine: the full list stays as-is.
+    if (!platform && !os) return;   // A machine we do not ship for.
 
-    const match = options.find((o) => o.dataset.platform === platform);
-    if (!match) return;      // A platform the hub does not publish for.
+    const match = platform
+      ? options.find((o) => o.dataset.platform === platform)
+      : undefined;
 
-    const primary = root.querySelector<HTMLAnchorElement>('[data-dl-primary]');
-    const label = root.querySelector('[data-dl-label]');
-    if (!primary || !label) return;
-
-    primary.href = match.href;
-    label.textContent = `Install GAIA for ${PLATFORM_LABELS[platform]}`;
-    primary.hidden = false;
-
-    // The other platforms stay reachable, one disclosure away.
     const list = root.querySelector<HTMLElement>('[data-dl-list]');
     const listLabel = root.querySelector('[data-dl-list-label]');
-    if (!list || !listLabel) return;
-    const details = document.createElement('details');
-    details.className = 'mt-4';
-    const summary = document.createElement('summary');
-    summary.className =
-      'g-label cursor-pointer list-none transition-colors hover:text-g-text';
-    summary.textContent = `Other platforms · v${listLabel.textContent?.split('v').pop() ?? ''}`;
-    list.replaceWith(details);
-    details.append(summary, list);
-    listLabel.remove();
+    const version = listLabel?.textContent?.split('v').pop() ?? '';
+
+    // Collapse the full list behind a disclosure, labelled for whichever path is
+    // currently secondary. Runs once; the label is rewritten if an installer
+    // arrives afterwards.
+    let summaryEl: HTMLElement | null = null;
+    const collapseList = (summaryText: string) => {
+      if (summaryEl) {
+        summaryEl.textContent = summaryText;
+        return;
+      }
+      if (!list || !listLabel) return;
+      const details = document.createElement('details');
+      details.className = 'mt-4';
+      const summary = document.createElement('summary');
+      summary.className =
+        'g-label cursor-pointer list-none transition-colors hover:text-g-text';
+      summary.textContent = summaryText;
+      list.replaceWith(details);
+      details.append(summary, list);
+      listLabel.remove();
+      summaryEl = summary;
+    };
+
+    // Step 1 — the raw binary, on screen now. The whole interface until a
+    // release publishes an installer, and the fallback afterwards for any
+    // platform the installer matrix does not cover.
+    const rawPrimary = root.querySelector<HTMLAnchorElement>('[data-dl-primary]');
+    const rawLabel = root.querySelector('[data-dl-label]');
+    if (match && platform && rawPrimary && rawLabel) {
+      rawPrimary.href = match.href;
+      rawLabel.textContent = `Install GAIA for ${PLATFORM_LABELS[platform]}`;
+      rawPrimary.hidden = false;
+      collapseList(`Other platforms · v${version}`);
+    }
+
+    // Step 2 — promote the installer over it, if the release carries one.
+    //
+    // With an exact machine, `rest` is the same platform's other FORMAT (the
+    // AppImage beside the .deb). With only an OS, it is the other MACHINE (an
+    // Intel Mac beside Apple Silicon) — so labels come from the entry itself.
+    const assets = await assetsPromise;
+    const installers = platform
+      ? findInstallers(platform, assets).map((d) => ({ ...d, platform }))
+      : findInstallersForOs(os!, assets);
+    if (!installers.length) return;
+
+    const [primary, ...rest] = installers;
+    const button = root.querySelector<HTMLAnchorElement>('[data-dl-installer]');
+    const label = root.querySelector('[data-dl-installer-label]');
+    if (!button || !label) return;
+
+    button.href = primary.url;
+    // Name the machine, not just the OS: with an undecidable Mac this button is
+    // a choice the visitor has to be able to check, not a silent pick.
+    label.textContent = `Download GAIA for ${PLATFORM_LABELS[primary.platform]}`;
+    button.hidden = false;
+    if (rawPrimary) rawPrimary.hidden = true;
+
+    const alt = root.querySelector<HTMLAnchorElement>('[data-dl-installer-alt]');
+    const altLabel = root.querySelector('[data-dl-installer-alt-label]');
+    if (rest[0] && alt && altLabel) {
+      alt.href = rest[0].url;
+      altLabel.textContent = platform
+        ? `${rest[0].label} instead`
+        : `${PLATFORM_LABELS[rest[0].platform]} instead`;
+      alt.hidden = false;
+    }
+
+    collapseList('Advanced — no installer, just the binary');
   });
 </script>

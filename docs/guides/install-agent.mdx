@@ -1,0 +1,187 @@
+---
+title: 'Install the GAIA agent'
+description: 'One-click installers for the flagship GAIA agent and its terminal UI — Windows, macOS, and Linux. No Python, no Node, no repo clone.'
+icon: 'download'
+---
+
+<Note>
+This page installs the **flagship GAIA agent** — the one you talk to in a terminal.
+Looking for the Electron desktop app instead? That is the [Agent UI](/guides/install),
+a separate download.
+</Note>
+
+Download one file, run it, and you have a working agent. The installer carries both
+halves — `gaia-tui` (the terminal UI) and `gaia-agent` (the agent itself) — and on
+Windows it installs [Lemonade Server](https://lemonade-server.ai) too, so there is
+nothing to set up afterwards. No Python, no Node.js, no virtualenv, no repo clone.
+
+Every inference runs on your machine. Nothing you type leaves it.
+
+## What you'll need
+
+| | |
+|---|---|
+| Windows | 10 or 11, x64 |
+| macOS | 14+, Apple Silicon or Intel |
+| Linux | x64 — Debian/Ubuntu (`.deb`) or any distro (AppImage) |
+| RAM | 8 GB minimum |
+| Disk | ~500 MB for the agent, plus ~4 GB for the local model |
+
+It is a big download — it carries both binaries (90–140 MB before compression,
+depending on platform) rather than fetching them while it runs. That is deliberate:
+an install cannot half-succeed because the network dropped at the wrong moment.
+
+**On ARM64 Linux or ARM64 Windows there is no installer.** The agent is frozen for
+Windows x64, Linux x64, and both macOS architectures only. Those machines can still
+run the terminal UI on its own — see [Other ways in](#other-ways-in) — but there is no
+agent behind it yet.
+
+## Download
+
+<Warning>
+  **Not on a release yet.** The installers are built and validated in CI, but no
+  release has attached them, so the filenames below do not exist to download today.
+  Until one does, the download button on amd-gaia.ai offers the raw `gaia-tui`
+  binary instead, and [`npx @amd-gaia/gaia`](#other-ways-in) is the working
+  one-command path. Tracked in the
+  [flagship installer plan](/plans/flagship-installer), §10.
+</Warning>
+
+Get it from the [download button on amd-gaia.ai](https://amd-gaia.ai), which picks
+the right file for your machine, or from
+[GitHub Releases](https://github.com/amd/gaia/releases/latest) directly.
+
+<Tabs>
+  <Tab title="Windows">
+    Download **`gaia-<version>-x64-setup.exe`** and double-click it.
+
+    The wizard puts `gaia-tui.exe` and `gaia-agent.exe` on your `PATH` and installs
+    Lemonade Server from a bundled MSI. If Lemonade is already installed at a newer
+    version, the installer says so and moves on — it never downgrades what you have.
+
+    When it finishes, open a new terminal and run:
+
+    ```powershell
+    gaia-tui
+    ```
+  </Tab>
+
+  <Tab title="macOS">
+    Download **`gaia-<version>-arm64.dmg`** (Apple Silicon) or
+    **`gaia-<version>-x64.dmg`** (Intel), open it, and double-click
+    **Install GAIA.command**.
+
+    It copies both binaries into `/usr/local/bin` — macOS will ask for your password
+    — and clears their quarantine attribute. Then:
+
+    ```bash
+    gaia-tui
+    ```
+
+    macOS has no bundled Lemonade installer, so install it separately:
+    [lemonade-server.ai](https://lemonade-server.ai).
+  </Tab>
+
+  <Tab title="Linux (Debian/Ubuntu)">
+    Download **`gaia-<version>-x64.deb`** and install it:
+
+    ```bash
+    sudo apt install ./gaia-<version>-x64.deb
+    gaia-tui
+    ```
+
+    The package installs into `/opt/gaia/bin` with symlinks in `/usr/bin`, so
+    `apt remove gaia` takes everything back out.
+
+    Install Lemonade Server separately: [lemonade-server.ai](https://lemonade-server.ai).
+  </Tab>
+
+  <Tab title="Linux (other distros)">
+    Download **`gaia-<version>-x64.AppImage`**, make it executable, and run it:
+
+    ```bash
+    chmod +x gaia-<version>-x64.AppImage
+    ./gaia-<version>-x64.AppImage
+    ```
+
+    The AppImage is self-contained and installs nothing — move it wherever you like.
+
+    Install Lemonade Server separately: [lemonade-server.ai](https://lemonade-server.ai).
+  </Tab>
+</Tabs>
+
+## First-launch warnings
+
+The installers are **not code-signed yet**, so your OS will question them once. This
+is expected, and it is the one rough edge in an otherwise one-click install.
+
+- **Windows** — SmartScreen shows "Windows protected your PC". Click **More info**,
+  then **Run anyway**.
+- **macOS** — Gatekeeper refuses to open an un-notarized file on a double-click.
+  Right-click the DMG (or `Install GAIA.command`) and choose **Open**, then **Open**
+  in the dialog.
+- **Linux** — no equivalent prompt; `.deb` and AppImage both just run.
+
+Signing is tracked in the [flagship installer plan](/plans/flagship-installer), §9.2.
+Until it lands, verify a download yourself if you want to: every binary inside the
+installer is SHA-256-pinned in `@amd-gaia/gaia`'s `binaries.lock.json`, and CI
+refuses to package a byte that does not match.
+
+## Check it works
+
+Start the local model server, then ask the agent something:
+
+```bash
+lemonade-server serve      # in one terminal
+gaia-tui                   # in another
+```
+
+If the agent cannot reach Lemonade it says so and names the URL it tried — it does
+not silently answer from somewhere else. See
+[Requirements](/guides/gaia#requirements) for the model and version floor.
+
+## Uninstall
+
+<Tabs>
+  <Tab title="Windows">
+    Settings → Apps → **GAIA** → Uninstall. Lemonade Server is a separate product
+    and stays installed — remove it from the same Apps list.
+  </Tab>
+  <Tab title="macOS">
+    ```bash
+    sudo rm /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+    ```
+  </Tab>
+  <Tab title="Linux (Debian/Ubuntu)">
+    ```bash
+    sudo apt remove gaia
+    ```
+  </Tab>
+  <Tab title="Linux (AppImage)">
+    Delete the `.AppImage` file.
+  </Tab>
+</Tabs>
+
+Your data lives in `~/.gaia/` and is left alone by all of the above — delete that
+directory to remove it. (`gaia uninstall` does a tiered cleanup, but it belongs to the
+`gaia` Python CLI, which this installer does not put on your machine; see the
+[CLI reference](/reference/cli) if you have it from another install.)
+
+## Other ways in
+
+The installer is the shortest path, not the only one.
+
+- **`npx @amd-gaia/gaia`** — same two binaries, fetched and SHA-256-verified at run
+  time instead of bundled. Needs Node.js 18+. Good when you already have Node and
+  want the newest agent without reinstalling.
+- **The raw `gaia-tui` binary** from the [Agent Hub](https://amd-gaia.ai/hub) — the
+  terminal UI on its own, with no agent behind it and no `PATH` entry. Only useful if
+  you are wiring the pieces together yourself.
+- **From source** — see [the GAIA agent guide](/guides/gaia) for running the agent out
+  of your own checkout so prompt and tool edits take effect immediately.
+
+## Next steps
+
+- [The GAIA agent](/guides/gaia) — what it can do, and the tools that need your approval
+- [Terminal hub](/guides/terminal-hub) — browsing and installing other agents from the TUI
+- [Memory](/guides/memory) — what the agent remembers between sessions

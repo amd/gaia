@@ -6,9 +6,10 @@ description: One-command install for the flagship GAIA agent and its Go terminal
 # Flagship Installer Plan
 
 <Note>
-**Status:** Mostly built, not yet released — this document was written *after* the
-architecture, so it's a record of what exists plus an honest gap list, not a
-from-scratch proposal.
+**Status:** Released and installable. `terminal-hub` 0.23.0 and
+`@amd-gaia/gaia` 0.1.1 are both published, and a one-click installer wraps them
+(§4.1). This document was written *after* the architecture, so it's a record of what
+exists plus an honest gap list, not a from-scratch proposal.
 **Issue:** [#2804](https://github.com/amd/gaia/issues/2804)
 **Branch:** `feat/gaia-flagship-agent-2804`
 **Scope:** the flagship `gaia` agent (`hub/agents/gaia/python/`) + the Go terminal UI
@@ -39,9 +40,8 @@ So this plan does three things instead of one:
    this space — [Desktop Installer Plan](/plans/desktop-installer),
    [Agent Hub Plan](/plans/agent-hub), and the [`hub-publishing`](/guides/hub-publishing)
    guide (§7).
-3. **Names the real gaps** — signing, an unmeasured sidecar size, docs that drifted
-   out of sync with the code, and the fact that nothing has actually been released
-   yet (§8–§9).
+3. **Names the real gaps** — code signing above all, plus an unmeasured sidecar size
+   and docs that drifted out of sync with the code (§8–§9).
 
 Building this a second time, differently, would have thrown away working, tested
 code for no reason. The remaining work is finishing what's here, not replacing it.
@@ -51,8 +51,14 @@ code for no reason. The remaining work is finishing what's here, not replacing i
 ## §1 The goal, restated
 
 A user downloads one thing, runs it, and has a working `gaia` agent + terminal UI —
-no repo clone, no Python installed by hand, no venv. That's `npx @amd-gaia/gaia`
-today, once the release is cut (§9).
+no repo clone, no Python installed by hand, no venv. Two entry points deliver that
+today, from the same published, hash-pinned binaries:
+
+- **The one-click installer** (§4.1) — a single `.exe` / `.dmg` / `.deb` /
+  `.AppImage` for someone who has nothing installed. This is what the download button
+  on amd-gaia.ai points at.
+- **`npx @amd-gaia/gaia`** — the same two binaries, fetched at run time, for someone
+  who already has Node.
 
 ---
 
@@ -116,8 +122,23 @@ present) with a 2.6s cold start to first healthy response. This is a **Windows-o
 number — the macOS/Linux freezes were not run here, and PyInstaller's per-platform
 packing (compression, DLL vs. dylib/so bundling) means the real number there can differ
 — so read 48.9 MB as "confirmed on Windows, right order of magnitude elsewhere," not a
-cross-platform guarantee. Worth recording the real per-platform numbers in the npm
-README's install-size expectations once a release actually cuts all four platforms.
+cross-platform guarantee.
+
+**Superseded by the release.** That 48.9 MB was a local dev freeze of 0.1.0. The
+figures anyone actually downloads are the ones in the published `binaries.lock.json`,
+and they are roughly double it — the release freeze is not the dev freeze:
+
+| Platform | sidecar | tui | bundled total |
+|---|---|---|---|
+| win32-x64 | 90.7 MB | 19.4 MB | **110.1 MB** |
+| darwin-arm64 | 74.2 MB | 17.9 MB | **92.0 MB** |
+| darwin-x64 | 78.6 MB | 19.0 MB | **97.6 MB** |
+| linux-x64 | 122.0 MB | 18.7 MB | **140.7 MB** |
+
+These are the numbers to quote for install-size expectations, and they are what the
+installer's artifact-size floor in `build-flagship-installers.yml` is calibrated
+against. Any size claim elsewhere should read from the lock, not from this section's
+dev-freeze measurement.
 
 If a future change makes the sidecar import anything in `EXCLUDES` at module load
 time (not lazily, inside a function), the freeze will silently balloon toward the
@@ -147,9 +168,44 @@ refuses to publish if `terminal-hub` isn't published yet at the pinned version. 
 is no fallback path that builds a TUI copy of its own.
 
 One consequence worth naming: **the gaia agent's release is now gated on a
-component it doesn't own.** If `terminal-hub` hasn't shipped a version yet, gaia's
-release fails loudly, naming the missing version — which is exactly what's happening
-today (§9).
+component it doesn't own.** If `terminal-hub` hasn't shipped the pinned version,
+gaia's release fails loudly and names it. That gate blocked the first release attempt;
+`terminal-hub` 0.23.0 has since shipped, and 0.1.1 released behind it.
+
+### §4.1 The one-click installer wraps both, and builds neither
+
+`npx` is a developer's entry point: it assumes Node.js. The installer removes that
+assumption, and it does so by *packaging* the published artifacts rather than
+producing new ones —
+[`build-flagship-installers.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/build-flagship-installers.yml)
+reads `binaries.lock.json` out of the **published** `@amd-gaia/gaia` package,
+downloads the two binaries that lock pins, re-verifies both SHA-256 digests, and only
+then packages. Nothing is compiled; a digest mismatch fails the job.
+
+That keeps one property worth stating plainly: **the installer, `npx`, and a raw hub
+download all deliver byte-identical binaries.** There is no third build to drift.
+
+| Platform | Artifact | What it does |
+|---|---|---|
+| Windows x64 | `gaia-<version>-x64-setup.exe` | NSIS wizard; both binaries on `PATH`, plus the bundled Lemonade MSI (issue #774's graceful-failure contract, copied verbatim) |
+| macOS arm64 / x64 | `gaia-<version>-arm64.dmg` / `-x64.dmg` | Disk image with a double-clickable installer that copies into `/usr/local/bin` and clears quarantine |
+| Linux x64 | `gaia-<version>-x64.deb` | `/opt/gaia/bin` + `/usr/bin` symlinks, owned by dpkg so `apt remove` is clean |
+| Linux x64 | `gaia-<version>-x64.AppImage` | Self-contained, installs nothing |
+
+Two deliberate calls:
+
+- **Bundled, not fetched at install time.** 90–140 MB of payload per platform,
+  versus a few MB that then needs the hub reachable mid-install. The Agent UI installer bundles for
+  the same reason: an install that half-succeeds because a download failed is worse
+  than a bigger download.
+- **Versioned by `agentVersion`, not `src/gaia/version.py`.** The installer ships the
+  agent, so it is named for the agent. The two version lines move independently.
+
+The artifact names above are a contract, not a convention: the download button on
+amd-gaia.ai resolves them by exact name from the GitHub Release
+(`website/src/components/TuiDownload.astro`). A rename in one place without the other
+silently downgrades visitors to the raw-binary fallback, so the workflow asserts each
+name before upload and again across the whole set.
 
 ---
 
@@ -299,16 +355,33 @@ end-to-end:**
 
 ## §9 Actual gaps
 
-### 9.1 Nothing is released yet
+### 9.1 Released — this section used to say nothing was
 
-`binaries.lock.json` still carries `PENDING-replace-with-real-sha256` placeholders
-for every platform — both the sidecar lane and the tui lane. The npm fetcher
-refuses to download against a placeholder (that's by design — an unverifiable binary
-should never be fetchable). Until someone with the `agent-publish` GitHub
-environment's approval rights tags `agent-pkg-gaia-v0.1.0` (which needs
-`terminal-hub` published first — §4), `npx @amd-gaia/gaia` doesn't work for anyone.
-`docs/guides/gaia.mdx` already says this plainly ("Coming Soon... Use the source path
-in the meantime") — that part of the docs is accurate, not a gap.
+**This gap is closed.** The release happened: `terminal-hub` 0.23.0 and
+`@amd-gaia/gaia` 0.1.1 are both published, with real SHA-256 digests for every
+platform in the published `binaries.lock.json` (sidecar: win32-x64, darwin-arm64,
+darwin-x64, linux-x64; tui: all six). `npx @amd-gaia/gaia` works, and the one-click
+installer of §4.1 packages those same bytes.
+
+One thing that reads as a contradiction and is not: the **in-repo**
+`hub/agents/gaia/npm/binaries.lock.json` still carries
+`PENDING-replace-with-real-sha256`. That copy is a template — `release_agent_gaia.yml`
+regenerates it with real hashes at publish time and ships the result inside the npm
+tarball. Anything that needs true digests must read the lock from the **published
+package**, never from the checkout. `build-flagship-installers.yml` does exactly
+that, and fails loudly if the version it resolves still carries placeholders.
+
+Two residual gaps, both narrower than "nothing is released":
+
+- **Linux arm64 and Windows arm64 have no sidecar**, so they have no installer. The
+  TUI publishes for both; the frozen agent does not. Those visitors keep the
+  raw-binary path, and `fetch_payload.py` refuses the platform by name rather than
+  packaging a TUI with no agent behind it.
+- **No installer has been cut on a release tag yet.** The workflow is wired and
+  `workflow_dispatch`-runnable, but it only uploads on the `workflow_call` release
+  path, so the assets appear on the first tagged release that invokes it. Until then
+  the website's download button degrades to the raw binary — visibly, by design, not
+  as a dead link.
 
 ### 9.2 Signing — real, unaddressed, and worse here than in the Electron path
 
@@ -329,6 +402,14 @@ Findings:
   submitted from anywhere else — including `gaia-agent.exe` or `gaia-tui.exe` from
   `release_agent_gaia.yml` — would be **rejected by this policy as written**, not
   silently signed.
+- **`build-flagship-installers.yml` DOES have the scaffolding** — a SignPath step for
+  Windows and a `notarytool`/`stapler` step for macOS, each gated on secret presence
+  and skipped with a `::warning::` when the secrets are absent, exactly like the
+  Electron path. It is wired but inert: `.signpath/policies/gaia.policy`'s
+  `trusted_build_systems` still names only `build-installers.yml` on `refs/tags/v*`,
+  so a request from the flagship workflow is **rejected by policy**, not silently
+  signed. Extending that policy to name the second workflow is the whole remaining
+  Windows task.
 - **`release_agent_gaia.yml` has no signing step of any kind**, and couldn't use the
   existing policy even if it tried to (see above). The sidecar `.exe` and the
   `terminal-hub` binaries ship as raw executables with no installer wrapper and no
@@ -437,20 +518,24 @@ and I'm naming it rather than starting it so it doesn't get lost.
 
 1. **Fix the doc-drift issues in §9.3, and the `--version` bug in §9.3.1** — done as
    part of this change.
-2. **Cut the `terminal-hub` release** (tag the core release; `release_components.yml`
-   publishes it) — not something this session can do; needs a maintainer with tag
-   and `agent-publish`-environment access.
-3. **Cut `agent-pkg-gaia-v0.1.0`** once `terminal-hub` is live — same access
-   requirement.
-4. **Signing** (§9.2), split by how much work remains:
-   - Windows: extend `.signpath/policies/gaia.policy`'s `artifact_types` (or add a
-     sibling policy) to accept the sidecar/TUI binaries and wire a signing step into
-     `release_agent_gaia.yml` — an engineering task against infrastructure that
-     already exists, not a procurement one.
+2. ~~**Cut the `terminal-hub` release**~~ — done, 0.23.0 is published.
+3. ~~**Cut `agent-pkg-gaia-v0.1.0`**~~ — done, `@amd-gaia/gaia` 0.1.1 is on npm.
+4. **Cut the first installer set on a release tag.** `build-flagship-installers.yml`
+   uploads only when it is *called* with `publish_to_release: true` and a tag, so
+   `publish.yml` has to invoke it. Until that happens the download button on
+   amd-gaia.ai falls back to the raw binary — visibly, by design.
+5. **Signing** (§9.2), split by how much work remains:
+   - Windows: extend `.signpath/policies/gaia.policy`'s `trusted_build_systems` to
+     accept `build-flagship-installers.yml` (whose SignPath step is already wired and
+     inert), and its `artifact_types` to accept the bare sidecar/TUI binaries for
+     `release_agent_gaia.yml` — engineering against infrastructure that already
+     exists, not procurement.
    - macOS: still needs an Apple Developer ID + notarization credentials provisioned
      — that part is genuinely an org-level decision, not something to start from a
-     coding session.
-5. **Add the measured sizes to the npm README's install-size expectations** (not
-   currently stated anywhere). §3/§8 now have a real Windows number (48.9 MB); macOS
-   and Linux still need their own real freeze to confirm the same order of magnitude
-   holds — that will happen automatically on the next release attempt's freeze matrix.
+     coding session. The keychain-import / `codesign` / `notarytool` / `stapler`
+     chain is written in `build-flagship-installers.yml` but has never run against a
+     real certificate; treat its first run as unproven.
+6. **Add the measured sizes to the npm README's install-size expectations** (not
+   currently stated anywhere). §3 now carries the real per-platform figures from the
+   published 0.1.1 lock — 92–141 MB bundled, depending on platform — so this is a
+   copy-across, not a measurement task.
