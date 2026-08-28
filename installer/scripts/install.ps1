@@ -325,19 +325,24 @@ function Install-Tui {
 # Installed BESIDE gaia-tui.exe on purpose. The hub resolves its agent from its
 # own directory before consulting PATH (catalog.resolveAgentBinary), so a stale
 # gaia-agent elsewhere cannot shadow the one this script just verified.
+# Returns $true only when the agent binary is on disk. The caller uses that to
+# decide what to promise: the hub spawns gaia-agent as a child process, so
+# without it `gaia-tui` opens an agent list rather than a chat. ARM64 Windows
+# hits this every time — the sidecar publishes no build for it.
 function Install-FlagshipAgent {
     Write-Step "Installing the GAIA flagship agent"
 
     $platform = Get-TerminalHubPlatform
     if (-not $platform) {
         Write-Warning "No flagship agent build for this architecture - skipping."
-        return
+        return $false
     }
     # The sidecar is published under win32-x64; the terminal hub uses win-x64.
     $lockPlatform = $platform -replace '^win-', 'win32-'
     $suffix = if ($lockPlatform -like 'win32-*') { ".exe" } else { "" }
 
-    [void](Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform$suffix" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional)
+    $ok = Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform$suffix" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
+    return [bool]$ok
 }
 
 function Add-ToPath {
@@ -376,6 +381,12 @@ function Add-ToPath {
 }
 
 function Show-NextSteps {
+    param(
+        # False when the flagship sidecar was skipped — no published build for
+        # this platform (ARM64 Windows), or its download failed. The banner must
+        # not promise an agent that is not on disk.
+        [bool]$FlagshipInstalled = $true
+    )
     Write-Host "`n" -NoNewline
     Write-Host "================================" -ForegroundColor $COLOR_GREEN
     Write-Host "  GAIA Installed Successfully!" -ForegroundColor $COLOR_GREEN
@@ -388,11 +399,18 @@ function Show-NextSteps {
     Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
     Write-Host " to set up Lemonade Server and download models" -ForegroundColor White
     Write-Host "     (the Lemonade installer asks for administrator approval)" -ForegroundColor White
-    Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
-    Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
-    Write-Host "     (it opens the GAIA agent; type " -ForegroundColor White -NoNewline
-    Write-Host "/hub" -ForegroundColor $COLOR_GREEN -NoNewline
-    Write-Host " for the agent hub)" -ForegroundColor White
+    if ($FlagshipInstalled) {
+        Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
+        Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+        Write-Host "     (it opens the GAIA agent; type " -ForegroundColor White -NoNewline
+        Write-Host "/hub" -ForegroundColor $COLOR_GREEN -NoNewline
+        Write-Host " for the agent hub)" -ForegroundColor White
+    } else {
+        Write-Host "  3. Open the terminal hub: " -ForegroundColor White -NoNewline
+        Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+        Write-Host "     The GAIA agent was skipped - see the warning above - so this" -ForegroundColor $COLOR_YELLOW
+        Write-Host "     opens the agent list, not a chat. Re-run this installer to retry." -ForegroundColor $COLOR_YELLOW
+    }
     Write-Host "`n"
 
     Write-Host "Documentation: https://amd-gaia.ai" -ForegroundColor $COLOR_CYAN
@@ -433,10 +451,10 @@ function Main {
 
     # After Install-Tui so it lands in the same directory, which is where
     # the hub looks for its agent first.
-    Install-FlagshipAgent
+    $flagshipInstalled = Install-FlagshipAgent
 
     # Show next steps
-    Show-NextSteps
+    Show-NextSteps -FlagshipInstalled:$flagshipInstalled
 }
 
 # Run installer

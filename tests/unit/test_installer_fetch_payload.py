@@ -237,3 +237,92 @@ def test_main_reports_a_bad_lock_as_an_error_line_and_exits_nonzero(
 
     assert code == 1
     assert "::error::" in capsys.readouterr().err
+
+
+# --- verify(): what the smoke jobs run against a BUILT installer -------
+#
+# stage() guards what goes into an installer; verify() guards what came out of
+# one. All four platform smoke jobs are built on it, so its two failure messages
+# are what a release engineer reads when a build looks wrong.
+
+
+def _built(tmp_path) -> Path:
+    """A directory shaped like an unpacked installer payload."""
+    out = tmp_path / "unpacked"
+    out.mkdir()
+    (out / "gaia-tui.exe").write_bytes(TUI_BYTES)
+    (out / "gaia-agent.exe").write_bytes(SIDECAR_BYTES)
+    return out
+
+
+def test_verify_passes_when_the_artifact_carries_the_pinned_bytes(lock_file, tmp_path):
+    checked = fetch_payload.verify(lock_file(_lock()), "win32-x64", _built(tmp_path))
+
+    assert {c["component"] for c in checked} == {"tui", "sidecar"}
+
+
+def test_verify_catches_a_binary_that_packaging_replaced(lock_file, tmp_path):
+    built = _built(tmp_path)
+    built.joinpath("gaia-agent.exe").write_bytes(b"something else entirely")
+
+    with pytest.raises(fetch_payload.PayloadError) as excinfo:
+        fetch_payload.verify(lock_file(_lock()), "win32-x64", built)
+
+    message = str(excinfo.value)
+    assert "INSIDE the built artifact" in message
+    assert "gaia-agent.exe" in message, "the file must be named"
+    assert _digest(SIDECAR_BYTES) in message, "the expected digest must be named"
+
+
+def test_verify_names_what_the_artifact_actually_contains_when_one_is_missing(
+    lock_file, tmp_path
+):
+    built = _built(tmp_path)
+    built.joinpath("gaia-agent.exe").unlink()
+
+    with pytest.raises(fetch_payload.PayloadError) as excinfo:
+        fetch_payload.verify(lock_file(_lock()), "win32-x64", built)
+
+    message = str(excinfo.value)
+    assert "does not carry the sidecar binary" in message
+    # Listing what IS there is the difference between "it failed" and knowing
+    # whether packaging dropped the file or renamed it.
+    assert "gaia-tui.exe" in message
+
+
+def test_verify_says_so_when_the_directory_does_not_exist(lock_file, tmp_path):
+    with pytest.raises(fetch_payload.PayloadError) as excinfo:
+        fetch_payload.verify(lock_file(_lock()), "win32-x64", tmp_path / "nope")
+
+    assert "directory does not exist" in str(excinfo.value)
+
+
+def test_verify_never_reaches_the_network(lock_file, tmp_path, monkeypatch):
+    """A smoke job checks bytes on disk; re-downloading would defeat the point."""
+
+    def explode(*_a, **_k):
+        raise AssertionError("verify() must not download anything")
+
+    monkeypatch.setattr(fetch_payload, "_download", explode)
+    fetch_payload.verify(lock_file(_lock()), "win32-x64", _built(tmp_path))
+
+
+def test_verify_is_reachable_from_the_cli(lock_file, tmp_path, capsys):
+    built = _built(tmp_path)
+    built.joinpath("gaia-tui.exe").write_bytes(b"tampered")
+    path = lock_file(_lock())
+
+    code = fetch_payload.main(
+        [
+            "--verify",
+            "--lock",
+            str(path),
+            "--platform",
+            "win32-x64",
+            "--dest",
+            str(built),
+        ]
+    )
+
+    assert code == 1
+    assert "::error::" in capsys.readouterr().err

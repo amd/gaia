@@ -62,7 +62,11 @@ function Find-MakeNSIS {
 # hashes to. Read it from the published package rather than a copy in this repo,
 # so the installer can never bundle a binary the release does not describe.
 function Get-Lock {
-    if ((Test-Path $LockPath) -and $NoFetch) {
+    if ($NoFetch) {
+        if (-not (Test-Path $LockPath)) {
+            Fail "-NoFetch was passed but there is no cached lock at $LockPath." `
+                "drop -NoFetch so the lock is fetched from @amd-gaia/gaia" $LockPath
+        }
         Write-Host "[build] reusing cached lock: $LockPath"
         return (Get-Content $LockPath -Raw | ConvertFrom-Json)
     }
@@ -107,9 +111,16 @@ function Get-Lock {
 
 # Download one component, then verify it against the lock BEFORE staging it.
 function Get-VerifiedBinary($Component, [string]$PlatformKey, [string]$StageAs) {
-    $entry = $Component.platforms.$PlatformKey
+    # StrictMode makes a missing property throw, so ask before reaching for it —
+    # otherwise this function dies with "property cannot be found" and the
+    # actionable message below never prints.
+    $entry = $null
+    if ($Component.platforms.PSObject.Properties.Name -contains $PlatformKey) {
+        $entry = $Component.platforms.$PlatformKey
+    }
     if (-not $entry) {
-        Fail "the lock has no '$PlatformKey' build for this component." `
+        $published = ($Component.platforms.PSObject.Properties.Name | Sort-Object) -join ', '
+        Fail "the lock has no '$PlatformKey' build for this component (published: $published)." `
             "build it locally and pass -SidecarPath/-TuiPath" $LockPath
     }
     $url = "$($Component.baseUrl)/$($entry.filename)"

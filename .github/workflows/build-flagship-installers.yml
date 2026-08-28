@@ -19,9 +19,17 @@
 #     sidecar -> hub.amd-gaia.ai/agents/gaia/<sidecarVersion>/      -> gaia-agent[.exe]
 #   `resolve-payload` reads that lock FROM npm — the published package is the
 #   source of truth, because the in-repo copy carries placeholder hashes until
-#   a release rewrites it. Every build leg then re-verifies each downloaded
-#   byte against it via installer/tui/fetch_payload.py BEFORE packaging. A
-#   digest mismatch fails the job loudly; there is no "package it anyway" path.
+#   a release rewrites it. Every build leg then re-verifies those two binaries
+#   against it via installer/tui/fetch_payload.py BEFORE packaging. A digest
+#   mismatch fails the job loudly; there is no "package it anyway" path.
+#
+#   ONE bundled artifact is NOT hash-pinned: lemonade-server-minimal.msi, which
+#   installer/tui/build.ps1 fetches from the Lemonade release named by
+#   src/gaia/version.py and checks only for plausible size. It is version-pinned
+#   and HTTPS-fetched from the upstream project, but its digest is not recorded
+#   anywhere, and it is the artifact that runs elevated via `msiexec /qn`. Worth
+#   closing by pinning its SHA-256 alongside LEMONADE_VERSION; until then, no
+#   doc should claim every bundled byte is verified.
 #
 #   The installer BUNDLES the binaries rather than fetching them at install
 #   time — the same call the Agent UI installer makes. It costs 92-140 MB of
@@ -68,10 +76,9 @@ on:
   # tag — once directly, once from publish.yml — and the two runs would race
   # each other uploading assets to the same draft GitHub Release.
   #
-  # That call site does NOT exist yet: publish.yml currently invokes only
-  # build-installers.yml. Until it is added alongside, no installer is attached
-  # to any release and the download button on amd-gaia.ai stays on its
-  # raw-binary fallback. Tracked in docs/plans/flagship-installer.mdx section 10.
+  # publish.yml's `build-flagship-installers` job is that call site. It passes
+  # publish_to_release=false and lets publish.yml's own github-release job
+  # attach the artifacts, so only one job ever writes to the draft release.
   workflow_dispatch:
     inputs:
       package_version:
@@ -145,6 +152,7 @@ jobs:
       tui_version: ${{ steps.lock.outputs.tui_version }}
       sidecar_version: ${{ steps.lock.outputs.sidecar_version }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      macos_matrix: ${{ steps.matrix.outputs.macos_matrix }}
       expected: ${{ steps.matrix.outputs.expected }}
     steps:
       - name: Setup Node.js
@@ -261,10 +269,18 @@ jobs:
           const expected = ALL.filter((p) => have.has(p.lock_platform))
             .flatMap((p) => p.artifacts);
           console.error(`expected artifacts: ${expected.join(' ')}`);
-          process.stdout.write(JSON.stringify({ include, expected }));
+
+          // The DMG smoke job runs per Mac leg. Derived from the same list so an
+          // Intel DMG that got BUILT is never published without being mounted,
+          // hashed and run — a weaker gate than the other three platforms is
+          // exactly what the smoke suite exists to prevent.
+          const macos = include.filter((p) => p.label.startsWith('macos-'));
+
+          process.stdout.write(JSON.stringify({ include, expected, macos }));
           NODE
 
           echo "matrix=$(node -p 'JSON.stringify({include: require("./matrix.json").include})')" >> "$GITHUB_OUTPUT"
+          echo "macos_matrix=$(node -p 'JSON.stringify({include: require("./matrix.json").macos})')" >> "$GITHUB_OUTPUT"
           echo "expected=$(node -p 'require("./matrix.json").expected.join(" ")')" >> "$GITHUB_OUTPUT"
 
       - name: Upload payload lock
@@ -836,10 +852,16 @@ jobs:
             /tmp/gaia.AppImage version
 
   macos-install-smoke:
-    name: macOS DMG smoke
+    name: macOS DMG smoke (${{ matrix.label }})
     needs: [resolve-payload, build]
     if: always() && needs.build.result == 'success'
-    runs-on: macos-latest  # Apple Silicon — matches the arm64 build leg
+    # One run per Mac leg that was actually built, on that leg's own runner. An
+    # Intel DMG checked on Apple Silicon would prove nothing about whether it
+    # runs, and until now the Intel DMG shipped with no smoke test at all.
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve-payload.outputs.macos_matrix) }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -847,7 +869,7 @@ jobs:
       - name: Download macOS installer
         uses: actions/download-artifact@v8
         with:
-          name: flagship-macos-arm64-installer
+          name: flagship-${{ matrix.label }}-installer
           path: ${{ runner.temp }}/macos
 
       - name: Download payload lock
@@ -874,13 +896,33 @@ jobs:
           done
           [ -x "${MNT}/Install GAIA.command" ] || { echo "::error::'Install GAIA.command' is not executable, so double-clicking it does nothing."; exit 1; }
 
-      - name: DMG binaries match the lock
+      # Signing, when it is eventually enabled, REWRITES these binaries —
+      # codesign appends an LC_CODE_SIGNATURE load command, so a signed binary
+      # cannot hash to what the lock pins. Verifying the digest unconditionally
+      # would therefore fail every macOS leg the day a Developer ID is
+      # provisioned, and the error would blame packaging for what the signing
+      # step two jobs earlier did on purpose. So: verify the digest when
+      # unsigned, the SIGNATURE when signed. Both prove the payload was not
+      # swapped; only the applicable one can be checked.
+      - name: DMG binaries are the ones the lock pins
         shell: bash
         run: |
           set -euo pipefail
-          python3 installer/tui/fetch_payload.py --verify \
-            --lock binaries.lock.json --platform darwin-arm64 \
-            --dest "${{ steps.mount.outputs.mnt }}/GAIA"
+          MNT="${{ steps.mount.outputs.mnt }}"
+          if codesign -dv "${MNT}/GAIA/gaia-tui" >/dev/null 2>&1; then
+            echo "Binaries are code-signed — verifying signatures (a signature changes the bytes, so the lock digest cannot match by design)."
+            for bin in gaia-tui gaia-agent; do
+              codesign --verify --strict --verbose=2 "${MNT}/GAIA/${bin}" || {
+                echo "::error::${bin} in the DMG carries a broken code signature. Gatekeeper will refuse it, so do not ship this build."
+                exit 1
+              }
+            done
+          else
+            echo "Binaries are unsigned — verifying against the lock digest."
+            python3 installer/tui/fetch_payload.py --verify \
+              --lock binaries.lock.json --platform "${{ matrix.lock_platform }}" \
+              --dest "${MNT}/GAIA"
+          fi
 
       - name: The bundled binary runs
         shell: bash

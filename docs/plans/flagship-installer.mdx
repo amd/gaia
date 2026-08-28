@@ -520,9 +520,9 @@ and I'm naming it rather than starting it so it doesn't get lost.
    part of this change.
 2. ~~**Cut the `terminal-hub` release**~~ — done, 0.23.0 is published.
 3. ~~**Cut `agent-pkg-gaia-v0.1.0`**~~ — done, `@amd-gaia/gaia` 0.1.1 is on npm.
-4. **Cut the first installer set on a release tag.** `build-flagship-installers.yml`
-   uploads only when it is *called* with `publish_to_release: true` and a tag, so
-   `publish.yml` has to invoke it. Until that happens the download button on
+4. **Cut the first installer set on a release tag.** `publish.yml` now calls
+   `build-flagship-installers.yml` and attaches what it produces, so this needs a
+   release to run rather than more wiring. Until one does, the download button on
    amd-gaia.ai falls back to the raw binary — visibly, by design.
 5. **Signing** (§9.2), split by how much work remains:
    - Windows: extend `.signpath/policies/gaia.policy`'s `trusted_build_systems` to

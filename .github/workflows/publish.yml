@@ -331,7 +331,18 @@ jobs:
     permissions:
       contents: read
       id-token: write   # SignPath OIDC — the step is still secret-gated
-    secrets: inherit
+    # Forwarded BY NAME, not `secrets: inherit`. The called workflow declares
+    # exactly these seven and says why: it shells out to `npm pack` and executes
+    # downloaded installers, so it must not be able to read the caller's whole
+    # secrets context. Adding a secret there means adding it here too.
+    secrets:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
     uses: ./.github/workflows/build-flagship-installers.yml
     with:
       tag: ${{ needs.validate.outputs.tag_name }}

@@ -123,9 +123,15 @@ is expected, and it is the one rough edge in an otherwise one-click install.
 - **Linux** — no equivalent prompt; `.deb` and AppImage both just run.
 
 Signing is tracked in the [flagship installer plan](/plans/flagship-installer), §9.2.
-Until it lands, verify a download yourself if you want to: every binary inside the
-installer is SHA-256-pinned in `@amd-gaia/gaia`'s `binaries.lock.json`, and CI
-refuses to package a byte that does not match.
+Until it lands, you can verify the payload yourself: the agent and the terminal UI
+are both SHA-256-pinned in `@amd-gaia/gaia`'s `binaries.lock.json`, and CI refuses
+to package either one if its digest does not match — before packaging, and again
+against the built installer.
+
+The Lemonade Server MSI that the Windows installer bundles is the exception. It is
+pinned to a version and fetched over HTTPS from the Lemonade project's own release,
+but its digest is not recorded, so it carries a weaker guarantee than the two
+binaries above.
 
 ## Check it works
 
