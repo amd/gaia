@@ -214,25 +214,132 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _safe_members_ok(names, dest: Path) -> None:
-    """Reject archive entries that would land outside *dest*.
+def _reject(entry: str, detail: str) -> "EmbeddedLemonadeError":
+    """Build the refusal raised for an archive member GAIA will not unpack.
 
     Args:
-        names: Archive member names.
-        dest: Directory the archive unpacks into.
+        entry: Name of the offending member.
+        detail: What is wrong with it.
+
+    Returns:
+        The error to raise.
+    """
+    return EmbeddedLemonadeError(
+        f"Refusing to unpack embedded Lemonade: archive entry '{entry}' "
+        f"{detail}. The download is corrupt or tampered with -- delete it and "
+        f"retry, and report it at {RELEASES_PAGE}."
+    )
+
+
+def _destination_for(name: str, dest: Path) -> Path:
+    """Resolve where *name* may be written under *dest*.
+
+    Absolute names, drive letters and ``..`` segments all resolve to somewhere
+    outside *dest* and are refused by the containment check.
+
+    Args:
+        name: Archive member name.
+        dest: Already-resolved directory the archive unpacks into.
+
+    Returns:
+        The absolute path the member is allowed to occupy.
+
+    Raises:
+        EmbeddedLemonadeError: The member escapes *dest*.
+    """
+    target = (dest / name).resolve()
+    if target != dest and dest not in target.parents:
+        raise _reject(name, f"escapes {dest}")
+    return target
+
+
+def _write_link(member: tarfile.TarInfo, target: Path, dest: Path) -> None:
+    """Recreate a symlink or hard link, refusing one that points out of *dest*.
+
+    Args:
+        member: The link member.
+        target: Validated path the link itself occupies.
+        dest: Already-resolved directory the archive unpacks into.
+
+    Raises:
+        EmbeddedLemonadeError: The link points outside *dest*.
+    """
+    # A symlink's target is read relative to the directory holding it; a hard
+    # link names another member, relative to the archive root.
+    anchor = target.parent if member.issym() else dest
+    pointee = (anchor / member.linkname).resolve()
+    if pointee != dest and dest not in pointee.parents:
+        raise _reject(member.name, f"links to '{member.linkname}', outside {dest}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if member.issym():
+        os.symlink(member.linkname, target)
+    else:
+        os.link(pointee, target)
+
+
+def _extract_tar(archive: Path, dest: Path) -> None:
+    """Unpack a ``.tar.gz`` into *dest*, one validated member at a time.
+
+    Every member is materialised explicitly rather than through
+    ``extractall``: tar carries symlinks, hard links and device nodes, and the
+    bulk API's safety depends on a ``filter`` argument that only exists from
+    Python 3.10.12 on. Writing each member ourselves is the same guarantee on
+    every interpreter GAIA supports.
+
+    Args:
+        archive: The ``.tar.gz`` file.
+        dest: Already-resolved directory to unpack into.
+
+    Raises:
+        EmbeddedLemonadeError: A member escapes *dest* or is a special file.
+    """
+    with tarfile.open(archive, "r:gz") as handle:
+        links = []
+        for member in handle.getmembers():
+            target = _destination_for(member.name, dest)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                source = handle.extractfile(member)
+                if source is None:
+                    raise _reject(member.name, "is an unreadable file entry")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source, open(target, "wb") as sink:
+                    shutil.copyfileobj(source, sink)
+                # & 0o777 drops setuid, setgid and sticky; nothing in the
+                # published artifact needs them.
+                target.chmod(member.mode & 0o777)
+            elif member.issym() or member.islnk():
+                links.append((member, target))
+            else:
+                raise _reject(member.name, "is a device or special file")
+
+        # Links go last. Created inline, one could become a path component a
+        # later member is written through -- the write would follow it out of
+        # dest even though the member's own name resolved inside.
+        for member, target in links:
+            _write_link(member, target, dest)
+
+
+def _extract_zip(archive: Path, dest: Path) -> None:
+    """Unpack a ``.zip`` into *dest*, one validated member at a time.
+
+    ``zipfile`` silently rewrites a traversing member name to a harmless one.
+    Checking first turns that into the loud failure a tampered artifact
+    deserves.
+
+    Args:
+        archive: The ``.zip`` file.
+        dest: Already-resolved directory to unpack into.
 
     Raises:
         EmbeddedLemonadeError: A member escapes *dest*.
     """
-    dest_resolved = dest.resolve()
-    for name in names:
-        target = (dest_resolved / name).resolve()
-        if dest_resolved != target and dest_resolved not in target.parents:
-            raise EmbeddedLemonadeError(
-                f"Refusing to unpack embedded Lemonade: archive entry '{name}' "
-                f"escapes {dest_resolved}. The download is corrupt or tampered "
-                f"with -- delete it and retry, and report it at {RELEASES_PAGE}."
-            )
+    with zipfile.ZipFile(archive) as handle:
+        for name in handle.namelist():
+            _destination_for(name, dest)
+            handle.extract(name, dest)
 
 
 def _extract(archive: Path, dest: Path) -> None:
@@ -246,31 +353,11 @@ def _extract(archive: Path, dest: Path) -> None:
         EmbeddedLemonadeError: Unknown suffix or an unsafe member path.
     """
     dest.mkdir(parents=True, exist_ok=True)
+    resolved = dest.resolve()
     if archive.name.endswith(".zip"):
-        with zipfile.ZipFile(archive) as zf:
-            _safe_members_ok(zf.namelist(), dest)
-            zf.extractall(dest)
+        _extract_zip(archive, resolved)
     elif archive.name.endswith((".tar.gz", ".tgz")):
-        with tarfile.open(archive, "r:gz") as tf:
-            members = tf.getmembers()
-            _safe_members_ok([m.name for m in members], dest)
-            # Names alone miss a symlink pointing out of the tree that a later
-            # member then writes through; Python < 3.12 has no data filter.
-            for member in members:
-                if member.issym() or member.islnk():
-                    _safe_members_ok(
-                        [os.path.join(os.path.dirname(member.name), member.linkname)],
-                        dest,
-                    )
-                elif not (member.isfile() or member.isdir()):
-                    raise EmbeddedLemonadeError(
-                        f"Refusing to unpack embedded Lemonade: '{member.name}' "
-                        f"is a device or special file. The download is corrupt "
-                        f"or tampered with -- retry, and report it at "
-                        f"{RELEASES_PAGE}."
-                    )
-            extra = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
-            tf.extractall(dest, **extra)
+        _extract_tar(archive, resolved)
     else:
         raise EmbeddedLemonadeError(
             f"Cannot unpack '{archive.name}': expected a .zip or .tar.gz "
@@ -553,15 +640,21 @@ class EmbeddedLemonade:
     def _write_state(self, state: dict) -> None:
         """Persist the running instance.
 
-        The file holds the API key that is the server's only protection, so it
-        is created 0600 rather than chmod-ed afterwards -- a chmod leaves the
-        key world-readable in between.
+        The file holds the API key that is the server's only protection, so on
+        POSIX it is created 0600 rather than chmod-ed afterwards -- a chmod
+        leaves the key world-readable in between. The old file is removed first
+        because the mode argument only applies when ``open`` creates the file;
+        rewriting one left behind by an earlier build would keep its mode.
+
+        Windows ignores the mode bits; there the file is protected by the ACL
+        it inherits from the user's profile directory.
 
         Args:
             state: pid, port, api_key and version of the live daemon.
         """
         self.root.mkdir(parents=True, exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        self.state_path.unlink(missing_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         descriptor = os.open(self.state_path, flags, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=2)
@@ -681,7 +774,7 @@ class EmbeddedLemonade:
 
         if self._daemon_alive(int(pid)):
             log.warning(
-                "Embedded Lemonade (pid %s) is running but not answering on " "port %s",
+                "Embedded Lemonade (pid %s) is running but not answering on port %s",
                 pid,
                 port,
             )
@@ -714,6 +807,13 @@ class EmbeddedLemonade:
     def _write_env_file(self, port: int, api_key: str) -> Path:
         """Write the sourceable credentials file for the running instance.
 
+        Created owner-only, and removed first so the mode applies: ``open``
+        honours its mode argument only when it creates the file, so rewriting
+        one left behind by an earlier build would keep that file's permissions.
+
+        Windows ignores the mode bits; there the file is protected by the ACL
+        it inherits from the user's profile directory.
+
         Args:
             port: Port the instance listens on.
             api_key: Bearer token the instance requires.
@@ -734,7 +834,8 @@ class EmbeddedLemonade:
             )
 
         self.root.mkdir(parents=True, exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        self.env_path.unlink(missing_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         descriptor = os.open(self.env_path, flags, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(body)

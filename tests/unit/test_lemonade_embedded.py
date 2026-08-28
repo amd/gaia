@@ -3,6 +3,7 @@
 """Unit tests for GAIA's private (embeddable) Lemonade Server."""
 
 import hashlib
+import io
 import json
 import platform
 import stat
@@ -18,8 +19,8 @@ from gaia.llm.lemonade_embedded import (
     EmbeddedLemonade,
     EmbeddedLemonadeError,
     UnsupportedPlatformError,
+    _extract,
     _flatten_single_root,
-    _safe_members_ok,
     asset_name,
     asset_url,
     gaia_home,
@@ -124,16 +125,76 @@ class TestChecksumPinning:
 class TestArchiveSafety:
     """Downloaded archives must not be able to write outside the target."""
 
-    @pytest.mark.parametrize("evil", ["../escape.txt", "a/../../escape.txt"])
+    @pytest.mark.parametrize(
+        "evil", ["../escape.txt", "a/../../escape.txt", "/tmp/escape.txt"]
+    )
     def test_rejects_members_escaping_the_destination(self, tmp_path, evil):
+        archive = tmp_path / "evil.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            tf.addfile(tarfile.TarInfo(evil), io.BytesIO(b""))
+
         with pytest.raises(EmbeddedLemonadeError) as exc:
-            _safe_members_ok([evil], tmp_path / "dest")
+            _extract(archive, tmp_path / "dest")
         assert "escapes" in str(exc.value)
+        assert not (tmp_path / "escape.txt").exists()
+
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="creating a symlink needs a privilege CI does not hold; Windows "
+        "installs from the .zip asset, never the tarball",
+    )
+    def test_a_symlink_cannot_redirect_a_later_member_out_of_the_tree(self, tmp_path):
+        # Every member name here resolves inside dest while dest is empty, so
+        # a name-only check waves them through. Once 'hop' exists as a symlink,
+        # the kernel resolves 'hop/../..' through it and the third member lands
+        # a directory above dest.
+        archive = tmp_path / "evil.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            holder = tarfile.TarInfo("d")
+            holder.type = tarfile.DIRTYPE
+            tf.addfile(holder)
+
+            hop = tarfile.TarInfo("d/hop")
+            hop.type = tarfile.SYMTYPE
+            hop.linkname = "."
+            tf.addfile(hop)
+
+            tf.addfile(tarfile.TarInfo("d/hop/../../pwned.txt"), io.BytesIO(b"owned"))
+
+        dest = tmp_path / "dest"
+        _extract(archive, dest)
+        assert not (tmp_path / "pwned.txt").exists()
+        assert (dest / "pwned.txt").read_text(encoding="utf-8") == "owned"
+
+    def test_rejects_a_hard_link_pointing_out_of_the_tree(self, tmp_path):
+        archive = tmp_path / "evil.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            link = tarfile.TarInfo("stolen")
+            link.type = tarfile.LNKTYPE
+            link.linkname = "../../etc/passwd"
+            tf.addfile(link)
+
+        with pytest.raises(EmbeddedLemonadeError) as exc:
+            _extract(archive, tmp_path / "dest")
+        assert "outside" in str(exc.value)
+
+    def test_drops_setuid_and_setgid_bits(self, tmp_path):
+        if platform.system() == "Windows":
+            pytest.skip("POSIX permission bits are not modelled on Windows")
+
+        archive = tmp_path / "suid.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            member = tarfile.TarInfo("rooted")
+            member.mode = 0o4755
+            member.size = 0
+            tf.addfile(member, io.BytesIO(b""))
+
+        dest = tmp_path / "dest"
+        _extract(archive, dest)
+        assert not (dest / "rooted").stat().st_mode & (stat.S_ISUID | stat.S_ISGID)
 
     def test_rejects_a_symlink_pointing_out_of_the_tree(self, tmp_path):
         # Member names alone look innocent here; the link target is the escape.
-        from gaia.llm.lemonade_embedded import _extract
-
         archive = tmp_path / "evil.tar.gz"
         with tarfile.open(archive, "w:gz") as tf:
             link = tarfile.TarInfo("escape")
@@ -143,11 +204,9 @@ class TestArchiveSafety:
 
         with pytest.raises(EmbeddedLemonadeError) as exc:
             _extract(archive, tmp_path / "dest")
-        assert "escapes" in str(exc.value)
+        assert "outside" in str(exc.value)
 
     def test_rejects_device_and_special_files(self, tmp_path):
-        from gaia.llm.lemonade_embedded import _extract
-
         archive = tmp_path / "evil.tar.gz"
         with tarfile.open(archive, "w:gz") as tf:
             node = tarfile.TarInfo("dev/null")
@@ -159,11 +218,16 @@ class TestArchiveSafety:
         assert "device or special file" in str(exc.value)
 
     def test_accepts_ordinary_members(self, tmp_path):
-        _safe_members_ok(["lemond.exe", "resources/defaults.json"], tmp_path / "dest")
+        archive = tmp_path / "ok.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for name in ("lemond.exe", "resources/defaults.json"):
+                tf.addfile(tarfile.TarInfo(name), io.BytesIO(b""))
+
+        dest = tmp_path / "dest"
+        _extract(archive, dest)
+        assert (dest / "resources" / "defaults.json").is_file()
 
     def test_unknown_archive_suffix_is_rejected(self, tmp_path):
-        from gaia.llm.lemonade_embedded import _extract
-
         bogus = tmp_path / "asset.7z"
         bogus.write_bytes(b"x")
         with pytest.raises(EmbeddedLemonadeError) as exc:
@@ -171,8 +235,6 @@ class TestArchiveSafety:
         assert ".zip or .tar.gz" in str(exc.value)
 
     def test_zip_and_tar_both_unpack(self, tmp_path):
-        from gaia.llm.lemonade_embedded import _extract
-
         payload = tmp_path / "payload.txt"
         payload.write_text("hello", encoding="utf-8")
 
