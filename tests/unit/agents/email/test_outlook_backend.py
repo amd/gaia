@@ -254,21 +254,36 @@ class TestReadTranslation:
         # exact-phrase quoting.
         assert params["$search"] == ['"invoice"']
 
-    def test_list_messages_from_operator_reaches_search_unquoted(self):
-        # #2996: the whole query used to be wrapped in one pair of quotes, so
-        # Graph read "from:netflix" as literal text instead of the scoped
-        # from: term its own $search (Graph KQL) already understands.
+    def test_list_messages_from_operator_reaches_search_quoted(self):
+        # #2996: the whole query used to reach Graph unmodified for is:/
+        # newer_than:, which $search cannot express at all, hence the
+        # $filter routing below. from:/subject: are Graph KQL search-scoping
+        # keywords already, so they stay in $search under the same
+        # quote-and-escape contract #3021 established for every other value.
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(query="from:netflix", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
-        assert params["$search"] == ["from:netflix"]
+        assert params["$search"] == ['"from:netflix"']
         assert "$filter" not in params
 
-    def test_list_messages_subject_operator_reaches_search_unquoted(self):
+    def test_list_messages_subject_operator_reaches_search_quoted(self):
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(query="subject:invoice", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
-        assert params["$search"] == ["subject:invoice"]
+        assert params["$search"] == ['"subject:invoice"']
+
+    def test_list_messages_query_escapes_quotes_in_search(self):
+        # #3021: from:"Acme Corp" must not produce nested unescaped quotes.
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query='from:"Acme Corp"', max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ['"from:\\"Acme Corp\\""']
+
+    def test_list_messages_query_escapes_backslash_in_search(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="subject:a\\b", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ['"subject:a\\\\b"']
 
     def test_list_messages_is_unread_query_routes_to_filter(self):
         # #2996 acceptance criterion: unread/status filters route to Graph

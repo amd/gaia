@@ -24,15 +24,23 @@ def test_bare_phrase_is_quoted_as_exact_phrase():
     assert result.filter is None
 
 
-def test_from_operator_passes_through_unquoted():
+def test_from_operator_is_quoted_like_a_bare_phrase():
+    # Graph's own KQL parser reads from: inside the wrapping quotes
+    # (learn.microsoft.com/en-us/graph/search-query-parameter shows
+    # $search="from:randiw"), so quoting from:/subject: does not defeat them.
     result = translate_query("from:netflix", now=_NOW)
-    assert result.search == "from:netflix"
+    assert result.search == '"from:netflix"'
     assert result.filter is None
 
 
-def test_subject_operator_passes_through_unquoted():
+def test_subject_operator_is_quoted_like_a_bare_phrase():
     result = translate_query("subject:invoice", now=_NOW)
-    assert result.search == "subject:invoice"
+    assert result.search == '"subject:invoice"'
+
+
+def test_from_operator_escapes_inner_quotes():
+    result = translate_query('from:"Acme Corp"', now=_NOW)
+    assert result.search == '"from:\\"Acme Corp\\""'
 
 
 def test_is_unread_becomes_isread_filter():

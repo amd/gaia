@@ -15,10 +15,15 @@ This module splits that string into what each half of it actually is:
   filters Graph's mail ``$search`` (a KQL subset over subject/body/
   participants) does not expose; only ``$filter`` can express "unread" or a
   date bound, so these are extracted and rendered as an OData ``$filter``.
-- Everything else, a bare phrase, or ``from:``/``subject:`` (which Outlook's
-  own search box, and therefore Graph's ``$search``, already parses as scoped
-  KQL terms), is left in the ``$search`` string, UNQUOTED so Graph's parser
-  sees the operator instead of a literal colon character.
+- Everything else, including a bare phrase or ``from:``/``subject:``, stays
+  in the ``$search`` string. Graph's docs (Use the search query parameter,
+  learn.microsoft.com/en-us/graph/search-query-parameter) show the whole KQL
+  clause wrapped in one pair of double quotes, e.g. ``$search="from:randiw"``:
+  the wrapping does not demote ``from:`` to a literal, Graph's KQL parser
+  reads it inside the quotes. So every ``$search`` value this module returns
+  is quoted and escaped the same way #3021 established (quotes/backslashes
+  already in the query, e.g. ``from:"Acme Corp"``, are escaped so they don't
+  collide with the wrapping quotes).
 - Graph's mail endpoint rejects ``$search`` and ``$filter`` in the same
   request, so a query mixing the two families (``is:unread from:alice``)
   cannot be expressed in one call; that raises rather than silently dropping
@@ -43,15 +48,21 @@ _DURATION_RE = re.compile(
     r"\b(?P<op>newer_than|older_than):(?P<val>\S+)", re.IGNORECASE
 )
 
-# Presence check only: from:/subject: stay embedded in $search itself
-# (Graph's KQL search already scopes on them). Decides whether a query with
-# no recognized operator falls back to the legacy exact-phrase quoting.
-_SEARCH_OP_RE = re.compile(r"\b(from|subject):", re.IGNORECASE)
-
 # Graph has no calendar-aware relative-date filter, so a month is 30 days
 # and a year is 365, the same approximation Gmail's own "1 month ago"
 # reading makes, and precise enough for a recency window, not a ledger.
 _DURATION_UNIT_DAYS = {"d": 1, "m": 30, "y": 365}
+
+
+def _graph_search_param(query: str) -> str:
+    """Wrap KQL for Graph ``$search``.
+
+    Graph requires the whole KQL string to be wrapped in double quotes.
+    Quotes and backslashes inside the query must be escaped, otherwise a
+    value such as ``from:"Acme Corp"`` becomes ``"from:"Acme Corp""``.
+    """
+    escaped = query.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _duration_to_cutoff(op: str, raw_value: str, *, now: datetime) -> str:
@@ -86,6 +97,13 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
     bare text): Graph's mail endpoint errors if both parameters are sent
     together, so silently keeping one side would return a result set the
     caller never asked for.
+
+    Every ``$search`` value is quoted and escaped per ``_graph_search_param``
+    (#3021): ``from:``/``subject:`` are Graph KQL search-scoping keywords
+    already, understood the same way inside the wrapping quotes, so quoting
+    does not defeat them the way it defeats ``is:``/``newer_than:`` (which
+    ``$search`` cannot express under any quoting and route to ``$filter``
+    above instead).
     """
     now = now or datetime.now(timezone.utc)
     filters: List[str] = []
@@ -117,6 +135,4 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
         )
     if filters:
         return GraphQuery(filter=" and ".join(filters))
-    if _SEARCH_OP_RE.search(query):
-        return GraphQuery(search=query)
-    return GraphQuery(search=f'"{query}"')
+    return GraphQuery(search=_graph_search_param(query))
