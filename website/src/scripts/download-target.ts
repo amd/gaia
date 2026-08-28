@@ -82,11 +82,14 @@ export const INSTALLERS_FOR: Record<PlatformKey, InstallerKey[]> = {
 /**
  * Primary-button text per installer. Linux names the distro family in the
  * button itself: the two packages sit side by side and the visitor picks, so
- * the button has to say which one is theirs.
+ * the button has to say which one is theirs. macOS names the chip for the same
+ * reason — Safari cannot report it, so both Mac buttons are shown together and
+ * a bare "Install GAIA for macOS" beside "(Intel)" would read as the universal
+ * one.
  */
 export const INSTALLER_CTA_LABELS: Record<InstallerKey, string> = {
   'win-x64-setup': 'Install GAIA for Windows',
-  'darwin-arm64-pkg': 'Install GAIA for macOS',
+  'darwin-arm64-pkg': 'Install GAIA for macOS (Apple Silicon)',
   'darwin-x64-pkg': 'Install GAIA for macOS (Intel)',
   'linux-x64-deb': 'Debian / Ubuntu (.deb)',
   'linux-x64-rpm': 'Fedora / RHEL / SUSE (.rpm)',
@@ -115,12 +118,21 @@ export function detectOs(userAgent: string): Os | null {
 }
 
 /**
- * Apple Silicon without client hints (Safari): the UA says "Intel" on every
- * Mac, so the UA cannot decide it. A Mac reporting touch points is an M-series
- * machine — Intel Macs report 0 — which is the one signal Safari does expose.
+ * iPadOS Safari asks for desktop sites by default, sending the *Mac* UA
+ * (`Macintosh; Intel Mac OS X 10_15_7`) with no iPad token — so the UA alone
+ * calls it a Mac. Touch points are the only separator: no Mac has a
+ * touchscreen and every one reports 0 (Touch Bar models included), while an
+ * iPad reports 5. `> 1` rather than `> 0` because a handful of browsers report
+ * 1 on non-touch hardware.
  */
-function appleSiliconBySideChannel(nav: NavigatorLike): boolean {
-  return (nav.maxTouchPoints ?? 0) > 0;
+function isIpadClaimingToBeAMac(nav: NavigatorLike): boolean {
+  return /Macintosh/i.test(nav.userAgent) && (nav.maxTouchPoints ?? 0) > 1;
+}
+
+/** The OS we publish for, or null for one we do not — including an iPad. */
+export function placeOs(nav: NavigatorLike): Os | null {
+  if (isIpadClaimingToBeAMac(nav)) return null;
+  return detectOs(nav.userAgent);
 }
 
 export async function resolveArch(nav: NavigatorLike, os: Os): Promise<Arch | null> {
@@ -139,19 +151,35 @@ export async function resolveArch(nav: NavigatorLike, os: Os): Promise<Arch | nu
 
   // Explicit arm64 in the UA — Linux and Windows do sometimes say so.
   if (/aarch64|arm64/i.test(nav.userAgent)) return 'arm64';
-  if (os === 'darwin') return appleSiliconBySideChannel(nav) ? 'arm64' : null;
+  // Undecidable on macOS: Safari exposes no client hints, and every Mac —
+  // Intel and Apple Silicon alike — says "Intel Mac OS X". Nothing is left to
+  // read, so callers offer both builds rather than guess.
+  if (os === 'darwin') return null;
   // Windows and Linux on arm64 without hints are rare enough that x64 is the
   // safe read; on macOS it is not, which is why that case returns null above.
   if (/x86_64|win64|wow64|x64|amd64|intel/i.test(nav.userAgent)) return 'x64';
   return null;
 }
 
-export async function resolvePlatform(nav: NavigatorLike): Promise<PlatformKey | null> {
-  const os = detectOs(nav.userAgent);
-  if (!os) return null;
+/**
+ * Every platform to offer this visitor, best first.
+ *
+ * Usually one, and empty for a machine we do not publish for. Two only on a
+ * Mac whose architecture cannot be read — Apple Silicon leads because it is
+ * what Apple has shipped since 2020. Offering both beats the alternatives: a
+ * guess hands half of Safari's Mac visitors a package that will not run, and
+ * offering nothing is what left them with no install button at all.
+ *
+ * This replaced a `resolvePlatform` that returned one platform or null. The
+ * null was indistinguishable from "unsupported machine", so the caller showed
+ * no install button at all — which is how a Mac on Safari ended up with none.
+ */
+export async function resolveTargets(nav: NavigatorLike): Promise<PlatformKey[]> {
+  const os = placeOs(nav);
+  if (!os) return [];
   const arch = await resolveArch(nav, os);
-  if (!arch) return null;
-  return `${os}-${arch}`;
+  if (arch) return [`${os}-${arch}`];
+  return os === 'darwin' ? ['darwin-arm64', 'darwin-x64'] : [];
 }
 
 // The installer filenames, as the packaging scripts name them — each carries

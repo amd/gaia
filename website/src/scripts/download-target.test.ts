@@ -10,8 +10,9 @@ import {
   PLATFORM_LABELS,
   artifactFileName,
   detectOs,
+  placeOs,
   resolveArch,
-  resolvePlatform,
+  resolveTargets,
   type DownloadKey,
   type NavigatorLike,
   type PlatformKey,
@@ -111,28 +112,52 @@ describe('resolveArch', () => {
     expect(await resolveArch(nav(UA.linux), 'linux')).toBe('x64');
   });
 
-  // Safari reports "Intel Mac OS X" on Apple Silicon and offers no hints, so
-  // the UA alone cannot decide; touch points are the one honest signal.
-  it('uses touch points to place an Apple Silicon Mac behind Safari', async () => {
-    expect(await resolveArch(nav(UA.macSafari, { maxTouchPoints: 5 }), 'darwin')).toBe('arm64');
-  });
-
   it('refuses to guess a Mac architecture with no evidence', async () => {
     expect(await resolveArch(nav(UA.macSafari), 'darwin')).toBeNull();
     expect(await resolveArch(nav(UA.mac, { hintsThrow: true }), 'darwin')).toBeNull();
   });
+
+  // Touch points say nothing about the chip: every Mac reports 0, Intel and
+  // Apple Silicon alike. Reading them as an Apple Silicon signal placed every
+  // Safari Mac nowhere and handed every iPad a Mac build.
+  it('does not read touch points as an architecture signal', async () => {
+    expect(await resolveArch(nav(UA.macSafari, { maxTouchPoints: 5 }), 'darwin')).toBeNull();
+  });
 });
 
-describe('resolvePlatform', () => {
-  it('returns the hub platform key', async () => {
-    expect(await resolvePlatform(nav(UA.win))).toBe('win-x64');
-    expect(await resolvePlatform(nav(UA.linuxArm))).toBe('linux-arm64');
-    expect(await resolvePlatform(nav(UA.mac, { architecture: 'arm' }))).toBe('darwin-arm64');
+describe('placeOs', () => {
+  it('places the desktops we publish for', () => {
+    expect(placeOs(nav(UA.win))).toBe('win');
+    expect(placeOs(nav(UA.macSafari))).toBe('darwin');
+    expect(placeOs(nav(UA.linux))).toBe('linux');
   });
 
-  it('returns null for anything unplaceable, so the caller shows every option', async () => {
-    expect(await resolvePlatform(nav(UA.iphone))).toBeNull();
-    expect(await resolvePlatform(nav(UA.macSafari))).toBeNull();
+  // iPadOS Safari sends the Mac UA verbatim; touch points are the only tell.
+  it('rejects an iPad sending the Mac desktop UA', () => {
+    expect(placeOs(nav(UA.macSafari, { maxTouchPoints: 5 }))).toBeNull();
+  });
+
+  it('keeps a real Mac, which reports no touch points', () => {
+    expect(placeOs(nav(UA.macSafari, { maxTouchPoints: 0 }))).toBe('darwin');
+  });
+});
+
+describe('resolveTargets', () => {
+  it('offers exactly one platform when the machine is placeable', async () => {
+    expect(await resolveTargets(nav(UA.win))).toEqual(['win-x64']);
+    expect(await resolveTargets(nav(UA.linuxArm))).toEqual(['linux-arm64']);
+    expect(await resolveTargets(nav(UA.mac, { architecture: 'arm' }))).toEqual(['darwin-arm64']);
+  });
+
+  // The case that regressed: a Mac on Safari must still get an install button.
+  it('offers both Mac builds when the architecture cannot be read', async () => {
+    expect(await resolveTargets(nav(UA.macSafari))).toEqual(['darwin-arm64', 'darwin-x64']);
+  });
+
+  it('offers nothing to a machine we do not publish for', async () => {
+    expect(await resolveTargets(nav(UA.iphone))).toEqual([]);
+    expect(await resolveTargets(nav(UA.android))).toEqual([]);
+    expect(await resolveTargets(nav(UA.macSafari, { maxTouchPoints: 5 }))).toEqual([]);
   });
 });
 

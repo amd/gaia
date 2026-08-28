@@ -12,9 +12,11 @@
 //
 // Every published platform is rendered server-side, so a no-JS visitor gets the
 // whole list and a working link. JS reveals the block for the platform this
-// machine can run and collapses the list behind a disclosure; a machine it
-// cannot place (Apple Silicon behind Safari, an unknown arch) keeps the full
-// list rather than guessing — see scripts/download-target.ts.
+// machine can run and collapses the list behind a disclosure. A Mac behind
+// Safari reports no architecture, so both Mac builds are offered side by side;
+// a machine we publish nothing for (an iPad sending the Mac UA, an unknown
+// arch) keeps the full list rather than guessing — see
+// scripts/download-target.ts.
 //
 // Nothing here builds a URL. Each link is the `url` the hub manifest published
 // for an artifact whose filename matched a key exactly, so a platform the hub
@@ -116,7 +118,10 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       outranks Tailwind's preflight `[hidden]` rule and would show them all. */}
   {rows.map((row) => (
     <div data-dl-cta data-platform={row.platform} hidden>
-      <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
+      <div
+        data-dl-buttons
+        class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}
+      >
         {row.installers.length > 0
           ? row.installers.map((i) => (
               <a href={i.artifact.url} class="g-btn g-btn-primary px-6 py-3 text-[15px]">
@@ -197,19 +202,33 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
 </div>
 
 <script>
-  import { resolvePlatform } from '../scripts/download-target';
+  import { resolveTargets } from '../scripts/download-target';
 
   document.querySelectorAll<HTMLElement>('[data-tui-download]').forEach(async (root) => {
     const blocks = Array.from(root.querySelectorAll<HTMLElement>('[data-dl-cta]'));
     if (!blocks.length) return;
 
-    const platform = await resolvePlatform(navigator).catch(() => null);
-    if (!platform) return;   // Unplaceable machine: the full list stays as-is.
+    const targets = await resolveTargets(navigator).catch(() => []);
+    // Unplaceable machine, or none of its platforms are published: the full
+    // list stays as-is.
+    const matched = targets.flatMap((t) => {
+      const block = blocks.find((b) => b.dataset.platform === t);
+      return block ? [block] : [];
+    });
+    if (!matched.length) return;
 
-    const match = blocks.find((b) => b.dataset.platform === platform);
-    if (!match) return;      // A platform the hub does not publish for.
+    const [primary, ...rest] = matched;
+    primary.hidden = false;
 
-    match.hidden = false;
+    // More than one target means a Mac whose architecture Safari will not
+    // report. Fold the others' buttons into the first block's row so they read
+    // as one choice — the same side-by-side shape Linux already uses for .deb
+    // and .rpm — instead of two near-identical blocks with duplicate copy.
+    const buttons = primary.querySelector('[data-dl-buttons]');
+    for (const extra of rest) {
+      const extraButtons = extra.querySelector('[data-dl-buttons]');
+      if (buttons && extraButtons) buttons.append(...extraButtons.children);
+    }
 
     // Every platform stays reachable, one disclosure away — including this
     // machine's other options, so the standalone binary is never hidden from
