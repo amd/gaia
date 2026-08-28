@@ -98,3 +98,98 @@ async def test_allowed_user_streams_accumulated_response(monkeypatch):
         call("Hello"),
         call("Hello from Gaia"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_photo_ingest_is_included_in_session_input(monkeypatch, tmp_path):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    streamed_reply = AsyncMock()
+    reply_text = AsyncMock(return_value=streamed_reply)
+    downloaded_path = tmp_path / "gaia_telegram_photo-1.jpg"
+    downloaded_file = SimpleNamespace(
+        file_id="photo-1",
+        download_to_drive=AsyncMock(),
+    )
+    photo = SimpleNamespace(get_file=AsyncMock(return_value=downloaded_file))
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="What is shown here?",
+            photo=[photo],
+            document=None,
+            reply_text=reply_text,
+        ),
+    )
+    sent_inputs = []
+
+    class StubSession:
+        def send_stream(self, text):
+            sent_inputs.append(text)
+            return iter([SimpleNamespace(text="Description")])
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.tempfile.gettempdir", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.ingest_image_to_vlm",
+        lambda path: {"status": "success", "text": "A red bicycle"},
+    )
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
+    )
+
+    await adapter._handle_message(update, None)
+
+    downloaded_file.download_to_drive.assert_awaited_once_with(str(downloaded_path))
+    assert sent_inputs == [
+        "What is shown here? [photo uploaded and processed] - A red bicycle"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_document_ingest_failure_is_visible_in_session_input(
+    monkeypatch, tmp_path
+):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    streamed_reply = AsyncMock()
+    reply_text = AsyncMock(return_value=streamed_reply)
+    downloaded_file = SimpleNamespace(
+        file_id="document-1",
+        download_to_drive=AsyncMock(),
+    )
+    document = SimpleNamespace(
+        file_name="notes.pdf", get_file=AsyncMock(return_value=downloaded_file)
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="Summarize this",
+            photo=[],
+            document=document,
+            reply_text=reply_text,
+        ),
+    )
+    sent_inputs = []
+
+    class StubSession:
+        def send_stream(self, text):
+            sent_inputs.append(text)
+            return iter([SimpleNamespace(text="Unable to index")])
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.tempfile.gettempdir", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.ingest_document_to_rag",
+        lambda path: {"success": False},
+    )
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
+    )
+
+    await adapter._handle_message(update, None)
+
+    downloaded_file.download_to_drive.assert_awaited_once_with(
+        str(tmp_path / "gaia_telegram_document-1")
+    )
+    assert sent_inputs == ["Summarize this [file uploaded: notes.pdf - index failed]"]
