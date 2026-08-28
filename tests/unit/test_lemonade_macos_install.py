@@ -16,9 +16,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.installer.lemonade_installer import LemonadeInfo
+from gaia.version import LEMONADE_VERSION
 from tests.fixtures.lemonade_assets import make_installer
 
-PKG = Path("/tmp/Lemonade-11.5.0-Darwin.pkg")
+PKG = Path(f"/tmp/Lemonade-{LEMONADE_VERSION}-Darwin.pkg")
 
 
 def _completed(returncode=0, stdout="", stderr=""):
