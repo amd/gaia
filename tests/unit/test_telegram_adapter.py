@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from gaia.messaging.telegram import TelegramAdapter
+from gaia.messaging.telegram import UNAUTHORIZED_REPLY, TelegramAdapter
 
 
 def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
@@ -50,10 +50,52 @@ async def test_unknown_user_is_refused_before_session_creation(monkeypatch, capl
     with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
         await adapter._handle_message(update, None)
 
-    reply_text.assert_awaited_once_with(
-        "Sorry — you're not authorized to use this bot."
-    )
+    reply_text.assert_awaited_once_with(UNAUTHORIZED_REPLY)
     assert "Refused Telegram message from unauthorized user 99999" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unknown_user_is_refused_by_start_command(caplog):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=99999),
+        message=SimpleNamespace(reply_text=reply_text),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_start(update, None)
+
+    reply_text.assert_awaited_once_with(UNAUTHORIZED_REPLY)
+    assert "Refused Telegram message from unauthorized user 99999" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_allowed_user_gets_start_greeting():
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(reply_text=reply_text),
+    )
+
+    await adapter._handle_start(update, None)
+
+    assert reply_text.await_args.args[0].startswith("Hello! I'm Gaia.")
+
+
+def test_every_update_handler_enforces_the_allowlist():
+    """A handler added without ``@require_allowed`` is reachable unauthenticated."""
+    handlers = [name for name in dir(TelegramAdapter) if name.startswith("_handle_")]
+    assert handlers, "no update handlers found — did they get renamed?"
+    unguarded = [
+        name
+        for name in handlers
+        if not getattr(
+            getattr(TelegramAdapter, name), "__gaia_allowlist_guarded__", False
+        )
+    ]
+    assert not unguarded, f"handlers missing @require_allowed: {unguarded}"
 
 
 @pytest.mark.asyncio
