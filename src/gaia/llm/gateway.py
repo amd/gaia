@@ -36,6 +36,7 @@ from gaia.llm.lemonade_client import (
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
 
@@ -291,9 +292,9 @@ def _no_credential_store_message() -> str:
     persist = (
         f"Set the token in *Lemonade's* environment instead — Lemonade reads it\n"
         f"  directly, so GAIA does not need to store anything:\n\n"
-        f"      {export}\n"
-        f"      lemonade-server serve\n\n"
-        f"  (It must be set for the Lemonade process, not just your shell.)"
+        f"      {export}\n\n"
+        f"  It must be set for the Lemonade process, not just your shell, so set\n"
+        f"  it before starting Lemonade: {describe_start_hint().instruction}"
     )
 
     if sys.platform.startswith("linux"):
@@ -395,8 +396,8 @@ class GatewayManager:
         except requests.exceptions.RequestException as e:
             raise GatewayError(
                 f"Lemonade Server is not reachable at {self.base_url}: {e}. "
-                f"Start it with `lemonade-server serve`, or point "
-                f"LEMONADE_BASE_URL at a running server."
+                f"{describe_start_hint().instruction} "
+                f"Or point LEMONADE_BASE_URL at a server already running."
             ) from e
 
         if response.status_code >= 400:
@@ -443,7 +444,9 @@ class GatewayManager:
 
     # -- provider lifecycle ----------------------------------------------
 
-    def check_reachable(self, base_url: str) -> Optional[int]:
+    def check_reachable(
+        self, base_url: str, allow_insecure_http: bool = False
+    ) -> Optional[int]:
         """Probe the gateway's own ``/models`` before registering it.
 
         Returns the number of models it lists, or ``None`` when the endpoint is
@@ -459,6 +462,16 @@ class GatewayManager:
         """
         url = f"{base_url.rstrip('/')}/models"
         token = os.getenv(GATEWAY_API_KEY_ENV) or os.getenv("GAIA_GATEWAY_TOKEN")
+        if token and url.lower().startswith("http://") and not allow_insecure_http:
+            # Registration and token handoff both refuse plaintext without the
+            # opt-in; the probe runs FIRST, so without this it is the one place
+            # that puts the credential on the wire in the clear.
+            raise GatewayError(
+                f"Refusing to send your gateway token to {url} over plaintext "
+                f"HTTP, where anyone on the network path can read it. Use an "
+                f"https:// URL, or pass --allow-insecure-http if this is a "
+                f"trusted on-prem endpoint you control."
+            )
         # Same header Lemonade will use, so the probe tests the real thing.
         headers = (
             {DEFAULT_AUTH_HEADER_NAME: f"{DEFAULT_AUTH_HEADER_PREFIX}{token}"}

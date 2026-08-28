@@ -35,9 +35,9 @@ Write-Host "`nProbing $url with a $($token.Length)-character token`n" -Foregroun
 
 # name, header-name, value-prefix
 $candidates = @(
-    @("Authorization: Bearer (GAIA default)", "Authorization", "Bearer "),
+    @("Ocp-Apim-Subscription-Key (Azure APIM, GAIA default)", "Ocp-Apim-Subscription-Key", ""),
+    @("Authorization: Bearer", "Authorization", "Bearer "),
     @("api-key (Azure OpenAI style)", "api-key", ""),
-    @("Ocp-Apim-Subscription-Key (Azure APIM)", "Ocp-Apim-Subscription-Key", ""),
     @("X-Api-Key", "X-Api-Key", ""),
     @("Authorization (raw, no prefix)", "Authorization", ""),
     @("api-key with Bearer prefix", "api-key", "Bearer ")
@@ -90,7 +90,7 @@ if ($winner) {
     $hName = $winner[1]; $hPrefix = $winner[2]
     Write-Host "The gateway accepts: $hName`: $hPrefix<token>" -ForegroundColor Green
     Write-Host "`nRegister it with:" -ForegroundColor Cyan
-    if ($hName -eq "Authorization" -and $hPrefix -eq "Bearer ") {
+    if ($hName -eq "Ocp-Apim-Subscription-Key" -and $hPrefix -eq "") {
         Write-Host "  gaia gateway install --base-url $GatewayUrl"
         Write-Host "  (this is already GAIA's default, so the earlier failure was the token itself)"
     }

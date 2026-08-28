@@ -113,10 +113,13 @@ type Client struct {
 func NewClient() (*Client, error) {
 	base := DetectLemonadeURL()
 	if base == "" {
+		// No start command is named here on purpose: it differs per machine
+		// and `lemonade-server serve` no longer exists on a modern install.
+		// /setup resolves the right one against this host.
 		return nil, fmt.Errorf(
 			"Lemonade Server is not reachable on port 13305 or 8000.\n" +
-				"Start it with `lemonade-server serve`, or set LEMONADE_BASE_URL " +
-				"to a running server")
+				"Run /setup to start it, or set LEMONADE_BASE_URL to a server " +
+				"that is already running")
 	}
 	return &Client{baseURL: base, http: &http.Client{Timeout: 60 * time.Second}}, nil
 }
@@ -281,6 +284,15 @@ func (c *Client) Probe(baseURL string) (int, error) {
 		token = strings.TrimSpace(os.Getenv("GAIA_GATEWAY_TOKEN"))
 	}
 	if token != "" {
+		// Lemonade refuses to hold a token for an http:// endpoint without an
+		// explicit opt-in, and the TUI has no way to give one. Sending it here
+		// anyway would put the credential on the wire in the clear, on the one
+		// request that runs before any of those checks.
+		if strings.HasPrefix(strings.ToLower(url), "http://") {
+			return 0, fmt.Errorf(
+				"refusing to send your gateway token to %s over plaintext HTTP, "+
+					"where anyone on the network path can read it. Use an https:// URL", url)
+		}
 		req.Header.Set(DefaultAuthHeaderName, DefaultAuthHeaderPrefix+token)
 	}
 

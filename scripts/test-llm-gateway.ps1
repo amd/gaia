@@ -136,10 +136,6 @@ finally {
 # --------------------------------------------------------------- wire up ---
 Step 3 "Point GAIA at it"
 Set-Location $RepoRoot
-$branch = (git rev-parse --abbrev-ref HEAD).Trim()
-if ($branch -ne "kalin/llm-gateway") {
-    Note "WARNING: on branch '$branch', expected kalin/llm-gateway"
-}
 $env:PYTHONPATH = Join-Path $RepoRoot "src"    # gaia is -e linked elsewhere
 $env:LEMONADE_BASE_URL = "http://localhost:$Port/api/v1"
 $env:GAIA_GATEWAY_TOKEN = $token               # read by gateway auth/test

@@ -10,11 +10,13 @@ whether Lemonade would accept the request. The matching contract test lives in
 """
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.llm.gateway import (
+    DEFAULT_AUTH_HEADER_NAME,
     DEFAULT_GATEWAY_BASE_URL,
     GATEWAY_API_KEY_ENV,
     GATEWAY_PROVIDER,
@@ -271,7 +273,10 @@ class TestErrors:
 
         message = str(excinfo.value)
         assert "http://localhost:13305/api/v1" in message
-        assert "lemonade-server serve" in message
+        # Names a start method resolved for THIS machine, never the legacy CLI
+        # that no longer exists on a modern install.
+        assert "lemonade-server serve" not in message
+        assert "Lemonade" in message
 
     def test_404_on_a_cloud_route_points_at_the_version_requirement(self, manager):
         with patch(
@@ -747,3 +752,45 @@ class TestEnsureAuthenticatedReportsRealUsability:
                 }
             )
             assert manager.ensure_authenticated() is True
+
+
+class TestProbeDoesNotLeakTheTokenOverPlaintext:
+    """Registration and token handoff both refuse an ``http://`` gateway
+    without an explicit opt-in. The probe runs BEFORE either of them, so
+    without the same check it is the one place that puts the credential on the
+    wire in the clear.
+    """
+
+    def test_plaintext_probe_with_a_token_is_refused(self, manager, monkeypatch):
+        monkeypatch.setenv("GAIA_GATEWAY_TOKEN", "sk-secret")
+        with patch("gaia.llm.gateway.requests.get") as get:
+            with pytest.raises(GatewayError, match="plaintext HTTP"):
+                manager.check_reachable("http://gw.example.com/v1")
+        # Refused before any request went out, not after.
+        get.assert_not_called()
+
+    def test_plaintext_probe_is_allowed_with_the_explicit_opt_in(self, manager):
+        with patch.dict(os.environ, {"GAIA_GATEWAY_TOKEN": "sk-secret"}):
+            with patch("gaia.llm.gateway.requests.get") as get:
+                get.return_value = _response(body={"data": []})
+                manager.check_reachable(
+                    "http://gw.example.com/v1", allow_insecure_http=True
+                )
+            assert get.called
+
+    def test_https_probe_still_sends_the_token(self, manager):
+        with patch.dict(os.environ, {"GAIA_GATEWAY_TOKEN": "sk-secret"}):
+            with patch("gaia.llm.gateway.requests.get") as get:
+                get.return_value = _response(body={"data": []})
+                manager.check_reachable("https://gw.example.com/v1")
+            sent = get.call_args.kwargs["headers"]
+            assert sent[DEFAULT_AUTH_HEADER_NAME].endswith("sk-secret")
+
+    def test_plaintext_probe_without_a_token_is_fine(self, manager, monkeypatch):
+        """Nothing to leak, so URL validation must still work."""
+        monkeypatch.delenv("GAIA_GATEWAY_TOKEN", raising=False)
+        monkeypatch.delenv(GATEWAY_API_KEY_ENV, raising=False)
+        with patch("gaia.llm.gateway.requests.get") as get:
+            get.return_value = _response(body={"data": []})
+            manager.check_reachable("http://gw.example.com/v1")
+        assert get.called

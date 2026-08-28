@@ -5182,6 +5182,7 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
 def handle_gateway_command(args):
     """Handle `gaia gateway ...` (AMD LLM gateway via Lemonade cloud offload)."""
     from gaia.config import GaiaConfigError
+    from gaia.connectors.errors import ConnectorsError
     from gaia.llm.gateway import (
         DEFAULT_GATEWAY_BASE_URL,
         GATEWAY_API_KEY_ENV,
@@ -5242,7 +5243,10 @@ def handle_gateway_command(args):
             base_url = args.base_url or state.base_url or DEFAULT_GATEWAY_BASE_URL
             if not args.skip_probe:
                 print(f"Probing {base_url}/models ...")
-                count = manager.check_reachable(base_url)
+                count = manager.check_reachable(
+                    base_url,
+                    allow_insecure_http=getattr(args, "allow_insecure_http", False),
+                )
                 if count is None:
                     print(
                         "✅ Gateway reachable — it wants a token before it lists models"
@@ -5461,6 +5465,17 @@ def handle_gateway_command(args):
         # `models` and `test` go through LemonadeClient, which raises its own
         # type. Letting it escape printed a traceback instead of the message.
         print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    except ConnectorsError as e:
+        # The credential store raises this for an unusable backend, and `logout
+        # --forget` reaches it. The user hitting it is exactly the one who
+        # already saw "could not be remembered" from `auth` — a traceback is
+        # the last thing that helps them.
+        print(
+            f"❌ The OS credential store is not usable: {e}\n"
+            f"   Nothing was stored there, so there is nothing to remove.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     except GaiaConfigError as e:
         print(

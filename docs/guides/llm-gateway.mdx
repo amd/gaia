@@ -83,15 +83,19 @@ gaia gateway test "Say hello"        # end-to-end round trip
 `gaia gateway status` shows registration, auth state, discovered model count, and your
 current selection.
 
-### Gateways with a non-standard auth header
+### Gateways with a different auth header
 
-The default is `Authorization: Bearer <token>`. A gateway that expects something else:
+The default is `Ocp-Apim-Subscription-Key` with **no** prefix, because AMD's gateway
+runs behind Azure API Management and that is the header it checks.
+
+So a plain OpenAI-compatible endpoint expecting a bearer token is the case that needs
+the override — not the other way round:
 
 ```bash
 gaia gateway install \
   --base-url https://gateway.example.com/v1 \
-  --auth-header-name X-Api-Key \
-  --auth-header-prefix ""
+  --auth-header-name Authorization \
+  --auth-header-prefix "Bearer "
 ```
 
 Both settings persist per provider and are re-applied on every request.
