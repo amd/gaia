@@ -72,8 +72,11 @@ def test_ps1_reads_the_agent_hub(ps1_text):
     assert "releases/latest/download" not in ps1_text
     assert "hub.amd-gaia.ai" in ps1_text
     assert '$TERMINAL_HUB_ID = "terminal-hub"' in ps1_text
-    assert "/agents/$TERMINAL_HUB_ID/manifest.json" in ps1_text
-    assert "/agents/$TERMINAL_HUB_ID/$version/$filename" in ps1_text
+    # The hub id is a parameter now — one resolver serves the terminal hub and
+    # the agent — so the URL is built from $AgentId rather than a literal.
+    assert "/agents/$AgentId/manifest.json" in ps1_text
+    assert "/agents/$AgentId/$version/$Filename" in ps1_text
+    assert "-AgentId $TERMINAL_HUB_ID" in ps1_text
 
 
 def test_component_id_matches_the_published_manifest():
@@ -120,9 +123,12 @@ def test_binary_is_installed_as_gaia_tui(sh_text, ps1_text):
     """tui/internal/daemon/client.go resolves `gaia` on PATH to start the
     Python-owned daemon; a Go binary named `gaia` would find itself."""
     assert '"$GAIA_BIN/gaia-tui"' in sh_text
-    assert "$GAIA_BIN\\gaia-tui.exe" in ps1_text
+    # PowerShell installs through a shared helper, so the leaf name is passed
+    # as -DestName and joined to $GAIA_BIN inside it.
+    assert '-DestName "gaia-tui.exe"' in ps1_text
+    assert "$GAIA_BIN\\$DestName" in ps1_text
     assert '"$GAIA_BIN/gaia"' not in sh_text
-    assert "$GAIA_BIN\\gaia.exe" not in ps1_text
+    assert '-DestName "gaia.exe"' not in ps1_text
 
 
 def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
@@ -188,16 +194,66 @@ def test_install_tui_never_soft_skips(sh_text):
     body = _shell_function_body(sh_text, "install_tui")
     assert "return 0" not in body
     assert "skipping" not in body
-    # Every failure branch aborts.
-    assert body.count("exit 1") >= 6
+    # Every failure branch aborts. Download and checksum handling moved into
+    # download_and_verify, so install_tui turns its non-zero return into an
+    # exit rather than owning that branch itself.
+    assert "download_and_verify" in body
+    assert body.count("exit 1") >= 5
+    assert re.search(r"if ! download_and_verify.*?\n.*?exit 1", body, re.DOTALL)
 
 
 def test_install_tui_refuses_an_unverified_binary(sh_text, ps1_text):
-    body = _shell_function_body(sh_text, "install_tui")
-    assert "publishes %s with no SHA-256" in body
-    assert "Checksum mismatch" in body
+    # Both live in the shared helpers now — one copy of the rule for the
+    # terminal hub and the agent, rather than a copy per caller.
+    assert "publishes %s with no SHA-256" in _shell_function_body(
+        sh_text, "read_hub_manifest"
+    )
+    assert "Checksum mismatch" in _shell_function_body(sh_text, "download_and_verify")
     assert "no SHA-256" in ps1_text
     assert "Checksum mismatch" in ps1_text
+
+
+# ── the flagship agent sidecar ─────────────────────────────────────────────
+#
+# `gaia-tui` spawns `gaia-agent` as a child, so a bootstrap that installs only
+# the hub leaves a UI with no agent under it.
+
+
+def test_both_scripts_install_the_flagship_agent(sh_text, ps1_text):
+    assert 'FLAGSHIP_AGENT_ID="gaia"' in sh_text
+    assert '$FLAGSHIP_AGENT_ID = "gaia"' in ps1_text
+    assert '"$GAIA_BIN/gaia-agent"' in sh_text
+    assert '-DestName "gaia-agent.exe"' in ps1_text
+
+
+def test_agent_is_fetched_under_the_hub_key_it_is_published_as(ps1_text):
+    """The sidecar publishes as win32-x64; the terminal hub uses win-x64.
+
+    Constructing `gaia-agent-win-x64.exe` 404s against a hub that only ever
+    published `gaia-agent-win32-x64.exe`, and only on a cold fetch.
+    """
+    assert "-replace '^win-', 'win32-'" in ps1_text
+
+
+def test_a_missing_agent_build_is_survivable_but_a_bad_one_is_not(sh_text):
+    """Absence and corruption are different failures and must not be merged.
+
+    No published build for this platform is a warning — the hub still works.
+    Bytes that do not match the digest are an integrity failure and stop the
+    install outright.
+    """
+    body = _shell_function_body(sh_text, "install_flagship_agent")
+    assert "skipping" in body
+    assert body.count("return 0") >= 3
+    # …but the verified-download branch aborts rather than skipping.
+    assert re.search(r"if ! download_and_verify.*?\n.*?exit 1", body, re.DOTALL)
+
+
+def test_the_closing_banner_only_promises_an_agent_that_installed(sh_text, ps1_text):
+    """Every early return above leaves no agent; the banner must not claim one."""
+    assert "FLAGSHIP_INSTALLED=1" in sh_text
+    assert 'if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]' in sh_text
+    assert "-FlagshipInstalled" in ps1_text
 
 
 def test_elevation_is_announced_before_it_is_needed(sh_text, ps1_text):
