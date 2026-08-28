@@ -1,6 +1,9 @@
 package root
 
-import "github.com/amd/gaia/tui/internal/control"
+import (
+	"github.com/amd/gaia/tui/internal/control"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
+)
 
 // ControlSnapshot reports where the user currently is, for the control API's
 // /status and for POST /wait state matchers.
@@ -8,31 +11,30 @@ import "github.com/amd/gaia/tui/internal/control"
 // It satisfies control.SnapshotProvider. Reporting real model state — rather
 // than inferring it from the rendered characters — is what lets an assistant
 // wait on "the chat view for agent X is open" instead of racing on a substring.
-func (m RootModel) ControlSnapshot() control.Snapshot {
-	snap := control.Snapshot{View: control.ViewUnknown, VisibleAgentIDs: []string{}}
+func (m FlagshipModel) ControlSnapshot() control.Snapshot {
+	snap := control.Snapshot{View: control.ViewUnknown, Agent: m.agent.ID}
 
 	switch m.activeView {
-	case viewHub:
-		snap.View = "hub"
-		snap.HubTabIndex, snap.HubTab = m.hub.ActiveTab()
-		snap.SelectedAgentID = m.hub.SelectedAgentID()
-		snap.VisibleAgentIDs = m.hub.VisibleAgentIDs()
-		snap.Filtering = m.hub.IsFiltering()
-		snap.Overlay = m.hub.Overlay()
+	case viewSplash:
+		snap.View = control.ViewSplash
 	case viewPreflight:
-		snap.View = "preflight"
+		snap.View = control.ViewPreflight
 		if m.preflight != nil {
 			snap.Agent = m.preflight.AgentID()
+			// The row refusing the launch, by key. Automation asserts on this
+			// instead of grepping the rendered remedy for a phrase.
+			if blocker, blocked := m.preflight.Report().Blocker(); blocked {
+				snap.Blocker = blocker.Key
+			}
 		}
 		if m.connect != nil {
 			snap.Overlay = "connect-mailbox"
 		}
 	case viewChat:
-		snap.View = "chat"
+		snap.View = control.ViewChat
 		if m.chat != nil {
 			snap.Agent = m.chat.AgentID()
 			snap.Streaming = m.chat.IsStreaming()
-			snap.CanReturnToHub = m.chat.CanReturnToHub()
 		}
 	}
 
@@ -48,4 +50,15 @@ func (m RootModel) ControlSnapshot() control.Snapshot {
 		snap.Overlay = "halt"
 	}
 	return snap
+}
+
+// PreflightReport is the gate's current answer, and false when no gate is on
+// screen. It exists so a test can assert on ROWS — which row refused, in what
+// state — instead of grepping the rendered remedy for a phrase that is allowed
+// to change.
+func (m FlagshipModel) PreflightReport() (preflight.Report, bool) {
+	if m.activeView != viewPreflight || m.preflight == nil {
+		return preflight.Report{}, false
+	}
+	return m.preflight.Report(), true
 }

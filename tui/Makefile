@@ -32,10 +32,10 @@ vet:
 
 # Statement coverage, rolled up per package.
 #
-# A plain `go test -cover` reports internal/ui/hub and internal/ui/root as 0%
-# because their tests live in the test/ integration package. -coverpkg=./...
-# attributes coverage back to the package that owns the code, so those report
-# their real numbers (~77% and ~90%) instead of a zero that invites deletion.
+# A plain `go test -cover` reports internal/ui/root as 0% because its tests live
+# in the test/ integration package. -coverpkg=./... attributes coverage back to
+# the package that owns the code, so it reports its real number instead of a
+# zero that invites deletion.
 # `go tool cover` writes to a file rather than piping into tail: a pipeline
 # reports the LAST command's status, so `go tool cover ... | tail` would read as
 # success even when it failed. make checks the redirected command directly.

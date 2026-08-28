@@ -1,138 +1,116 @@
 ---
-title: "Terminal Hub"
-description: "Browse, install, and run GAIA agents without leaving the terminal — with a readiness check that fixes what it can and tells you what it can't."
+title: "Terminal UI"
+description: "gaia-tui boots straight into the flagship GAIA agent's chat — a splash, a readiness gate that fixes what it can, then the conversation. No terminal required to leave."
 icon: "terminal"
 ---
 
-The Terminal Hub is GAIA's terminal-native front door. It lists the agents you can
-run, installs them, and — before it hands you a chat prompt — checks that everything
-the agent needs is actually working. Where it can fix a problem itself, one key does
-it. Where it can't, it says so and gives you the exact command.
+`gaia-tui` is GAIA's terminal-native front door. It opens directly on the flagship
+`gaia` agent — conversation, documents, data, web research, memory, skills — behind a
+readiness gate that runs on every launch and checks the few things that would
+otherwise make the agent fail. Where it can fix a problem itself, one key does it.
+Where it can't, it says so and gives you the exact command.
 
 ```bash
 cd tui && make build     # -> tui/bin/gaia
 ./tui/bin/gaia
 ```
 
-<Warning>
-  The hub binary is **not yet published** — `release_components.yml` builds and
-  publishes it as the `terminal-hub` hub component (all six platform/arch targets,
-  cross-compiled from one Go toolchain), but no version has been tagged and released
-  yet. `pip install amd-gaia` does not provide it, and the Python CLI has no `tui`
-  subcommand (`gaia tui` exits 2 today). Building from source
-  (`cd tui && make build`) remains the only way to get it until the first tag lands.
-  Once a version is live, this page will name the download instead.
-</Warning>
-
 <Info>
-  The Terminal Hub and the [Agent UI](/guides/agent-ui) are two front ends over the
-  same agents and the same background service. Use the hub when you live in a
-  terminal or are on a headless box; use the Agent UI when you want rendered cards
-  and a browser. Both take a dropped file or a pasted screenshot.
+  The Terminal UI and the [Agent UI](/guides/agent-ui) are two front ends over the same
+  agents. Use the terminal when you live in one or are on a headless box; use the Agent
+  UI when you want rendered cards and a browser. Both take a dropped file or a pasted
+  screenshot.
 </Info>
 
 <Note>
   `gaia tui` is the Go terminal binary. Building from source it is `tui/bin/gaia`
   (`cd tui && make build`) — it accepts a leading `tui` word and drops it, so
-  `./tui/bin/gaia` and `./tui/bin/gaia tui` open the same screen. See the
-  [CLI reference](/reference/cli#terminal-hub-gaia-tui) for its non-interactive
+  `./tui/bin/gaia` and `./tui/bin/gaia tui` open the same session. See the
+  [CLI reference](/reference/cli#terminal-ui-gaia-tui) for its non-interactive
   subcommands.
 </Note>
 
-## The hub screen
+<Warning>
+  GAIA ships **one** agent through this binary: there is nothing to browse and nothing
+  to pick. An earlier version of the TUI opened on an Agent Hub browser — install,
+  uninstall, search, vote — with the flagship agent listed as "Coming Soon." That
+  screen, and the `list` / `install` / `uninstall` / `hub` subcommands that drove it,
+  are gone. Installing a hub sidecar agent (`email`) is now the Python CLI's job —
+  `gaia hub install <id>` — not the terminal's.
+</Warning>
 
-The hub opens on the agent list, grouped into three categories:
+## The boot sequence
+
+Every launch — `gaia-tui` with no arguments, or `gaia-tui run email` — goes
+through the same three screens: a splash, a readiness gate, then chat.
+
+```bash
+gaia-tui                 # the flagship agent
+gaia-tui run email       # any other agent, by id
+```
+
+### 1. Splash
+
+The first frame is GAIA's mascot over the wordmark and tagline, while the readiness
+gate spins up behind it — the launch never opens on a blank terminal:
 
 ```
-  G A I A    Local AI Agent Hub — by AMD
-   Installed: 1
-  Installed (1)    Available (0)    Coming Soon (12)
-────────────────────────────────────────────────────────────────────────────
-▸ ● mail Email Triage v0.5.0
-    GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally
-    productivity
-  enter run · i install · d remove · / search · tab category · v vote · r refresh · ? help · q quit
+  [ GAIA mascot ]
+
+  G A I A    Your local AI agent — by AMD
+
+  starting GAIA…
 ```
 
-- **Installed** — on this machine, ready to run.
-- **Available** — published on the Agent Hub, not installed yet. On a fresh machine
-  Email Triage starts here.
-- **Coming Soon** — announced but not published. These can't be installed; you can
-  vote for them.
+On a terminal shorter than 32 rows or narrower than about 44 columns, the mascot
+is dropped and the frame is just the wordmark and tagline on one line.
 
-| Key | What it does |
-|---|---|
-| `Enter` | Run the selected agent |
-| `i` | Install it (or update it) |
-| `d` | Uninstall it (asks first) |
-| `r` | Refresh the agent list from the Agent Hub |
-| `/` | Search agents |
-| `Tab` / `Shift+Tab` | Next / previous category |
-| `v` | Vote for a coming-soon agent |
-| `?` | Toggle the help overlay |
-| `q`, `Ctrl+C` | Quit |
+### 2. The readiness gate
 
-<Note>
-  `Backspace` is deliberately unbound. Everyone presses it meaning "go back", and on
-  this screen that would be one keystroke away from a destructive action.
-</Note>
+For the flagship, three things are checked, in order, each depending on the one
+before it: is `gaia-agent` on this machine, is the local model server (Lemonade)
+reachable, are the models downloaded. The gate stops at the first failure — a
+missing model server makes "are the models downloaded" meaningless.
 
-Voting sends only the agent ID to amd-gaia.ai — no personal data.
-
-## Installing an agent
-
-Select it and press `i`. That is the whole flow — there is no shell command you need
-to remember. (For scripts and CI there are non-interactive equivalents; see the
-[CLI reference](/reference/cli#terminal-hub-gaia-tui).)
-
-An agent outside the `verified` security tier runs third-party code on your machine,
-so GAIA asks first rather than installing quietly. The prompt names what you're
-agreeing to — the agent id, version, publisher, security tier, download size, and
-the access it declares — plus the background service's own reason for refusing the
-install until you say yes.
-
-**Cancel is focused by default.** `y` trusts and installs, `n` or `Esc` cancels,
-`←`/`→` moves between the buttons, `Enter` picks the focused one.
-
-If an install fails, the result box stays up with the reason. `i` or `r` retries it;
-`Esc`, `q`, `n`, or `Enter` dismisses. Dismissing never cancels an install that is
-still running — the background service owns that work, and a half-removed install
-directory is worse than waiting.
-
-## The readiness check
-
-Press `Enter` on an installed agent and GAIA checks its preconditions before starting
-it. This runs on **every** launch, not just the first, because any of these can break
-between sessions.
+An all-green machine flashes through this screen and lands in chat without a
+keypress. A failure holds it open:
 
 ```
-  Getting Email Triage ready                                          1 of 5 ready
+  Getting GAIA ready                                                1 of 3 ready
   ──────────────────────────────────────────────────────────────────────────────
-    [ok]  Background service  running (pid 47979) · host API v1.1
-  > [!]   Email Triage agent  installed, not started
-          The Email Triage agent is registered but its state is "stopped".
-          Start it — the background service supervises it from then on.
-          run:   gaia daemon start-agent email
-          look:  ~/.gaia/agents/email/logs/
-          f start the agent
-    [ ]   Local AI            —  checked once "Email Triage agent" is fixed
-    [ ]   AI model            —  checked once "Email Triage agent" is fixed
-    [ ]   Mailbox             —  checked once "Email Triage agent" is fixed
+    [ok]  GAIA agent          found at /usr/local/bin/gaia-agent
+  > [!]   Local AI            not running
+          GAIA needs a local model server. It runs on your machine; no message
+          text ever leaves it.
+          run:   lemonade-server serve
+    [ ]   AI model            —  checked once "Local AI" is fixed
   ──────────────────────────────────────────────────────────────────────────────
-  f start the agent · r re-check · d details · esc back
+  r re-check · d details · esc back
 ```
 
-Two things on this screen are worth knowing about, because they change how you read it.
+If `gaia-agent` itself is missing, the gate stops on the first row and sends you
+to the installer — there is no in-TUI download for the agent binary:
 
-**Rows below a failure aren't results — they're deferred.** `checked once "X" is
-fixed` means exactly that: the check did not run, so the screen never shows you a
-verdict it couldn't have reached. A `[ ]` row is not a pass and not a failure.
+```
+  Getting GAIA ready                                                0 of 3 ready
+  ──────────────────────────────────────────────────────────────────────────────
+  > [!]   GAIA agent          not on this machine
+          gaia-agent is the program that does the thinking. Nothing runs without it.
+          Re-run the GAIA installer — it ships gaia-agent alongside gaia-tui.
+          run:   https://amd-gaia.ai/#install
+          look:  https://amd-gaia.ai/docs/guides/gaia
+    [ ]   Local AI            —  checked once "GAIA agent" is fixed
+    [ ]   AI model            —  checked once "GAIA agent" is fixed
+  ──────────────────────────────────────────────────────────────────────────────
+  r re-check · d details · esc back
+```
 
-**Where a fix can be automated, it's one key.** The failing row offers `f` and the
-footer repeats it. `f` on the row above starts the agent; the count went `1 of 5` →
-`2 of 5` and the check moved on to the next row on its own.
+`email` (and any other daemon-supervised agent) goes through the same three
+screens, but its gate has five rows instead of three: background service,
+sidecar, Lemonade, model, and mailbox. See [Email Triage](/guides/email) for
+that gate end to end.
 
-### Markers
+#### Markers
 
 | Marker | Meaning |
 |---|---|
@@ -145,67 +123,26 @@ footer repeats it. `f` on the row above starts the agent; the count went `1 of 5
 The marker and the words carry the state on their own, so the screen reads the same
 on a monochrome terminal or piped to a file.
 
-### Keys
+#### Keys
 
 | Key | What it does |
 |---|---|
-| `f` | Apply the focused row's fix — shown only when that row has one |
+| `f` | Apply the focused row's fix — shown only when that row has one (e.g. downloading the models) |
 | `r` | Re-check everything |
 | `d` | Toggle the raw answer the check got — paste this into a bug report |
 | `↑` / `↓` (or `k` / `j`) | Move between rows |
-| `Enter` | Start anyway — offered only when nothing is outright broken |
-| `Esc` | Back to the hub |
-| `Ctrl+C` | Quit GAIA |
+| `Enter` | Continue anyway — offered only when nothing is outright broken |
+| `Esc` | **Quit.** There is no screen behind the gate to go back to — the footer still shows this key as "back" |
+| `Ctrl+C` | Quit |
 
-`Enter` is not offered while a row is failing. Press it anyway and the screen names
-the blocker rather than starting something that would fail on its first action. It
-*is* offered when a row is merely unverified (`[?]`) — nothing there says anything is
+`Enter` is not offered while a row is failing outright. Press it anyway and the
+screen names the blocker rather than starting a chat that cannot talk. It *is*
+offered when a row is merely unverified (`[?]`) — nothing there says anything is
 broken.
 
-### When the fix can't be automated
+### 3. Chat
 
-Some fixes can't be done from a terminal UI. GAIA does not open a browser behind your
-back or half-implement a flow that already works elsewhere. It hands you the command
-and waits:
-
-```
-  Reconnect Gmail for Email Triage
-  ──────────────────────────────────────────────────────────────────────────────
-  The account is linked and granted, but reading it just failed, so the very first
-  thing Email Triage does would fail too. It said: no forwarded 'google' credential
-  is available to the email sidecar.
-
-  This cannot be done from here — it opens a browser sign-in. Run this in another
-  terminal, then come back and press r.
-
-    gaia connectors connect google --grant-agent installed:email --scopes openid email profile
-    https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send
-
-    look:  https://amd-gaia.ai/docs/guides/email
-
-  r re-check · esc back to the checks
-```
-
-Run the command in another terminal, come back, and press `r`. The re-check is the
-loop: fix something, `r`, read the new count. `Esc` goes back to the checks without
-re-running them.
-
-Other rows behave the same way when they can't self-heal — the `Local AI` row, for
-instance, offers no `f` (the model server keeps the terminal it starts in), so the
-footer drops to `r re-check · d details · esc back` and the row prints the command
-to run.
-
-### Filing a bug about a check
-
-Press `d` on the failing row. That shows the raw answer the probe got — the HTTP
-status, the body, the timing — which is what a maintainer needs and what prose
-summaries lose.
-
-## The chat screen
-
-Once the checks clear, GAIA starts the agent and drops you into the conversation. The
-chrome is the same for every agent — the agent's name appears in the title bar, the
-`Connected to:` line, and the status line:
+Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
  GAIA  │ <agent>
@@ -217,14 +154,14 @@ Type a message and press Enter to start chatting.
 Type /help for available commands.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
-  ● <agent> connected                                       Esc back · Ctrl+C quit
+  ● <agent> connected                                                Ctrl+C quit
 ```
 
 | Key | What it does |
 |---|---|
 | `Enter` | Send message (queues it if the agent is still working) |
 | `Alt+Enter`, `Ctrl+J` | New line in the composer |
-| `Esc` | Cancel streaming, or return to the hub; press again to give up waiting |
+| `Esc` | Idle: clear the composer. Streaming: cancel the turn (press again to force it if the agent doesn't notice right away) |
 | `Ctrl+C` | Quit |
 | `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation one line / one page |
 | `Home` / `End` | Jump to the top / bottom, if the composer is empty |
@@ -245,7 +182,6 @@ things borrow it back, each only for as long as they are on screen:
 | Command | What it does |
 |---|---|
 | `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
-| `/hub` | Return to the Agent Hub |
 | `/clear` | Clear the conversation |
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
@@ -283,24 +219,46 @@ one directly, `Enter` to answer, and the mouse works identically to the palette 
 `Esc` cancels the turn rather than the question, since abandoning it is the only way
 out once it is up.
 
-The flagship agent (the one spawned as a local subprocess, not through the
-background daemon) runs this same setup automatically on its first launch on a
-clean machine — installing Lemonade and downloading the models it needs instead
-of failing at whichever piece is missing. `/setup` reruns it on demand, e.g.
-after deleting a model or reinstalling Lemonade.
+A session launched with `--use-claude` skips first-boot setup entirely and does not
+start the local server — that flag exists to avoid the local backend, so running an
+installer that launches it would defeat it, and would hold the first answer behind a
+multi-minute install. The transcript says the server was not started and names what
+still needs it: RAG, memory and the code index embed through Lemonade, which has no
+Claude equivalent. Run `gaia init --profile chat --skip-chat-model`, or `/setup` in
+the composer, when you want those.
 
-A session launched with `--use-claude` skips this setup entirely and does not
-start the local server — that flag exists to avoid the local backend, so
-running an installer that launches it would defeat it, and would hold the first
-answer behind a multi-minute install. The transcript says the server was not
-started and names what still needs it: RAG, memory and the code index embed
-through Lemonade, which has no Claude equivalent. Run `gaia init --profile chat
---skip-chat-model`, or `/setup` in the composer, when you want those.
+## Running another agent
+
+The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
+its own five-row readiness gate:
+
+```bash
+gaia-tui run email
+gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
+gaia-tui chat --agent email                    # same thing, via `chat`
+```
+
+Installing or removing it is the Python CLI's job:
+
+```bash
+gaia hub list
+gaia hub install email --trust
+gaia hub uninstall email
+```
+
+## Colours (light vs dark terminals)
+
+Colours adapt to your terminal automatically. Some terminals never answer that
+query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mode:
+
+```bash
+GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
+```
 
 ## Next steps
 
-- [Email Triage](/guides/email) — the first agent on the hub, end to end.
-- [CLI reference](/reference/cli#terminal-hub-gaia-tui) — the non-interactive
-  subcommands (`list`, `status`, `run --query`) and their exit codes.
+- [Email Triage](/guides/email) — the id-addressed agent, end to end.
+- [CLI reference](/reference/cli#terminal-ui-gaia-tui) — the non-interactive
+  subcommands (`run`, `chat`, `status`) and their exit codes.
 - [Driving the TUI programmatically](/guides/mcp/tui) — the control API, for tests
   and assistants. Not needed for normal use.

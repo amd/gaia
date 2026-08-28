@@ -4,129 +4,35 @@
 package chat
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
-	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
-// First-boot setup: the flagship agent (setupAgentID) is a local subprocess
-// talking directly to Lemonade, with no daemon in front of it to run the
-// preflight gate other agents get (see root/preflight.go, which explicitly
-// skips non-daemon transports). Without this, a clean machine's first launch
-// died wherever the missing piece was first touched -- Lemonade absent, or
-// the chat/embedding model not downloaded -- with whatever error that
-// particular code path happened to produce, instead of the one command that
-// fixes all of it.
+// First-boot setup for a chat opened WITHOUT the readiness gate in front of it.
 //
-// This reuses `gaia init` itself rather than re-deriving its checks in Go
-// (src/gaia/installer/init_command.py is the single source of truth for what
-// "set up" means): a fast, side-effect-free `gaia init --check` decides
-// whether anything needs to run, and a real `gaia init --profile chat --yes`
-// does the work if so, with its own stdout/stderr streamed into the
-// transcript as it happens.
+// The flagship agent is a local subprocess talking straight to Lemonade, so a
+// clean machine's first launch used to die wherever the missing piece was first
+// touched — Lemonade absent, or the chat/embedding model not downloaded — with
+// whatever error that code path happened to produce, instead of the one command
+// that fixes all of it.
 //
-// "Not set up" is read from the SAME real state `gaia init` itself checks
-// (Lemonade installed + reachable, required models present) every launch --
-// never a marker file recorded after the first successful run, which goes
-// stale the moment a model is deleted or Lemonade is uninstalled outside
-// GAIA's knowledge.
+// The launch path that DOES run the gate (root's local preflight) proves the
+// same facts before chat opens, and tells the constructor so: arming this as
+// well would spawn a fresh Python interpreter twice on every cold launch, each
+// up to gaiainit.CheckTimeout. See NewChatModelForFlagship.
+//
+// `/setup` is unconditional either way — typing it IS the user asking for the
+// real thing to run.
 
 // setupAgentID is the one catalog agent this gate applies to.
 const setupAgentID = "gaia"
 
-// setupProfile is the `gaia init` profile the flagship agent needs -- see
-// INIT_PROFILES["chat"] in src/gaia/installer/init_command.py: the chat
-// model, the RAG/memory embedder, and the [rag] pip extras.
-const setupProfile = "chat"
-
-// setupCheckTimeout bounds the read-only readiness probe. It runs a fresh
-// Python interpreter plus one Lemonade health check, so a few seconds is
-// normal; this only guards against a wedged network call hanging the gate
-// forever on an otherwise-idle launch.
-const setupCheckTimeout = 30 * time.Second
-
-// setupNotReadyExitCode is the ONLY exit code that means "not set up yet".
-// Anything else — notably 2, which an installed gaia older than `--check`
-// returns for "unrecognized arguments" — means the question was not answered,
-// and must not be mistaken for a clean machine.
-const setupNotReadyExitCode = 1
-
-// lastMeaningfulLine picks the line worth quoting back out of a failed child's
-// output. The LAST non-empty one, because a CLI that rejects its arguments
-// prints its whole usage banner first and the actual complaint at the end.
-func lastMeaningfulLine(s string) string {
-	lines := strings.Split(s, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if t := strings.TrimSpace(lines[i]); t != "" {
-			return t
-		}
-	}
-	return "(no output)"
-}
-
-// gaiaBinary resolves the `gaia` CLI on PATH. A package var, not a bare
-// exec.LookPath call, so tests can substitute a stub without spawning the
-// real CLI (mirrors daemon.Options.StartCommand's injection point).
-var gaiaBinary = func() (string, error) {
-	bin, err := exec.LookPath("gaia")
-	if err != nil {
-		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so setup cannot run. " +
-				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
-				"`pip install amd-gaia` into the Python environment on your PATH, " +
-				"then retry. From a clone of the repo, `pip install -e .` works too")
-	}
-	return bin, nil
-}
-
-// setupCheckArgs/setupRunArgs build `gaia init` argv for the flagship
-// profile. claudeMode mirrors --use-claude onto --skip-chat-model: a
-// Claude-backed session never calls the local chat LLM, only Lemonade's
-// embedder for RAG/memory (Anthropic has no embeddings API -- see
-// hub/agents/gaia/python/gaia_agent/stdio.py's header comment). Downloading
-// several GB of a chat model that session will never touch is the bug this
-// avoids.
-func setupCheckArgs(claudeMode bool) []string {
-	args := []string{"init", "--check", "--profile", setupProfile}
-	if claudeMode {
-		args = append(args, "--skip-chat-model")
-	}
-	return args
-}
-
-func setupRunArgs(claudeMode bool) []string {
-	// --yes: nothing here can answer an interactive prompt. The child's
-	// stdin is not connected to the terminal (Bubble Tea owns it), so a
-	// prompt gaia init tried to read would hang forever with no way to
-	// answer it.
-	args := []string{"init", "--profile", setupProfile, "--yes"}
-	if claudeMode {
-		args = append(args, "--skip-chat-model")
-	}
-	return args
-}
-
-// claudeSkipSuffix is the flag to append to a `gaia init` command shown to
-// the user, so a copy-pasted retry matches what was actually attempted.
-func claudeSkipSuffix(claudeMode bool) string {
-	if claudeMode {
-		return " --skip-chat-model"
-	}
-	return ""
-}
-
-// setupCheckResultMsg is delivered once the read-only readiness probe
-// (`gaia init --check`) returns.
+// setupCheckResultMsg is delivered once the read-only readiness probe returns.
 type setupCheckResultMsg struct {
 	ready bool
 	// err is non-nil only when the check itself could not run (gaia missing,
@@ -135,147 +41,50 @@ type setupCheckResultMsg struct {
 	err error
 }
 
-// setupEvent is what the setup goroutine pushes over the channel: either one
-// line of `gaia init` output, or -- once Done -- the run's final result.
-type setupEvent struct {
-	line string
-	done bool
-	// err is the process's own exit error (nil on success). Meaningless
-	// unless done.
-	err error
-}
-
-// setupStreamMsg carries one setupEvent, tagged with the channel it came
-// from so a message from an abandoned run (cancelled, then /setup again)
-// cannot be mistaken for the current one -- same pattern as eventMsg/m.events.
+// setupStreamMsg carries one event, tagged with the channel it came from so a
+// message from an abandoned run (cancelled, then /setup again) cannot be
+// mistaken for the current one -- same pattern as eventMsg/m.events.
 type setupStreamMsg struct {
-	ch  <-chan setupEvent
-	evt setupEvent
+	ch  <-chan gaiainit.Event
+	evt gaiainit.Event
 }
 
-// checkSetupCmd runs `gaia init --check` and reports whether the flagship
-// profile is ready, without installing, starting, or downloading anything.
+// checkSetupCmd asks whether the flagship profile is ready, without installing,
+// starting, or downloading anything.
 func checkSetupCmd(claudeMode bool) tea.Cmd {
 	return func() tea.Msg {
-		bin, err := gaiaBinary()
+		ready, err := gaiainit.Check(context.Background(), claudeMode)
 		if err != nil {
 			return setupCheckResultMsg{err: err}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), setupCheckTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, bin, setupCheckArgs(claudeMode)...)
-		// Captured so a failure can quote what the tool actually said. Without
-		// it the only evidence is an exit code.
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		runErr := cmd.Run()
-		if runErr == nil {
-			return setupCheckResultMsg{ready: true}
-		}
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == setupNotReadyExitCode {
-			// Exit 1 is `gaia init --check`'s documented "not ready" answer
-			// -- the expected negative, not a failure to ask the question.
-			return setupCheckResultMsg{ready: false}
-		}
-		// Anything else means the question was never answered. Treating that as
-		// "not ready" ran a full multi-minute `gaia init` on EVERY launch: an
-		// installed gaia older than `--check` exits 2 with "unrecognized
-		// arguments", which looked exactly like a clean machine.
-		return setupCheckResultMsg{err: fmt.Errorf(
-			"could not check whether setup is needed (%w). GAIA said: %s",
-			runErr, lastMeaningfulLine(out.String()))}
+		return setupCheckResultMsg{ready: ready}
 	}
-}
-
-// startSetup launches `gaia init` for the flagship profile and begins
-// streaming its stdout/stderr, one setupEvent per line, terminated by a
-// setupEvent{done: true}. The returned CancelFunc kills the child; safe to
-// call from any goroutine.
-func startSetup(claudeMode bool) (<-chan setupEvent, context.CancelFunc, error) {
-	bin, err := gaiaBinary()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, bin, setupRunArgs(claudeMode)...)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, nil, fmt.Errorf("could not prepare `gaia init`: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, nil, fmt.Errorf("could not prepare `gaia init`: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return nil, nil, fmt.Errorf("could not start `gaia init`: %w", err)
-	}
-
-	ch := make(chan setupEvent, 64)
-
-	// os/exec forbids calling Wait before every Read from a pipe it created
-	// has completed (see subprocess.go's procHandle for the same rule) --
-	// stdout and stderr are two separate pipes here, so both readers have to
-	// finish before Wait is safe.
-	var wg sync.WaitGroup
-	wg.Add(2)
-	stream := func(r io.Reader) {
-		defer wg.Done()
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				ch <- setupEvent{line: line}
-			}
-		}
-	}
-	go stream(stdout)
-	go stream(stderr)
-
-	go func() {
-		wg.Wait()
-		waitErr := cmd.Wait()
-		ch <- setupEvent{done: true, err: waitErr}
-		close(ch)
-	}()
-
-	return ch, cancel, nil
 }
 
 // waitForSetupEvent reads the next event off a setup run's channel.
-func waitForSetupEvent(ch <-chan setupEvent) tea.Cmd {
+func waitForSetupEvent(ch <-chan gaiainit.Event) tea.Cmd {
 	return func() tea.Msg {
 		evt, ok := <-ch
 		if !ok {
-			return setupStreamMsg{ch: ch, evt: setupEvent{done: true}}
+			return setupStreamMsg{ch: ch, evt: gaiainit.Event{Done: true}}
 		}
 		return setupStreamMsg{ch: ch, evt: evt}
 	}
 }
 
-// applyFirstBootGate arms the first-boot check for the flagship agent. It
-// does not run anything -- Init() fires the actual probe once Bubble Tea's
-// event loop is running; this only makes the composer hold Enter (and Init
-// hold the initial --query, if any) until that probe answers.
+// applyFirstBootGate arms the first-boot check for the flagship agent. It does
+// not run anything -- Init() fires the actual probe once Bubble Tea's event
+// loop is running; this only makes the composer hold Enter (and Init hold the
+// initial --query, if any) until that probe answers.
 //
 // A Claude session is never gated: `gaia init` starts LemonadeServer.exe
 // unconditionally (_auto_start_server in src/gaia/installer/init_command.py),
-// which is the one thing --use-claude exists to avoid. --skip-chat-model
-// skips the model DOWNLOAD only; nothing skipped the server.
+// which is the one thing --use-claude exists to avoid. --skip-chat-model skips
+// the model DOWNLOAD only; nothing skipped the server.
 //
-// Skipped, not hidden -- setupSkippedForClaudeNotice says so and what it
-// costs. `/setup` still runs the real thing, because typing it IS the user
-// choosing to start the local backend.
+// Skipped, not hidden -- setupSkippedForClaudeNotice says so and what it costs.
 func (m ChatModel) applyFirstBootGate() ChatModel {
-	if m.agentID != setupAgentID {
+	if m.agentID != setupAgentID || m.setupVerified {
 		return m
 	}
 	if m.claudeMode {
@@ -298,14 +107,14 @@ func (m ChatModel) applyFirstBootGate() ChatModel {
 // matters to what the user observes. Embeddings have no Anthropic equivalent,
 // so those features do need Lemonade either way (see
 // hub/agents/gaia/python/gaia_agent/stdio.py).
-const setupSkippedForClaudeNotice = "Local setup skipped — `gaia init` was not run " +
+var setupSkippedForClaudeNotice = "Local setup skipped — `gaia init` was not run " +
 	"and the Lemonade server was not started for this session. If document search, " +
-	"memory or the code index turn out not to work, that is why: run `gaia init " +
-	"--profile " + setupProfile + " --skip-chat-model` in a terminal, or type /setup here."
+	"memory or the code index turn out not to work, that is why: run `" +
+	gaiainit.RunCommand(true) + "` in a terminal, or type /setup here."
 
 // supersededSetup reports whether an event belongs to a setup run that is no
 // longer the current one.
-func (m ChatModel) supersededSetup(ch <-chan setupEvent) bool {
+func (m ChatModel) supersededSetup(ch <-chan gaiainit.Event) bool {
 	return ch != m.setupCh
 }
 
@@ -334,8 +143,8 @@ func (m ChatModel) handleSetupCheckResult(msg setupCheckResultMsg) (tea.Model, t
 			Role: RoleError,
 			Content: fmt.Sprintf(
 				"Could not check whether %s is set up: %v\nType /setup to try running it directly, "+
-					"or run `gaia init --profile %s%s` in a terminal.",
-				m.agentName, msg.err, setupProfile, claudeSkipSuffix(m.claudeMode)),
+					"or run `%s` in a terminal.",
+				m.agentName, msg.err, gaiainit.RunCommand(m.claudeMode)),
 		})
 		m.updateViewport()
 		return m, m.releaseAfterSetupGate()
@@ -353,19 +162,19 @@ func (m ChatModel) handleSetupCheckResult(msg setupCheckResultMsg) (tea.Model, t
 // first-boot trigger and /setup share every other line of code, so a user
 // who reconfigures later gets exactly what a fresh machine gets.
 func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
-	ch, cancel, err := startSetup(m.claudeMode)
+	ch, cancel, err := gaiainit.Start(m.claudeMode)
 	if err != nil {
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
 			Content: fmt.Sprintf(
-				"Could not start setup: %v\nRun `gaia init --profile %s%s` in a terminal instead.",
-				err, setupProfile, claudeSkipSuffix(m.claudeMode)),
+				"Could not start setup: %v\nRun `%s` in a terminal instead.",
+				err, gaiainit.RunCommand(m.claudeMode)),
 		})
 		m.updateViewport()
 		return m, m.releaseAfterSetupGate()
 	}
 
-	intro := "Setting up " + m.agentName + " -- running `gaia init --profile " + setupProfile + "`"
+	intro := "Setting up " + m.agentName + " -- running `gaia init --profile " + gaiainit.Profile + "`"
 	if m.claudeMode {
 		intro += " (skipping the local chat model: this session runs on Claude)"
 	}
@@ -386,9 +195,9 @@ func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
 
 // handleSetupEvent applies one line of `gaia init` output, or -- once Done
 // -- the run's terminal result.
-func (m ChatModel) handleSetupEvent(evt setupEvent) (tea.Model, tea.Cmd) {
-	if !evt.done {
-		m.upsertSetupProgress(evt.line)
+func (m ChatModel) handleSetupEvent(evt gaiainit.Event) (tea.Model, tea.Cmd) {
+	if !evt.Done {
+		m.upsertSetupProgress(evt.Line)
 		m.updateViewport()
 		return m, waitForSetupEvent(m.setupCh)
 	}
@@ -408,13 +217,12 @@ func (m ChatModel) handleSetupEvent(evt setupEvent) (tea.Model, tea.Cmd) {
 			Role:    RoleStatus,
 			Content: "Setup cancelled. Type /setup to try again.",
 		})
-	case evt.err != nil:
+	case evt.Err != nil:
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
 			Content: fmt.Sprintf(
-				"Setup failed: %v\nRun `gaia init --profile %s%s` in a terminal to see the full log, "+
-					"then /setup to retry.",
-				evt.err, setupProfile, claudeSkipSuffix(m.claudeMode)),
+				"Setup failed: %v\nRun `%s` in a terminal to see the full log, then /setup to retry.",
+				evt.Err, gaiainit.RunCommand(m.claudeMode)),
 		})
 	default:
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[✓] Setup complete."})

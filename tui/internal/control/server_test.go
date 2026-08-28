@@ -27,13 +27,8 @@ type testModel struct {
 
 func newTestModel() testModel {
 	return testModel{
-		lines: []string{"GAIA Agent Hub"},
-		snap: Snapshot{
-			View:            "hub",
-			HubTab:          "Installed",
-			SelectedAgentID: "bash",
-			VisibleAgentIDs: []string{"bash", "email"},
-		},
+		lines: []string{"G A I A"},
+		snap:  Snapshot{View: ViewPreflight, Agent: "gaia", Blocker: "binary"},
 	}
 }
 
@@ -50,8 +45,7 @@ func (m testModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.snap = newTestModel().snap
 		case "tab":
-			m.snap.HubTabIndex++
-			m.snap.HubTab = fmt.Sprintf("Tab%d", m.snap.HubTabIndex)
+			m.snap.Overlay = "help"
 		}
 	case tea.WindowSizeMsg:
 		lines = append(lines, fmt.Sprintf("size:%dx%d", msg.Width, msg.Height))
@@ -241,8 +235,8 @@ func TestStatusReportsServiceAndState(t *testing.T) {
 	if !ok {
 		t.Fatalf("status has no state object: %v", body)
 	}
-	if state["view"] != "hub" || state["selected_agent_id"] != "bash" {
-		t.Errorf("state = %v, want the hub view with bash selected", state)
+	if state["view"] != ViewPreflight || state["blocker"] != "binary" {
+		t.Errorf("state = %v, want the preflight view blocked on the binary row", state)
 	}
 }
 
@@ -489,7 +483,7 @@ func TestResizeIsUnboundedWithoutARealTerminal(t *testing.T) {
 func TestWaitResolvesImmediately(t *testing.T) {
 	srv, _ := newTestServer(t)
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"contains": "GAIA Agent Hub", "timeout_ms": 2000}, srv.Token())
+		map[string]any{"contains": "G A I A", "timeout_ms": 2000}, srv.Token())
 	if status != http.StatusOK {
 		t.Fatalf("wait: status = %d (%v)", status, body)
 	}
@@ -540,7 +534,7 @@ func TestWaitTimeoutReportsTheActualScreen(t *testing.T) {
 		t.Errorf("message %q should quote what was being waited for", msg)
 	}
 	screen := errorField(t, body, "screen")
-	if !strings.Contains(screen, "GAIA Agent Hub") {
+	if !strings.Contains(screen, "G A I A") {
 		t.Errorf("timeout screen = %q — a timeout must report what the screen actually contained", screen)
 	}
 	envelope, _ := body["error"].(map[string]any)
@@ -567,11 +561,11 @@ func TestWaitValidatesMatchers(t *testing.T) {
 	}
 
 	status, body = request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"vieww": "hub"}}, srv.Token())
+		map[string]any{"state": map[string]any{"vieww": "chat"}}, srv.Token())
 	if status != http.StatusBadRequest || errorField(t, body, "code") != "bad_state_matcher" {
 		t.Errorf("typo'd state key: status %d code %q, want 400/bad_state_matcher", status, errorField(t, body, "code"))
 	}
-	if hint := errorField(t, body, "hint"); !strings.Contains(hint, "selected_agent_id") {
+	if hint := errorField(t, body, "hint"); !strings.Contains(hint, "blocker") {
 		t.Errorf("hint %q should list the supported state keys", hint)
 	}
 
@@ -811,28 +805,38 @@ func TestWaitRejectsNonPositiveTimeout(t *testing.T) {
 
 	// Omitting it entirely still means "use the default", not an error.
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"contains": "GAIA Agent Hub"}, srv.Token())
+		map[string]any{"contains": "G A I A"}, srv.Token())
 	if status != http.StatusOK {
 		t.Errorf("omitted timeout_ms: status = %d, want 200 (%v)", status, body)
 	}
 }
 
-func TestVisibleAgentIDsAreNeverNull(t *testing.T) {
+// The hub-era fields are GONE from the wire, not merely unset. A client that
+// still reads them has to fail its assertion rather than silently match a zero
+// value that means nothing.
+func TestTheHubFieldsAreNoLongerServed(t *testing.T) {
 	srv, state := newTestServer(t)
-	// A model that reports no ids at all — the chat view does exactly this.
-	state.setSnapshot(Snapshot{View: "chat", Agent: "email"})
+	state.setSnapshot(Snapshot{View: ViewChat, Agent: "gaia"})
 
 	_, status := request(t, srv, http.MethodGet, "/status", nil, srv.Token())
 	st, _ := status["state"].(map[string]any)
-	if st["visible_agent_ids"] == nil {
-		t.Error("/status served visible_agent_ids: null; a client taking its length would crash")
+	for _, gone := range []string{
+		"hub_tab", "hub_tab_index", "selected_agent_id",
+		"visible_agent_ids", "filtering", "can_return_to_hub",
+	} {
+		if _, present := st[gone]; present {
+			t.Errorf("/status still serves %q", gone)
+		}
 	}
 
-	_, waited := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"view": "chat"}, "timeout_ms": 2000}, srv.Token())
-	wst, _ := waited["state"].(map[string]any)
-	if wst["visible_agent_ids"] == nil {
-		t.Error("/wait served visible_agent_ids: null")
+	// And the matchers that read them are refused outright, so a stale client
+	// gets a 400 instead of a wait that can never succeed.
+	for _, gone := range []string{"hub_tab", "selected_agent_id", "visible_contains", "can_return_to_hub"} {
+		code, _ := request(t, srv, http.MethodPost, "/wait",
+			map[string]any{"state": map[string]any{gone: "x"}, "timeout_ms": 100}, srv.Token())
+		if code != http.StatusBadRequest {
+			t.Errorf("/wait on the removed %q matcher = %d, want 400", gone, code)
+		}
 	}
 }
 
@@ -975,24 +979,26 @@ func TestScreenLineCount(t *testing.T) {
 	}
 }
 
-func TestWaitAcceptsTheHubReturnabilityMatcher(t *testing.T) {
+// Waiting on WHICH row refuses the launch is the point of the blocker matcher:
+// the remedy's wording is allowed to change, the row key is not.
+func TestWaitAcceptsTheBlockerMatcher(t *testing.T) {
 	srv, state := newTestServer(t)
-	state.setSnapshot(Snapshot{View: "chat", Agent: "email", CanReturnToHub: true})
+	state.setSnapshot(Snapshot{View: ViewPreflight, Agent: "gaia", Blocker: "binary"})
 
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"can_return_to_hub": true}, "timeout_ms": 2000}, srv.Token())
+		map[string]any{"state": map[string]any{"blocker": "binary"}, "timeout_ms": 2000}, srv.Token())
 	if status != http.StatusOK || body["matched"] != true {
 		t.Fatalf("status %d matched %v, want 200/true (%v)", status, body["matched"], body)
 	}
 	st, _ := body["state"].(map[string]any)
-	if st["can_return_to_hub"] != true {
-		t.Errorf("state.can_return_to_hub = %v, want true", st["can_return_to_hub"])
+	if st["blocker"] != "binary" {
+		t.Errorf("state.blocker = %v, want %q", st["blocker"], "binary")
 	}
 
-	// A standalone chat must be distinguishable: esc quits there.
-	state.setSnapshot(Snapshot{View: "chat", Agent: "email", CanReturnToHub: false})
+	// A gate holding on a DIFFERENT row must not match.
+	state.setSnapshot(Snapshot{View: ViewPreflight, Agent: "gaia", Blocker: "lemonade"})
 	status, body = request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"can_return_to_hub": true}, "timeout_ms": 200}, srv.Token())
+		map[string]any{"state": map[string]any{"blocker": "binary"}, "timeout_ms": 200}, srv.Token())
 	if status != http.StatusRequestTimeout {
 		t.Errorf("status = %d, want 408 (%v)", status, body)
 	}

@@ -49,7 +49,7 @@ func TestFixStartsTheDaemonThenRechecks(t *testing.T) {
 	// The fix succeeded (the fake clears its attach error), so the screen must
 	// re-check rather than claim success on its own.
 	// Run the real fix command, so the fake actually performs the start.
-	updated, cmd = m.Update(m.startDaemonCmd()())
+	updated, cmd = m.Update(m.quickFixCmd(KeyDaemon, FixStartDaemon, startTimeout)())
 	m = updated.(Model)
 	if !m.Busy() {
 		t.Error("a successful fix did not trigger a re-check")

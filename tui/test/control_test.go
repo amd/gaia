@@ -13,9 +13,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"fmt"
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/control"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
+	"net/http/httptest"
 )
 
 // mockBinaryPath builds the mock agent and returns its path. It must be a real
@@ -28,7 +31,7 @@ func mockBinaryPath(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
-	return filepath.Join(binDir, "gaia-bash"+suffix)
+	return filepath.Join(binDir, "gaia-agent"+suffix)
 }
 
 // liveTUI boots the real root model inside a real tea.Program, headlessly, with
@@ -40,24 +43,46 @@ type liveTUI struct {
 	token string
 }
 
+// startLiveTUI boots the real launch router headlessly with every host
+// dependency stubbed, so what these tests drive is decided here rather than by
+// whatever Lemonade, models and daemon the machine running them happens to have.
+//
+// The three stubs match the local runner's three rows exactly: a mock agent
+// binary, a Lemonade that answers /models, and a `gaia init --check` that exits
+// 0. Leave any of them out and the gate correctly refuses to reach chat.
 func startLiveTUI(t *testing.T) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
+	isolateGaiaHome(t)
+	stubSetupCheck(t, 0)
+	t.Setenv("LEMONADE_BASE_URL", stubLemonade(t))
 
-	// A fixed catalog and NO hub client, so what these tests drive is decided
-	// here and not by whatever daemon and installed agents the machine running
-	// them happens to have. --mock is the flag a person would use for the same
-	// reason: it makes the one subprocess agent launchable.
+	// SetMockBinary, not a hand-edited entry: it owns the invariant that a
+	// mock replaces the whole how-to-talk-to-this-binary set, CanonicalEvents
+	// included.
 	cat := catalog.NewCatalog()
 	cat.SetMockBinary(mockBinaryPath(t))
+	agent := cat.Get(catalog.FlagshipID)
+	if agent == nil {
+		t.Fatalf("the catalog has no %q entry", catalog.FlagshipID)
+	}
+
 	state := control.NewState(nil)
-	prog := tea.NewProgram(
-		control.NewRecorder(root.NewRootModelWithHub(cat, nil, false), state),
+	model := root.NewFlagshipModel(*agent, false).
+		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
+		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
+	return runLiveTUI(t, tea.NewProgram(
+		control.NewRecorder(model, state),
 		tea.WithInput(strings.NewReader("")),
 		tea.WithOutput(io.Discard),
 		tea.WithoutRenderer(),
-	)
+	), state, model)
+}
 
+// runLiveTUI starts the program and the control server around it, and tears
+// both down when the test ends.
+func runLiveTUI(t *testing.T, prog *tea.Program, state *control.State, closer io.Closer) *liveTUI {
+	t.Helper()
 	srv, err := control.Start(prog, state, control.Options{Version: "test"})
 	if err != nil {
 		t.Fatalf("control.Start: %v", err)
@@ -75,6 +100,10 @@ func startLiveTUI(t *testing.T) *liveTUI {
 
 	t.Cleanup(func() {
 		prog.Quit()
+		// ui.run closes the model once the loop stops, and so must this: the
+		// agent is a child process that Windows will not let the temp dir be
+		// removed while it lives.
+		defer closer.Close()
 		select {
 		case err := <-done:
 			if err != nil {
@@ -139,6 +168,24 @@ func (l *liveTUI) state() map[string]any {
 	return st
 }
 
+// frameContaining returns the first recorded frame holding text, or "" when
+// none did. A screen that is on for one render can only be proven from here.
+func (l *liveTUI) frameContaining(text string) string {
+	l.t.Helper()
+	status, body := l.call(http.MethodGet, "/frames?since=0&limit=200", nil)
+	if status != http.StatusOK {
+		l.t.Fatalf("GET /frames: status %d (%v)", status, body)
+	}
+	frames, _ := body["frames"].([]any)
+	for _, f := range frames {
+		frame, _ := f.(map[string]any)
+		if screen, _ := frame["screen"].(string); strings.Contains(screen, text) {
+			return screen
+		}
+	}
+	return ""
+}
+
 func (l *liveTUI) waitFor(matcher map[string]any) map[string]any {
 	l.t.Helper()
 	if _, ok := matcher["timeout_ms"]; !ok {
@@ -161,95 +208,101 @@ func (l *liveTUI) keys(names ...string) {
 	}
 }
 
-// TestControlDrivesLiveProgram is the end-to-end proof: a real tea.Program, a
-// real root model, driven only over HTTP, with the rendered screen read back.
-func TestControlDrivesLiveProgram(t *testing.T) {
+// TestFlagshipBootReachesChat is the end-to-end proof: a real tea.Program, the
+// real launch router, driven only over HTTP, with the rendered screen read
+// back. It walks the whole boot — splash, readiness, chat — and then holds a
+// turn with the mock agent.
+func TestFlagshipBootReachesChat(t *testing.T) {
 	tui := startLiveTUI(t)
 
-	// The hub renders "Loading..." until it knows the terminal size, so the
-	// first thing any driver does is set one.
+	// Resize FIRST: cols and rows are 0 until the program is told, and every
+	// layout below wraps wrongly against that.
 	status, body := tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
 	if status != http.StatusOK {
 		t.Fatalf("POST /resize: status %d (%v)", status, body)
 	}
-	tui.waitFor(map[string]any{"contains": "Installed"})
 
-	screen := tui.screen()
-	if strings.Contains(screen, "Loading...") {
-		t.Fatalf("hub is still loading after a resize; screen:\n%s", screen)
-	}
-	if !strings.Contains(screen, "Bash") {
-		t.Fatalf("hub screen does not list the seeded Bash agent; screen:\n%s", screen)
-	}
-	if strings.Contains(screen, "\x1b[") {
-		t.Error("format=plain returned ANSI escape sequences")
-	}
+	// 1. Splash, 2. the readiness gate, 3. chat — with nothing to press in
+	// between. The walk is read back from the FRAME HISTORY rather than waited
+	// on view by view: the splash holds for a single render, so a /wait issued
+	// after the fact races it and times out having missed nothing.
+	tui.waitFor(map[string]any{
+		"state": map[string]any{"view": control.ViewChat}, "timeout_ms": 20000})
 
-	st := tui.state()
-	if st["view"] != "hub" {
-		t.Errorf("view = %v, want hub", st["view"])
+	splash := tui.frameContaining("G A I A")
+	if splash == "" {
+		t.Error("no recorded frame carried the wordmark; the launch never showed a splash")
+	} else if !strings.Contains(splash, "+#############*=") {
+		t.Errorf("the splash frame does not carry the mascot:\n%s", splash)
 	}
-	if st["hub_tab"] != string(catalog.SectionInstalled) {
-		t.Errorf("hub_tab = %v, want %q", st["hub_tab"], catalog.SectionInstalled)
-	}
-	visible, _ := st["visible_agent_ids"].([]any)
-	if len(visible) == 0 {
-		t.Error("visible_agent_ids is empty; navigation by id would be impossible")
-	}
-}
-
-// TestControlTabKeyIsTheTabKey is the regression the older smoke tests miss:
-// sending tea.KeyRunes{"tab"} types three letters, so the category never
-// changes. Driving through the control API must actually switch tabs.
-func TestControlTabKeyIsTheTabKey(t *testing.T) {
-	tui := startLiveTUI(t)
-	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
-
-	before := tui.state()
-	tui.keys("tab")
-	tui.waitFor(map[string]any{"state": map[string]any{"hub_tab": string(catalog.SectionAvailable)}})
-
-	after := tui.state()
-	if before["hub_tab"] == after["hub_tab"] {
-		t.Fatalf("hub_tab stayed %v after pressing tab", after["hub_tab"])
-	}
-	if !strings.Contains(tui.screen(), string(catalog.SectionAvailable)) {
-		t.Errorf("screen does not show the Available tab:\n%s", tui.screen())
+	if tui.frameContaining("Getting GAIA ready") == "" {
+		t.Error("no recorded frame showed the readiness gate; the launch skipped it")
 	}
 
-	tui.keys("shift+tab")
-	tui.waitFor(map[string]any{"state": map[string]any{"hub_tab": string(catalog.SectionInstalled)}})
-}
+	chatScreen := tui.screen()
+	if !strings.Contains(chatScreen, "Welcome to GAIA") {
+		t.Errorf("the chat view never rendered its welcome:\n%s", chatScreen)
+	}
+	if !strings.Contains(chatScreen, "Ask anything") {
+		t.Errorf("the composer is not on screen:\n%s", chatScreen)
+	}
+	// Nothing about the hub may have survived on any frame.
+	for _, gone := range []string{"Installed (", "Available (", "Coming Soon", "i install"} {
+		if strings.Contains(chatScreen, gone) {
+			t.Errorf("the chat screen still says %q:\n%s", gone, chatScreen)
+		}
+	}
 
-// TestControlFilterAndSelect exercises the search flow: "/" opens the filter,
-// typed runes narrow it, and the reported selection follows.
-func TestControlFilterAndSelect(t *testing.T) {
-	tui := startLiveTUI(t)
-	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
-
-	tui.keys("/")
-	tui.waitFor(map[string]any{"state": map[string]any{"filtering": true}})
-
-	status, body := tui.call(http.MethodPost, "/text", map[string]any{"text": "bash"})
+	// 4. A real turn against the mock agent. The wait is on the ANSWER landing,
+	// not on a sleep — it returns the instant the stream settles.
+	status, body = tui.call(http.MethodPost, "/text", map[string]any{"text": "list my files"})
 	if status != http.StatusOK {
 		t.Fatalf("POST /text: status %d (%v)", status, body)
 	}
-	tui.waitFor(map[string]any{"contains": "bash"})
+	tui.keys("enter")
+	tui.waitFor(map[string]any{"contains": "Summary:", "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"state": map[string]any{"streaming": false}, "timeout_ms": 20000})
 
-	tui.keys("esc")
-	tui.waitFor(map[string]any{"state": map[string]any{"filtering": false}})
+	answered := tui.screen()
+	if !strings.Contains(answered, "list my files") {
+		t.Errorf("the query never reached the transcript:\n%s", answered)
+	}
 }
 
-// TestControlHelpOverlay proves a named single-rune key ("?") reaches the model
-// and that the overlay is reported as state, not guessed from the screen.
+// The other half of the gate: with the agent binary gone it must settle on
+// preflight and STAY there. A launch that reaches chat anyway is the exact
+// failure the gate exists to prevent.
+func TestFlagshipWithNoAgentBinaryNeverReachesChat(t *testing.T) {
+	tui := startLiveTUIMissingAgent(t)
+	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
+
+	// Asserted on model state, not on rendered text.
+	tui.waitFor(map[string]any{"state": map[string]any{
+		"view": control.ViewPreflight, "blocker": preflight.KeyBinary}})
+
+	screen := tui.screen()
+	if !strings.Contains(screen, catalog.InstallerURL) {
+		t.Errorf("the halt screen does not name the installer:\n%s", screen)
+	}
+
+	// And it must not become chat while nobody is looking. A /wait that TIMES
+	// OUT is the assertion here.
+	status, _ := tui.call(http.MethodPost, "/wait",
+		map[string]any{"state": map[string]any{"view": control.ViewChat}, "timeout_ms": 2000})
+	if status != http.StatusRequestTimeout {
+		t.Fatalf("the launch reached chat with no agent binary (wait status %d)\n%s", status, tui.screen())
+	}
+}
+
+// TestControlHelpOverlay proves a named single-rune key reaches the model and
+// that the overlay is reported as state, not guessed from the screen.
 func TestControlHelpOverlay(t *testing.T) {
 	tui := startLiveTUI(t)
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}})
 
-	tui.keys("?")
+	tui.call(http.MethodPost, "/text", map[string]any{"text": "/help"})
+	tui.keys("enter")
 	tui.waitFor(map[string]any{"state": map[string]any{"overlay": "help"}})
 
 	tui.keys("esc")
@@ -262,11 +315,11 @@ func TestControlResizeChangesLayout(t *testing.T) {
 	tui := startLiveTUI(t)
 
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 80, "rows": 24})
-	tui.waitFor(map[string]any{"contains": "Installed"})
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}})
 	narrow := tui.screen()
 
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 200, "rows": 50})
-	tui.waitFor(map[string]any{"contains": "Installed"})
+	tui.waitFor(map[string]any{"contains": "Welcome to GAIA"})
 	wide := tui.screen()
 
 	if narrow == wide {
@@ -282,9 +335,7 @@ func TestControlResizeChangesLayout(t *testing.T) {
 func TestControlFramesRecordHistory(t *testing.T) {
 	tui := startLiveTUI(t)
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
-	tui.keys("tab")
-	tui.waitFor(map[string]any{"state": map[string]any{"hub_tab": string(catalog.SectionAvailable)}})
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}})
 
 	status, body := tui.call(http.MethodGet, "/frames?since=0&limit=50", nil)
 	if status != http.StatusOK {
@@ -294,9 +345,18 @@ func TestControlFramesRecordHistory(t *testing.T) {
 	if len(frames) < 2 {
 		t.Fatalf("only %d frames recorded; the history is not usable for debugging", len(frames))
 	}
-	last, _ := frames[len(frames)-1].(map[string]any)
-	if screen, _ := last["screen"].(string); !strings.Contains(screen, string(catalog.SectionAvailable)) {
-		t.Errorf("the newest frame does not show the Available tab:\n%s", screen)
+	// The splash really was rendered, not skipped past — the frame history is
+	// where that is provable after the fact.
+	var sawSplash bool
+	for _, f := range frames {
+		frame, _ := f.(map[string]any)
+		if screen, _ := frame["screen"].(string); strings.Contains(screen, "G A I A") {
+			sawSplash = true
+			break
+		}
+	}
+	if !sawSplash {
+		t.Error("no recorded frame shows the splash; the launch skipped straight past it")
 	}
 }
 
@@ -304,7 +364,7 @@ func TestControlFramesRecordHistory(t *testing.T) {
 func TestControlWaitTimeoutShowsTheScreen(t *testing.T) {
 	tui := startLiveTUI(t)
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"contains": "Installed"})
+	tui.waitFor(map[string]any{"contains": "Welcome to GAIA"})
 
 	status, body := tui.call(http.MethodPost, "/wait",
 		map[string]any{"contains": "this text is not on any screen", "timeout_ms": 300})
@@ -313,7 +373,7 @@ func TestControlWaitTimeoutShowsTheScreen(t *testing.T) {
 	}
 	envelope, _ := body["error"].(map[string]any)
 	screen, _ := envelope["screen"].(string)
-	if !strings.Contains(screen, "Installed") {
+	if !strings.Contains(screen, "Welcome to GAIA") {
 		t.Errorf("the timeout did not report the real screen; got:\n%s", screen)
 	}
 }
@@ -328,25 +388,40 @@ func widest(screen string) int {
 	return max
 }
 
-// TestControlReportsHubReturnability covers a destructive mistake a driver
-// would otherwise make: in the hub-launched chat esc goes back, but in a
-// standalone chat esc QUITS the program. The snapshot has to say which.
-func TestControlReportsHubReturnability(t *testing.T) {
-	tui := startLiveTUI(t)
-	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
+// startLiveTUIMissingAgent is startLiveTUI with the one stub the gate is meant
+// to catch left out.
+func startLiveTUIMissingAgent(t *testing.T) *liveTUI {
+	t.Helper()
+	t.Setenv(control.EnvHome, t.TempDir())
+	isolateGaiaHome(t)
 
-	if got := tui.state()["can_return_to_hub"]; got != false {
-		t.Errorf("can_return_to_hub = %v in the hub view, want false", got)
-	}
+	agent := catalog.NewCatalog().Get(catalog.FlagshipID)
+	agent.BinaryPath = "gaia-agent-that-was-never-installed"
 
-	tui.keys("enter") // launch the selected (installed) agent
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "chat"}})
+	state := control.NewState(nil)
+	model := root.NewFlagshipModel(*agent, false).
+		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
+		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
+	return runLiveTUI(t, tea.NewProgram(
+		control.NewRecorder(model, state),
+		tea.WithInput(strings.NewReader("")),
+		tea.WithOutput(io.Discard),
+		tea.WithoutRenderer(),
+	), state, model)
+}
 
-	if got := tui.state()["can_return_to_hub"]; got != true {
-		t.Errorf("can_return_to_hub = %v in a hub-launched chat, want true — esc returns to the hub here", got)
-	}
-
-	tui.keys("esc")
-	tui.waitFor(map[string]any{"state": map[string]any{"view": "hub"}})
+// stubLemonade stands in for the local model server: it answers /models and
+// nothing else, which is exactly what the Local AI row probes.
+func stubLemonade(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"data":[]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/api/v1"
 }

@@ -145,22 +145,3 @@ func TestAPresentRouteStillWorks(t *testing.T) {
 		t.Error("the catalog came back empty")
 	}
 }
-
-// The hub screen must carry the same diagnosis. It used to headline "Can't
-// reach the GAIA background service" for every catalog failure — wrong for a
-// service that answered perfectly well and is merely too old.
-func TestTheHubScreenShowsTheSkewDiagnosis(t *testing.T) {
-	fake := newFakeDaemon(t)
-	fake.omitRoute(daemon.APIPrefix + "/catalog")
-
-	d := newDriver(t, fake.client(), 120, 40)
-	d.pump(d.m.Init())
-
-	view := plainView(d.m)
-	if strings.Contains(view, "Can't reach") {
-		t.Errorf("the hub says it cannot reach a service that answered:\n%s", view)
-	}
-	if !strings.Contains(view, "older than this GAIA") {
-		t.Errorf("the hub screen does not carry the diagnosis:\n%s", view)
-	}
-}

@@ -1,93 +1,149 @@
 package test
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
-	"github.com/amd/gaia/tui/internal/ui/hub"
+	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
 
-// The failure this whole change exists to stop: the hub opened a chat for an
-// agent whose binary was never built, painted "Connected to: Bash", and only
+// The failure this gate exists to stop: the TUI opened a chat for an agent
+// whose binary was never on the machine, painted "Connected to: GAIA", and only
 // failed when the user sent their first message with
-// `exec: "gaia-bash": executable file not found in $PATH`.
+// `exec: "gaia-agent": executable file not found in $PATH`.
 //
-// A launch must verify the agent can start BEFORE any screen claims it did.
-func TestLaunchingAnAgentWithNoBinaryStaysInTheHubAndSaysWhy(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := root.NewRootModelWithHub(cat, nil, false)
-	updated, _ := m.Update(windowSize(120, 40))
-	m = updated.(root.RootModel)
+// A launch must verify the agent can start BEFORE any screen claims it did —
+// and for the flagship that check used to be skipped entirely, because every
+// row the gate knew how to ask was probed through a daemon it does not use.
+func TestAMissingAgentBinaryHaltsAtPreflightAndNeverReachesChat(t *testing.T) {
+	isolateGaiaHome(t)
+	const missing = "gaia-agent-that-was-never-installed"
+	d := newLocalDriver(t, missing, 120, 40)
 
-	// A launchable row whose binary resolves nowhere — exactly the state the
-	// seed catalog used to ship in.
-	ghost := catalog.Agent{
-		ID: "bash", Name: "Bash", Status: catalog.StatusInstalled,
-		Transport: catalog.TransportSubprocess, BinaryPath: "gaia-bash-that-was-never-built",
-	}
-	updated, _ = m.Update(hub.LaunchAgentMsg{Agent: ghost})
-	m = updated.(root.RootModel)
+	d.launch()
 
-	snap := m.ControlSnapshot()
-	if snap.View == "chat" {
-		t.Fatal("the hub opened a chat for an agent that cannot start; the failure would only " +
-			"appear on the first message")
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("view = %q, want preflight — a chat opened for an agent that cannot start", got)
 	}
-	if snap.View != "hub" {
-		t.Fatalf("view = %q, want hub", snap.View)
+	// Asserted from model state, not from the rendered text: the screen's
+	// wording is allowed to change, the row key refusing the launch is not.
+	if got := d.m.ControlSnapshot().Blocker; got != preflight.KeyBinary {
+		t.Fatalf("blocker = %q, want %q", got, preflight.KeyBinary)
 	}
 
-	view := stripAnsi(m.View())
-	if !strings.Contains(view, "cannot start") {
-		t.Errorf("the hub does not say the launch failed:\n%s", view)
+	screen := d.flat()
+	for _, want := range []string{
+		missing,              // what is missing
+		"Looked in",          // where it looked
+		"installer",          // what to do about it
+		catalog.InstallerURL, // where to go
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the halt screen never says %q:\n%s", want, d.screen())
+		}
+	}
+
+	// It must STAY halted: nothing may hand off to a chat after a hold tick or
+	// a re-check. `r` is the advertised way to try again.
+	d.send(key("r"))
+	if got := d.view(); got == "chat" {
+		t.Fatal("re-checking a still-missing binary opened the chat anyway")
 	}
 }
 
-// The other half: an agent whose binary IS there still launches. A check that
+// The other half: an agent whose binary IS there passes the row. A check that
 // refuses everything would be no better than one that refuses nothing.
-func TestLaunchingAnAgentWithARealBinaryOpensChat(t *testing.T) {
-	cat := catalog.NewCatalog()
-	cat.SetMockBinary(mockBinaryPath(t))
-	m := root.NewRootModelWithHub(cat, nil, false)
-	updated, _ := m.Update(windowSize(120, 40))
-	m = updated.(root.RootModel)
+func TestAResolvableBinaryPassesTheBinaryRow(t *testing.T) {
+	isolateGaiaHome(t)
+	stubSetupCheck(t, 0)
 
-	updated, _ = m.Update(hub.LaunchAgentMsg{Agent: *cat.Get("bash")})
-	m = updated.(root.RootModel)
+	d := newLocalDriver(t, mockBinaryPath(t), 120, 40)
+	d.launch()
 
-	if snap := m.ControlSnapshot(); snap.View != "chat" {
-		t.Fatalf("a launchable agent with a real binary did not open chat (view=%q)", snap.View)
+	row, ok := d.report().Find(preflight.KeyBinary)
+	if !ok {
+		t.Fatal("the local gate produced no agent-binary row")
+	}
+	if row.State != preflight.StateOK {
+		t.Fatalf("a resolvable binary is %s: %s\n%s", row.State.Word(), row.Detail, d.screen())
 	}
 }
 
-// Coming Soon is not a launch: pressing enter on one must explain, not connect.
-func TestEnterOnAComingSoonAgentDoesNotLaunch(t *testing.T) {
-	d := newDriver(t, nil, 120, 40)
-	d.gotoTab("Coming Soon")
-	d.selectAgent("bash")
-	d.send(keyEnter())
+// --- helpers -----------------------------------------------------------------
 
-	view := plainView(d.m)
-	if !strings.Contains(view, "not published") {
-		t.Errorf("enter on a Coming Soon agent said nothing useful:\n%s", view)
+// newLocalDriver builds the launch router around the flagship, with the local
+// runner pointed at binary.
+func newLocalDriver(t *testing.T, binary string, w, h int) *rootDriver {
+	t.Helper()
+	agent := catalog.NewCatalog().Get(catalog.FlagshipID)
+	if agent == nil {
+		t.Fatalf("the catalog has no %q entry", catalog.FlagshipID)
 	}
+	agent.BinaryPath = binary
+
+	m := root.NewFlagshipModel(*agent, false).
+		WithLocalPreflight(preflight.LocalOptions{Binary: binary}).
+		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
+	d := &rootDriver{t: t, m: m, cat: catalog.NewCatalog()}
+	d.send(windowSize(w, h))
+	return d
 }
 
-// `i` on an agent the Agent Hub does not publish must refuse with the reason —
-// the daemon has no spec for it and the install would 404.
-func TestInstallOnAnUnpublishedAgentRefusesWithAReason(t *testing.T) {
-	d, _ := newHubOnFakeDaemon(t)
-	d.gotoTab("Coming Soon")
-	d.selectAgent("bash")
-	d.send(key("i"))
+// launch runs what the program runs on start: the splash, then the gate.
+func (d *rootDriver) launch() {
+	d.t.Helper()
+	d.pump(d.m.Init())
+}
 
-	view := plainView(d.m)
-	if !strings.Contains(view, "cannot be installed") {
-		t.Errorf("pressing i on an unpublished agent did not refuse clearly:\n%s", view)
+// report is the gate's current answer, for asserting on rows rather than pixels.
+func (d *rootDriver) report() preflight.Report {
+	d.t.Helper()
+	rep, ok := d.m.PreflightReport()
+	if !ok {
+		d.t.Fatalf("no readiness gate is on screen (view=%q)", d.view())
 	}
-	if d.m.Overlay() != "" {
-		t.Errorf("an install started for an agent the daemon cannot fetch (overlay=%q)", d.m.Overlay())
+	return rep
+}
+
+// isolateGaiaHome points the install-root lookup at a temp dir, so a developer
+// box with a real ~/.gaia/agents cannot decide whether a "nothing is installed"
+// test passes.
+func isolateGaiaHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// stubSetupCheck replaces `gaia init` with a script that exits with code, so
+// the model row answers without spawning a Python interpreter.
+func stubSetupCheck(t *testing.T, code int) {
+	t.Helper()
+	dir := t.TempDir()
+	var path string
+	if runtime.GOOS == "windows" {
+		path = filepath.Join(dir, "gaia-stub.bat")
+		writeStub(t, path, fmt.Sprintf("@echo off\r\nexit /b %d\r\n", code))
+	} else {
+		path = filepath.Join(dir, "gaia-stub.sh")
+		writeStub(t, path, fmt.Sprintf("#!/bin/sh\nexit %d\n", code))
+	}
+	orig := gaiainit.Binary
+	gaiainit.Binary = func() (string, error) { return path, nil }
+	t.Cleanup(func() { gaiainit.Binary = orig })
+}
+
+func writeStub(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }

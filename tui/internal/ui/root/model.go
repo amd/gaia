@@ -3,6 +3,7 @@ package root
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
-	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
@@ -18,33 +18,43 @@ import (
 type view int
 
 const (
-	viewHub view = iota
-	// viewPreflight is the readiness gate every daemon-backed launch passes
-	// through before chat opens.
+	// viewSplash is the first frame: GAIA's mascot while the readiness gate
+	// spins up behind it. It exists so the launch never opens on a blank
+	// terminal, and it is what makes the boot feel like starting a product
+	// rather than waiting on a probe.
+	viewSplash view = iota
+	// viewPreflight is the readiness gate every launch passes through before
+	// chat opens.
 	viewPreflight
 	viewChat
 )
 
-type RootModel struct {
+// FlagshipModel is the whole TUI: splash, readiness, chat, for exactly one
+// agent. GAIA ships one, so there is nothing to browse and nothing to pick —
+// the launch goes straight at it.
+type FlagshipModel struct {
 	activeView view
-	hub        hub.HubModel
+	agent      catalog.Agent
 	chat       *chat.ChatModel
-	chatClient client.AgentClient
-	catalog    *catalog.Catalog
+	// chatClient is held behind a pointer shared by every copy Bubble Tea
+	// makes, so whoever tears the program down can close the child this model
+	// opened. Stored by value it would live on a copy that dies with the
+	// Update call, and the agent process would outlive the TUI — on Windows
+	// nothing reaps it, so gaia-agent stays running after the terminal is gone.
+	chatClient *clientBox
 	// help is the shared overlay state machine (components.HelpState) — the
 	// same one the chat view uses on a direct launch, so open/scroll/dismiss
 	// behavior can never diverge between the two paths.
-	help components.HelpState
-	width      int
-	height     int
-	dev        bool
-	// bypassPermissions starts agents launched from this session with
-	// confirmation prompts off (--bypass-permissions). Off unless the launch
-	// asked for it.
+	help   components.HelpState
+	width  int
+	height int
+	dev    bool
+	// bypassPermissions starts the agent with confirmation prompts off
+	// (--bypass-permissions). Off unless the launch asked for it.
 	bypassPermissions bool
-	// useClaude starts agents launched from this session against Anthropic's
-	// Claude API instead of the local Lemonade backend (--use-claude).
-	// claudeModel optionally picks the Claude model.
+	// useClaude starts the agent against Anthropic's Claude API instead of the
+	// local Lemonade backend (--use-claude). claudeModel optionally picks the
+	// Claude model.
 	useClaude   bool
 	claudeModel string
 
@@ -57,99 +67,127 @@ type RootModel struct {
 	// pfTransport is built on first launch and reused for the session.
 	pfTransport preflight.Transport
 	pfOpts      preflight.Options
+	// pfLocal overrides the local runner's options. Tests point it at a
+	// different binary name; a real session leaves it alone.
+	pfLocal *preflight.LocalOptions
 
 	// halted is every Outcome the active screen is currently holding on.
-	// RootModel does not render it or intercept keys for it — the screen
-	// that raised it (preflight.Model) already pauses itself and shows its
-	// own explanation; this is purely a state flag automation reads via
+	// FlagshipModel does not render it or intercept keys for it — the screen
+	// that raised it (preflight.Model) already pauses itself and shows its own
+	// explanation; this is purely a state flag automation reads via
 	// ControlSnapshot's Overlay. Cleared when the gate closes, whether by
 	// proceeding or backing out.
 	halted []status.Outcome
 	// suppressed is every StepID the user has already proceeded past this
-	// session — per-process, never persisted, so relaunching the same agent
-	// does not report a fresh halt for a row already accepted once. It does
-	// NOT change what the screen itself asks for on each launch.
+	// session — per-process, never persisted.
 	suppressed map[string]bool
-	// listeners decide whether an Outcome halts. The subscribe seam the
-	// issue asks for; defaults to one entry with no registration API beyond
-	// it.
+	// listeners decide whether an Outcome halts.
 	listeners []Listener
+}
+
+// clientBox owns the agent client across the copies Bubble Tea makes of the
+// model. See FlagshipModel.chatClient.
+type clientBox struct {
+	mu sync.Mutex
+	c  client.AgentClient
+}
+
+func (b *clientBox) set(c client.AgentClient) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.c = c
+}
+
+func (b *clientBox) close() {
+	b.mu.Lock()
+	c := b.c
+	b.c = nil
+	b.mu.Unlock()
+	if c != nil {
+		c.Close()
+	}
+}
+
+// NewFlagshipModel builds the TUI around one agent.
+func NewFlagshipModel(agent catalog.Agent, dev bool) FlagshipModel {
+	return FlagshipModel{
+		activeView: viewSplash,
+		agent:      agent,
+		chatClient: &clientBox{},
+		dev:        dev,
+		suppressed: map[string]bool{},
+		listeners:  []Listener{haltOnDisposition},
+	}
+}
+
+// Close releases everything the session opened — the agent child in
+// particular. The host calls it once the event loop has stopped.
+//
+// Cancel before close: the chat model owns the per-turn context, so closing the
+// transport without cancelling it can leave a reader streaming into a screen
+// that no longer exists.
+func (m FlagshipModel) Close() error {
+	if m.chat != nil {
+		m.chat.CancelActiveTurn()
+	}
+	if m.chatClient != nil {
+		m.chatClient.close()
+	}
+	return nil
 }
 
 // WithPreflight points the readiness gate at a specific transport and tunes its
 // options. Tests use it to drive the gate against a fake daemon; a real session
 // leaves it alone and gets the daemon transport.
-func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) RootModel {
+func (m FlagshipModel) WithPreflight(t preflight.Transport, opts preflight.Options) FlagshipModel {
 	m.pfTransport = t
 	m.pfOpts = opts
 	return m
 }
 
-// WithBypassPermissions starts agents launched from this session with
-// confirmation prompts off.
+// WithLocalPreflight overrides what the local runner looks for. Tests point it
+// at a mock binary so the gate answers about the thing the launch will spawn.
+func (m FlagshipModel) WithLocalPreflight(opts preflight.LocalOptions) FlagshipModel {
+	m.pfLocal = &opts
+	return m
+}
+
+// WithBypassPermissions starts the agent with confirmation prompts off.
 //
 // A builder rather than a constructor parameter, for the same reason
 // WithPreflight is one: the flag is opt-in and rare, and threading it through
 // every caller — including a dozen tests that do not care — would make the
 // default path noisier than the feature.
-func (m RootModel) WithBypassPermissions(enabled bool) RootModel {
+func (m FlagshipModel) WithBypassPermissions(enabled bool) FlagshipModel {
 	m.bypassPermissions = enabled
 	return m
 }
 
-// WithClaude starts agents launched from this session against Anthropic's
-// Claude API instead of the local Lemonade backend. A builder for the same
-// reason WithBypassPermissions is one: opt-in and rare.
-func (m RootModel) WithClaude(enabled bool, model string) RootModel {
+// WithClaude starts the agent against Anthropic's Claude API instead of the
+// local Lemonade backend.
+func (m FlagshipModel) WithClaude(enabled bool, model string) FlagshipModel {
 	m.useClaude = enabled
 	m.claudeModel = model
 	return m
 }
 
-func NewRootModel(cat *catalog.Catalog, dev bool) RootModel {
-	m := RootModel{
-		activeView: viewHub,
-		catalog:    cat,
-		dev:        dev,
-		suppressed: map[string]bool{},
-		listeners:  []Listener{haltOnDisposition},
-	}
-	// One hub client for the session: it caches the daemon instance whose token
-	// authorized the last call, and that token rotates on every daemon restart.
-	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), dev)
-	return m
+// Init opens the gate immediately. The splash is what is on screen while the
+// first probe runs, not a screen the user has to dismiss.
+func (m FlagshipModel) Init() tea.Cmd {
+	return func() tea.Msg { return beginMsg{} }
 }
 
-// NewRootModelWithHub builds a root model against a specific hub client. Tests
-// point it at a fake daemon; a nil client disables install/uninstall, which
-// then fail loudly instead of silently doing nothing.
-func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) RootModel {
-	m := RootModel{
-		activeView: viewHub,
-		catalog:    cat,
-		dev:        dev,
-		suppressed: map[string]bool{},
-		listeners:  []Listener{haltOnDisposition},
-	}
-	m.hub = hub.NewHubModel(cat, hc, dev)
-	return m
-}
+// beginMsg leaves the splash and starts the readiness gate. A message rather
+// than a direct call so the splash gets at least one rendered frame — Init's
+// command runs after the first View.
+type beginMsg struct{}
 
-func (m RootModel) Init() tea.Cmd {
-	return m.hub.Init()
-}
-
-func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Forward to active sub-model
 		switch m.activeView {
-		case viewHub:
-			updated, cmd := m.hub.Update(msg)
-			m.hub = updated.(hub.HubModel)
-			return m, cmd
 		case viewPreflight:
 			return m.updatePreflight(msg)
 		case viewChat:
@@ -162,8 +200,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case hub.LaunchAgentMsg:
-		return m.beginPreflight(msg.Agent)
+	case beginMsg:
+		return m.beginPreflight(m.agent)
 
 	case preflight.ProceedMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -186,9 +224,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case status.Outcome:
 		return m.applyOutcome(msg)
 
-	case chat.ReturnToHubMsg:
-		return m.returnToHub(msg.AgentID)
-
 	case chat.ToggleHelpMsg:
 		m.help.Toggle(components.HelpContextChat)
 		return m, nil
@@ -204,31 +239,23 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.help.HandleKey(msg, m.width, m.height)
 			return m, nil
 		}
-		// The mailbox hand-off owns every key while it is up, the way the hub's
-		// modals do — otherwise esc would cancel the launch behind it.
+		// The mailbox hand-off owns every key while it is up — otherwise esc
+		// would cancel the launch behind it.
 		if m.activeView == viewPreflight && m.connect != nil {
 			return m.handleConnectKey(msg)
 		}
+		// Nothing on the splash is interactive except the way out, and a user
+		// who presses ctrl+c there means it.
+		if m.activeView == viewSplash && msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
 	}
 
-	// The hub's async results go to the hub whatever is on screen. They are
-	// answers to work it started, and the chat view would just discard them.
-	if hub.OwnsMsg(msg) {
-		updated, cmd := m.hub.Update(msg)
-		m.hub = updated.(hub.HubModel)
-		return m, cmd
-	}
-
-	// Forward to active sub-model
 	switch m.activeView {
-	case viewHub:
-		updated, cmd := m.hub.Update(msg)
-		m.hub = updated.(hub.HubModel)
-		return m, cmd
 	case viewPreflight:
 		// Everything the gate started answers with a message this package cannot
-		// name — the probe result, a fix outcome, download progress, the hold
-		// tick — so the gate gets the whole default stream, spinner ticks and all.
+		// name — the probe result, a fix outcome, setup progress, the hold tick —
+		// so the gate gets the whole default stream, spinner ticks and all.
 		return m.updatePreflight(msg)
 	case viewChat:
 		if m.chat != nil {
@@ -242,11 +269,11 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m RootModel) View() string {
+func (m FlagshipModel) View() string {
 	var base string
 	switch m.activeView {
-	case viewHub:
-		base = m.hub.View()
+	case viewSplash:
+		base = m.renderSplash()
 	case viewPreflight:
 		switch {
 		case m.connect != nil:
@@ -267,12 +294,6 @@ func (m RootModel) View() string {
 	return base
 }
 
-// helpScrollKey reports how ↑/↓/PgUp/PgDn/Home/End should move the open help
-// panel's scroll offset. delta is a relative line count unless jump is true,
-// in which case delta is an absolute target the caller still has to clamp.
-// Any other key reports handled=false, which is the caller's cue to close
-// the panel instead — the behavior every other key has always had.
-
 func clampInt(v, lo, hi int) int {
 	if v < lo {
 		return lo
@@ -285,14 +306,14 @@ func clampInt(v, lo, hi int) int {
 
 // logf writes transport diagnostics to stderr in dev mode. It must never be
 // given a daemon token — daemon.Instance redacts its own token when formatted.
-func (m RootModel) logf(format string, args ...any) {
+func (m FlagshipModel) logf(format string, args ...any) {
 	if !m.dev {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 }
 
-func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
@@ -302,52 +323,20 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 		ClaudeModel:       m.claudeModel,
 	})
 	if err != nil {
-		// Stay in the hub and say why, rather than opening a chat that cannot talk.
-		m.hub.SetStatus(err.Error())
-		return m, nil
+		// Nothing to fall back to, so this is the gate's problem: re-raise it as
+		// a blocked report rather than open a chat that cannot talk.
+		return m.haltOnLaunchFailure(agent, err)
 	}
-	m.chatClient = c
+	m.chatClient.set(c)
 
-	m.catalog.SetStatus(agent.ID, catalog.StatusActive)
-
-	chatModel := chat.NewChatModelFromHub(c, agent.ID, agent.Name, m.dev)
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified)
 	m.chat = &chatModel
 	m.activeView = viewChat
 
-	// Forward initial window size + init the chat model
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.chat.Init())
 	if m.width > 0 && m.height > 0 {
-		cmds = append(cmds, func() tea.Msg {
-			return tea.WindowSizeMsg{Width: m.width, Height: m.height}
-		})
-	}
-
-	return m, tea.Batch(cmds...)
-}
-
-func (m RootModel) returnToHub(agentID string) (tea.Model, tea.Cmd) {
-	m.catalog.SetStatus(agentID, catalog.StatusIdle)
-
-	// Cancel before closing: the chat model owns the per-turn context, so closing
-	// the transport without cancelling it can leave a reader streaming into a
-	// screen that no longer exists.
-	if m.chat != nil {
-		m.chat.CancelActiveTurn()
-	}
-	if m.chatClient != nil {
-		m.chatClient.Close()
-		m.chatClient = nil
-	}
-	m.chat = nil
-	m.activeView = viewHub
-
-	// Re-send window size to hub
-	var cmds []tea.Cmd
-	if m.width > 0 && m.height > 0 {
-		cmds = append(cmds, func() tea.Msg {
-			return tea.WindowSizeMsg{Width: m.width, Height: m.height}
-		})
+		cmds = append(cmds, m.sizeCmd())
 	}
 
 	return m, tea.Batch(cmds...)

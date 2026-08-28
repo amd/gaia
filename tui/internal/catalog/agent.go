@@ -1,16 +1,17 @@
 package catalog
 
-import "strings"
-
-// AgentStatus represents the lifecycle state of an agent.
+// AgentStatus is whether the daemon has this agent on disk.
+//
+// It used to be a five-state lifecycle driving the hub's tabs and dot colours.
+// Nothing browses agents any more, so what is left is the one question the
+// install machinery still asks: can this be started, or does it have to be
+// fetched first? Whether it is READY to start is the readiness gate's answer,
+// not this field's.
 type AgentStatus int
 
 const (
-	StatusInstalled  AgentStatus = iota // downloaded and ready to use
-	StatusActive                        // currently in a chat session
-	StatusIdle                          // used this session, back at hub
-	StatusAvailable                     // in registry but not downloaded
-	StatusComingSoon                    // placeholder, voteable
+	StatusInstalled AgentStatus = iota // on disk, startable
+	StatusAvailable                    // in the hub index, not fetched yet
 )
 
 // String returns a human-readable status label.
@@ -18,41 +19,15 @@ func (s AgentStatus) String() string {
 	switch s {
 	case StatusInstalled:
 		return "installed"
-	case StatusActive:
-		return "active"
-	case StatusIdle:
-		return "idle"
 	case StatusAvailable:
 		return "available"
-	case StatusComingSoon:
-		return "coming soon"
 	default:
 		return "unknown"
 	}
 }
 
-// StatusDot returns the dot indicator for this status.
-func (s AgentStatus) StatusDot() string {
-	switch s {
-	case StatusActive:
-		return "●" // render green
-	case StatusIdle:
-		return "●" // render yellow
-	case StatusInstalled:
-		return "●" // render dim
-	case StatusAvailable:
-		return "○"
-	case StatusComingSoon:
-		return "◌"
-	default:
-		return " "
-	}
-}
-
-// IsLaunchable returns true if the agent can be launched for chat.
-func (s AgentStatus) IsLaunchable() bool {
-	return s == StatusInstalled || s == StatusActive || s == StatusIdle
-}
+// IsLaunchable returns true if the agent is on disk.
+func (s AgentStatus) IsLaunchable() bool { return s == StatusInstalled }
 
 // Transport is how the TUI talks to an agent.
 //
@@ -127,61 +102,4 @@ type Agent struct {
 	Author            string
 	Permissions       []string
 	UpdateAvailable   bool
-	// NotOfferedReason explains why an entry is shown as "not out" instead of
-	// installable. Empty for everything the user can act on.
-	NotOfferedReason string
-}
-
-// RequiresTrust reports whether installing this agent runs code GAIA has not
-// verified, so the daemon will refuse without an explicit opt-in. An entry with
-// no known tier is treated as needing trust: "unknown" must never read as
-// "safe".
-func (a Agent) RequiresTrust() bool { return a.SecurityTier != TierVerified }
-
-// Installable reports whether `i` can do anything with this row: the daemon
-// knows how to fetch AND start it, and it is not already installed.
-func (a Agent) Installable() bool {
-	return a.FromHub && a.Supervised && a.Status == StatusAvailable
-}
-
-// Uninstallable reports whether this row can be removed through the daemon.
-func (a Agent) Uninstallable() bool {
-	return a.FromHub && a.InstalledVersion != ""
-}
-
-// Publisher is the display name of whoever published the agent.
-func (a Agent) Publisher() string {
-	if a.Author == "" {
-		return "unknown"
-	}
-	return a.Author
-}
-
-// SecurityLabel is the tier as a person should read it.
-func (a Agent) SecurityLabel() string {
-	switch a.SecurityTier {
-	case TierVerified:
-		return "verified by AMD"
-	case TierCommunity:
-		return "community (not verified)"
-	case TierExperimental:
-		return "experimental (not verified)"
-	case "":
-		return "unknown (not verified)"
-	default:
-		return a.SecurityTier + " (not verified)"
-	}
-}
-
-// FilterValue returns a searchable string for fuzzy matching.
-// Implements the bubbles/list.Item interface.
-func (a Agent) FilterValue() string {
-	parts := []string{a.Name, a.Description, a.Category}
-	parts = append(parts, a.Tags...)
-	return strings.Join(parts, " ")
-}
-
-// Title returns the display title for list rendering.
-func (a Agent) Title() string {
-	return a.Icon + " " + a.Name
 }

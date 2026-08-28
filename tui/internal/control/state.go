@@ -16,24 +16,31 @@ const maxFrames = 200
 // describe itself implements [SnapshotProvider]; anything else is reported with
 // View "unknown" rather than a guess.
 type Snapshot struct {
-	View            string   `json:"view"`
-	Agent           string   `json:"agent"`
-	Streaming       bool     `json:"streaming"`
-	HubTab          string   `json:"hub_tab,omitempty"`
-	HubTabIndex     int      `json:"hub_tab_index"`
-	SelectedAgentID string   `json:"selected_agent_id,omitempty"`
-	VisibleAgentIDs []string `json:"visible_agent_ids"`
-	Filtering       bool     `json:"filtering"`
-	Overlay         string   `json:"overlay,omitempty"`
+	View      string `json:"view"`
+	Agent     string `json:"agent"`
+	Streaming bool   `json:"streaming"`
+	Overlay   string `json:"overlay,omitempty"`
 
-	// CanReturnToHub reports whether esc leaves the chat for the hub. In a
-	// standalone chat (`gaia chat --subprocess`) esc QUITS the program, so a
-	// client that presses it to "go back" would kill the session it is driving.
-	CanReturnToHub bool `json:"can_return_to_hub"`
+	// Blocker is the key of the readiness row refusing the launch, empty when
+	// none is. It exists so a client can assert WHY the gate is holding from
+	// model state instead of grepping the rendered remedy for a phrase — the
+	// screen's wording is allowed to change; the row key is not.
+	Blocker string `json:"blocker,omitempty"`
 }
 
-// ViewUnknown is reported when the running model cannot describe its own state.
-const ViewUnknown = "unknown"
+// Every view the TUI can report. A client waits on one of these, so they are
+// constants rather than literals scattered through the view packages.
+const (
+	// ViewUnknown is reported when the running model cannot describe its own
+	// state.
+	ViewUnknown = "unknown"
+	// ViewSplash is the mascot frame the launch opens on.
+	ViewSplash = "splash"
+	// ViewPreflight is the readiness gate.
+	ViewPreflight = "preflight"
+	// ViewChat is the conversation.
+	ViewChat = "chat"
+)
 
 // SnapshotProvider is implemented by a root model that can report where the
 // user currently is. Keeping it an interface means the control package never
@@ -91,10 +98,7 @@ func NewState(debugf func(format string, args ...any)) *State {
 		debugf = func(string, ...any) {}
 	}
 	return &State{
-		// VisibleAgentIDs is set here, not left nil: a Server started without a
-		// Recorder would otherwise serve `"visible_agent_ids": null` and any
-		// client taking its length would crash.
-		snap:    Snapshot{View: ViewUnknown, VisibleAgentIDs: []string{}},
+		snap:    Snapshot{View: ViewUnknown},
 		started: time.Now(),
 		changed: make(chan struct{}),
 		debugf:  debugf,
@@ -177,11 +181,6 @@ func (s *State) RenderedMark() int64 {
 
 // setSnapshot stores the model's self-reported state and logs transitions.
 func (s *State) setSnapshot(snap Snapshot) {
-	if snap.VisibleAgentIDs == nil {
-		// Normalized once, here, so every endpoint serves [] and no client has
-		// to guard against null before taking its length.
-		snap.VisibleAgentIDs = []string{}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prev := s.snap
@@ -250,21 +249,7 @@ func (s *State) UptimeMS() int64 {
 	return time.Since(s.started).Milliseconds()
 }
 
-func snapshotsEqual(a, b Snapshot) bool {
-	if a.View != b.View || a.Agent != b.Agent || a.Streaming != b.Streaming ||
-		a.HubTab != b.HubTab || a.HubTabIndex != b.HubTabIndex ||
-		a.SelectedAgentID != b.SelectedAgentID || a.Filtering != b.Filtering ||
-		a.Overlay != b.Overlay || a.CanReturnToHub != b.CanReturnToHub ||
-		len(a.VisibleAgentIDs) != len(b.VisibleAgentIDs) {
-		return false
-	}
-	for i := range a.VisibleAgentIDs {
-		if a.VisibleAgentIDs[i] != b.VisibleAgentIDs[i] {
-			return false
-		}
-	}
-	return true
-}
+func snapshotsEqual(a, b Snapshot) bool { return a == b }
 
 // PlainScreen strips ANSI styling and trailing padding so the result is what an
 // assistant should read. Lipgloss pads every line to the layout width; keeping

@@ -2,6 +2,7 @@ package root
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,25 +15,28 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
-// beginPreflight puts the readiness gate between the hub and the chat.
+// beginPreflight puts the readiness gate between the splash and the chat.
 //
 // The gate runs on EVERY launch and nothing is remembered between them. Each row
 // is a fact with no expiry notice — the daemon can be killed, its client token
 // rotates on every restart, Lemonade can unload the model, a mailbox grant can be
 // revoked from the web — so a cached pass would open a chat that cannot answer
-// while claiming it had been verified. An all-green pass costs one attach, three
-// relayed GETs, and one bounded relayed mailbox read, and is held ~800ms; that is
-// the price of the answer being true now.
-func (m RootModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
-	if agent.Transport != catalog.TransportDaemon {
-		// Every precondition the gate reports is probed THROUGH the daemon relay
-		// (GET /v1/<agent>/init). A subprocess agent has no relay and no
-		// registered sidecar, so the gate could only answer "not installed" —
-		// four wrong rows with four wrong remedies, over a launch that works.
-		return m.launchAgent(agent)
+// while claiming it had been verified.
+//
+// WHICH gate depends on how the agent is reached, and that used to decide
+// whether there was one at all. A subprocess agent has no relay and no
+// registered sidecar, so the daemon runner's rows could only ever answer "not
+// installed" — four wrong rows with four wrong remedies over a launch that
+// works — and the launch was let through ungated instead. It now gets the LOCAL
+// runner, which probes the same facts directly on this machine.
+func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
+	cfg := preflight.ConfigFor(agent.ID, agent.Name)
+	var gate preflight.Model
+	if agent.Transport == catalog.TransportDaemon {
+		gate = preflight.New(m.preflightTransport(), cfg, m.preflightOptions())
+	} else {
+		gate = preflight.NewLocal(m.localOptions(agent), cfg, m.preflightOptions())
 	}
-
-	gate := preflight.New(m.preflightTransport(), preflight.ConfigFor(agent.ID, agent.Name), m.preflightOptions())
 	m.preflight = &gate
 	m.pending = &agent
 	m.connect = nil
@@ -45,11 +49,20 @@ func (m RootModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// localOptions describes the agent to the local runner: the binary the launch
+// will actually spawn, and whether this session runs on Claude.
+func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions {
+	if m.pfLocal != nil {
+		return *m.pfLocal
+	}
+	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude}
+}
+
 // preflightTransport builds the gate's transport on first use and keeps it for
 // the session: it caches the daemon instance whose token authorized the last
 // call, and that token rotates on every daemon restart. Building it lazily also
 // keeps a session that never launches anything from constructing a daemon client.
-func (m *RootModel) preflightTransport() preflight.Transport {
+func (m *FlagshipModel) preflightTransport() preflight.Transport {
 	if m.pfTransport == nil {
 		m.pfTransport = preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: m.logf}))
 	}
@@ -60,7 +73,7 @@ func (m *RootModel) preflightTransport() preflight.Transport {
 // wired to --debug: the gate's footer only offers `enter` while a report is
 // neither blocked nor ready, so holding an all-green screen would leave a debug
 // user on a green wall whose only advertised keys are re-check and back.
-func (m RootModel) preflightOptions() preflight.Options {
+func (m FlagshipModel) preflightOptions() preflight.Options {
 	opts := m.pfOpts
 	if opts.Logf == nil {
 		opts.Logf = m.logf
@@ -71,26 +84,17 @@ func (m RootModel) preflightOptions() preflight.Options {
 // gateIsFor reports whether the gate on screen is the one that sent this
 // message. A ProceedMsg from a gate the user already backed out of must not
 // launch anything — the hold tick that produced it can still be in flight.
-func (m RootModel) gateIsFor(agentID string) bool {
+func (m FlagshipModel) gateIsFor(agentID string) bool {
 	return m.activeView == viewPreflight && m.preflight != nil &&
 		m.pending != nil && m.pending.ID == agentID
 }
 
-// closeGate tears the gate down, cancelling what it started: a re-check, a
-// sidecar start, a model pull.
-//
-// It does NOT stop the FIRST probe. preflight.Model.Init has a value receiver, so
-// the cancel func for the check it launches is parked on a copy that dies with
-// the call, and the model this host keeps has none. That probe therefore runs to
-// its own 90s timeout after the user leaves; its result is dropped by
-// updatePreflight rather than allowed to drive whatever is on screen. Fixing it
-// properly needs a pointer-receiver initialiser in the preflight package.
-//
-// Since the mailbox row started proving its credentials, that abandoned check can
-// include one live read of the user's mailbox, capped by the row's own 5s bound
-// rather than the 90s one — so it is bounded and read-only, but it is no longer
-// only loopback traffic.
-func (m *RootModel) closeGate() {
+// closeGate tears the gate down, cancelling everything it started — the first
+// probe included. That last part was not true until preflight.Model started
+// holding its cancel func behind a pointer (see cancelBox): an abandoned check
+// used to run to its own 90s timeout, and once a fix could spawn `gaia init`,
+// ctrl+c during preflight would have left that child running.
+func (m *FlagshipModel) closeGate() {
 	if m.preflight != nil {
 		m.preflight.Cancel()
 		m.preflight = nil
@@ -103,43 +107,54 @@ func (m *RootModel) closeGate() {
 	m.halted = nil
 }
 
-func (m RootModel) proceedFromGate() (tea.Model, tea.Cmd) {
+func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	agent := *m.pending
+	// The gate has just proved the models are downloaded, so the chat's own
+	// first-boot check must not spawn a SECOND `gaia init --check` — each costs
+	// a fresh Python interpreter for up to 30s, and a cold launch was paying
+	// that twice.
+	verified := gateProvedSetup(m.preflight.Report())
 	// Before closeGate clears halted: proceeding IS the deliberate choice
 	// the halt exists to gate, so mark these StepIDs accepted for the rest
 	// of the session before the record of them is gone.
 	m.suppressHalted()
 	m.closeGate()
-	// Back to the hub FIRST. launchAgent stays where it is and reports the reason
-	// when a client cannot be built, and "where it is" has to be a screen that
-	// still renders — the gate is gone by now.
-	m.activeView = viewHub
-	return m.launchAgent(agent)
+	return m.launchAgent(agent, verified)
 }
 
-// cancelFromGate returns to the hub. The hub model is untouched while the gate is
-// up, so its tab and highlighted row are exactly where the user left them.
-func (m RootModel) cancelFromGate() (tea.Model, tea.Cmd) {
+// gateProvedSetup reports whether the AI model row passed OUTRIGHT. Anything
+// else — indeterminate, skipped behind an earlier failure, or a daemon report
+// whose model row means something different — leaves the chat's own first-boot
+// check to ask. Only a pass is a pass.
+func gateProvedSetup(rep preflight.Report) bool {
+	row, ok := rep.Find(preflight.KeyModel)
+	return ok && row.State == preflight.StateOK
+}
+
+// cancelFromGate leaves. There is no screen behind the gate to go back to: the
+// splash is a frame, not a destination, and the one agent this TUI runs is the
+// one the user just declined to start.
+func (m FlagshipModel) cancelFromGate() (tea.Model, tea.Cmd) {
 	rep := m.preflight.Report()
 	m.closeGate()
-	m.activeView = viewHub
 
-	// Backing out of a gate that found something leaves the user staring at a hub
-	// that looks like nothing happened. Say which row it was — the one that
-	// refused the launch, or the one the user was being asked to fix.
+	// Say which row it was on the way out — the one that refused the launch, or
+	// the one the user was being asked to fix. To stderr, because the alt screen
+	// is about to be torn down and anything drawn into it goes with it.
 	if row, found := attentionRow(rep); found {
-		// One line, and no trailing call to action: the hub truncates its status
-		// row at the terminal width, and a hint that gets cut mid-word is worse
-		// than the footer's own "enter run".
-		m.hub.SetStatus(fmt.Sprintf("%s did not start — %s is %s",
-			rep.AgentName, row.Label, row.Line))
+		fmt.Fprintf(os.Stderr, "%s did not start — %s is %s\n",
+			rep.AgentName, row.Label, row.Line)
 	}
+	return m, tea.Quit
+}
 
-	var cmds []tea.Cmd
-	if m.width > 0 && m.height > 0 {
-		cmds = append(cmds, m.sizeCmd())
-	}
-	return m, tea.Batch(cmds...)
+// haltOnLaunchFailure reports a client that could not be built and leaves.
+// Reached when the agent binary goes away between the check and the spawn —
+// rare, but opening a chat that cannot talk is the one outcome the gate exists
+// to prevent.
+func (m FlagshipModel) haltOnLaunchFailure(agent catalog.Agent, err error) (tea.Model, tea.Cmd) {
+	fmt.Fprintf(os.Stderr, "%s could not start: %v\n", agent.Name, err)
+	return m, tea.Quit
 }
 
 // attentionRow is the row worth naming after a gate the user left: the one that
@@ -155,7 +170,7 @@ func attentionRow(rep preflight.Report) (preflight.Row, bool) {
 	return rep.Rows[idx], true
 }
 
-func (m RootModel) sizeCmd() tea.Cmd {
+func (m FlagshipModel) sizeCmd() tea.Cmd {
 	w, h := m.width, m.height
 	return func() tea.Msg { return tea.WindowSizeMsg{Width: w, Height: h} }
 }
@@ -171,7 +186,7 @@ func (m RootModel) sizeCmd() tea.Cmd {
 // all-green report for A drives B's screen, and B's gate hands off — opening a
 // chat for an agent nothing ever probed, which is the one outcome this gate
 // exists to prevent.
-func (m RootModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.preflight == nil {
 		return m, nil
 	}
@@ -204,7 +219,7 @@ type connectHandoff struct {
 	haveRow  bool
 }
 
-func (m RootModel) openConnectHandoff(provider string) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) openConnectHandoff(provider string) (tea.Model, tea.Cmd) {
 	rep := m.preflight.Report()
 	row, ok := rep.Find(preflight.KeyMailbox)
 	m.connect = &connectHandoff{
@@ -217,14 +232,14 @@ func (m RootModel) openConnectHandoff(provider string) (tea.Model, tea.Cmd) {
 }
 
 // handleConnectKey owns every key while the hand-off is up.
-func (m RootModel) handleConnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) handleConnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c":
-		// Same as everywhere else: ctrl+c leaves the app, not just the screen. The
-		// view goes back to the hub so the last frame is never a view whose model
-		// has just been torn out from under it.
+		// Same as everywhere else: ctrl+c leaves the app, not just the screen.
+		// Back to the splash so the last frame is never a view whose model has
+		// just been torn out from under it.
 		m.closeGate()
-		m.activeView = viewHub
+		m.activeView = viewSplash
 		return m, tea.Quit
 	case "r":
 		// Dismiss, then let the gate's own `r` do the re-check — the screen that
