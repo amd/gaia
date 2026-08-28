@@ -9,6 +9,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
+  a bare text 500 (#3000).** Only four connector exception types were mapped to
+  a status code, so anything else — a `KeyError` on an unexpected Graph payload,
+  a `TypeError` from a shape change — fell through to Starlette's default:
+  `Content-Type: text/plain` with the body `Internal Server Error` and nothing a
+  client could branch on. The sidecar now installs an app-level handler, so those
+  come back as `{"detail": "Internal server error", "error_id": "<12 hex>"}` with
+  the traceback logged server-side against that `error_id`. **Integrators
+  parsing the old text body must switch to the JSON shape.** Known error paths
+  are unchanged — 403/400/502/503, request-validation 422s, and 404/405 all keep
+  their existing status and detail.
 - **An Outlook search containing a quoted value no longer sends Graph a malformed
   `$search` (#3021).** `from:"Acme Corp"` was wrapped verbatim, producing
   `$search="from:"Acme Corp""` nested unescaped quotes. Inner quotes and
