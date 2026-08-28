@@ -46,7 +46,7 @@ class PEError(Exception):
 def _section_containing(sections, rva):
     for name, virt_addr, virt_size, raw_size, raw_ptr in sections:
         if virt_addr <= rva < virt_addr + max(virt_size, raw_size):
-            return name, virt_addr, raw_ptr
+            return name, virt_addr, raw_ptr, raw_size
     return None
 
 
@@ -92,7 +92,7 @@ def _walk_resource_types(data: bytes, sections, res_rva: int) -> dict[int, int]:
     located = _section_containing(sections, res_rva)
     if located is None:
         raise PEError(f"resource RVA {res_rva:#x} falls outside every section")
-    _, sec_rva, sec_ptr = located
+    _, sec_rva, sec_ptr, _ = located
     base = sec_ptr + (res_rva - sec_rva)
 
     # IMAGE_RESOURCE_DIRECTORY: 12 reserved/stamp bytes, then the two counts.
@@ -122,9 +122,12 @@ def _resource_text(data: bytes, sections, res_rva: int, res_size: int) -> str:
     located = _section_containing(sections, res_rva)
     if located is None:
         return ""
-    _, sec_rva, sec_ptr = located
+    _, sec_rva, sec_ptr, sec_raw_size = located
     start = sec_ptr + (res_rva - sec_rva)
-    return data[start : start + res_size].decode("utf-16-le", errors="ignore")
+    # res_size is a VIRTUAL size; clamp to the raw section or the read spills
+    # into the next section, which is what the scoping exists to prevent.
+    end = min(start + res_size, sec_ptr + sec_raw_size)
+    return data[start:end].decode("utf-16-le", errors="ignore")
 
 
 def main() -> int:

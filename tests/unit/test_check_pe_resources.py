@@ -35,6 +35,7 @@ TEXT_RAW = 0x400
 TEXT_RAW_SIZE = 0x200
 RSRC_RVA = 0x2000
 RSRC_RAW = TEXT_RAW + TEXT_RAW_SIZE
+DATA_RVA = 0x3000
 FILE_ALIGN = 0x200
 
 
@@ -76,6 +77,8 @@ def build_pe(
     version_text: str | None = None,
     magic: int = PE32PLUS,
     resource_rva: int | None = None,
+    resource_size_overrun: int = 0,
+    trailing_section_text: str | None = None,
     machine: int = 0x8664,
     truncate_to: int | None = None,
 ) -> bytes:
@@ -83,15 +86,25 @@ def build_pe(
 
     ``resource_types`` maps a resource type id to the number of entries beneath
     it; ``None`` builds an image with no resource directory at all.
+    ``resource_size_overrun`` inflates the data directory's (virtual) resource
+    size past the .rsrc section's raw bytes, and ``trailing_section_text`` puts
+    a UTF-16LE string in the section that follows -- together they reproduce a
+    resource read spilling into the next section.
     """
     blob = (
         b"" if resource_types is None else _resource_dir(resource_types, version_text)
     )
+    rsrc_raw_size = _align(max(len(blob), 1), FILE_ALIGN)
 
     if resource_types is None:
         res_rva, res_size = 0, 0
     else:
-        res_rva, res_size = RSRC_RVA, len(blob)
+        res_rva = RSRC_RVA
+        res_size = (
+            rsrc_raw_size + resource_size_overrun
+            if resource_size_overrun
+            else len(blob)
+        )
     if resource_rva is not None:
         res_rva = resource_rva
 
@@ -104,12 +117,19 @@ def build_pe(
     sections = [(b".text", 0x100, TEXT_RVA, TEXT_RAW_SIZE, TEXT_RAW)]
     if resource_types is not None:
         sections.append(
+            (b".rsrc", max(len(blob), 1), RSRC_RVA, rsrc_raw_size, RSRC_RAW)
+        )
+
+    trailing = b""
+    if trailing_section_text is not None:
+        trailing = trailing_section_text.encode("utf-16-le")
+        sections.append(
             (
-                b".rsrc",
-                max(len(blob), 1),
-                RSRC_RVA,
-                _align(max(len(blob), 1), FILE_ALIGN),
-                RSRC_RAW,
+                b".data",
+                max(len(trailing), 1),
+                DATA_RVA,
+                _align(max(len(trailing), 1), FILE_ALIGN),
+                RSRC_RAW + rsrc_raw_size,
             )
         )
 
@@ -131,7 +151,10 @@ def build_pe(
     image += bytes(TEXT_RAW_SIZE)
     if resource_types is not None:
         image += blob
-        image += bytes(_align(max(len(blob), 1), FILE_ALIGN) - len(blob))
+        image += bytes(rsrc_raw_size - len(blob))
+    if trailing:
+        image += trailing
+        image += bytes(_align(len(trailing), FILE_ALIGN) - len(trailing))
 
     return bytes(image) if truncate_to is None else bytes(image)[:truncate_to]
 
@@ -297,3 +320,22 @@ def test_expected_version_only_matches_the_resource_section(
     )
     assert code == 1
     assert "9.9.9" in err
+
+
+def test_expected_version_does_not_spill_into_the_next_section(
+    make_exe, monkeypatch, capsys
+):
+    # The data directory's resource size is virtual and can exceed .rsrc's raw
+    # bytes; reading it unclamped would find "9.9.9" sitting in .data.
+    exe = make_exe(
+        version_text="1.2.3",
+        resource_size_overrun=0x100,
+        trailing_section_text="9.9.9",
+    )
+    code, _, err = run_checker(monkeypatch, capsys, exe, "--expect-version", "9.9.9")
+    assert code == 1
+    assert "9.9.9" in err
+
+    # The real version, inside .rsrc, still matches.
+    code, _, err = run_checker(monkeypatch, capsys, exe, "--expect-version", "1.2.3")
+    assert code == 0, err

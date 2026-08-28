@@ -249,7 +249,6 @@ def main() -> int:
 
     npm_key = PLATFORM_KEYS[args.platform]
     is_windows = args.platform.startswith("win")
-    filename = f"gaia-agent-{npm_key}" + (".exe" if is_windows else "")
     out_name = args.name or ("gaia-agent.exe" if is_windows else "gaia-agent")
 
     sidecar, lock_path = _sidecar_lock()
@@ -279,7 +278,18 @@ def main() -> int:
             file=sys.stderr,
         )
         return EXIT_NO_SIDECAR_FOR_PLATFORM
-    expected_size = sidecar["platforms"][npm_key].get("size")
+
+    entry = sidecar["platforms"][npm_key]
+    # The lock already names the published artifact; rebuilding it here would
+    # keep asking for the old name after the flagship renames its builds.
+    filename = str(entry.get("filename") or "")
+    if not filename:
+        raise SystemExit(
+            f"{lock_path} has no components.sidecar.platforms.{npm_key}.filename, so "
+            f"there is no artifact name to request from the hub. Regenerate the lock "
+            f"with {LOCK_GENERATOR}."
+        )
+    expected_size = entry.get("size")
     if not isinstance(expected_size, int) or expected_size <= 0:
         expected_size = None
 
