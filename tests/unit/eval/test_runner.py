@@ -707,3 +707,60 @@ class TestJudgeMismatchWarning:
         result = compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
 
         assert len(result["regressed"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# run_scenario_subprocess — driver failure diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestDriverFailureIsDiagnosable:
+    """A non-zero `claude -p` must say WHY, whichever stream carried the reason.
+
+    The Gemma eval gate spent weeks reporting `ERRORED` with `error=""` because
+    the driver wrote its failure to stdout and only stderr was recorded.
+    """
+
+    SCENARIO = {"id": "known_path_read", "turns": [{"turn": 1, "objective": "x"}]}
+
+    def _run(self, monkeypatch, tmp_path, stdout, stderr):
+        import subprocess
+
+        from gaia.eval import runner
+
+        monkeypatch.setattr(runner, "build_scenario_prompt", lambda *a, **k: "prompt")
+        monkeypatch.setattr(runner, "_load_merged_manifest", lambda **k: {})
+        monkeypatch.setattr(
+            runner.subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(
+                args=["claude"], returncode=1, stdout=stdout, stderr=stderr
+            ),
+        )
+        return runner.run_scenario_subprocess(
+            tmp_path / "s.yaml",
+            dict(self.SCENARIO),
+            tmp_path,
+            "http://127.0.0.1:4200",
+            "claude-sonnet-4-6",
+            1.0,
+            60,
+        )
+
+    def test_reason_on_stdout_is_captured(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path, "Invalid API key", "")
+
+        assert result["status"] == "ERRORED"
+        assert "Invalid API key" in result["error"]
+
+    def test_stderr_still_preferred_when_present(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path, "noise on stdout", "real failure")
+
+        assert "real failure" in result["error"]
+        assert "noise on stdout" not in result["error"]
+
+    def test_both_streams_empty_says_so_instead_of_blank(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path, "", "")
+
+        assert result["error"].strip()
+        assert "no output on stdout or stderr" in result["error"]

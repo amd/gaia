@@ -984,16 +984,26 @@ def run_scenario_subprocess(
         elapsed = time.time() - start
 
         if proc.returncode != 0:
+            # claude -p reports auth and bad-flag failures on stdout and exits
+            # non-zero with an empty stderr; recording stderr alone left the
+            # scenario ERRORED with error="" and no way to tell why.
+            detail = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            detail = detail[:500] if detail else "no output on stdout or stderr"
+            message = (
+                f"scenario driver `{cmd[0]}` exited {proc.returncode}: {detail} "
+                f"(model={model}; check that the driver is installed, "
+                f"ANTHROPIC_API_KEY is set, and the model id is valid)"
+            )
             print(
                 f"[ERROR] {scenario_id} — exit code {proc.returncode}", file=sys.stderr
             )
-            print(proc.stderr[:500], file=sys.stderr)
+            print(message, file=sys.stderr)
             result = {
                 "scenario_id": scenario_id,
                 "status": "ERRORED",
                 "overall_score": None,
                 "turns": [],
-                "error": proc.stderr[:500],
+                "error": message,
                 "elapsed_s": elapsed,
                 "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
             }
