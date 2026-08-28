@@ -31,7 +31,7 @@ from gaia.skills.drift import (
     check_drift,
     relock,
 )
-from gaia.skills.errors import SkillDriftError
+from gaia.skills.errors import SkillDriftError, SkillValidationError
 from gaia.skills.lock import SOURCE_HUB, SOURCE_LOCAL, SkillLock
 from tests.unit.skills_helpers import make_marketplace
 
@@ -532,6 +532,179 @@ def test_cli_skill_lock_json_carries_every_drift(
     assert exit_code == skills_cli.EXIT_INVALID
     assert payload["clean"] is False
     assert {d["kind"] for d in payload["drifts"]} >= {DRIFT_VERSION, DRIFT_CONTENT}
+
+
+# ----------------------------------------------------------------------
+# What a user actually reads (#2929 review)
+# ----------------------------------------------------------------------
+
+
+def _list_args(**kwargs):
+    kwargs.setdefault("root", None)
+    kwargs.setdefault("as_json", False)
+    return argparse.Namespace(skill_action="list", **kwargs)
+
+
+def _drop_digest(root, name):
+    """Make an entry look like one written before digests were recorded."""
+    lock = SkillLock.load(root)
+    lock.get(name).content_digest = ""
+    lock.save()
+
+
+def test_relock_refuses_to_stamp_a_digest_onto_a_pre_digest_attested_entry(
+    marketplace, attested
+):
+    """The upgrade state is the easiest place to launder an attestation.
+
+    A ``community`` entry with no digest has never had its bytes checked. If
+    ``--relock`` records the current ones, whatever is on disk inherits the
+    publisher's signature — and the pre-digest state is exactly where every
+    upgrading user starts, so this is the likeliest path, not an exotic one.
+    """
+    _drop_digest(marketplace.skills_root, "web-research")
+    (attested.path / "tools.py").write_text("import socket\n", encoding="utf-8")
+
+    result = relock(marketplace.skills_root)
+
+    assert result.updated == []
+    assert [d.kind for d in result.refused] == [DRIFT_UNRECORDED]
+    assert (
+        SkillLock.load(marketplace.skills_root).get("web-research").content_digest == ""
+    )
+    assert "gaia skill install web-research --force" in result.refused[0].remediation
+
+
+def test_relock_still_records_a_pre_digest_entry_that_nothing_attested(
+    marketplace, unattested
+):
+    """The refusal must be scoped to attestation, not to every missing digest."""
+    _drop_digest(marketplace.skills_root, "scratch-skill")
+
+    result = relock(marketplace.skills_root)
+
+    assert result.refused == []
+    assert check_drift(marketplace.skills_root).clean
+
+
+def test_cli_skill_list_calls_a_pre_digest_entry_unverifiable_not_changed(
+    marketplace, unattested, monkeypatch, capsys
+):
+    """Every upgrading user hits this path; it must not read as tampering."""
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    _drop_digest(marketplace.skills_root, "scratch-skill")
+
+    assert skills_cli.handle(_list_args()) == skills_cli.EXIT_OK
+
+    err = capsys.readouterr().err
+    assert "predate content digests" in err
+    assert "gaia skill lock --relock" in err
+    assert "no longer match" not in err
+
+
+def test_cli_skill_lock_says_predate_rather_than_differ_for_pre_digest_entries(
+    marketplace, unattested, monkeypatch, capsys
+):
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    _drop_digest(marketplace.skills_root, "scratch-skill")
+
+    assert skills_cli.handle(_lock_args()) == skills_cli.EXIT_INVALID
+
+    err = capsys.readouterr().err
+    assert "predate content digests" in err
+    assert "difference(s)" not in err
+
+
+def test_an_untracked_skill_does_not_undo_the_predate_wording(
+    marketplace, tmp_path, unattested, monkeypatch, capsys
+):
+    """Untracked is the normal residue of create/import — not a difference."""
+    import shutil
+
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    _drop_digest(marketplace.skills_root, "scratch-skill")
+    shutil.copytree(
+        _write_source(tmp_path, name="hand-written", tier="experimental"),
+        marketplace.skills_root / "hand-written",
+    )
+
+    assert skills_cli.handle(_lock_args()) == skills_cli.EXIT_INVALID
+
+    err = capsys.readouterr().err
+    assert "predate content digests" in err
+    assert "1 the lock does not track" in err
+    assert "difference(s)" not in err
+
+
+def test_cli_skill_list_reports_a_real_change_as_a_mismatch(
+    marketplace, attested, monkeypatch, capsys
+):
+    """The wording split must not blunt the finding that matters."""
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (attested.path / "tools.py").write_text("import socket\n", encoding="utf-8")
+    marketplace.manager.reload()
+
+    assert skills_cli.handle(_list_args()) == skills_cli.EXIT_OK
+
+    err = capsys.readouterr().err
+    assert "no longer match" in err
+    assert "1 will refuse to load" in err
+    assert "predate content digests" not in err
+
+
+def test_cli_skill_list_reports_a_damaged_lock_without_hiding_the_skills(
+    marketplace, attested, monkeypatch, capsys
+):
+    """A truncated lock must not take the inventory down with it."""
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (marketplace.skills_root / "skill-lock.json").write_text("{trunca", "utf-8")
+
+    assert skills_cli.handle(_list_args()) == skills_cli.EXIT_INVALID
+
+    captured = capsys.readouterr()
+    assert "web-research" in captured.out
+    assert "not readable JSON" in captured.err
+
+
+def test_cli_skill_list_json_carries_the_lock_error_instead_of_crashing(
+    marketplace, attested, monkeypatch, capsys
+):
+    import json
+
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (marketplace.skills_root / "skill-lock.json").write_text("{trunca", "utf-8")
+
+    exit_code = skills_cli.handle(_list_args(as_json=True))
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == skills_cli.EXIT_INVALID
+    assert payload["drift"] is None
+    assert "not readable JSON" in payload["lock_error"]
+    assert [s["name"] for s in payload["skills"]] == ["web-research"]
+
+
+def test_a_damaged_lock_still_refuses_to_load_a_user_root_skill(marketplace, attested):
+    """Corrupting one file must not switch the drift check off."""
+    (marketplace.skills_root / "skill-lock.json").write_text("{trunca", "utf-8")
+    marketplace.manager.reload()
+
+    with pytest.raises(SkillValidationError):
+        marketplace.manager.load("web-research")
+
+
+def test_cli_relock_does_not_claim_success_when_everything_was_refused(
+    marketplace, attested, monkeypatch, capsys
+):
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (attested.path / "tools.py").write_text("import socket\n", encoding="utf-8")
+
+    args = _lock_args()
+    args.relock = True
+    assert skills_cli.handle(args) == skills_cli.EXIT_INVALID
+
+    captured = capsys.readouterr()
+    assert "Re-recorded" not in captured.out
+    assert "Refused to re-record" in captured.err
 
 
 def test_a_local_skills_remediation_never_tells_you_to_reinstall_from_the_hub(

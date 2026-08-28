@@ -247,7 +247,9 @@ fourth discovery root — discovery still reads the directory, and a skill creat
 or imported locally has no lock entry until `gaia skill lock --relock` records one
 as `source: local`. Loading a skill from the user root does check it against the
 lock: a `community` / `verified` install whose files changed since is refused,
-because those are not the bytes its signature covered.
+because those are not the bytes its signature covered. If the lock itself is
+unreadable, **every** user-root skill is refused — including local ones — since
+nothing can tell an attested skill from a local one at that point.
 </Note>
 
 ### Progressive disclosure

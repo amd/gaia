@@ -476,17 +476,26 @@ def _manager() -> SkillManager:
 
 
 def _handle_list(args: argparse.Namespace) -> int:
-    from gaia.skills.drift import DRIFT_UNTRACKED, check_drift
+    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift
 
     manager = _manager()
     skills = manager.list_skills()
     if args.root:
         skills = [s for s in skills if s.root == args.root]
     errors = manager.discovery_errors
-    drift = check_drift(manager.user_root)
+
+    # A damaged lock is reported beside the inventory, not instead of it — the
+    # skills are still there, and the user needs the list to act on the error.
+    drift = None
+    lock_error = ""
+    try:
+        drift = check_drift(manager.user_root)
+    except SkillValidationError as exc:
+        lock_error = str(exc)
+
     # An untracked skill is already a row in the table below; re-flagging it here
     # would bury the drifts that are not otherwise visible.
-    notable = [d for d in drift.drifts if d.kind != DRIFT_UNTRACKED]
+    notable = [d for d in drift.drifts if d.kind != DRIFT_UNTRACKED] if drift else []
 
     if getattr(args, "as_json", False):
         payload = {
@@ -497,10 +506,11 @@ def _handle_list(args: argparse.Namespace) -> int:
             "skills": [_skill_summary(s) for s in skills],
             "shadowed": [_skill_summary(s) for s in manager.shadowed()],
             "errors": errors,
-            "drift": drift.to_dict(),
+            "drift": drift.to_dict() if drift else None,
+            "lock_error": lock_error,
         }
         print(json.dumps(payload, indent=2))
-        return EXIT_INVALID if errors else EXIT_OK
+        return EXIT_INVALID if errors or lock_error else EXIT_OK
 
     if not skills:
         print("No skills found. Searched:")
@@ -524,23 +534,39 @@ def _handle_list(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if lock_error:
+        print(f"\n❌ {lock_error}", file=sys.stderr)
+
     if notable:
-        blocking = sum(1 for d in notable if d.fatal)
-        names = ", ".join(sorted({d.skill for d in notable}))
-        print(
-            f"\n⚠ {len(notable)} skill file(s) no longer match "
-            f"{drift.lock_file.name} ({names}"
-            f"{f'; {blocking} will refuse to load' if blocking else ''}). "
-            "Details: gaia skill lock --check",
-            file=sys.stderr,
-        )
+        # "Cannot be verified" and "does not match" are different findings; one
+        # message for both tells every upgrading user their files were edited.
+        unverifiable = [d for d in notable if d.kind == DRIFT_UNRECORDED]
+        differing = [d for d in notable if d.kind != DRIFT_UNRECORDED]
+        if unverifiable:
+            names = ", ".join(sorted({d.skill for d in unverifiable}))
+            print(
+                f"\n⚠ {len(unverifiable)} skill(s) predate content digests, so "
+                f"{drift.lock_file.name} cannot verify them ({names}). Record them "
+                "with 'gaia skill lock --relock'; it refuses signature-backed "
+                "skills — 'gaia skill lock --check' says what those need.",
+                file=sys.stderr,
+            )
+        if differing:
+            blocking = sum(1 for d in differing if d.fatal)
+            names = ", ".join(sorted({d.skill for d in differing}))
+            print(
+                f"\n⚠ {len(differing)} skill(s) no longer match "
+                f"{drift.lock_file.name} ({names}"
+                f"{f'; {blocking} will refuse to load' if blocking else ''}). "
+                "Details: gaia skill lock --check",
+                file=sys.stderr,
+            )
 
     if errors:
         print(f"\n{len(errors)} skill folder(s) failed to load:", file=sys.stderr)
         for path, message in errors.items():
             print(f"  {path}: {message}", file=sys.stderr)
-        return EXIT_INVALID
-    return EXIT_OK
+    return EXIT_INVALID if errors or lock_error else EXIT_OK
 
 
 def _handle_info(args: argparse.Namespace) -> int:
@@ -893,10 +919,11 @@ def _handle_search(args: argparse.Namespace) -> int:
 
         days = round(CACHE_STALE_AFTER_SECONDS / 86400)
         print(
-            f"⚠ This catalog is {found.age_text} — over {days} days old. The hub "
-            "is unreachable, so skills published since are missing and skills "
-            "unpublished since are still listed, including any whose security "
-            "tier changed. Reconnect and re-run to refresh, or check GAIA_HUB_URL.",
+            f"⚠ This catalog was last refreshed {found.age_text} — over {days} "
+            "days old. The hub is unreachable, so skills published since are "
+            "missing and skills unpublished since are still listed, including "
+            "any whose security tier changed. Reconnect and re-run to refresh, "
+            "or check GAIA_HUB_URL.",
             file=sys.stderr,
         )
     elif found.offline:
@@ -998,7 +1025,7 @@ def _handle_remove(args: argparse.Namespace) -> int:
 
 def _handle_lock(args: argparse.Namespace) -> int:
     """Check the user root against ``skill-lock.json``, or re-record it."""
-    from gaia.skills.drift import check_drift, relock
+    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift, relock
 
     root = _manager().user_root
 
@@ -1014,6 +1041,22 @@ def _handle_lock(args: argparse.Namespace) -> int:
     if report.clean:
         print(f"✅ {report.lock_file} matches what is installed in {root}")
         return EXIT_OK
+
+    # Untracked is excluded from the verdict, not from the report: it is the
+    # expected residue of create/import/migrate, and one of them must not turn
+    # "your skills predate digests" back into "your skills differ".
+    unrecorded = [d for d in report.drifts if d.kind == DRIFT_UNRECORDED]
+    notable = [d for d in report.drifts if d.kind != DRIFT_UNTRACKED]
+    if unrecorded and len(unrecorded) == len(notable):
+        untracked = len(report.drifts) - len(unrecorded)
+        also = f", plus {untracked} the lock does not track" if untracked else ""
+        print(
+            f"⚠ {len(unrecorded)} skill(s) in {root} predate content digests, so "
+            f"{report.lock_file.name} cannot verify them{also}:\n",
+            file=sys.stderr,
+        )
+        print(report.render(), file=sys.stderr)
+        return EXIT_INVALID
 
     fatal, warnings = len(report.fatal), len(report.warnings)
     print(
@@ -1045,22 +1088,23 @@ def _render_relock(result: "RelockResult", root: Path, *, as_json: bool) -> int:
         print(f"✅ Nothing to re-record — {result.lock_file} already matches {root}")
         return EXIT_OK
 
-    print(f"✅ Re-recorded {result.lock_file}")
-    if result.updated:
-        print(f"   updated : {', '.join(result.updated)}")
-    if result.added:
-        print(f"   now tracked (source: local) : {', '.join(result.added)}")
-    if result.removed:
-        print(f"   dropped (no longer installed) : {', '.join(result.removed)}")
+    if result.changed:
+        print(f"✅ Re-recorded {result.lock_file}")
+        if result.updated:
+            print(f"   updated : {', '.join(result.updated)}")
+        if result.added:
+            print(f"   now tracked (source: local) : {', '.join(result.added)}")
+        if result.removed:
+            print(f"   dropped (no longer installed) : {', '.join(result.removed)}")
 
     if not result.refused:
         return EXIT_OK
 
     names = ", ".join(sorted({d.skill for d in result.refused}))
     print(
-        f"\n❌ Refused to re-record {names}: installed at a signature-backed tier, "
-        "but the files changed. Re-recording would leave the lock asserting a "
-        "signature over bytes it never covered.",
+        f"\n❌ Refused to re-record {names}: installed at a signature-backed tier "
+        "over bytes this lock cannot vouch for. Writing a digest now would leave "
+        "the lock asserting a publisher signature over content nothing verified.",
         file=sys.stderr,
     )
     for drift in result.refused:

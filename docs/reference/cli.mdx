@@ -2106,9 +2106,9 @@ Skills are discovered from three roots, highest precedence first:
     warns loudly once it passes a week:
 
     ```
-    ⚠ This catalog is 93 days ago — over 7 days old. The hub is unreachable, so
-      skills published since are missing and skills unpublished since are still
-      listed, including any whose security tier changed.
+    ⚠ This catalog was last refreshed 93 days ago — over 7 days old. The hub is
+      unreachable, so skills published since are missing and skills unpublished
+      since are still listed, including any whose security tier changed.
     ```
 
     `--json` carries the same facts as `age_seconds`, `age_text`, and `stale`.
@@ -2168,12 +2168,39 @@ Skills are discovered from three roots, highest precedence first:
     Untracked skills are normal right after `create` / `import` / `migrate`;
     `--relock` starts tracking them as `source: local`.
 
+    <Note>
+    **After upgrading from a build that predates content digests**, skills
+    installed by the older build have nothing to compare against. They report as
+    *unverifiable*, not as changed — `gaia skill list` says so in those words and
+    still exits `0`:
+
+    ```
+    ⚠ 2 skill(s) in ~/.gaia/skills predate content digests, so skill-lock.json
+      cannot verify them:
+    ```
+
+    `gaia skill lock` still exits `4` here: it is an explicit verification verb,
+    and "could not verify" is not "verified clean". Don't gate CI on it without
+    running `--relock` first. Locally-authored and `experimental` skills are
+    recorded by that one command; a `community` / `verified` one needs
+    `gaia skill install <name> --force` instead (see the warning below).
+
+    A **corrupt or future-schema** `skill-lock.json` is different: it is reported
+    alongside the `gaia skill list` inventory (exit `4`), and every skill in
+    `~/.gaia/skills` refuses to load until the file is fixed or deleted —
+    including purely local ones. Nothing can tell an attested skill from a local
+    one while the lock is unreadable, so loading anyway would let corrupting one
+    file switch the check off.
+    </Note>
+
     <Warning>
     `--relock` **refuses** to re-record a `community` or `verified` skill whose
-    files changed. Rewriting the digest there would leave the lock asserting a
-    publisher signature over bytes that signature never covered. Reinstall it, or
-    `gaia skill remove` then `gaia skill import` to keep the edit at
-    `experimental`.
+    files changed, **or one that has no recorded digest at all**. Writing a digest
+    in either case would leave the lock asserting a publisher signature over bytes
+    that signature never covered — and the no-digest case is where every upgrade
+    from a pre-digest build starts, so it is the likeliest way to launder an
+    attestation, not the rarest. Reinstall it, or `gaia skill remove` then
+    `gaia skill import` to keep the edit at `experimental`.
     </Warning>
   </Tab>
 

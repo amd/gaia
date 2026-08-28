@@ -627,7 +627,11 @@ tier actually installed at.
 content, and presence drift between the lock and the disk, exiting `4` when
 anything differs; `--relock` re-records the current state after an intentional
 change. A `community` / `verified` skill whose files drifted refuses to load and
-cannot be relocked — those bytes are not the ones its signature covered.
+cannot be relocked — those bytes are not the ones its signature covered. Nor can
+one with no digest recorded yet (an entry from a pre-digest build): stamping the
+current bytes there would assert a signature nothing checked, so those reinstall
+instead. An unreadable lock refuses **every** user-root skill, local ones
+included — it cannot say which are attested.
 
 **Still PROPOSED** — `update` (marketplace):
 
