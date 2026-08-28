@@ -988,6 +988,14 @@ def run_scenario_subprocess(
             # non-zero with an empty stderr; recording stderr alone left the
             # scenario ERRORED with error="" and no way to tell why.
             detail = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            # Under --output-format json the reason is the `result` field of the
+            # envelope, past the point a head-truncated dump would show it.
+            try:
+                envelope = json.loads(detail)
+                if isinstance(envelope, dict) and envelope.get("result"):
+                    detail = str(envelope["result"])
+            except (ValueError, TypeError):
+                pass
             detail = detail[:500] if detail else "no output on stdout or stderr"
             message = (
                 f"scenario driver `{cmd[0]}` exited {proc.returncode}: {detail} "

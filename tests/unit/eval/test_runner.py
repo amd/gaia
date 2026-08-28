@@ -764,3 +764,14 @@ class TestDriverFailureIsDiagnosable:
 
         assert result["error"].strip()
         assert "no output on stdout or stderr" in result["error"]
+
+    def test_json_envelope_surfaces_the_result_field(self, monkeypatch, tmp_path):
+        """--output-format json buries the reason past a head-truncated dump."""
+        envelope = json.dumps(
+            {"is_error": True, "usage": {"x": 0}, "result": "Invalid model name"}
+        )
+
+        result = self._run(monkeypatch, tmp_path, envelope, "")
+
+        assert "Invalid model name" in result["error"]
+        assert "is_error" not in result["error"]
