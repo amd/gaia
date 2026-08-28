@@ -159,7 +159,10 @@ class TestArchiveSafety:
             hop.linkname = "."
             tf.addfile(hop)
 
-            tf.addfile(tarfile.TarInfo("d/hop/../../pwned.txt"), io.BytesIO(b"owned"))
+            payload = b"owned"
+            through = tarfile.TarInfo("d/hop/../../pwned.txt")
+            through.size = len(payload)
+            tf.addfile(through, io.BytesIO(payload))
 
         dest = tmp_path / "dest"
         _extract(archive, dest)
