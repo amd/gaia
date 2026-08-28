@@ -10,6 +10,7 @@ so the agent loop's response parser works unchanged against either backend.
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -206,26 +207,61 @@ class ClaudeProvider(LLMClient):
                 return candidate
         return DEFAULT_CLAUDE_MODEL
 
-    @staticmethod
-    def _to_anthropic_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+    #: Anthropic's tool-name contract. GAIA names can be wider — skill tools are
+    #: namespaced ``<skill>/<tool>`` and the ``/`` 400s the whole request — so
+    #: names are sanitized outbound and mapped back on returned tool_use blocks.
+    _TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+    def _api_tool_name(self, name: str) -> str:
+        if self._TOOL_NAME_RE.fullmatch(name):
+            return name
+        return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
+
+    def _restore_tool_name(self, api_name: str) -> str:
+        mapping = getattr(self, "_tool_name_map", None)
+        if mapping is None or api_name not in mapping:
+            # Every outbound name is registered, so a miss means the map is
+            # stale — the agent would blame the model for "Unknown tool name".
+            logger.warning(
+                "Tool %r is not in the outbound name map; returning it "
+                "unmapped. Dispatch will fail if the name was sanitized.",
+                api_name,
+            )
+            return api_name
+        return mapping[api_name]
+
+    def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
         """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
+        self._tool_name_map: dict = {}
         if not tools:
             return None
         converted = []
         for tool in tools:
             fn = tool.get("function") if tool.get("type") == "function" else None
-            if fn is None:
-                # Already Anthropic-shaped (has name + input_schema) — pass through.
-                converted.append(tool)
-                continue
-            converted.append(
-                {
+            entry = (
+                dict(tool)  # already Anthropic-shaped (name + input_schema)
+                if fn is None
+                else {
                     "name": fn["name"],
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters")
                     or {"type": "object", "properties": {}},
                 }
             )
+            original = entry.get("name", "")
+            api_name = self._api_tool_name(original)
+            # Register identity names too: `write/file` sanitizes onto the
+            # builtin `write_file`, and only a full map can see that clash.
+            if api_name in self._tool_name_map:
+                clash = self._tool_name_map[api_name]
+                raise ValueError(
+                    f"Tool names {clash!r} and {original!r} both map to "
+                    f"{api_name!r} for the Anthropic API — the model's call "
+                    "could not be routed back unambiguously. Rename one."
+                )
+            self._tool_name_map[api_name] = original
+            entry["name"] = api_name
+            converted.append(entry)
         return converted
 
     def _split_system(self, messages: List[dict]) -> tuple:
@@ -361,7 +397,7 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": block.name,
+                            "name": self._restore_tool_name(block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
@@ -412,7 +448,10 @@ class ClaudeProvider(LLMClient):
                         tool_slots[event.index] = {
                             "id": block.id,
                             "type": "function",
-                            "function": {"name": block.name, "arguments": ""},
+                            "function": {
+                                "name": self._restore_tool_name(block.name),
+                                "arguments": "",
+                            },
                         }
                 elif etype == "content_block_delta":
                     delta = event.delta
