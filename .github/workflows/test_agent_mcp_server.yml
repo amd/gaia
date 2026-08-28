@@ -84,8 +84,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev]
-          uv pip install --system "fastmcp>=0.1.0"
+          uv pip install --system -e ".[dev,mcp]"
 
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped
