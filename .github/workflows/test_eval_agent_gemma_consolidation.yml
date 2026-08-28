@@ -699,6 +699,12 @@ jobs:
             Show-LemonadeTaskLog | Out-Null
             "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "::error::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured; tool_selection does not need the embedder and WILL still run, so this job continues and still gates that category. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
+            # This is the STOP the comment above describes. Without it control
+            # falls into rungs 3-5, whose terminal `exit 1` fails this step - and
+            # the eval step below is plain `success()`-gated, so tool_selection
+            # never runs. Exit 0 hands off to it; the integrity gate still fails
+            # the job for the two categories nobody measured.
+            exit 0
           }
 
           # RUNG 3 - purge the model's BYTES, not just its registration, then
