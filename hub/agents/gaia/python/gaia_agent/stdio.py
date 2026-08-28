@@ -72,6 +72,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
+from gaia.agents.base.readiness import start_advice
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
@@ -400,7 +401,7 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
     except LemonadeClientError as exc:
         raise RuntimeError(
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
-            "Start it with `lemonade-server serve`, then retry."
+            f"{start_advice()}"
         ) from exc
     return sorted(
         {
@@ -893,8 +894,8 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
         return {
             "type": "error",
             "detail": (
-                "Local Lemonade Server is not reachable. Start it, then retry — "
-                f"run `lemonade-server serve`. (underlying error: {text})"
+                f"Local Lemonade Server is not reachable. {start_advice()} "
+                f"(underlying error: {text})"
             ),
         }
     return {"type": "error", "detail": text}

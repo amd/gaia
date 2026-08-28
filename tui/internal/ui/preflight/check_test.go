@@ -65,7 +65,8 @@ const (
 		`"base_url":"http://localhost:8000/api/v1","version":null,"min_version":"8.1.0",` +
 		`"compatible":null},"model":{"id":"Gemma-4-E4B-it-GGUF","present":false,"loadable":null,` +
 		`"ctx_size":null},"hint":"Local Lemonade Server is not reachable at ` +
-		"http://localhost:8000/api/v1 — start it with `lemonade-server serve` (or run `gaia init`), then retry.\"}"
+		"http://localhost:8000/api/v1. GAIA starts it automatically — run `gaia daemon start` " +
+		"if the background service is not running.\"}"
 
 	initTooOld = `{"ready":false,"lemonade":{"reachable":true,` +
 		`"base_url":"http://localhost:8000/api/v1","version":"8.0.1","min_version":"8.1.0",` +
