@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -491,6 +492,18 @@ def resolve_effective_device(
     return effective_device
 
 
+def _gaia_cli_client_params(kwargs: dict) -> dict:
+    """Keep only the kwargs that ``GaiaCliClient.__init__`` accepts.
+
+    ``async_main`` receives every parsed CLI flag in ``kwargs``, including global
+    ones like ``--ui``. Passing those straight through crashes the constructor
+    with ``TypeError: ... unexpected keyword argument``. Deriving the accepted
+    names from the signature keeps this correct if the signature ever changes.
+    """
+    accepted = set(inspect.signature(GaiaCliClient.__init__).parameters) - {"self"}
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
@@ -528,32 +541,9 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
-        # Filter out parameters that are not accepted by GaiaCliClient
-        # GaiaCliClient only accepts: model, max_tokens, show_stats, logging_level
-        audio_params = {
-            "whisper_model_size",
-            "audio_device_index",
-            "silence_threshold",
-            "no_tts",
-        }
-        llm_provider_params = {
-            "use_claude",
-            "use_chatgpt",
-            "claude_model",
-            "base_url",
-        }
-        cli_params = {
-            "action",
-            "message",
-            "stats",
-            "assistant_name",
-            "stream",
-            "no_lemonade_check",
-            "list_tools",
-        }
-        excluded_params = cli_params | audio_params | llm_provider_params
-        client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
-        client = GaiaCliClient(**client_params)
+        # Pass only what GaiaCliClient accepts; unrelated CLI flags (e.g. --ui)
+        # would otherwise reach the constructor and crash it with a TypeError.
+        client = GaiaCliClient(**_gaia_cli_client_params(kwargs))
 
     if action == "prompt":
         if not kwargs.get("message"):
@@ -7734,9 +7724,6 @@ def handle_mcp_serve(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🤖 GAIA Agent UI MCP Server")
             print("=" * 60)
@@ -7747,11 +7734,11 @@ def handle_mcp_serve(args):
                     mcp._tool_manager._tools
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
-            except Exception:
-                pass
+            except AttributeError:
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
@@ -7783,9 +7770,6 @@ def handle_mcp_tui(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
@@ -7797,10 +7781,10 @@ def handle_mcp_tui(args):
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
             except AttributeError:
-                log.debug("FastMCP tool registry layout changed; skipping tool count")
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ TUI control MCP server stopped")

@@ -1,0 +1,42 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// One bullet in the landing page's two list sections — what it can do, and how
+// it is built. Both use this component, so the two lists cannot drift into
+// different type sizes, measures, or spacing.
+//
+// Each item opens with a hairline and a gold tick. Without them the bullets in
+// a three-column grid have no edge between them: one body text runs straight
+// into the next item's title, which is exactly how it reads when the page is
+// selected or read aloud.
+//
+// `link` closes the sentence with a credit or reference (e.g. the Lemonade
+// backend); the trailing period belongs to the component, not the copy, so a
+// bullet with a link and one without end identically.
+
+interface Props {
+  title: string;
+  body: string;
+  link?: { label: string; href: string; emoji?: string };
+}
+
+const { title, body, link } = Astro.props;
+---
+
+<li class="border-t border-g-border pt-5">
+  <h3 class="flex items-start gap-2.5 font-display text-[16.5px] font-semibold leading-[1.35] tracking-[-0.01em] text-g-text">
+    <span class="mt-[7px] h-[5px] w-[5px] flex-none rounded-full bg-g-gold" aria-hidden="true"></span>
+    {title}
+  </h3>
+  <p class="mt-2.5 max-w-[40ch] pl-[19px] text-[14.5px] leading-[1.7] text-g-muted">
+    {body}{link && (
+      <>
+        {' '}
+        {/* One line on purpose: a newline inside the anchor renders as a
+            space before the period ("Lemonade ."). */}
+        <a href={link.href} target="_blank" rel="noopener noreferrer" class="prose-link whitespace-nowrap">{link.emoji && <span aria-hidden="true">{link.emoji + ' '}</span>}{link.label}</a>.
+      </>
+    )}
+  </p>
+</li>

@@ -2,11 +2,13 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/ui"
@@ -17,30 +19,111 @@ import (
 const altScreenEnter = "\x1b[?1049h"
 
 // buildBinaries compiles the CLI and the mock agent into a temp dir, naming the
-// mock `gaia-bash` so the catalog's PATH lookup finds it. This exercises the
-// real command the user runs, not an in-process shortcut.
+// mock `gaia-agent` so the catalog's PATH lookup finds it as the flagship. This
+// exercises the real command the user runs, not an in-process shortcut.
+// buildBinaries compiles the CLI and the mock agent ONCE per test binary and
+// returns their shared directory. The mock is named `gaia-agent` so the
+// catalog's PATH lookup finds it as the flagship. This exercises the real
+// command the user runs, not an in-process shortcut.
+//
+// Built once, into a directory that is NOT a t.TempDir, for two reasons. It was
+// costing a fresh ~13s compile per test. And `go build` writes its module cache
+// under $HOME — which isolateGaiaHome moves — so a per-test build re-downloaded
+// every dependency into a temp dir that cleanup then could not remove, because
+// module-cache files are read-only. TestMain removes the shared dir at the end.
+var (
+	buildOnce sync.Once
+	builtBin  string
+	builtDir  string
+	buildErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtDir != "" {
+		_ = os.RemoveAll(builtDir)
+	}
+	os.Exit(code)
+}
+
 func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the CLI binary; skipped under -short")
 	}
 
-	binDir = t.TempDir()
-	suffix := ""
-	if runtime.GOOS == "windows" {
-		suffix = ".exe"
-	}
-	gaiaBin = filepath.Join(binDir, "gaia"+suffix)
-	mockBin := filepath.Join(binDir, "gaia-bash"+suffix)
-
-	for target, out := range map[string]string{"./cmd/gaia": gaiaBin, "./test/mockagent": mockBin} {
-		cmd := exec.Command("go", "build", "-o", out, target)
-		cmd.Dir = repoTUIDir(t)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("go build %s: %v\n%s", target, err, output)
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "gaia-tui-build")
+		if err != nil {
+			buildErr = err
+			return
 		}
+		builtDir = dir
+
+		suffix := ""
+		if runtime.GOOS == "windows" {
+			suffix = ".exe"
+		}
+		builtBin = filepath.Join(dir, "gaia-tui"+suffix)
+		mockBin := filepath.Join(dir, "gaia-agent"+suffix)
+
+		root, rerr := os.Getwd()
+		if rerr != nil {
+			buildErr = rerr
+			return
+		}
+		root = filepath.Dir(root)
+
+		for target, out := range map[string]string{"./cmd/gaia": builtBin, "./test/mockagent": mockBin} {
+			cmd := exec.Command("go", "build", "-o", out, target)
+			cmd.Dir = root
+			if output, err := cmd.CombinedOutput(); err != nil {
+				buildErr = fmt.Errorf("go build %s: %w\n%s", target, err, output)
+				return
+			}
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	return gaiaBin, binDir
+	return builtBin, builtDir
+}
+
+// oneShotEnv is the environment a gated one-shot needs to get past readiness:
+// the mock agent on PATH, a `gaia` CLI whose `init --check` says "ready", and a
+// Lemonade that answers /models. Every one of the three is a row the gate
+// checks, and leaving one out is a legitimate refusal rather than a test bug —
+// TestAMissingAgentBinaryHaltsAtPreflight covers that direction.
+func oneShotEnv(t *testing.T, binDir string) []string {
+	t.Helper()
+	writeGaiaInitStub(t, binDir)
+	return append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"LEMONADE_BASE_URL="+stubLemonade(t),
+		"HOME="+t.TempDir(),
+		"USERPROFILE="+t.TempDir(),
+	)
+}
+
+// writeGaiaInitStub puts a `gaia` on PATH that answers `init --check` with
+// exit 0 and nothing else. The real one downloads several GB.
+func writeGaiaInitStub(t *testing.T, binDir string) {
+	t.Helper()
+	name, body := "gaia", "#!/bin/sh\nexit 0\n"
+	if runtime.GOOS == "windows" {
+		name, body = "gaia.bat", "@echo off\r\nexit /b 0\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+		t.Fatalf("write gaia stub: %v", err)
+	}
+}
+
+// mockName is the mock agent's file name in binDir.
+func mockName() string {
+	if runtime.GOOS == "windows" {
+		return "gaia-agent.exe"
+	}
+	return "gaia-agent"
 }
 
 // repoTUIDir returns the tui module root (this package lives in tui/test).
@@ -59,8 +142,8 @@ func repoTUIDir(t *testing.T) string {
 func TestRunQueryIsAGenuineOneShot(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "list the files")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command(gaiaBin, "run", "gaia", "--mock", filepath.Join(binDir, mockName()), "--query", "list the files")
+	cmd.Env = oneShotEnv(t, binDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -94,8 +177,8 @@ func TestRunQueryIsAGenuineOneShot(t *testing.T) {
 func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "please fail the tool")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command(gaiaBin, "run", "gaia", "--mock", filepath.Join(binDir, mockName()), "--query", "please fail the tool")
+	cmd.Env = oneShotEnv(t, binDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -126,15 +209,16 @@ func TestDebugAddsDiagnosticsToTheOneShotPath(t *testing.T) {
 
 	run := func(args ...string) string {
 		cmd := exec.Command(gaiaBin, args...)
-		cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		cmd.Env = oneShotEnv(t, binDir)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		_ = cmd.Run()
 		return stderr.String()
 	}
 
-	quiet := run("run", "bash", "--query", "list the files")
-	loud := run("run", "bash", "--query", "list the files", "--debug")
+	mock := filepath.Join(binDir, mockName())
+	quiet := run("run", "gaia", "--mock", mock, "--query", "list the files")
+	loud := run("run", "gaia", "--mock", mock, "--query", "list the files", "--debug")
 
 	if !strings.Contains(loud, "[DEBUG]") {
 		t.Fatalf("--debug produced no diagnostics on the one-shot path:\n%s", loud)
@@ -142,7 +226,7 @@ func TestDebugAddsDiagnosticsToTheOneShotPath(t *testing.T) {
 	if len(loud) <= len(quiet) {
 		t.Errorf("--debug output is no richer than the plain run:\n%s", loud)
 	}
-	for _, want := range []string{"one-shot: agent=bash", "tool_result"} {
+	for _, want := range []string{"one-shot: agent=gaia", "tool_result"} {
 		if !strings.Contains(loud, want) {
 			t.Errorf("--debug output is missing %q:\n%s", want, loud)
 		}
@@ -155,7 +239,7 @@ func TestRunUnknownAgentExitsNonZero(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
 	cmd := exec.Command(gaiaBin, "run", "not-a-real-agent", "--query", "hi")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = oneShotEnv(t, binDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -168,14 +252,13 @@ func TestRunUnknownAgentExitsNonZero(t *testing.T) {
 	}
 }
 
-// The unknown-id error used to print every id in the catalog as "known ids",
-// which reads as a menu of things to run — and 12 of the 13 could not run.
-// Picking one answered "build it" for an agent nothing publishes.
-func TestUnknownAgentErrorSeparatesRunnableFromNotRunnable(t *testing.T) {
+// An unknown --agent has to name what DOES exist, and must not send the user
+// to a screen that is gone.
+func TestUnknownAgentErrorNamesTheIdsThatExist(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
 	cmd := exec.Command(gaiaBin, "run", "not-a-real-agent", "--query", "hi")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = oneShotEnv(t, binDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -184,14 +267,12 @@ func TestUnknownAgentErrorSeparatesRunnableFromNotRunnable(t *testing.T) {
 	}
 
 	text := stderr.String()
-	if strings.Contains(text, "known ids") {
-		t.Errorf("the error still presents every catalog id as runnable:\n%s", text)
+	if !strings.Contains(text, "gaia") || !strings.Contains(text, "email") {
+		t.Errorf("the error does not name the ids that do exist:\n%s", text)
 	}
-	if !strings.Contains(text, "gaia tui list") {
-		t.Errorf("the error does not say how to find a runnable agent:\n%s", text)
-	}
-	if !strings.Contains(text, "Not runnable here") {
-		t.Errorf("the error does not separate what cannot run:\n%s", text)
+	// The old text pointed at a browser to go find one in.
+	if strings.Contains(text, "gaia tui list") {
+		t.Errorf("the error still points at a hub browser that no longer exists:\n%s", text)
 	}
 }
 
@@ -253,37 +334,55 @@ func TestFlagRefusalDoesNotDumpTheUsageBlock(t *testing.T) {
 	}
 }
 
-// The subcommands the port added must exist and be discoverable from --help.
-func TestHubSubcommandsExist(t *testing.T) {
+// The subcommands this binary ships must be discoverable from --help. The
+// hub browser's list/install/uninstall are deliberately NOT among them: GAIA
+// ships one agent, and `gaia hub` (the Python CLI) owns installing the sidecar
+// agents that are fetched.
+func TestTheShippedSubcommandsExist(t *testing.T) {
 	gaiaBin, _ := buildBinaries(t)
 
 	out, err := exec.Command(gaiaBin, "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("gaia --help: %v\n%s", err, out)
+		t.Fatalf("gaia-tui --help: %v\n%s", err, out)
 	}
-	for _, want := range []string{"list", "install", "uninstall", "run", "status", "hub", "chat"} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("`gaia --help` does not list the %q subcommand:\n%s", want, out)
+	commands := commandNames(t, string(out))
+	for _, want := range []string{"run", "status", "chat"} {
+		if !commands[want] {
+			t.Errorf("`gaia-tui --help` does not list the %q subcommand:\n%s", want, out)
+		}
+	}
+	// Matched as a COMMAND, not as a substring: `status`'s own summary says
+	// "what is installed", and a bare Contains("install") hits that.
+	for _, gone := range []string{"list", "install", "uninstall", "hub"} {
+		if commands[gone] {
+			t.Errorf("`gaia-tui --help` still offers the %q subcommand, which is gone:\n%s", gone, out)
 		}
 	}
 }
 
-// --trust must be opt-in and documented; a user who has not read the docs has
-// to be able to find it from --help.
-func TestInstallHelpDocumentsTheTrustFlag(t *testing.T) {
-	gaiaBin, _ := buildBinaries(t)
-
-	out, err := exec.Command(gaiaBin, "install", "--help").CombinedOutput()
-	if err != nil {
-		t.Fatalf("gaia install --help: %v\n%s", err, out)
+// commandNames parses cobra's "Available Commands:" block.
+func commandNames(t *testing.T, help string) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	inBlock := false
+	for _, line := range strings.Split(help, "\n") {
+		if strings.HasPrefix(line, "Available Commands:") {
+			inBlock = true
+			continue
+		}
+		if inBlock {
+			if strings.TrimSpace(line) == "" {
+				break
+			}
+			if fields := strings.Fields(line); len(fields) > 0 {
+				names[fields[0]] = true
+			}
+		}
 	}
-	text := string(out)
-	if !strings.Contains(text, "--trust") {
-		t.Errorf("install --help does not mention --trust:\n%s", text)
+	if len(names) == 0 {
+		t.Fatalf("could not parse any subcommands out of --help:\n%s", help)
 	}
-	if !strings.Contains(text, "third-party code") {
-		t.Errorf("install --help does not say what --trust means:\n%s", text)
-	}
+	return names
 }
 
 // `run --help` promises "exit 0 on a final answer / 1 on an error", and that
@@ -293,8 +392,8 @@ func TestInstallHelpDocumentsTheTrustFlag(t *testing.T) {
 func TestFailedToolExitsNonZeroEvenWithAnAnswer(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "please fail the tool")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command(gaiaBin, "run", "gaia", "--mock", filepath.Join(binDir, mockName()), "--query", "please fail the tool")
+	cmd.Env = oneShotEnv(t, binDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -317,8 +416,8 @@ func TestFailedToolExitsNonZeroEvenWithAnAnswer(t *testing.T) {
 func TestSuccessfulToolRunStaysZeroAndQuiet(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "list the files")
-	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command(gaiaBin, "run", "gaia", "--mock", filepath.Join(binDir, mockName()), "--query", "list the files")
+	cmd.Env = oneShotEnv(t, binDir)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

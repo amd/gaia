@@ -238,7 +238,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
-| `model` | no | Overrides the model id for this run. |
+| `model` | no | Overrides the model id — only when the run builds a fresh agent. On a retained `session_id` the agent already exists, so a model that differs from the one it was built with is a **409**, not an override. |
 | `provider` | no | Local inference only — anything but `"lemonade"` is a **400**. |
 | `max_steps` | no | ≥ 1. |
 

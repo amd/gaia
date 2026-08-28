@@ -126,9 +126,15 @@ private:
 // ---------------------------------------------------------------------------
 // Conformance corpus
 //
-// Discovered from disk rather than hardcoded: tests/fixtures/skills/ has 6
-// skills today and tests/fixtures/openclaw_skills/ adds 26 more when PR #2693
-// lands. A hardcoded list would silently ignore the new ones.
+// Discovered from disk rather than hardcoded, so a new GAIA-authored corpus is
+// picked up without editing a list.
+//
+// A corpus carrying PROVENANCE.md is EXCLUDED. Those are verbatim third-party
+// skills kept byte-for-byte as migrator input, and their own PROVENANCE.md
+// says so: "including invalid or nonstandard frontmatter - that irregularity
+// is the point of the fixture." Holding them to the GAIA conformance contract
+// asserts the opposite of what they exist to prove, and the only way to make
+// them pass is to edit files that file forbids editing.
 // ---------------------------------------------------------------------------
 
 bool isSkillCorpusDir(const std::string& name) {
@@ -138,6 +144,13 @@ bool isSkillCorpusDir(const std::string& name) {
            name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0;
 }
 
+// Verbatim third-party content, identified by the file that records where each
+// skill was fetched from.
+bool isVendorCorpus(const fs::path& corpus) {
+    std::error_code ec;
+    return fs::exists(corpus / "PROVENANCE.md", ec);
+}
+
 std::vector<std::string> discoverCorpus() {
     std::vector<std::string> skills;
     std::error_code ec;
@@ -145,6 +158,7 @@ std::vector<std::string> discoverCorpus() {
     for (const auto& corpus : fs::directory_iterator(fixtures, ec)) {
         if (!corpus.is_directory()) continue;
         if (!isSkillCorpusDir(corpus.path().filename().string())) continue;
+        if (isVendorCorpus(corpus.path())) continue;
         for (const auto& skill : fs::directory_iterator(corpus.path(), ec)) {
             if (!skill.is_directory()) continue;
             if (fs::exists(skill.path() / gaia::SKILL_FILENAME)) {
@@ -423,7 +437,15 @@ INSTANTIATE_TEST_SUITE_P(Fixtures, SkillCorpus, ::testing::ValuesIn(discoverCorp
 TEST(SkillCorpusDiscovery, FindsTheOnDiskCorpus) {
     // Guards the discovery itself: an empty corpus would make every
     // parameterized case above vacuously pass.
-    EXPECT_GE(discoverCorpus().size(), 6u);
+    const auto skills = discoverCorpus();
+    EXPECT_GE(skills.size(), 6u);
+    // And guards the other direction: vendor fixtures are verbatim third-party
+    // migrator input whose nonstandard frontmatter is the point, so pulling
+    // them in asserts the opposite of what they exist to prove.
+    for (const auto& path : skills) {
+        EXPECT_EQ(path.find("openclaw_skills"), std::string::npos)
+            << path << " is vendor migrator input, not a GAIA-conformant skill";
+    }
 }
 
 // ---------------------------------------------------------------------------

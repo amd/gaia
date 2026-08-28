@@ -18,10 +18,7 @@ import (
 // rendered box itself is never allowed to overflow 24 rows, or `?` becomes
 // another way to overflow the screen.
 func TestHelpOverlayFitsEightyByTwentyFour(t *testing.T) {
-	for _, ctx := range []components.HelpContext{
-		components.HelpContextHub,
-		components.HelpContextChat,
-	} {
+	for _, ctx := range []components.HelpContext{components.HelpContextChat} {
 		rendered := components.RenderHelpOverlay(ctx, "", 80, 24, 0)
 		lines := strings.Split(stripAnsi(rendered), "\n")
 		if len(lines) > 24 {
@@ -35,61 +32,21 @@ func TestHelpOverlayFitsEightyByTwentyFour(t *testing.T) {
 	}
 }
 
-// `?` documents the keys the hub actually binds. A help screen that lists a key
-// the model does not handle is worse than none.
-func TestHubHelpDocumentsTheInstallKeys(t *testing.T) {
-	rendered := stripAnsi(components.RenderHelpOverlay(components.HelpContextHub, "", 100, 40, 0))
-	for _, want := range []string{"Install", "Uninstall", "Refresh", "non-verified"} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("hub help does not mention %q:\n%s", want, rendered)
-		}
-	}
-	if strings.Contains(rendered, "Request a new agent") {
-		t.Error("hub help still binds r to 'request an agent'; it now refreshes the catalog")
-	}
-}
-
-// Pressing ? in the hub must actually reach the overlay through the root model.
-func TestQuestionMarkOpensTheHubHelp(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := root.NewRootModelWithHub(cat, nil, false)
-
-	updated, _ := m.Update(windowSize(100, 40))
-	m = updated.(root.RootModel)
-
-	updated, cmd := m.Update(key("?"))
-	m = updated.(root.RootModel)
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			updated, _ = m.Update(msg)
-			m = updated.(root.RootModel)
-		}
-	}
-
-	if snap := m.ControlSnapshot(); snap.Overlay != "help" {
-		t.Fatalf("overlay after ? = %q, want help", snap.Overlay)
-	}
-	if !strings.Contains(stripAnsi(m.View()), "Install it") {
-		t.Error("the help overlay is not what got rendered")
-	}
-}
-
 // Once the panel can be longer than the box, the keys that used to always
 // close it (↑/↓/PgUp/PgDn/Home/End) have to navigate it instead — otherwise
 // every future line just makes scrolling worse, not possible. This drives
 // the actual root-model key routing, not just the renderer underneath it.
 func TestHelpNavigationKeysScrollWithoutClosingTheOverlay(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := root.NewRootModelWithHub(cat, nil, false)
+	m := newFlagshipForHelp(t)
 
 	// Short enough that chatHelpText overflows the box and the panel has to
 	// scroll — see TestHelpScrollReachesTheLastLineAndTheIndicatorAgrees in
 	// the components package for the same overflow at the renderer layer.
 	updated, _ := m.Update(windowSize(80, 10))
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 
 	updated, cmd := m.Update(chat.ToggleHelpMsg{})
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 	if cmd != nil {
 		t.Fatal("opening help returned a command; nothing should fire on open")
 	}
@@ -107,7 +64,7 @@ func TestHelpNavigationKeysScrollWithoutClosingTheOverlay(t *testing.T) {
 	}
 	for _, k := range navKeys {
 		updated, cmd = m.Update(k)
-		m = updated.(root.RootModel)
+		m = updated.(root.FlagshipModel)
 		if cmd != nil {
 			t.Fatalf("navigating help returned a command for %v; it should only move the scroll offset", k.Type)
 		}
@@ -126,7 +83,7 @@ func TestHelpNavigationKeysScrollWithoutClosingTheOverlay(t *testing.T) {
 
 	// Home has to reach back to the top just as reliably.
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyHome})
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 	if cmd != nil {
 		t.Fatal("Home returned a command; it should only move the scroll offset")
 	}
@@ -138,7 +95,7 @@ func TestHelpNavigationKeysScrollWithoutClosingTheOverlay(t *testing.T) {
 	// Any other key still closes the panel, exactly like every key did before
 	// it could scroll at all.
 	updated, cmd = m.Update(key("x"))
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 	if cmd != nil {
 		t.Fatal("closing help returned a command; nothing should fire on close")
 	}
@@ -152,24 +109,35 @@ func TestHelpNavigationKeysScrollWithoutClosingTheOverlay(t *testing.T) {
 // underlying chat model ever sees the KeyMsg, so Esc here can neither quit
 // the app nor cancel whatever turn the screen underneath was running.
 func TestHelpEscClosesWithoutQuittingOrForwarding(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := root.NewRootModelWithHub(cat, nil, false)
+	m := newFlagshipForHelp(t)
 
 	updated, _ := m.Update(windowSize(80, 24))
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 
 	updated, _ = m.Update(chat.ToggleHelpMsg{})
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 	if snap := m.ControlSnapshot(); snap.Overlay != "help" {
 		t.Fatalf("overlay after opening help = %q, want help", snap.Overlay)
 	}
 
 	updated, cmd := m.Update(keyEsc())
-	m = updated.(root.RootModel)
+	m = updated.(root.FlagshipModel)
 	if cmd != nil {
 		t.Fatal("Esc while help is open returned a command — it must only close the overlay")
 	}
 	if snap := m.ControlSnapshot(); snap.Overlay == "help" {
 		t.Fatal("Esc did not close the help overlay")
 	}
+}
+
+// newFlagshipForHelp builds the launch router without starting it, so the help
+// overlay can be driven without a readiness probe running underneath it. The
+// overlay is owned by the router and works from whatever view is on screen.
+func newFlagshipForHelp(t *testing.T) root.FlagshipModel {
+	t.Helper()
+	agent := catalog.NewCatalog().Get(catalog.FlagshipID)
+	if agent == nil {
+		t.Fatalf("the catalog has no %q entry", catalog.FlagshipID)
+	}
+	return root.NewFlagshipModel(*agent, false)
 }

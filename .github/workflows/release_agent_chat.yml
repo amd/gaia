@@ -55,11 +55,13 @@
 #     restricted to `main` AND the `agent-pkg-*` tag pattern).
 #   Secrets:     GAIA_HUB_TOKEN (Agent Hub Bearer publish token, defined as
 #     an ENVIRONMENT secret on agent-publish, NOT a repo secret).
-#   Variables:   GAIA_HUB_BASE_URL (default https://hub.amd-gaia.ai),
+#   Variables:   GAIA_HUB_BASE_URL (default https://hub.amd-gaia.ai — downloads),
 #     GAIA_HUB_PUBLISH_URL (the Worker's workers.dev origin -- large uploads
 #     are blocked on the proxied custom domain's managed WAF; a wheel is
 #     small so this matters less than for email's binaries, but the Worker
-#     endpoint is the same one either way).
+#     endpoint is the same one either way — same Worker + R2 bucket, just the
+#     door that isn't WAF-blocked). REQUIRED for publishing — the release
+#     fails loudly if it is unset (no silent fallback).
 #
 # Tag namespace: `agent-pkg-chat-*` (NOT `v*` -- avoids firing publish.yml /
 # the paused publish_agents.yml). Example:
@@ -284,6 +286,20 @@ jobs:
             exit 1
           fi
 
+      - name: Assert hub publish URL present
+        if: steps.dry.outputs.dry_run == 'false'
+        shell: bash
+        # Variable goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing.
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Install requests + PyYAML (publish_to_r2.py deps)
         if: steps.dry.outputs.dry_run == 'false'
         run: python -m pip install --upgrade requests pyyaml
@@ -296,7 +312,6 @@ jobs:
           # the command line or disk.
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           whl="$(find dist -maxdepth 1 -name '*.whl' | head -n1)"
@@ -313,7 +328,7 @@ jobs:
           # only special-cases 'email-agent-*'/'.zip' filenames — a bare
           # gaia_agent_chat-*.whl has no inferrable prefix.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --artifact "${whl}=wheel" \
             --readme "${README}" \

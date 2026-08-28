@@ -77,10 +77,16 @@ func binaryName(argv0 string) string {
 	return name
 }
 
+// mockAgent overrides the agent binary with a stand-in, for tests that need a
+// deterministic child. Declared here rather than beside the flag so every entry
+// point that honours it reads the same variable.
+var mockAgent string
+
 var rootCmd = &cobra.Command{
 	Use:   defaultBinaryName,
-	Short: "GAIA Terminal Agent Hub",
-	Long:  "Terminal-native hub for browsing, launching, and chatting with GAIA agents.",
+	Short: "GAIA in your terminal",
+	Long: "Chat with GAIA — documents, data, web research, memory and skills — " +
+		"running on this machine.",
 	// A one-line refusal followed by 20 lines of command listing pushes the
 	// actual error off a short terminal. Usage is what --help is for.
 	SilenceUsage: true,
@@ -89,11 +95,19 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
+		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
 	},
 }
 
 func init() {
+	// Empty is cobra's documented opt-out for the Windows Explorer guard. Left
+	// at its default, cobra refuses to run and prints "This is a command line
+	// tool" for ANY launch it did not trace to a console — which includes the
+	// Start Menu and desktop shortcuts the installer creates. This binary opens
+	// its own full-screen TUI, so an Explorer launch is a supported entry point,
+	// not a mistake. root_test.go pins this.
+	cobra.MousetrapHelpText = ""
+
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
 		"developer mode: show per-turn timings, steps, and tool arguments and output "+
 			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/)")
@@ -139,17 +153,20 @@ func init() {
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,
 		"control API port (implies --control; 0 auto-assigns)")
-	rootCmd.Flags().StringVar(&mockAgent, "mock", "", "path to mock agent binary for testing (overrides all agent binaries)")
+	// Persistent: `run` launches an agent too, and a --mock that only worked on
+	// the bare launch let a test spawn the real agent while believing it had
+	// substituted a stand-in.
+	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
+		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
 }
 
 // Execute runs the CLI.
 //
 // A leading `tui` word is accepted and dropped. This binary is addressed as
 // `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui install email` — the exact line
-// the docs and the install refusal tell people to run — would fail with
-// "unknown command". Both spellings work; only the first argument is
-// considered, so an agent named "tui" is unaffected.
+// binary's own name, so without this `gaia tui run email` — the exact spelling
+// the docs use — would fail with "unknown command". Both spellings work; only
+// the first argument is considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

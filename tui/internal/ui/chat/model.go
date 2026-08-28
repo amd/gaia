@@ -18,6 +18,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -74,9 +75,6 @@ type preScanFetchFailedMsg struct{ err error }
 // status note, never as the confident (and wrong) empty-needs_you card a
 // naive decode of an old sidecar's response would produce.
 type preScanDegradedMsg struct{ notice string }
-
-// ReturnToHubMsg signals the root model to switch back to the hub view.
-type ReturnToHubMsg struct{ AgentID string }
 
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
@@ -168,7 +166,6 @@ type ChatModel struct {
 	agentName string
 	agentID   string
 	dev       bool
-	fromHub   bool
 
 	width  int
 	height int
@@ -344,10 +341,16 @@ type ChatModel struct {
 	// other reason a run ended, so the completion handler reports
 	// "cancelled" instead of misreading the killed child as a failure.
 	setupCancelRequested bool
+	// setupVerified means the readiness gate in front of this launch already
+	// ran `gaia init --check` and it passed, so the first-boot gate must not
+	// ask again. Each check spawns a fresh Python interpreter for up to
+	// gaiainit.CheckTimeout, and a cold launch was paying that twice.
+	// `/setup` is unaffected: typing it IS the user asking for the real run.
+	setupVerified bool
 	// setupCh is the current setup run's event channel, scoped the same way
 	// m.events scopes a turn: a late event from an abandoned run (the user
 	// cancelled, then /setup again) must not land on whatever replaced it.
-	setupCh <-chan setupEvent
+	setupCh <-chan gaiainit.Event
 	// memoryView is the last successfully fetched /memory snapshot, drawn
 	// inline in the transcript until dismissed with Esc. Non-nil means it is
 	// on screen. It is never part of m.messages: like question/confirmation,
@@ -392,11 +395,15 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	return m.applyLaunchBypass().applyLaunchClaude()
 }
 
-// NewChatModelFromHub creates a ChatModel launched from the hub, enabling Esc-to-return behavior.
-func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
+// NewChatModelForFlagship creates the ChatModel the TUI boots into.
+//
+// setupVerified says the readiness gate in front of this launch already ran
+// `gaia init --check` and it passed, so the first-boot gate must not ask again
+// — see ChatModel.setupVerified.
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	m.fromHub = true
+	m.setupVerified = setupVerified
 	return m.applyFirstBootGate()
 }
 
@@ -996,12 +1003,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.streaming && m.cancelPending {
 			return m.forceLocalAbort()
 		}
-		if m.fromHub {
-			return m, func() tea.Msg {
-				return ReturnToHubMsg{AgentID: m.agentID}
-			}
-		}
-		// Idle, with nowhere to go back to. This used to quit, which made Esc
+		// Idle. This used to quit, which made Esc
 		// an unadvertised one-keystroke way to destroy the session — on the key
 		// people press to mean "never mind", and most reachable in the seconds
 		// after a cancelled turn, when pressing it again is the documented
@@ -1287,19 +1289,6 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	switch query {
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
-
-	case "/hub":
-		if m.fromHub {
-			return m, func() tea.Msg {
-				return ReturnToHubMsg{AgentID: m.agentID}
-			}
-		}
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "Not launched from hub. Use Ctrl+C to quit.",
-		})
-		m.updateViewport()
-		return m, nil
 
 	case "/clear":
 		m.messages = nil

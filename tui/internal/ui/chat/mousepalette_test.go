@@ -63,9 +63,9 @@ func TestHoveringAPaletteRowSelectsIt(t *testing.T) {
 // so the FIRST click on a fresh row is "select", not "run".
 func TestClickingAnUnselectedPaletteRowOnlySelectsIt(t *testing.T) {
 	m, _ := newTestModel(t)
-	m = typeInto(t, m, "/h") // matches /help then /hub
-	if len(m.paletteFiltered()) != 2 {
-		t.Fatal("test setup: expected exactly /help and /hub")
+	m = typeInto(t, m, "/") // every command, /clear on row 1
+	if names := paletteNames(m.paletteFiltered()); len(names) < 2 || names[1] != "/clear" {
+		t.Fatalf("test setup: expected /clear on row 1, got %v", names)
 	}
 
 	x, y := paletteRowCoord(t, m, 1)
@@ -88,9 +88,10 @@ func TestClickingAnUnselectedPaletteRowOnlySelectsIt(t *testing.T) {
 // TestSetupCommandIsNeverSentAsAQuery's own guarantee for /setup).
 func TestClickingTheSelectedPaletteRowRunsIt(t *testing.T) {
 	m, _ := newTestModel(t)
-	m = typeInto(t, m, "/h") // matches /help then /hub, /hub selected via a second click
+	m = typeInto(t, m, "/") // every command, /clear on row 1
+	m.messages = []Message{{Role: RoleStatus, Content: "something /clear must remove"}}
 	x, y := paletteRowCoord(t, m, 1)
-	m, _ = click(t, m, x, y) // first click: select row 1 (/hub)
+	m, _ = click(t, m, x, y) // first click: select row 1 (/clear)
 	if m.palette.selected != 1 {
 		t.Fatal("test setup: expected row 1 selected after the first click")
 	}
@@ -108,9 +109,10 @@ func TestClickingTheSelectedPaletteRowRunsIt(t *testing.T) {
 			t.Errorf("the command must never be posted as a chat message, found: %q", msg.Content)
 		}
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus {
-		t.Errorf("expected /hub's decline status note, got: %+v", last)
+	// Proof it ran /clear — the SELECTED row — and not the literally typed "/",
+	// which is not a command at all and would have gone to sendQuery.
+	if len(m.messages) != 0 {
+		t.Errorf("clicking /clear did not clear the transcript: %+v", m.messages)
 	}
 }
 

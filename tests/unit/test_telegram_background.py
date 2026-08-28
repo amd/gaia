@@ -1,9 +1,12 @@
 import os
 import sys
+import threading
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from gaia.messaging.telegram import run_telegram
+from gaia.messaging import telegram
 
 
 def test_background_writes_pid(mock_home, monkeypatch):
@@ -12,10 +15,34 @@ def test_background_writes_pid(mock_home, monkeypatch):
 
     # mock_home redirects "~" at a tmp dir, so the adapter's
     # expanduser("~/.gaia") pid file never overwrites a live adapter's real one.
-    run_telegram(token="fake-token-bg", allowed_users=None, background=True)
+    telegram.run_telegram(token="fake-token-bg", allowed_users=None, background=True)
 
     # Assert on the sandbox path, not expanduser("~") — if the isolation is
     # removed this fails instead of passing while clobbering the real pid file.
     pid_path = mock_home / ".gaia" / "telegram.pid"
     assert pid_path.exists()
     assert pid_path.read_text(encoding="utf-8").strip().isdigit()
+
+
+def test_background_test_mode_does_not_start_threads(mock_home, monkeypatch):
+    monkeypatch.setenv("GAIA_TEST_MODE", "1")
+
+    # python-telegram-bot is optional and is absent from the unit CI job.
+    # Stub its builder so the test reaches the GAIA_TEST_MODE guard.
+    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
+    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
+
+    def fail_if_thread_started(*args, **kwargs):
+        raise AssertionError("GAIA_TEST_MODE started a background thread")
+
+    monkeypatch.setattr(
+        telegram,
+        "threading",
+        SimpleNamespace(Thread=fail_if_thread_started, Event=threading.Event),
+    )
+
+    adapter = telegram.run_telegram(
+        token="fake-token-no-threads", allowed_users=None, background=True
+    )
+
+    assert adapter.application is not None

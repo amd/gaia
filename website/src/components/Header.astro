@@ -12,7 +12,6 @@ import ThemeToggle from './ThemeToggle.astro';
 // is shared with /hub and /hub/[id] where those sections don't exist.
 const NAV = [
   { label: 'Agent Hub', href: '/hub' },
-  { label: 'Build', href: '/#build' },
   { label: 'Docs', href: 'https://amd-gaia.ai/docs', external: true },
 ];
 ---
@@ -26,6 +25,8 @@ const NAV = [
     <a href="/" class="flex items-baseline gap-2">
       <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
       <span class="mono text-[10px] text-g-faint">/ AMD</span>
+      {/* Site-wide, not per page: the whole thing is in beta, not one feature. */}
+      <span class="g-badge">Beta</span>
     </a>
 
     <div class="flex items-center gap-1">
@@ -54,7 +55,7 @@ const NAV = [
 
       <ThemeToggle />
       <a href="/#install" class="g-btn g-btn-primary ml-1 hidden px-3.5 py-1.5 text-[13px] sm:inline-flex">
-        Get started
+        Install
       </a>
 
       <!-- Mobile menu button -->
@@ -87,7 +88,7 @@ const NAV = [
         >{item.label}</a>
       ))}
       <a href="/#install" class="g-btn g-btn-primary mt-3 w-full px-3.5 py-1.5 text-[13px]">
-        Get started
+        Install
       </a>
     </div>
   </div>

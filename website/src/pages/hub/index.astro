@@ -18,12 +18,20 @@ const published = await getCatalog();
 const agents = await getAgentPackages();
 const skills = await getSkills();
 
-// Editorial pick: feature the email agent; fall back to the first non-deprecated
-// verified agent, else the first agent.
+// The flagship leads. `gaia` is the agent the whole site points at, so it is the
+// spotlight whenever it is published — not an editorial pick that has to be
+// re-chosen each release. Falls back to any non-deprecated verified agent, then
+// to the first, so the page still renders against a sparse or offline catalog.
 const spotlight =
-  agents.find((a) => a.id === 'email' && !a.deprecated) ??
+  agents.find((a) => a.id === 'gaia' && !a.deprecated) ??
   agents.find((a) => !a.deprecated && a.security_tier === 'verified') ??
   agents[0];
+
+// …and it leads the list too, rather than sorting alphabetically into the middle.
+const ordered = [
+  ...agents.filter((a) => a.id === 'gaia'),
+  ...agents.filter((a) => a.id !== 'gaia'),
+];
 const categories = distinct(agents, 'category').sort();
 
 const stats = [
@@ -92,7 +100,7 @@ const stats = [
          agents there are instead of reading loose rows. -->
     <div id="hub-list" class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
       <ul aria-label="Published agents">
-        {agents.map((agent) => <li><AgentRow agent={agent} /></li>)}
+        {ordered.map((agent) => <li><AgentRow agent={agent} /></li>)}
       </ul>
 
       <div id="hub-empty" class="hidden px-[22px] py-11 text-center text-[14px] text-g-muted">

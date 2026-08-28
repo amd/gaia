@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +15,6 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
-	"github.com/amd/gaia/tui/internal/ui/chat"
-	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -254,7 +251,7 @@ func (g *gateTransport) ctxShortfall() *gateTransport {
 
 type rootDriver struct {
 	t   *testing.T
-	m   root.RootModel
+	m   root.FlagshipModel
 	cat *catalog.Catalog
 	tr  preflight.Transport
 }
@@ -280,18 +277,39 @@ func newRootDriver(t *testing.T, g preflight.Transport, w, h int) *rootDriver {
 // ManualProceed keeps an all-green gate on screen so it can be looked at.
 func newRootDriverOpts(t *testing.T, g preflight.Transport, w, h int, opts preflight.Options) *rootDriver {
 	t.Helper()
+	return newRootDriverFor(t, emailAgent(t), g, w, h, opts)
+}
+
+// newRootDriverFor builds the launch router around one agent. email is the
+// daemon-backed one, so it is what exercises the daemon runner end to end;
+// the local runner has its own driver (see flagship_test.go).
+func newRootDriverFor(t *testing.T, agent catalog.Agent, g preflight.Transport, w, h int, opts preflight.Options) *rootDriver {
+	t.Helper()
 	cat := catalog.NewCatalog()
-	cat.MarkInstalled("email", "0.5.0")
-	m := root.NewRootModelWithHub(cat, nil, false).WithPreflight(g, opts)
+	m := root.NewFlagshipModel(agent, false).WithPreflight(g, opts)
 	d := &rootDriver{t: t, m: m, cat: cat, tr: g}
 	d.send(windowSize(w, h))
 	return d
 }
 
+// emailAgent is the daemon-transport entry the gate guards.
+func emailAgent(t *testing.T) catalog.Agent {
+	t.Helper()
+	agent := catalog.NewCatalog().Get("email")
+	if agent == nil {
+		t.Fatal("the email agent is missing from the catalog")
+	}
+	if agent.Transport != catalog.TransportDaemon {
+		t.Fatalf("email transport = %s, want daemon — the daemon gate only guards relayed agents",
+			agent.Transport)
+	}
+	return *agent
+}
+
 func (d *rootDriver) send(msg tea.Msg) {
 	d.t.Helper()
 	updated, cmd := d.m.Update(msg)
-	d.m = updated.(root.RootModel)
+	d.m = updated.(root.FlagshipModel)
 	d.pump(cmd)
 }
 
@@ -300,7 +318,7 @@ func (d *rootDriver) send(msg tea.Msg) {
 func (d *rootDriver) sendNoPump(msg tea.Msg) tea.Cmd {
 	d.t.Helper()
 	updated, cmd := d.m.Update(msg)
-	d.m = updated.(root.RootModel)
+	d.m = updated.(root.FlagshipModel)
 	return cmd
 }
 
@@ -332,7 +350,7 @@ func (d *rootDriver) pump(cmd tea.Cmd) {
 			continue
 		}
 		updated, follow := d.m.Update(msg)
-		d.m = updated.(root.RootModel)
+		d.m = updated.(root.FlagshipModel)
 		queue = append(queue, follow)
 	}
 }
@@ -352,18 +370,21 @@ func (d *rootDriver) flat() string {
 
 func (d *rootDriver) view() string { return d.m.ControlSnapshot().View }
 
-// launchEmail sends the message the hub sends when the user presses enter on an
-// installed, daemon-backed agent.
+// beginNoPump starts the launch and stops at the FIRST frame of the gate,
+// before any probe has answered — the state whose spinner a user actually
+// watches. Deliberately unpumped: pumping would run the checks to completion.
+func (d *rootDriver) beginNoPump() root.FlagshipModel {
+	d.t.Helper()
+	msg := d.m.Init()()
+	updated, _ := d.m.Update(msg)
+	d.m = updated.(root.FlagshipModel)
+	return d.m
+}
+
+// launchEmail starts the launch the router runs on Init: splash, then the gate.
 func (d *rootDriver) launchEmail() {
 	d.t.Helper()
-	agent := d.cat.Get("email")
-	if agent == nil {
-		d.t.Fatal("the email agent is missing from the catalog")
-	}
-	if agent.Transport != catalog.TransportDaemon {
-		d.t.Fatalf("email transport = %s, want daemon — the gate only guards relayed agents", agent.Transport)
-	}
-	d.send(hub.LaunchAgentMsg{Agent: *agent})
+	d.pump(d.m.Init())
 }
 
 // --- the seam ---------------------------------------------------------------
@@ -377,8 +398,7 @@ func TestLaunchingAnAgentShowsPreflightNotChat(t *testing.T) {
 
 	// Deliberately unpumped: the point is the FIRST frame after the launch, not
 	// where the checks eventually land.
-	updated, _ := d.m.Update(hub.LaunchAgentMsg{Agent: *d.cat.Get("email")})
-	d.m = updated.(root.RootModel)
+	d.m = d.beginNoPump()
 
 	if got := d.view(); got != "preflight" {
 		t.Fatalf("view after launch = %q, want preflight", got)
@@ -409,9 +429,6 @@ func TestAnAllGreenGateReachesChat(t *testing.T) {
 	}
 	if !strings.Contains(d.flat(), "Email") {
 		t.Errorf("the chat view does not name the agent:\n%s", d.screen())
-	}
-	if got := d.cat.Get("email").Status; got != catalog.StatusActive {
-		t.Errorf("catalog status after launch = %s, want active", got)
 	}
 }
 
@@ -448,9 +465,6 @@ func TestAFailingPreconditionKeepsTheUserOnTheGate(t *testing.T) {
 	// asked the daemon to spawn a sidecar behind that failure.
 	if g := d.transport(); g.ensures != 0 || g.starts != 0 {
 		t.Errorf("a blocked gate started things anyway: %d ensures, %d daemon starts", g.ensures, g.starts)
-	}
-	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
-		t.Error("a blocked gate marked the agent active")
 	}
 }
 
@@ -559,69 +573,20 @@ func TestFixingAStoppedSidecarFromTheGateReachesChat(t *testing.T) {
 	if g.ensures != 1 {
 		t.Fatalf("f asked the daemon to start the agent %d times, want 1", g.ensures)
 	}
-	// The fix re-checks and everything else was already green, so it hands off.
-	if got := d.view(); got != "chat" {
-		t.Fatalf("after the fix the gate landed on %q, want chat\n%s", got, d.screen())
-	}
-}
-
-// esc backs out to a hub that still has a highlighted row (#2481), and says why
-// the launch did not happen.
-func TestCancellingTheGateReturnsToAUsableHub(t *testing.T) {
-	d := newRootDriver(t, readyGateTransport().modelMissing(), 80, 24)
-
-	// Drive the hub the way a user does, so the selection under test is a real
-	// one rather than one the test set up.
-	d.selectInHub("email")
-	before := d.m.ControlSnapshot()
-	d.send(keyEnter())
+	// The fix re-checks and everything else was already green — but a gate that
+	// has just CHANGED something holds for a keypress rather than handing off,
+	// so the user can read what the fix did before chat replaces the screen.
 	if got := d.view(); got != "preflight" {
-		t.Fatalf("enter in the hub landed on %q, want preflight", got)
+		t.Fatalf("the gate handed off to %q without letting the fix be read\n%s", got, d.screen())
+	}
+	if !strings.Contains(d.flat(), "enter continue") {
+		t.Errorf("the held gate does not advertise the way on:\n%s", d.screen())
 	}
 
-	d.send(keyEsc())
-	snap := d.m.ControlSnapshot()
-	if snap.View != "hub" {
-		t.Fatalf("esc from the gate landed on %q, want hub\n%s", snap.View, d.screen())
+	d.send(keyEnter())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter on the held gate landed on %q, want chat\n%s", got, d.screen())
 	}
-	if snap.SelectedAgentID == "" {
-		t.Error("the hub came back with nothing selected")
-	}
-	if snap.SelectedAgentID != before.SelectedAgentID {
-		t.Errorf("selection moved across the gate: %q → %q", before.SelectedAgentID, snap.SelectedAgentID)
-	}
-	if snap.HubTabIndex != before.HubTabIndex {
-		t.Errorf("tab moved across the gate: %d → %d", before.HubTabIndex, snap.HubTabIndex)
-	}
-	if !strings.Contains(d.flat(), "did not start") {
-		t.Errorf("the hub does not say why the launch stopped:\n%s", d.screen())
-	}
-	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
-		t.Error("a cancelled launch left the agent marked active")
-	}
-}
-
-// selectInHub moves the hub cursor onto agentID using only keys and the control
-// snapshot — the same surface automation drives.
-func (d *rootDriver) selectInHub(agentID string) {
-	d.t.Helper()
-	for tab := 0; tab < 6; tab++ {
-		snap := d.m.ControlSnapshot()
-		for i, id := range snap.VisibleAgentIDs {
-			if id != agentID {
-				continue
-			}
-			for j := 0; j < i; j++ {
-				d.send(keyDown())
-			}
-			if got := d.m.ControlSnapshot().SelectedAgentID; got != agentID {
-				d.t.Fatalf("selecting %q landed on %q", agentID, got)
-			}
-			return
-		}
-		d.send(keyTab())
-	}
-	d.t.Fatalf("no tab in the hub lists %q", agentID)
 }
 
 // A gate that has been left must not launch the agent afterwards: the hold tick
@@ -630,91 +595,13 @@ func TestALateProceedFromAnAbandonedGateLaunchesNothing(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().modelMissing(), 80, 24)
 	d.launchEmail()
 	d.send(keyEsc())
-	if got := d.view(); got != "hub" {
-		t.Fatalf("esc landed on %q, want hub", got)
+	if got := d.view(); got == "chat" {
+		t.Fatal("esc opened a chat instead of leaving")
 	}
 
 	d.send(preflight.ProceedMsg{AgentID: "email"})
-	if got := d.view(); got != "hub" {
-		t.Fatalf("a late ProceedMsg opened %q", got)
-	}
-	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
-		t.Error("a late ProceedMsg launched the agent anyway")
-	}
-}
-
-// analystAgent is a second daemon-backed agent, for the two-gates race below.
-func analystAgent() catalog.Agent {
-	return catalog.Agent{
-		ID: "analyst", Name: "Analyst", Status: catalog.StatusInstalled,
-		Transport: catalog.TransportDaemon,
-	}
-}
-
-// The nastiest race in this seam: a probe started for one agent, answered after
-// the user backed out and launched another. Its report must not drive the second
-// agent's gate — an all-green report for A would otherwise green-light B and open
-// a chat for an agent nothing ever probed.
-func TestAnAbandonedGatesReportCannotGreenLightAnotherAgent(t *testing.T) {
-	g := readyGateTransport()
-	// Email would pass; Analyst is blocked on its model. So if Email's stale
-	// report reaches Analyst's gate, it turns a blocked screen into a launch.
-	g.initByAgent = map[string]initAnswer{
-		"analyst": {status: http.StatusServiceUnavailable, body: readyGateTransport().modelMissing().initBody},
-	}
-	d := newRootDriver(t, g, 80, 24)
-
-	// Gate 1 for email, its probe captured and NOT run yet — this is the in-flight
-	// probe the user walks away from.
-	emailProbe := d.sendNoPump(hub.LaunchAgentMsg{Agent: *d.cat.Get("email")})
-	d.send(keyEsc())
-
-	// Gate 2 for a different agent, blocked and waiting for the user.
-	d.send(hub.LaunchAgentMsg{Agent: analystAgent()})
-	if got := d.view(); got != "preflight" {
-		t.Fatalf("the second launch landed on %q, want preflight\n%s", got, d.screen())
-	}
-
-	// Email's probe finally answers, into Analyst's gate.
-	d.pump(emailProbe)
-
-	if got := d.view(); got != "preflight" {
-		t.Fatalf("a stale report launched %q\n%s", got, d.screen())
-	}
-	screen := d.flat()
-	if !strings.Contains(screen, "Getting Analyst ready") {
-		t.Errorf("the gate is no longer the one that was on screen:\n%s", d.screen())
-	}
-	// The Mailbox row exists only in email's report: seeing it here means the
-	// stale report was adopted.
-	if strings.Contains(screen, "Mailbox") {
-		t.Errorf("email's rows are being shown on the Analyst gate:\n%s", d.screen())
-	}
-	if !strings.Contains(screen, "not downloaded") {
-		t.Errorf("Analyst's own blocked row was replaced:\n%s", d.screen())
-	}
-	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
-		t.Error("the abandoned gate launched email anyway")
-	}
-}
-
-// A subprocess agent has no daemon relay, so the gate has nothing to probe and
-// must not invent four failures over a launch that works.
-func TestASubprocessAgentIsNotGated(t *testing.T) {
-	// The test binary itself is the one executable path guaranteed to resolve
-	// on every OS — /bin/echo does not exist on Windows, and the client never
-	// spawns it here anyway.
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-	d := newRootDriver(t, readyGateTransport(), 80, 24)
-	d.send(hub.LaunchAgentMsg{Agent: catalog.Agent{
-		ID: "bash", Name: "Bash", Status: catalog.StatusInstalled,
-		Transport: catalog.TransportSubprocess, BinaryPath: self,
-	}})
-	if got := d.view(); got != "chat" {
-		t.Fatalf("a subprocess launch landed on %q, want chat\n%s", got, d.screen())
+	if got := d.view(); got == "chat" {
+		t.Fatalf("a late ProceedMsg from an abandoned gate opened %q", got)
 	}
 }
 
@@ -884,8 +771,7 @@ func TestTheGateGetsSpinnerAndResizeMessages(t *testing.T) {
 
 	// Unpumped on purpose: this is the gate mid-check, which is the state whose
 	// spinner the user actually watches.
-	updated, _ := d.m.Update(hub.LaunchAgentMsg{Agent: *d.cat.Get("email")})
-	d.m = updated.(root.RootModel)
+	d.m = d.beginNoPump()
 	if !strings.Contains(d.flat(), "checking") {
 		t.Fatalf("the gate is not mid-check:\n%s", d.screen())
 	}
@@ -894,7 +780,7 @@ func TestTheGateGetsSpinnerAndResizeMessages(t *testing.T) {
 	spun := false
 	for i := 0; i < 12 && !spun; i++ {
 		updated, _ := d.m.Update(spinner.TickMsg{Time: time.Now()})
-		d.m = updated.(root.RootModel)
+		d.m = updated.(root.FlagshipModel)
 		spun = d.screen() != before
 	}
 	if !spun {
@@ -1100,7 +986,6 @@ func TestProceedingPastAHaltSuppressesTheFlagForTheRestOfTheSession(t *testing.T
 		t.Error("Halted() stayed true after the screen proceeded")
 	}
 
-	d.send(chat.ReturnToHubMsg{AgentID: "email"})
 	d.launchEmail()
 
 	// The screen itself still pauses every launch on the same row —
@@ -1116,7 +1001,7 @@ func TestProceedingPastAHaltSuppressesTheFlagForTheRestOfTheSession(t *testing.T
 }
 
 // A resize (or any non-key message) must still reach the gate while
-// Halted() — RootModel never gates message routing on the flag, only
+// Halted() — FlagshipModel never gates message routing on the flag, only
 // ControlSnapshot reads it. Proven by the rendered width actually
 // narrowing, which only happens if the message reached the preflight
 // model's own Update.
@@ -1143,11 +1028,7 @@ func TestNonKeyMessagesPassThroughWhileHalted(t *testing.T) {
 // before its own report exists).
 func TestASpinnerTickReachesABusyGateWhileHalted(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport(), 100, 30)
-	agent := d.cat.Get("email")
-	if agent == nil {
-		t.Fatal("test setup: the email agent is missing from the catalog")
-	}
-	d.sendNoPump(hub.LaunchAgentMsg{Agent: *agent})
+	d.beginNoPump()
 	if d.view() != "preflight" {
 		t.Fatalf("test setup: want preflight, got %q", d.view())
 	}
@@ -1167,16 +1048,16 @@ func TestASpinnerTickReachesABusyGateWhileHalted(t *testing.T) {
 
 // The flag sets the same way from either screen it can be raised from — it
 // is not wired to one view.
-func TestCrossScreenHaltingWorksFromHubAndFromPreflight(t *testing.T) {
-	t.Run("hub", func(t *testing.T) {
+func TestCrossScreenHaltingWorksFromSplashAndFromPreflight(t *testing.T) {
+	t.Run("splash", func(t *testing.T) {
 		d := newRootDriver(t, readyGateTransport(), 100, 30)
-		if d.view() != "hub" {
-			t.Fatalf("test setup: want hub, got %q", d.view())
+		if d.view() != "splash" {
+			t.Fatalf("test setup: want splash, got %q", d.view())
 		}
-		d.send(status.Outcome{StepID: "hub-synthetic", Label: "Synthetic",
+		d.send(status.Outcome{StepID: "splash-synthetic", Label: "Synthetic",
 			Level: status.LevelFailed, Disposition: status.DispositionHalt, Summary: "test"})
 		if !d.m.Halted() {
-			t.Error("a synthetic halting Outcome while in the hub did not halt")
+			t.Error("a synthetic halting Outcome while on the splash did not halt")
 		}
 	})
 	t.Run("preflight", func(t *testing.T) {

@@ -86,8 +86,6 @@ func (m ChatModel) statusHints() []hint {
 			hint{text: "keep typing", rank: rankAffordance},
 			hint{text: "Esc cancel", rank: rankInterrupt},
 		)
-	} else if m.fromHub {
-		hints = append(hints, hint{text: "Esc back", rank: rankAffordance})
 	}
 
 	hints = append(hints, hint{text: "Ctrl+C quit", rank: rankEscape})

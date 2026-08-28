@@ -1,4 +1,4 @@
-.PHONY: build build-release test test-race lint vet cover clean cross-compile mock-agent dev
+.PHONY: build build-release test test-race lint vet cover clean cross-compile winres mock-agent dev
 
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -6,11 +6,14 @@ DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PKG      = github.com/amd/gaia/tui/internal/cli
 LDFLAGS  = -ldflags="-s -w -X $(PKG).version=$(VERSION) -X $(PKG).commit=$(COMMIT) -X $(PKG).date=$(DATE)"
 
+# Built as gaia-tui, never as gaia: the Python CLI owns `gaia`, the two have
+# completely different subcommands, and a dev build called `gaia` shadows it on
+# PATH — which reads as the Python CLI having silently lost every command it has.
 build:
-	go build -o bin/gaia ./cmd/gaia
+	go build -o bin/gaia-tui ./cmd/gaia
 
 build-release:
-	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia ./cmd/gaia
+	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-tui ./cmd/gaia
 
 test:
 	go test ./... -v
@@ -32,10 +35,10 @@ vet:
 
 # Statement coverage, rolled up per package.
 #
-# A plain `go test -cover` reports internal/ui/hub and internal/ui/root as 0%
-# because their tests live in the test/ integration package. -coverpkg=./...
-# attributes coverage back to the package that owns the code, so those report
-# their real numbers (~77% and ~90%) instead of a zero that invites deletion.
+# A plain `go test -cover` reports internal/ui/root as 0% because its tests live
+# in the test/ integration package. -coverpkg=./... attributes coverage back to
+# the package that owns the code, so it reports its real number instead of a
+# zero that invites deletion.
 # `go tool cover` writes to a file rather than piping into tail: a pipeline
 # reports the LAST command's status, so `go tool cover ... | tail` would read as
 # success even when it failed. make checks the redirected command directly.
@@ -73,13 +76,22 @@ mock-agent:
 	go build -o bin/mock-agent ./test/mockagent
 
 dev: build mock-agent
-	@echo "Built gaia + mock-agent. Run: ./bin/gaia"
+	@echo "Built gaia-tui + mock-agent. Run: ./bin/gaia-tui"
 
 clean:
 	rm -rf bin/
+	rm -f cmd/gaia/*.syso
+
+# Windows icon + Details-tab metadata. Go links no Windows resource unless a
+# .syso sits beside the main package, so without this every shipped .exe draws
+# with the generic console glyph and reports no version to Explorer. Generated
+# rather than committed: the version inside the resource has to match the
+# ldflags stamp, and a checked-in blob drifts from it silently.
+winres:
+	@scripts/gen-winres.sh --version $(VERSION)
 
 # Cross-compile all 6 platform targets
-cross-compile:
+cross-compile: winres
 	@mkdir -p bin
 	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-amd64       ./cmd/gaia
 	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-arm64       ./cmd/gaia

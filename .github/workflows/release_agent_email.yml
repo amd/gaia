@@ -60,10 +60,14 @@
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl, default https://hub.amd-gaia.ai.
 #     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
-#                              workers.dev URL: the free-plan managed WAF on the
-#                              proxied hub.amd-gaia.ai custom domain blocks large
-#                              binary uploads, but not GET downloads. Unset →
-#                              falls back to GAIA_HUB_BASE_URL (uploads will 403).
+#                              workers.dev URL: the managed WAF fronting the
+#                              hub.amd-gaia.ai custom domain 403s large binary
+#                              uploads, so POST /publish goes through the
+#                              workers.dev origin instead — same Worker + R2
+#                              bucket, just the door that isn't WAF-blocked
+#                              (GET downloads stay on hub.amd-gaia.ai). REQUIRED —
+#                              the release fails loudly if it is unset (no silent
+#                              fallback).
 #   npm trusted publisher for @amd-gaia/agent-email registered against THIS
 #   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
 #   is tied to the exact filename — renaming this file breaks publish.
@@ -522,6 +526,19 @@ jobs:
             exit 1
           fi
 
+      - name: Assert hub publish URL present
+        shell: bash
+        # Variable goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing.
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Download all platform artifacts
         uses: actions/download-artifact@v8
         with:
@@ -593,10 +610,9 @@ jobs:
           # blocks large binary multipart uploads (the POST /publish path).
           # workers.dev is a separate zone with no such ruleset and hits the same
           # Worker + bucket. Downloads and the lock baseUrl stay on
-          # hub.amd-gaia.ai (GETs aren't blocked). Falls back to the public origin
-          # if the var is unset.
+          # hub.amd-gaia.ai (GETs aren't blocked). Required — the release fails
+          # loudly if the variable is unset.
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           args=()
@@ -632,7 +648,7 @@ jobs:
             capability_matrix_args+=(--capability-matrix "${CAPABILITY_MATRIX}")
           fi
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --readme "${README}" \
             --changelog "${CHANGELOG}" \
@@ -692,7 +708,6 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           VER="${{ steps.ver.outputs.version }}"
@@ -714,7 +729,7 @@ jobs:
           echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
           # Publish the zip as the version's package artifact + its file listing.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --artifact "agent-email-${VER}.zip=package" \
             --package-files package-files.json

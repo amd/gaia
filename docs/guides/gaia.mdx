@@ -51,12 +51,7 @@ The agent runs local inference only: the sidecar's `/query` endpoint rejects any
 
     This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
 
-    <Warning>
-      `@amd-gaia/gaia` publishes with this release. Until the release tag lands, the package
-      is not on npm yet and the agent shows as **Coming Soon** in the
-      [terminal hub](/guides/terminal-hub) — it can't be installed from the Agent Hub. Use
-      the source path in the next tab in the meantime.
-    </Warning>
+    `@amd-gaia/gaia` is published on the [Agent Hub](https://amd-gaia.ai/hub), and the [terminal UI](/guides/terminal-hub) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">
     Run the agent from your own checkout, so prompt and tool edits take effect without a freeze-and-publish cycle.
@@ -224,17 +219,12 @@ Then re-run the readiness check.
 
 The file resolves outside the allowed paths — by default, outside your home directory. Move the file inside the scope, or construct the agent with an `allowed_paths` list that covers it (see [File access scope](#file-access-scope)).
 
-### The agent shows as "Coming Soon" in the terminal hub
-
-It isn't on the Agent Hub yet, so there is nothing to install — the row is deliberately not offered rather than failing halfway through an install. Run it from source in the meantime (see [Install and launch](#install-and-launch)).
-
 ### The sidecar won't start
 
 The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<port>.log`. Check that file first; a failed start also surfaces the log tail in the error. `gaia daemon agents` shows id, mode, pid, port, and contract version for everything currently running.
 
 ## Limitations (v0.1.1)
 
-- **Not published on the Agent Hub yet** — install from source until the release tag lands.
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
 - **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.

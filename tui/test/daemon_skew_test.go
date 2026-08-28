@@ -44,8 +44,10 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	if !strings.Contains(text, "daemon log") {
 		t.Errorf("the error does not say where to look next:\n%s", text)
 	}
-	// The way through that needs no daemon at all.
-	if !strings.Contains(text, "--installed") {
+	// The way through that needs no daemon at all. It used to be
+	// `gaia tui list --installed`; that subcommand is gone, and `status` is what
+	// reads the install sentinels straight off disk now.
+	if !strings.Contains(text, "gaia tui status") {
 		t.Errorf("the error does not mention the offline way through:\n%s", text)
 	}
 	// And it must NOT send the user to the Agent Hub.
@@ -143,24 +145,5 @@ func TestAPresentRouteStillWorks(t *testing.T) {
 	}
 	if len(cat.Agents) == 0 {
 		t.Error("the catalog came back empty")
-	}
-}
-
-// The hub screen must carry the same diagnosis. It used to headline "Can't
-// reach the GAIA background service" for every catalog failure — wrong for a
-// service that answered perfectly well and is merely too old.
-func TestTheHubScreenShowsTheSkewDiagnosis(t *testing.T) {
-	fake := newFakeDaemon(t)
-	fake.omitRoute(daemon.APIPrefix + "/catalog")
-
-	d := newDriver(t, fake.client(), 120, 40)
-	d.pump(d.m.Init())
-
-	view := plainView(d.m)
-	if strings.Contains(view, "Can't reach") {
-		t.Errorf("the hub says it cannot reach a service that answered:\n%s", view)
-	}
-	if !strings.Contains(view, "older than this GAIA") {
-		t.Errorf("the hub screen does not carry the diagnosis:\n%s", view)
 	}
 }

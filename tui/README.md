@@ -1,16 +1,17 @@
-# GAIA Terminal Hub
+# GAIA Terminal UI
 
-Browse, install, and chat with GAIA agents without leaving the terminal.
+Chat with GAIA in your terminal — no browser, no account, nothing you type
+leaves your machine.
 
-GAIA agents do real work for you — triage your inbox, answer questions about
-your files, write code. The terminal hub is how you find them, install them,
-and talk to them. Everything runs on your own machine: no account, and nothing
-you type is sent to a hosted service.
+`gaia-tui` boots straight into the flagship `gaia` agent: conversation,
+documents, data, web research, memory, skills. There is nothing to browse and
+nothing to pick — one binary, one agent, unless you ask for another by id
+(see [Running another agent](#running-another-agent)).
 
 ## Install
 
 One command installs the `gaia` CLI, the local model runtime, and the terminal
-hub itself:
+UI itself:
 
 ```bash
 # macOS and Linux
@@ -22,7 +23,7 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 irm https://amd-gaia.ai/install.ps1 | iex
 ```
 
-Then set up the local model — several GB, so give it a while — and open the hub:
+Then set up the local model — several GB, so give it a while — and launch:
 
 ```bash
 gaia init
@@ -30,8 +31,8 @@ gaia-tui
 ```
 
 `gaia init` installs Lemonade Server, the runtime that does the thinking on your
-machine. Skip it and the hub stops you before an agent starts and tells you the
-same thing.
+machine. Skip it and the readiness gate stops you before the agent starts and
+tells you the same thing.
 
 ### Or download the binary directly
 
@@ -49,22 +50,23 @@ yourself. Rename it to `gaia-tui` and put it on your `PATH`:
 
 `https://hub.amd-gaia.ai/agents/terminal-hub/manifest.json` lists what is
 published, with the SHA-256 of each build. A direct download still needs the
-`gaia` CLI on your `PATH` — the hub starts a local daemon through it — so the
-one-line installer above is the shorter route.
+`gaia` CLI on your `PATH` — first-time setup (`gaia init`) and the `email`
+agent's daemon both go through it — so the one-line installer above is the
+shorter route.
 
 The binary is installed as `gaia-tui`, never as `gaia`: the two have different
 subcommands and would collide on your `PATH`.
 
 ### Building from source
 
-For working on the hub itself. Needs `git`, [Go](https://go.dev/dl/), and
+For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia
-cp bin/gaia ~/.local/bin/gaia-tui   # somewhere on your PATH
+cd tui && make build                # -> tui/bin/gaia-tui
+cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
 
 ## Your first run
@@ -73,38 +75,54 @@ cp bin/gaia ~/.local/bin/gaia-tui   # somewhere on your PATH
 gaia-tui
 ```
 
-That opens the hub — a list of agents, what each one does, and whether you have
-it. Pick one and it walks you through installing it, then drops you into a chat
-with it.
+That opens on a splash frame (the GAIA mascot), then a readiness gate, then
+chat. The gate checks the few things that would otherwise make the agent fail —
+is `gaia-agent` on this machine, is the local model server running, are the
+models downloaded. Anything not ready is shown with the exact command that
+fixes it, and `f` runs the fix that can be automated (downloading the models)
+without leaving the terminal.
 
-Before an agent starts, the hub checks the few things that would otherwise make
-it fail — is the model server running, is the model downloaded, does the agent
-have what it needs. Anything not ready is shown with the exact command that
-fixes it, so a failed check is a to-do list rather than a dead end.
+If `gaia-agent` itself is missing, the gate stops there and points you at the
+installer — there is no in-TUI download for the agent binary.
 
 Colours adapt to your terminal automatically. Some terminals never answer that
-query (SSH, tmux, a CI log) — if the hub comes out hard to read, force it:
+query (SSH, tmux, a CI log) — if the screen comes out hard to read, force it:
 
 ```bash
 GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
 ```
 
+## Running another agent
+
+`gaia-tui` ships one agent by default, but it can also drive `email` by id —
+it keeps its own readiness gate (background service, sidecar, local model,
+mailbox):
+
+```bash
+gaia-tui run email                             # chat with it
+gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
+gaia-tui chat --agent email                    # same as `run email`
+```
+
+Installing and uninstalling a hub sidecar agent like `email` is the Python
+CLI's job, not the terminal UI's:
+
+```bash
+gaia hub list                 # what the Agent Hub offers, and what you have
+gaia hub install email --trust
+gaia hub uninstall email
+```
+
 ## Commands worth knowing
 
 ```bash
-gaia-tui                                     # open the hub
-gaia-tui list                                # what the hub offers, and what you have
-gaia-tui list --installed                    # local only, works offline
-gaia-tui install email --trust               # install an agent
-gaia-tui run email                           # chat with it
-gaia-tui run email --query "triage my inbox" # one-shot: answer on stdout
-gaia-tui uninstall email                     # remove it
-gaia-tui status                              # is everything running, and what do I have
+gaia-tui                    # launch straight into the flagship agent's chat
+gaia-tui run <id>           # chat with an agent by id (e.g. email)
+gaia-tui run <id> --query "…"  # one-shot: answer on stdout, exit 0/1/3
+gaia-tui chat --agent <id>  # same idea, via the chat subcommand
+gaia-tui status             # is the background service running, and what do I have
 gaia-tui version
 ```
-
-`--trust` on `install` is not a formality: an agent GAIA has not verified runs
-third-party code on your machine, so the hub refuses until you say so.
 
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
@@ -184,7 +202,7 @@ or name a Claude id), never silently answered somewhere else.
 
 Three independent layers, and only one of them has a flag.
 
-**The hub binary** — just rebuild it: `cd tui && go build -o bin/gaia ./cmd/gaia`.
+**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia-tui ./cmd/gaia`.
 
 **GAIA core / the daemon** — no flag exists. The daemon serves whichever
 checkout launched it, so you point it at your clone by launching it from an
@@ -215,14 +233,14 @@ directory (`<clone>/hub/agents/email/python`), not the repo root.
 
 ## An agent that only exists in your clone
 
-**It shows up in the list.** The hub reads `~/.gaia/agents/<id>/.installed`
+**It shows up in `status`.** The catalog reads `~/.gaia/agents/<id>/.installed`
 sentinel files and adds an id it has never seen rather than ignoring it, with
 sparse metadata — a sentinel only proves id and version:
 
 ```bash
 mkdir -p ~/.gaia/agents/myagent
 echo '{"id":"myagent","version":"0.1.0"}' > ~/.gaia/agents/myagent/.installed
-gaia-tui list --installed     # myagent  0.1.0  installed
+gaia-tui status     # lists myagent under "Installed in ~/.gaia/agents"
 ```
 
 **It will not run through the daemon.** Sidecar specs are built into GAIA core
@@ -248,9 +266,9 @@ rm -rf "$TMPHOME"
 
 ## The `tui` prefix
 
-A leading `tui` word is accepted and dropped — `gaia-tui tui list` and `gaia-tui
-list` are the same command — so the `gaia tui …` form used elsewhere in the docs
-keeps working.
+A leading `tui` word is accepted and dropped — `gaia-tui tui status` and
+`gaia-tui status` are the same command — so the `gaia tui …` form used
+elsewhere in the docs keeps working.
 
 ## Contributing: colours
 

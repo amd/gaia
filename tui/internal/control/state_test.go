@@ -121,7 +121,7 @@ func TestFrameCacheUnderConcurrentAccess(t *testing.T) {
 			default:
 			}
 			st.recordFrame(fmt.Sprintf("frame %d", i))
-			st.setSnapshot(Snapshot{View: "hub", HubTabIndex: i % 3})
+			st.setSnapshot(Snapshot{View: ViewPreflight, Blocker: fmt.Sprintf("row%d", i%3)})
 			st.SetSize(80+i%40, 24)
 		}
 	}()
@@ -171,10 +171,10 @@ func TestChangedBroadcastsOnNewFrame(t *testing.T) {
 
 func TestChangedBroadcastsOnSnapshotChangeOnly(t *testing.T) {
 	st := NewState(nil)
-	st.setSnapshot(Snapshot{View: "hub"})
+	st.setSnapshot(Snapshot{View: ViewSplash})
 
 	ch := st.Changed()
-	st.setSnapshot(Snapshot{View: "hub"}) // identical — must not wake waiters
+	st.setSnapshot(Snapshot{View: ViewSplash}) // identical — must not wake waiters
 	select {
 	case <-ch:
 		t.Fatal("an identical snapshot woke waiters")
