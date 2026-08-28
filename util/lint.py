@@ -166,7 +166,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("isort", *LINT_DIRS)
+        cmd = uvx("isort", *LINT_DIRS, "--settings-path", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -183,7 +183,19 @@ def check_isort(fix: bool = False) -> CheckResult:
             print("[OK] No import sorting needed.")
             return CheckResult("Import Sorting (isort)", True, False, 0, output)
     else:
-        cmd = uvx("isort", "--check-only", "--diff", *LINT_DIRS)
+        # The settings path is explicit, exactly as check_black passes --config.
+        # Left implicit, `uvx isort` did not pick up [tool.isort] at all: it
+        # asked for a 96-column line that line_length = 88 forbids, and
+        # disagreed with black on three files no contributor had touched — so
+        # the job was red for everyone while every local run was clean.
+        cmd = uvx(
+            "isort",
+            "--check-only",
+            "--diff",
+            *LINT_DIRS,
+            "--settings-path",
+            "pyproject.toml",
+        )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
