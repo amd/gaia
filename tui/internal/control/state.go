@@ -309,12 +309,20 @@ func (r Recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	next, cmd := r.inner.Update(msg)
 	r.inner = next
-	r.state.setSnapshot(snapshotOf(next))
 	return r, cmd
 }
 
+// View publishes the snapshot and the frame TOGETHER.
+//
+// The snapshot used to be taken in Update, which runs before Bubble Tea draws.
+// A client that waited on state and then read the screen therefore got the
+// frame from BEFORE the change it had just waited for — POST /wait would
+// return on `blocker: "binary"` and GET /screen would still say "checking…".
+// Current() documents these as read atomically; publishing them a render apart
+// made that untrue at exactly the moment a caller cares.
 func (r Recorder) View() string {
 	view := r.inner.View()
+	r.state.setSnapshot(snapshotOf(r.inner))
 	r.state.recordFrame(view)
 	return view
 }
