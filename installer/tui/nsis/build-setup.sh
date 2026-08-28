@@ -128,7 +128,9 @@ winpath() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
-"${MAKENSIS}" \
+# -WX: an NSIS warning is a shipped bug (an unreachable label, a define that
+# expanded to nothing), and makensis exits 0 with one by default.
+"${MAKENSIS}" -WX \
   "-DVERSION=${VERSION}" \
   "-DPAYLOAD_DIR=$(winpath "$(cd "${PAYLOAD}" && pwd)")" \
   "-DLEMONADE_MSI=$(winpath "$(cd "$(dirname "${LEMONADE_MSI}")" && pwd)/$(basename "${LEMONADE_MSI}")")" \

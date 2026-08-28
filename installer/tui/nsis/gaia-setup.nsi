@@ -64,7 +64,10 @@ OutFile "${OUTFILE}"
 ; the user's own profile. A machine-wide install would need elevation for a
 ; tool one user runs in their own terminal.
 RequestExecutionLevel user
-InstallDir "$LOCALAPPDATA\Programs\GAIA"
+; NOT "...\Programs\GAIA": that is byte-for-byte where the Agent UI's
+; electron-builder setup lands (productName "GAIA", perMachine false), and its
+; uninstaller removes $INSTDIR recursively.
+InstallDir "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
 InstallDirRegKey HKCU "Software\GAIA\TerminalHub" "InstallDir"
 ShowInstDetails show
 ShowUnInstDetails show
@@ -90,6 +93,8 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
+; Unquoted on purpose -- MUI2's Finish.nsh emits Exec "$\"${MUI_FINISHPAGE_RUN}$\"",
+; so quoting here would double-quote a path that already contains a space.
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${TUI_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT_NAME}"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
@@ -107,17 +112,12 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 
 ; ─── PATH helpers ──────────────────────────────────────────────────────────
 ;
-; A HKCU\Environment "Path" longer than ${NSIS_MAX_STRLEN} does NOT read back
-; truncated: ReadRegStr sets the error flag and yields an EMPTY string, so a
-; naive read-append-write REPLACES a long PATH instead of extending it. The
-; error flag cannot tell "too long" from "not set", so ReadUserPath resolves
-; that with EnumRegValue and every caller refuses what it cannot read whole.
+; ReadRegStr yields an EMPTY string with the error flag set for a PATH longer
+; than ${NSIS_MAX_STRLEN}, indistinguishable from "not set" -- so a naive
+; read-append-write REPLACES a long PATH. Every caller refuses what it cannot
+; read whole, and EnumRegValue is what tells the two cases apart.
 ;
-; Presence is matched as ";<dir>;" inside ";<PATH>;" so C:\...\GAIA-old never
-; counts as C:\...\GAIA.
-;
-; Emitted twice via macros: NSIS requires "un.<name>" for anything an uninstall
-; section calls.
+; Emitted twice via macros: an uninstall section can only call "un.<name>".
 
 !macro ReadUserPath UN
 Function ${UN}ReadUserPath
@@ -161,6 +161,9 @@ FunctionEnd
 Function ${UN}PathSegmentPresent
   ; in : $R1 = the full PATH, $R2 = the directory to look for
   ; out: $R0 = 1 when present, 0 when not
+  ;
+  ; Matched as ";<dir>;" inside ";<PATH>;" so ...\GAIA Terminal Hub-old never
+  ; counts as ...\GAIA Terminal Hub.
   Push $R3
   Push $R4
   Push $R5
@@ -258,8 +261,40 @@ Function .onInit
   InitPluginsDir
 FunctionEnd
 
+; Windows refuses write access to a running image, so `File` over a live
+; gaia-tui.exe fails mid-extraction and leaves a half-written install -- and
+; under /S there is no dialog to notice it. Opening for append is the same test
+; the extractor would make, one step before anything has been changed.
+Function AbortIfRunning
+  ; in: $R8 = file name inside $INSTDIR
+retry:
+  ${IfNot} ${FileExists} "$INSTDIR\$R8"
+    Return
+  ${EndIf}
+  ClearErrors
+  FileOpen $R9 "$INSTDIR\$R8" a
+  ${IfNot} ${Errors}
+    FileClose $R9
+    Return
+  ${EndIf}
+  DetailPrint "$R8 is running - cannot replace it."
+  ; /SD IDCANCEL: a silent install must fail rather than block on an invisible
+  ; dialog, and must fail HERE, with the previous install still intact.
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui, and end any gaia-agent it left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
+    /SD IDCANCEL IDRETRY retry
+  SetErrorLevel 2
+  Abort "GAIA is running. Close it and run Setup again - nothing was changed."
+FunctionEnd
+
 Section "GAIA Terminal Hub" SecMain
   SectionIn RO
+
+  StrCpy $R8 "${TUI_EXE}"
+  Call AbortIfRunning
+  StrCpy $R8 "${AGENT_EXE}"
+  Call AbortIfRunning
+
   SetOutPath "$INSTDIR"
 
   File "${PAYLOAD_DIR}\${TUI_EXE}"

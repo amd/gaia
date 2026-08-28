@@ -28,6 +28,25 @@ readonly LICENSE_NAME="LICENSE.md"
 # Not `readonly`: bash 3.2, which is what /bin/bash still is on macOS, rejects
 # `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+PKG_SCRIPTS=(preinstall postinstall)
+
+# Directory entries the payload must NOT carry. `--ownership recommended` stamps
+# every directory in the root root:wheel, and installing that resets /usr/local
+# on an Intel Mac where Homebrew owns it as the user -- which breaks `brew`.
+# preinstall creates whichever of these is missing instead; mkdir -p leaves an
+# existing one, and its ownership, alone.
+#
+# The first --filter disables pkgbuild's built-in ones, so they are restated.
+PAYLOAD_FILTERS=(
+    '^\.?/?usr$'
+    '^\.?/?usr/local$'
+    '^\.?/?usr/local/bin$'
+    '^\.?/?usr/local/share$'
+    '^\.?/?usr/local/share/doc$'
+    '\.DS_Store$'
+    '(^|/)\.svn(/|$)'
+    '(^|/)CVS(/|$)'
+)
 
 readonly DISTRIBUTION_TEMPLATE="${SCRIPT_DIR}/distribution.xml"
 readonly SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
@@ -120,8 +139,10 @@ done
 
 [ -f "$DISTRIBUTION_TEMPLATE" ] || die "distribution template not found: ${DISTRIBUTION_TEMPLATE}" \
     "It ships alongside this script; the checkout looks incomplete."
-[ -f "${SCRIPTS_DIR}/postinstall" ] || die "postinstall script not found: ${SCRIPTS_DIR}/postinstall" \
-    "It ships alongside this script; the checkout looks incomplete."
+for script in "${PKG_SCRIPTS[@]}"; do
+    [ -f "${SCRIPTS_DIR}/${script}" ] || die "${script} script not found: ${SCRIPTS_DIR}/${script}" \
+        "It ships alongside this script; the checkout looks incomplete."
+done
 
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd -- "$OUT_DIR" && pwd)"
@@ -173,7 +194,7 @@ fi
 #
 # Checked only now, so argument and environment errors surface on any host.
 
-REQUIRED_TOOLS=(pkgbuild productbuild)
+REQUIRED_TOOLS=(pkgbuild productbuild pkgutil)
 if [ "$SIGN_PKG" -eq 1 ]; then
     REQUIRED_TOOLS+=(xcrun codesign spctl plutil)
 fi
@@ -207,8 +228,10 @@ chmod 0644 "${PKG_ROOT}/${DOC_PREFIX}/${LICENSE_NAME}"
 # scripts/postinstall does not survive every clone (Windows checkouts drop it),
 # and pkgbuild silently ignores a non-executable script.
 mkdir -p "$STAGED_SCRIPTS"
-cp "${SCRIPTS_DIR}/postinstall" "${STAGED_SCRIPTS}/postinstall"
-chmod 0755 "${STAGED_SCRIPTS}/postinstall"
+for script in "${PKG_SCRIPTS[@]}"; do
+    cp "${SCRIPTS_DIR}/${script}" "${STAGED_SCRIPTS}/${script}"
+    chmod 0755 "${STAGED_SCRIPTS}/${script}"
+done
 
 if [ "$SIGN_PKG" -eq 1 ]; then
     # Apple's notary service requires every Mach-O inside the payload to carry a
@@ -251,6 +274,11 @@ fi
 # ── Component package ───────────────────────────────────────────────────────
 
 echo "build-pkg.sh: building component package (${PKG_IDENTIFIER} ${VERSION}, ${ARCH})"
+FILTER_ARGS=()
+for pattern in "${PAYLOAD_FILTERS[@]}"; do
+    FILTER_ARGS+=(--filter "$pattern")
+done
+
 pkgbuild \
     --root "$PKG_ROOT" \
     --identifier "$PKG_IDENTIFIER" \
@@ -259,9 +287,39 @@ pkgbuild \
     --scripts "$STAGED_SCRIPTS" \
     --ownership recommended \
     --min-os-version "$MIN_OS_VERSION" \
+    "${FILTER_ARGS[@]}" \
     "${WORK_DIR}/${COMPONENT_PKG}" \
     || die "pkgbuild failed for ${PKG_IDENTIFIER}." \
            "Re-run with the pkgbuild output above; the usual causes are an unreadable payload staged at ${PKG_ROOT} or a malformed --scripts directory."
+
+# The filters above are the only thing keeping /usr/local out of the payload, and
+# a regex that matched too much would ship an empty package that fails at INSTALL
+# time. Read the BOM back and assert both halves of the intent.
+PAYLOAD_LISTING="$(pkgutil --payload-files "${WORK_DIR}/${COMPONENT_PKG}")" \
+    || die "could not read back the component package's payload listing."
+echo "build-pkg.sh: payload"
+printf '%s\n' "$PAYLOAD_LISTING" | sed 's/^/  /'
+
+payload_has() {
+    printf '%s\n' "$PAYLOAD_LISTING" | grep -qx "\./$1"
+}
+
+for expected in "${PAYLOAD_BINARIES[@]/#/${INSTALL_PREFIX}/}" "${DOC_PREFIX}/${LICENSE_NAME}"; do
+    if ! payload_has "$expected"; then
+        die "the component package does not carry /${expected}." \
+            "A --filter pattern is excluding more than the parent directory entries." \
+            "Patterns: ${PAYLOAD_FILTERS[*]}"
+    fi
+done
+
+for unwanted in usr usr/local usr/local/bin usr/local/share usr/local/share/doc; do
+    if payload_has "$unwanted"; then
+        die "the component package carries a directory entry for /${unwanted}." \
+            "Installing it resets that directory to root:wheel, which breaks Homebrew on an" \
+            "Intel Mac where /usr/local is owned by the user. Fix the --filter patterns."
+    fi
+done
+echo "build-pkg.sh: payload owns only its own files (no /usr/local directory entries)"
 
 # ── Product archive ─────────────────────────────────────────────────────────
 

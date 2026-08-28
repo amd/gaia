@@ -1,0 +1,586 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Build the terminal hub's binaries and its native double-click installers, then
+# prove each installer installs on a machine that did not build it.
+#
+# Reusable so the PR gate and the release both run THE SAME jobs. They used to
+# be inline in release_components.yml, which fires only on a `v*` tag -- so a PR
+# editing gaia-setup.nsi or build-pkg.sh got no CI at all and the first
+# execution of that code was a live release. A second copy in build_tui.yml
+# would have fixed the gate and created a drift problem; one workflow, two
+# callers, fixes both.
+#
+# The two callers differ in exactly one way, `sidecar`:
+#
+#   pinned  (release) fetch the real gaia-agent and verify it against the digest
+#           committed in hub/agents/gaia/npm/binaries.lock.json.
+#   stub    (PR)      stand a copy of gaia-tui in for it. The committed digest is
+#           what makes a real sidecar safe to bundle and it is a placeholder
+#           between releases, so a PR cannot fetch one. Packaging, install, PATH,
+#           shortcuts and uninstall are all still exercised; only the sidecar's
+#           identity is not, and nothing built this way is ever published.
+#
+# Outputs let a caller treat the installers as optional without treating the
+# binaries as optional -- release_components.yml publishes the six raw binaries
+# even when an installer leg fails, because install.ps1 and install.sh depend on
+# them.
+
+name: TUI installers
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version stamped into the binaries and the installer filenames (x.y.z).'
+        required: true
+        type: string
+      sidecar:
+        description: 'pinned (fetch + verify the real gaia-agent) or stub (PR gate).'
+        required: false
+        default: pinned
+        type: string
+    outputs:
+      binaries_ok:
+        description: 'true when all six targets built and the Windows icon check passed.'
+        value: ${{ jobs.tui-build.outputs.ok }}
+      installers_ok:
+        description: 'true when every installer built AND smoke-tested on a clean runner.'
+        value: ${{ jobs.installers-ok.outputs.ok }}
+
+permissions:
+  contents: read
+
+jobs:
+  tui-build:
+    name: Build TUI binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      ok: ${{ steps.done.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      # Go links no Windows resource unless a .syso sits beside the main
+      # package, so without this the published gaia-win-*.exe carries the
+      # generic console icon and a blank Details tab. goversioninfo is a pinned
+      # `tool` dependency in tui/go.mod, so this needs no extra install.
+      - name: Generate Windows resources (icon + version)
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: tui/scripts/gen-winres.sh --version "${VERSION}"
+
+      # Cross-compile the same 6 targets build_tui.yml produces, stamped with
+      # the release version. CGO_ENABLED=0 keeps each binary static.
+      - name: Build all targets
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          PKG=github.com/amd/gaia/tui/internal/cli
+          # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
+          # rebuild of the same commit differ, so re-publishing a released
+          # version can never reconcile against the bytes already stored.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+          cd tui
+          while read -r goos goarch platform; do
+            EXT=""
+            [ "${goos}" = "windows" ] && EXT=".exe"
+            # -trimpath keeps the runner's absolute paths out of the binary.
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
+              -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
+              -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
+            echo "built gaia-${platform}${EXT}"
+          done <<'TARGETS'
+          linux   amd64 linux-x64
+          linux   arm64 linux-arm64
+          darwin  amd64 darwin-x64
+          darwin  arm64 darwin-arm64
+          windows amd64 win-x64
+          windows arm64 win-arm64
+          TARGETS
+
+      - name: Verify the built binary reports the release version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # `version` is a cobra subcommand — rootCmd sets no Version field, so
+          # `--version` is an unknown flag and exits 1.
+          # The linux-x64 build is the only one this runner can execute. A
+          # stamped-but-wrong version would otherwise only surface to a user.
+          got="$(./bin/gaia-linux-x64 version 2>&1 || true)"
+          echo "gaia version -> ${got}"
+          case "${got}" in
+            *"${VERSION}"*) echo "✓ version stamp present" ;;
+            *) echo "::error::built binary does not report ${VERSION} (got: ${got})"; exit 1 ;;
+          esac
+
+      # Reads the PE resource directory of the LINKED binary. Asserting the
+      # .syso exists would prove nothing: the Go linker silently ignores a
+      # resource object whose GOARCH suffix does not match the target, so the
+      # only claim worth making is about the bytes that ship.
+      - name: Verify the Windows binaries carry the icon
+        run: |
+          set -euo pipefail
+          for exe in bin/gaia-win-x64.exe bin/gaia-win-arm64.exe; do
+            python util/check_pe_resources.py \
+              --expect-version "${{ inputs.version }}" "${exe}"
+          done
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: tui-binaries
+          path: bin/
+          retention-days: 7
+
+      # Set last: binaries_ok must mean "built, stamped, icon-checked AND
+      # downloadable", not "the job started".
+      - id: done
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+  # ── Native double-click installers ─────────────────────────────────────────
+  # The setup files that replace the raw binary a website download gives you:
+  # gaia-tui plus the gaia-agent sidecar, on disk and on PATH.
+  #
+  # No installer is built for a platform the flagship publishes no sidecar for --
+  # it would install a front end with nothing behind it. win-arm64 and
+  # linux-arm64 are permanently in that set; darwin-x64 lands in it whenever the
+  # best-effort Intel sidecar build is skipped.
+  tui-installers:
+    name: Build installers (${{ matrix.label }})
+    needs: tui-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # One platform's packaging tool breaking must not hide the other two.
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows
+            os: windows-latest
+            platforms: win-x64
+          - label: macos
+            os: macos-latest
+            platforms: darwin-arm64 darwin-x64
+          - label: linux
+            os: ubuntu-latest
+            platforms: linux-x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tui-binaries
+          path: bin
+
+      # One staging directory per target, holding what all three build scripts
+      # consume: gaia-tui, gaia-agent, LICENSE.md. A staging directory that is
+      # absent afterwards means "no installer for this platform".
+      #
+      # fetch_sidecar.py verifies the sidecar against the digest COMMITTED in
+      # hub/agents/gaia/npm/binaries.lock.json, never one served by the hub that
+      # sent the bytes, and a placeholder digest is a hard stop.
+      - name: Stage payloads
+        env:
+          PLATFORMS: ${{ matrix.platforms }}
+          SIDECAR: ${{ inputs.sidecar }}
+        run: |
+          set -euo pipefail
+          for p in ${PLATFORMS}; do
+            EXT=""
+            case "${p}" in win-*) EXT=".exe" ;; esac
+            mkdir -p "stage/${p}"
+            cp "bin/gaia-${p}${EXT}" "stage/${p}/gaia-tui${EXT}"
+            cp LICENSE.md "stage/${p}/LICENSE.md"
+            chmod +x "stage/${p}/gaia-tui${EXT}"
+            if [ "${SIDECAR}" = "stub" ]; then
+              # A real sidecar is only safe to bundle because its digest is
+              # committed, and that digest is a placeholder between releases --
+              # so the PR gate cannot fetch one and must not pretend to. Standing
+              # the TUI binary in keeps packaging, install, PATH, shortcuts and
+              # uninstall under test; only the sidecar's identity is not, and
+              # nothing built here is ever published.
+              cp "stage/${p}/gaia-tui${EXT}" "stage/${p}/gaia-agent${EXT}"
+              chmod +x "stage/${p}/gaia-agent${EXT}"
+            else
+              # Exit 3 is the ONE tolerated outcome: the lock carries no entry for
+              # this platform, so the flagship publishes no sidecar for it. A
+              # placeholder or mismatched digest still exits 1 and fails the leg.
+              rc=0
+              python installer/tui/fetch_sidecar.py --platform "${p}" --out "stage/${p}" || rc=$?
+              if [ "${rc}" -eq 3 ]; then
+                echo "::warning::no installer will be built for ${p} — the flagship agent publishes no gaia-agent sidecar for it, so the setup would install the terminal hub with nothing behind it."
+                rm -rf "stage/${p}"
+                continue
+              fi
+              [ "${rc}" -eq 0 ] || exit "${rc}"
+            fi
+            ls -l "stage/${p}"
+          done
+
+      # ── Windows ──
+      # The MSI is bundled, not downloaded at install time, so the setup works
+      # offline. Same pinned source and size guard as build-installers.yml.
+      - name: Download the pinned Lemonade MSI
+        if: matrix.label == 'windows'
+        run: |
+          set -euo pipefail
+          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
+          if [ -z "$LEMONADE_VERSION" ]; then
+            echo "::error::Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
+            exit 1
+          fi
+          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
+          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
+          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
+          # The -minimal MSI is a bootstrap installer (~4-6MB) that fetches the
+          # Lemonade runtime on first run, so this guards against an obviously
+          # truncated download rather than pinning a size that moves between
+          # upstream minor releases.
+          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
+          echo "Downloaded MSI size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "::error::MSI smaller than 1MB; download likely corrupt or a 404 HTML body." >&2
+            exit 1
+          fi
+
+      - name: Install NSIS
+        if: matrix.label == 'windows'
+        run: choco install nsis --no-progress -y
+
+      - name: Build the Windows setup
+        if: matrix.label == 'windows'
+        run: |
+          installer/tui/nsis/build-setup.sh \
+            --version "${{ inputs.version }}" \
+            --payload stage/win-x64 \
+            --out dist \
+            --lemonade-msi installer/lemonade-server-minimal.msi
+
+      # ── macOS ──
+      # The packages ship UNSIGNED today and --allow-unsigned says so out loud.
+      #
+      # Adding the four Apple secrets is NOT sufficient to change that:
+      # build-pkg.sh also requires both payload binaries to already carry a
+      # Developer ID *Application* signature with the hardened runtime, and
+      # nothing here imports that certificate or signs them. Turning signing on
+      # without that step turns this leg red. See installer/tui/macos/README.md,
+      # "The payload binaries must already be signed".
+      - name: Build the macOS packages
+        if: matrix.label == 'macos'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          UNSIGNED=""
+          # All four, so that a job holding only APPLE_APP_SPECIFIC_PASSWORD is
+          # still recognised as half-configured rather than unconfigured.
+          if [ -z "${APPLE_ID:-}${APPLE_APP_SPECIFIC_PASSWORD:-}${APPLE_TEAM_ID:-}${APPLE_INSTALLER_IDENTITY:-}" ]; then
+            echo "::warning::No Apple credentials available to this job - the macOS packages will be UNSIGNED and Gatekeeper will warn users."
+            UNSIGNED="--allow-unsigned"
+          fi
+          for arch in arm64 x64; do
+            if [ ! -d "stage/darwin-${arch}" ]; then
+              echo "skipping the darwin-${arch} package: no sidecar was staged for it (see the Stage payloads step)."
+              continue
+            fi
+            installer/tui/macos/build-pkg.sh \
+              --version "${{ inputs.version }}" \
+              --arch "${arch}" \
+              --payload "stage/darwin-${arch}" \
+              --out dist ${UNSIGNED}
+          done
+
+      # ── Linux ──
+      # rpm supplies rpmbuild, which build-packages.sh refuses to run without --
+      # skipping the .rpm would ship a half-empty release that reports green.
+      # ruby-dev is fpm's own build dependency, not optional.
+      - name: Install fpm
+        if: matrix.label == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+          fpm --version
+          rpmbuild --version
+
+      - name: Build the Linux packages
+        if: matrix.label == 'linux'
+        run: |
+          installer/tui/linux/build-packages.sh \
+            --version "${{ inputs.version }}" \
+            --payload stage/linux-x64 \
+            --out dist
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: tui-installers-${{ matrix.label }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Prove each installer installs somewhere it was not built ───────────────
+  # A separate job is a fresh VM, and the Linux legs run in clean containers.
+  # That is the point: an installer verified only on the box that built it is
+  # not verified -- the build host already has every dependency, the PATH entry,
+  # and often the payload sitting in the working directory.
+  tui-installers-smoke:
+    name: Smoke-test installer (${{ matrix.label }})
+    needs: tui-installers
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows
+            os: windows-latest
+          - label: macos
+            os: macos-latest
+          - label: linux
+            os: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tui-installers-${{ matrix.label }}
+          path: dist
+
+      - name: Windows — install, verify, uninstall
+        if: matrix.label == 'windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name  = python installer/tui/artifacts.py names --version $env:VERSION --platform win-x64
+          $setup = "dist/$name"
+          $dir   = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
+          # The Agent UI's electron-builder setup owns this one and removes it
+          # recursively on uninstall, so the terminal hub must never land in it.
+          $agentUiDir = "$env:LOCALAPPDATA\Programs\GAIA"
+          if (Test-Path $dir) { throw "$dir already exists before install - this runner is not clean" }
+
+          $p = Start-Process -FilePath (Resolve-Path $setup) -ArgumentList '/S' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "setup exited $($p.ExitCode)" }
+
+          if (Test-Path $agentUiDir) {
+            throw "setup wrote to $agentUiDir - that is the Agent UI's install directory, whose uninstaller deletes it recursively"
+          }
+          foreach ($f in 'gaia-tui.exe','gaia-agent.exe','Uninstall.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "$f did not land in $dir" }
+          }
+          # The registry PATH, not $env:PATH: this process inherited its
+          # environment before the install, so it cannot see the change.
+          $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
+          if ($regPath -notlike "*$dir*") { throw "install dir was not added to the user PATH" }
+          if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub')) {
+            throw "no Add/Remove Programs entry was registered"
+          }
+
+          $out = & "$dir\gaia-tui.exe" version 2>&1 | Out-String
+          Write-Host "gaia-tui version -> $out"
+          if ($out -notmatch [regex]::Escape($env:VERSION)) { throw "gaia-tui did not report $env:VERSION" }
+
+          # The ordinary upgrade path: run the setup again while the payload is
+          # in use. A running image is held with FILE_SHARE_READ|DELETE, so the
+          # setup cannot open it for write -- reproduced here with an exclusive
+          # handle, which is deterministic in a headless runner where the TUI
+          # itself has no terminal to stay alive in. The setup must refuse up
+          # front and leave the previous install byte-identical.
+          $before = Get-FileHash "$dir\gaia-tui.exe" -Algorithm SHA256
+          $held   = [System.IO.File]::Open("$dir\gaia-tui.exe", 'Open', 'Read', 'Read')
+          try {
+            $again = Start-Process -FilePath (Resolve-Path $setup) -ArgumentList '/S' -PassThru -Wait
+            if ($again.ExitCode -eq 0) { throw "setup reported success while gaia-tui.exe was locked" }
+            Write-Host "re-install over an in-use gaia-tui refused with exit $($again.ExitCode)"
+          } finally {
+            $held.Dispose()
+          }
+          $after = Get-FileHash "$dir\gaia-tui.exe" -Algorithm SHA256
+          if ($after.Hash -ne $before.Hash) { throw "the refused install still rewrote gaia-tui.exe" }
+          foreach ($f in 'gaia-tui.exe','gaia-agent.exe','Uninstall.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "the refused install left $f missing" }
+          }
+
+          # Data the uninstaller must not touch.
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gaia" | Out-Null
+          Set-Content -Path "$env:USERPROFILE\.gaia\smoke-marker" -Value 'keep me'
+
+          $u = Start-Process -FilePath "$dir\Uninstall.exe" -ArgumentList '/S' -PassThru -Wait
+          if ($u.ExitCode -ne 0) { throw "uninstaller exited $($u.ExitCode)" }
+          # The uninstaller re-execs from a temp copy, so the original process is
+          # still exiting when Start-Process returns.
+          Start-Sleep -Seconds 12
+
+          if (Test-Path $dir) { throw "$dir survived the uninstall: $(Get-ChildItem $dir | Out-String)" }
+          $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
+          if ($regPath -like "*Programs\GAIA Terminal Hub*") { throw "install dir was left on the user PATH" }
+          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub') {
+            throw "the Add/Remove Programs entry survived the uninstall"
+          }
+          if (-not (Test-Path "$env:USERPROFILE\.gaia\smoke-marker")) {
+            throw "the uninstaller deleted ~/.gaia - it must keep user data unless asked"
+          }
+          Write-Host "OK - installed, ran, uninstalled cleanly, user data intact"
+
+      - name: macOS — install, verify, uninstall
+        if: matrix.label == 'macos'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui already present - runner is not clean"; exit 1; }
+          arm64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-arm64)"
+          x64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-x64)"
+
+          # /usr/local and /usr/local/bin must come out of this with the
+          # ownership they went in with -- the package ships no directory entry
+          # for either, because installing one breaks Homebrew on Intel.
+          before_local="$(stat -f '%Su:%Sg %Lp' /usr/local)"
+
+          # macos-latest is arm64, so only the arm64 package can be exercised
+          # end to end. The x64 package is verified by its payload listing --
+          # running it would need Rosetta, which the runner may not have.
+          sudo installer -pkg "dist/${arm64_pkg}" -target /
+          for b in gaia-tui gaia-agent; do
+            test -x "/usr/local/bin/${b}" || { echo "::error::${b} did not land in /usr/local/bin"; exit 1; }
+          done
+          test -f /usr/local/share/doc/gaia-tui/LICENSE.md \
+            || { echo "::error::the package did not install LICENSE.md"; exit 1; }
+          command -v gaia-tui >/dev/null || { echo "::error::gaia-tui is not on PATH"; exit 1; }
+          got="$(gaia-tui version 2>&1)"
+          echo "gaia-tui version -> ${got}"
+          case "${got}" in *"${VERSION}"*) ;; *) echo "::error::gaia-tui did not report ${VERSION}"; exit 1 ;; esac
+          pkgutil --pkg-info ai.amd.gaia.terminal-hub
+
+          after_local="$(stat -f '%Su:%Sg %Lp' /usr/local)"
+          if [ "${before_local}" != "${after_local}" ]; then
+            echo "::error::installing changed /usr/local from '${before_local}' to '${after_local}'. That is what breaks Homebrew on an Intel Mac; the payload must carry no directory entry for it."
+            exit 1
+          fi
+
+          # Absent when the flagship publishes no Intel sidecar -- see the Stage
+          # payloads step. Not a failure here: the publish step is the one that
+          # decides which platforms a release must carry.
+          if [ ! -f "dist/${x64_pkg}" ]; then
+            echo "no ${x64_pkg} in this build - skipping the Intel payload check"
+          else
+            echo "--- x64 package payload ---"
+            # --expand-full, not --payload-files: productbuild emits a PRODUCT
+            # archive and pkgutil only lists payloads of COMPONENT packages.
+            x64_tmp="$(mktemp -d)"
+            trap 'rm -rf "${x64_tmp}"' EXIT
+            pkgutil --expand-full "dist/${x64_pkg}" "${x64_tmp}/expanded"
+            find "${x64_tmp}/expanded" -path '*/Payload/usr/local/bin/*' -print
+            for b in gaia-tui gaia-agent; do
+              test -n "$(find "${x64_tmp}/expanded" -path "*/Payload/usr/local/bin/${b}" -print -quit)" \
+                || { echo "::error::the x64 package does not carry ${b}"; exit 1; }
+            done
+            rm -rf "${x64_tmp}"
+            trap - EXIT
+          fi
+
+          # A .pkg ships no uninstaller by macOS convention, so removal is the
+          # documented manual one: delete the files and forget the receipt.
+          sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+          sudo rm -rf /usr/local/share/doc/gaia-tui
+          sudo pkgutil --forget ai.amd.gaia.terminal-hub
+          test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui survived removal"; exit 1; }
+          echo "OK - installed, ran, removed"
+
+      - name: Linux — install, verify, uninstall in clean containers
+        if: matrix.label == 'linux'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DEB="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext deb)"
+          RPM="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext rpm)"
+          # One assertion per line, never `test A && test B`: a failing
+          # left-hand side of an && list is exempt from errexit, so the list
+          # returns 1 and the script sails on. That silently disarms the only
+          # check that the package actually removed its binaries.
+          echo "===== .deb on debian:bookworm ====="
+          docker run --rm -v "${PWD}/dist:/pkg:ro" debian:bookworm bash -euo pipefail -c "
+            test ! -e /usr/bin/gaia-tui
+            dpkg -i /pkg/${DEB}
+            test -x /usr/bin/gaia-tui
+            test -x /usr/bin/gaia-agent
+            command -v gaia-tui
+            gaia-tui version | tee /tmp/v
+            grep -q '${VERSION}' /tmp/v
+            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop
+            mkdir -p /root/.gaia && echo keep > /root/.gaia/smoke-marker
+            dpkg -r gaia
+            test ! -e /usr/bin/gaia-tui
+            test ! -e /usr/bin/gaia-agent
+            test -f /root/.gaia/smoke-marker
+            echo 'OK - deb installed, ran, removed, user data intact'
+          "
+          echo "===== .rpm on fedora:latest ====="
+          docker run --rm -v "${PWD}/dist:/pkg:ro" fedora:latest bash -euo pipefail -c "
+            test ! -e /usr/bin/gaia-tui
+            rpm -i /pkg/${RPM}
+            test -x /usr/bin/gaia-tui
+            test -x /usr/bin/gaia-agent
+            command -v gaia-tui
+            gaia-tui version | tee /tmp/v
+            grep -q '${VERSION}' /tmp/v
+            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop
+            mkdir -p /root/.gaia && echo keep > /root/.gaia/smoke-marker
+            rpm -e gaia
+            test ! -e /usr/bin/gaia-tui
+            test ! -e /usr/bin/gaia-agent
+            test -f /root/.gaia/smoke-marker
+            echo 'OK - rpm installed, ran, removed, user data intact'
+          "
+
+  # A matrix job reports the outputs of whichever leg happened to finish last,
+  # so it cannot answer "did all three pass". This job runs only when every leg
+  # did, which makes its output exactly that claim.
+  installers-ok:
+    name: All installers verified
+    needs: tui-installers-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ok: ${{ steps.done.outputs.ok }}
+    steps:
+      - id: done
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"

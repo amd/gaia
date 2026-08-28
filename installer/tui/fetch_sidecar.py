@@ -3,35 +3,28 @@
 # SPDX-License-Identifier: MIT
 """Download the flagship `gaia-agent` sidecar and verify it against the committed lock.
 
-The terminal hub spawns `gaia-agent` as a child process (``TransportSubprocess``
-in ``tui/internal/catalog/catalog.go``), so an installer that ships only the TUI
-installs a front end with nothing behind it. This stages the sidecar the
-installers bundle.
+The terminal hub spawns `gaia-agent` as a child process, so an installer that
+ships only the TUI installs a front end with nothing behind it.
 
-The SHA-256 check is the security boundary, and it is the same contract
-``hub/agents/gaia/npm/src/fetch.ts`` enforces: the expected digest comes from the
-COMMITTED ``hub/agents/gaia/npm/binaries.lock.json``, never from the origin that
-served the bytes. Verifying a download against a hash fetched from the same host
-proves only that the host is self-consistent, which is trust-on-first-use, not
-integrity. A placeholder hash in the lock is refused outright rather than quietly
-downgraded to that weaker check -- there is no "use it anyway" path, and a
-mismatch deletes the file and exits non-zero.
+Both the expected SHA-256 and the sidecar version come from the COMMITTED
+``hub/agents/gaia/npm/binaries.lock.json``, never from the origin that served the
+bytes -- an origin verifying itself is not an integrity check. Same contract as
+``hub/agents/gaia/npm/src/fetch.ts``. The hub manifest is read only to resolve
+the artifact's download path.
 
-The lock also pins WHICH sidecar version ships. That is deliberately not the
-manifest's ``latest_version``: three installer jobs resolving that independently
-can bundle three different agent builds in one release, and nothing would record
-which one shipped. The hub manifest is still read, but only to resolve the
-artifact's download path.
+Two outcomes are deliberately distinct, and must stay so:
 
-The two hub lanes disagree about platform spelling: the terminal hub publishes
-``gaia-win-x64.exe`` while the flagship publishes ``gaia-agent-win32-x64.exe``
-(npm's ``process.platform`` naming). PLATFORM_KEYS is that translation, and it is
-the only place it should live.
+* a platform with NO entry in the lock exits ``EXIT_NO_SIDECAR_FOR_PLATFORM`` --
+  the flagship publishes no sidecar there, so build no installer for it;
+* an entry with a placeholder or corrupt digest is a hard stop (exit 1). There is
+  no "use it anyway" path.
+
+PLATFORM_KEYS translates the terminal hub's platform spelling (``win-x64``) to
+the flagship's npm-style one (``win32-x64``).
 
 Usage::
 
     python installer/tui/fetch_sidecar.py --platform win-x64 --out dist/payload
-    python installer/tui/fetch_sidecar.py --platform linux-x64 --out . --version 0.1.1
 """
 
 from __future__ import annotations
@@ -63,6 +56,10 @@ PLATFORM_KEYS = {
 
 CHUNK = 1 << 20
 
+# "The flagship publishes no sidecar for this platform", not "something broke".
+# The caller skips that platform's installer; every other failure stays exit 1.
+EXIT_NO_SIDECAR_FOR_PLATFORM = 3
+
 # The managed WAF in front of hub.amd-gaia.ai 403s urllib's default agent.
 USER_AGENT = "gaia-installer-build/1.0"
 
@@ -73,6 +70,10 @@ BINARIES_LOCK = Path("hub/agents/gaia/npm/binaries.lock.json")
 # left half-filled by a future generator cannot slip past as "not PENDING".
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 LOCK_GENERATOR = "hub/agents/gaia/python/packaging/gen_binaries_lock.py"
+
+
+class NoSidecarForPlatform(Exception):
+    """The lock carries no entry at all for this platform."""
 
 
 def _repo_root() -> Path:
@@ -96,20 +97,29 @@ def _sidecar_lock() -> tuple[dict, Path]:
         ) from e
 
 
+def platform_has_sidecar(platform: str) -> bool:
+    """Whether the committed lock carries a sidecar entry for `platform`."""
+    sidecar, _ = _sidecar_lock()
+    entry = (sidecar.get("platforms") or {}).get(PLATFORM_KEYS[platform])
+    return isinstance(entry, dict)
+
+
 def _expected_sha256(sidecar: dict, npm_key: str, lock_path: Path) -> str:
     """The committed digest for `npm_key`, or a hard stop if there is not one."""
     entry = (sidecar.get("platforms") or {}).get(npm_key)
     if not isinstance(entry, dict):
-        raise SystemExit(
-            f"{lock_path} has no components.sidecar.platforms.{npm_key} entry, so there "
-            f"is no committed digest to verify the download against.\n"
-            f"Regenerate the lock with {LOCK_GENERATOR}."
+        # Absent, not broken: release_agent_gaia.yml DROPS a platform whose
+        # best-effort sidecar build was skipped, so the npm installer can say
+        # "not published for this platform". Say the same thing here.
+        raise NoSidecarForPlatform(
+            f"{lock_path} has no components.sidecar.platforms.{npm_key} entry, so the "
+            f"flagship agent publishes no sidecar for this platform."
         )
     sha = str(entry.get("sha256", ""))
     if not SHA256_RE.match(sha):
-        # The lock ships placeholders until a release fills them in, so this is
-        # the expected state on a fresh branch -- and the build must stay red
-        # until it is fixed. The same placeholder blocks `npx @amd-gaia/gaia`.
+        # A placeholder is the expected state on a fresh branch, and the build
+        # must stay red until a release fills it in -- the same placeholder
+        # blocks `npx @amd-gaia/gaia`.
         raise SystemExit(
             f"{lock_path} carries no real sha256 for the sidecar on {npm_key} "
             f"(found {sha!r}), so the downloaded binary cannot be verified and this "
@@ -258,7 +268,17 @@ def main() -> int:
             f"would mean verifying it against a digest for different bytes.\n"
             f"Bump the lock to {version} with {LOCK_GENERATOR}, or drop --version."
         )
-    expected_sha = _expected_sha256(sidecar, npm_key, lock_path)
+    try:
+        expected_sha = _expected_sha256(sidecar, npm_key, lock_path)
+    except NoSidecarForPlatform as e:
+        print(
+            f"{e}\n"
+            f"Build no installer for {args.platform}: it would ship the terminal hub with "
+            f"no agent behind it. If the flagship IS meant to publish here, the lock is "
+            f"stale -- regenerate it with {LOCK_GENERATOR}.",
+            file=sys.stderr,
+        )
+        return EXIT_NO_SIDECAR_FOR_PLATFORM
     expected_size = sidecar["platforms"][npm_key].get("size")
     if not isinstance(expected_size, int) or expected_size <= 0:
         expected_size = None

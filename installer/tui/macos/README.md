@@ -11,6 +11,14 @@ Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
 
+The payload carries **only those three files** — no directory entry for `/usr`,
+`/usr/local`, `/usr/local/bin` or `/usr/local/share`. Shipping one would reset
+that directory to `root:wheel` on install, which breaks `brew` on an Intel Mac
+where Homebrew owns `/usr/local` as the user. `pkgbuild --filter` drops the
+entries, `scripts/preinstall` creates whichever directory is missing (`mkdir -p`
+leaves an existing one alone), and `build-pkg.sh` reads the BOM back and fails if
+either half of that stopped holding.
+
 ## Uninstall it
 
 A `.pkg` ships no uninstaller — that is the macOS convention. Remove the files,
@@ -84,11 +92,22 @@ security find-identity -v | grep 'Developer ID Installer'
 Note that installer certificates do **not** appear under
 `security find-identity -p codesigning`.
 
-### The payload binaries must already be signed
+### The payload binaries must already be signed — and CI does not do this yet
 
-Apple's notary service rejects a package containing unsigned or ad-hoc-signed
-executables, so the build refuses to submit one. Codesign the Go binaries
-*before* staging them:
+**Setting the four variables above is not enough to turn signing on.** Apple's
+notary service rejects a package containing unsigned or ad-hoc-signed
+executables, so `build-pkg.sh` refuses to submit one — and a *Developer ID
+Application* certificate (a different certificate from the *Installer* one in
+the table above) is what signs them. `release_components.yml` imports no
+keychain and signs no binary, so today it passes `--allow-unsigned` and every
+published `.pkg` is unsigned.
+
+Enabling signing therefore needs three things together, not one: the four
+variables, a Developer ID **Application** certificate imported into the runner's
+keychain, and a workflow step that codesigns both binaries before they are
+staged. Wiring only the secrets turns the macOS leg red.
+
+Codesign the Go binaries *before* staging them:
 
 ```bash
 codesign --force --options runtime --timestamp \
@@ -109,6 +128,7 @@ other than `Accepted`.
 | --- | --- |
 | `build-pkg.sh` | Entry point; the only thing CI calls |
 | `distribution.xml` | `productbuild --distribution` template; `@VERSION@`, `@HOST_ARCHITECTURES@`, `@PKG_IDENTIFIER@` and `@COMPONENT_PKG@` are substituted at build time |
+| `scripts/preinstall` | Creates `/usr/local/bin` and the doc directory if absent, because the payload deliberately ships no directory entries |
 | `scripts/postinstall` | Verifies both binaries landed and are executable, then prints their paths. A non-zero exit here is surfaced by Installer.app |
 
 Bundle identifier: `ai.amd.gaia.terminal-hub`. Minimum OS: macOS 11.
