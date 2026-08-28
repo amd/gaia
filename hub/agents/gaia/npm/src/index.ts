@@ -16,6 +16,8 @@
  */
 
 export {
+  INSTALLED_SENTINEL_NAME,
+  SIDECAR_AGENT_ID,
   fetchAll,
   fetchBinary,
   verifySha256,
@@ -91,6 +93,9 @@ export {
   HealthTimeoutError,
   HttpError,
   IntegrityError,
+  MalformedResponseError,
   PlatformError,
+  PortInUseError,
+  SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";

@@ -55,9 +55,34 @@
 #   self-hosted Windows runner doesn't provide by default even though Git for
 #   Windows (and its bash.exe) is installed -- fixed with an explicit
 #   "Ensure bash is on PATH" step before any claude-code-action use.
-# - Re-run pending as of this comment -- if you're reading this in a PR that
-#   updates it, check whether both fixes actually resolved the run before
-#   trusting the weekly schedule.
+# - Run 32755389532 (2026-08-24): both fixes above held; the run died one step
+#   later. claude-code-action installs the CLI with `curl claude.ai/install.sh
+#   | bash`, which refuses Windows, so the executor and judge both failed after
+#   3 attempts before any doc was walked -- and continue-on-error reported the
+#   job green. Fixed by installing from npm and passing the binary through
+#   `path_to_claude_code_executable`.
+# - Run 32764106980: npm wasn't on PATH either (same story as bash and python);
+#   fixed with actions/setup-node, matching what
+#   test_eval_agent_gemma_consolidation.yml already does on this runner pool.
+# - Run 32767640853: executor finished cleanly (is_error=false, 52 turns) and the
+#   judge wrote findings, yet the status step called it a crash -- it parsed
+#   execution_file line-by-line, but that file is a pretty-printed JSON array.
+#   Fixed by scanning the whole text for the last is_error.
+# - Run 32770642262: PASSED end to end -- every step green, findings artifact
+#   uploaded, issue #3071 filed. First fully working run of this workflow.
+# - Run 32994770487 (2026-08-26): regressed on the FIRST post-merge run, from a
+#   runner change rather than a code change. The wheel builds, then installing it
+#   dies -- "An Application Control policy has blocked this file" -- because the
+#   policy now blocks the venv's unsigned pip.exe shim. Fixed by installing
+#   through `python.exe -m pip`, the form the same step already used two lines up.
+# - Run 33040830292: PASSED with that fix. Also settles the open question about
+#   the OTHER launcher in that folder: `gaia.exe` runs in the same step and the
+#   step passed, so the policy blocks that specific shim, not the class. Do NOT
+#   pre-emptively rewrite `gaia.exe` as `python -m gaia` -- driving the real
+#   console script is the property this workflow exists to prove. If the policy
+#   ever does block it, the fix is a runner allowlist entry, not a call-shape
+#   change here.
+#   A `.cmd` shim via path_to_claude_code_executable does work on this runner.
 
 name: Claude Weekly Doc Walkthrough
 
@@ -191,6 +216,51 @@ jobs:
             exit 1
           }
 
+      # FOUND ON A LIVE RUN (2026-08-24, run 32755389532): claude-code-action installs
+      # the CLI with `curl https://claude.ai/install.sh | bash`, and that script refuses
+      # Windows ("Windows is not supported by this script"). Both the executor and the
+      # judge died there after 3 attempts, before any doc was walked -- and
+      # continue-on-error reported the job green. Install from npm instead (which does
+      # support Windows) and hand the action the binary via
+      # `path_to_claude_code_executable`, its documented skip-the-install escape hatch.
+      # npm is not on PATH on this runner either (same story as bash and python).
+      # test_eval_agent_gemma_consolidation.yml sets Node up the same way on the
+      # same runner pool before its own `npm install -g @anthropic-ai/claude-code`.
+      - name: Set up Node (provides npm for the Claude Code install below)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code (npm — the action's own installer refuses Windows)
+        id: claude_cli
+        shell: powershell
+        run: |
+          if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            Write-Host "::error::No npm on PATH -- the Set up Node step above should have provided it. claude-code-action's own installer refuses Windows, so npm is the only install path here."
+            exit 1
+          }
+          # Major-pinned, not exact. The action bundles its own expected CLI version and
+          # bumps it with the SHA, so pinning exactly here would drift against it; ^2
+          # still tracks that while stopping a 3.x breaking release from landing
+          # mid-scheduled-run. Revisit when the action's SHA moves to a 3.x CLI.
+          npm install -g "@anthropic-ai/claude-code@^2"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::npm install of @anthropic-ai/claude-code failed -- the executor and judge cannot run."
+            exit 1
+          }
+          $npmPrefix = (npm prefix -g).Trim()
+          $claude = Join-Path $npmPrefix "claude.cmd"
+          if (-not (Test-Path $claude)) {
+            Write-Host "::error::Claude Code installed but no claude.cmd under $npmPrefix -- cannot point the action at it."
+            exit 1
+          }
+          Write-Host "Claude Code CLI at $claude"
+          & $claude --version
+          # Add-Content, not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
+          # writes a BOM mid-file, and the runner then rejects the NEXT step's append
+          # with "Unable to process file command 'output'".
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "path=$claude"
+
       - name: Verify clean start state
         shell: powershell
         run: |
@@ -208,6 +278,26 @@ jobs:
           "" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           "- **Start:** $(Get-Date -Format o), clean run dir: ``$runDir``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
+      # FOUND ON A LIVE RUN (2026-08-10, run 31387768076): this runner has no
+      # `python` on PATH, so the venv step below died with CommandNotFound before
+      # any doc was walked. Every other STX workflow gets its interpreter through
+      # uv (see .github/actions/setup-venv), so do the same here rather than
+      # depending on a system Python that isn't there.
+      - name: Ensure uv is on PATH (provides the interpreter for the venv below)
+        shell: powershell
+        run: |
+          $uvBin = "$env:USERPROFILE\.local\bin"
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "uv not present -- installing."
+            irm https://astral.sh/uv/install.ps1 | iex
+          }
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "::error::uv install did not produce $uvBin\uv.exe -- cannot create the walkthrough venv."
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $uvBin
+          Write-Host "uv on PATH at $uvBin"
+
       - name: Fresh venv, real-user install (no -e install, no hub packages)
         shell: powershell
         run: |
@@ -218,8 +308,10 @@ jobs:
           # hub/agents/*/python package alongside it. This is the property
           # that would have caught #2260 -- do not "fix" a resulting
           # ImportError by installing a hub package here; that IS the bug.
+          # uv only supplies the interpreter; --seed puts real pip in the venv so
+          # the install below is still a plain `pip install <wheel>`.
           Write-Host "Creating venv at $env:RUN_DIR\venv ..."
-          python -m venv "$env:RUN_DIR\venv"
+          uv venv --seed --python 3.12 "$env:RUN_DIR\venv"
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip build
           Write-Host "Building wheel from the checkout ..."
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m build --wheel --outdir "$env:RUN_DIR\dist" .
@@ -231,7 +323,10 @@ jobs:
           }
           Write-Host "Built: $($wheel.Name)"
           Write-Host "Installing $($wheel.Name) into the fresh venv (no -e, no hub packages) ..."
-          & "$env:RUN_DIR\venv\Scripts\pip.exe" install $wheel.FullName
+          # `python.exe -m pip`, not the venv's pip.exe: this runner's Application Control
+          # policy blocks the unsigned shim ("An Application Control policy has blocked
+          # this file"). Same install either way -- still a real non-editable wheel install.
+          & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install $wheel.FullName
           $gaiaVersion = & "$env:RUN_DIR\venv\Scripts\gaia.exe" --version
           Write-Host "Installed: $gaiaVersion"
           "- **Environment:** ✅ $($wheel.Name) installed, ``gaia --version`` -> $gaiaVersion" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
@@ -289,6 +384,13 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue,github-actions"
+          # Skip the action's Linux-only installer — see the npm install step above.
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
             You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
             to run commands and capture their raw output -- judging correctness is a
@@ -351,7 +453,15 @@ jobs:
             and any retry) to `<RUN_DIR>\transcript.md` (substitute the real value of the
             `RUN_DIR` env var), structured with one section per step in doc order. This
             transcript is the ONLY thing the judge step reads -- anything not captured
-            there does not exist for judging purposes.
+            there does not exist for judging purposes. You have no Write tool: create it
+            with Bash (a `cat > … <<'MD'` heredoc). A run that ends without this file is a
+            FAILED run -- the job hard-fails on it, because a missing transcript is
+            indistinguishable from the walk never having started.
+
+            ## Budget
+            You have --max-turns 60. Stop walking the guide at ~5 turns remaining and
+            spend them writing the transcript. Reaching the ceiling mid-walk discards
+            everything you captured; a partial transcript beats a perfect one never written.
           claude_args: |
             --max-turns 60
             --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
@@ -373,31 +483,35 @@ jobs:
           # presence on this self-hosted Windows runner is not a confirmed
           # dependency (the ubuntu-hosted synthesis job below uses jq safely,
           # since GH-hosted runners guarantee it; this job cannot assume that).
-          # execution_file is JSONL (one object per line); walk every line and
-          # keep the LAST one that has an is_error key, matching the bash
-          # `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
+          # execution_file is a PRETTY-PRINTED JSON array, not JSONL, so parsing it
+          # line by line makes every line invalid and silently reports a healthy run
+          # as crashed. Scan the whole text and keep the LAST is_error, matching the
+          # bash `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
           # claude-weekly-audit.yml uses on ubuntu.
           $ok = $false
-          $isErr = $null
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
-            foreach ($line in Get-Content $env:EXEC_FILE) {
-              try {
-                $obj = $line | ConvertFrom-Json -ErrorAction Stop
-                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
-              } catch {}
+            $raw = Get-Content -Raw $env:EXEC_FILE
+            $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
+            if ($hits.Count -gt 0) {
+              $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
+            } else {
+              Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
-            if ($isErr -eq $false) { $ok = $true }
           }
           $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
           if ($ok -and $transcriptExists) {
             Write-Host "✅ Executor completed and wrote a transcript."
             "- **Executor:** ✅ completed, transcript written" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } elseif ($ok -and -not $transcriptExists) {
-            Write-Host "::warning::Executor step reported success but no transcript.md was written -- the judge will file a crash finding for this."
-            "- **Executor:** ⚠️ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            # No transcript means the judge would review nothing and write nothing, and the
+            # job would still go green. Stop here so the cause is the reported failure.
+            Write-Host "::error title=Executor wrote no transcript (${{ matrix.doc.path }})::The executor reported success but never wrote transcript.md, so there is nothing to judge. log: $env:EXEC_FILE"
+            "- **Executor:** ❌ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            exit 1
           } else {
-            Write-Host "::warning title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
             "- **Executor:** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            exit 1
           }
 
       - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
@@ -409,6 +523,10 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
+          # Skip the action's Linux-only installer — see the npm install step above.
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
             You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
@@ -460,6 +578,15 @@ jobs:
                false but the underlying command doesn't crash; 🟡 a cosmetic/minor gap
                (a missing caveat, a stale example). `auto_fixable` = true only if the fix
                is small and locatable (~1-3 files, no design call).
+
+               This file IS the deliverable. You have no Write tool: create it with Bash
+               (a `cat > … <<'JSON'` heredoc). An empty `{"findings": []}` is a valid,
+               useful result; ending without the file at all is a FAILED run and the job
+               hard-fails on it.
+
+            ## Budget
+            You have --max-turns 25. Stop judging at ~3 turns remaining and spend them
+            writing the findings file -- partial findings written beat complete findings lost.
           claude_args: |
             --max-turns 25
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
@@ -475,18 +602,17 @@ jobs:
         env:
           EXEC_FILE: ${{ steps.judge.outputs.execution_file }}
         run: |
-          # PowerShell-native JSON parsing (ConvertFrom-Json), not jq -- see
-          # the "Report executor status" step above for why.
+          # Same whole-text scan as "Report executor status" above -- see the note there
+          # for why line-by-line parsing misreads this file.
           $ok = $false
-          $isErr = $null
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
-            foreach ($line in Get-Content $env:EXEC_FILE) {
-              try {
-                $obj = $line | ConvertFrom-Json -ErrorAction Stop
-                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
-              } catch {}
+            $raw = Get-Content -Raw $env:EXEC_FILE
+            $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
+            if ($hits.Count -gt 0) {
+              $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
+            } else {
+              Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
-            if ($isErr -eq $false) { $ok = $true }
           }
           $findingsFile = "findings-walkthrough-${{ matrix.doc.slug }}.json"
           if ($ok) {
@@ -538,7 +664,9 @@ jobs:
         with:
           name: findings-walkthrough-${{ matrix.doc.slug }}
           path: findings-walkthrough-${{ matrix.doc.slug }}.json
-          if-no-files-found: warn
+          # The judge writes `{"findings": []}` even when a doc is clean, so a missing file
+          # means the judge never ran. Fail — a silent skip reads as "walked, all good".
+          if-no-files-found: error
 
   # Collect every matrix job's findings, dedupe against open weekly-audit
   # issues, and file ONE parent triage issue + per-finding child issues.
@@ -612,6 +740,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
             execution-based sibling of the static weekly-audit -- see
@@ -717,5 +847,8 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            # Hard-fail for the same reason as claude-weekly-audit.yml: a green run that
+            # synthesised nothing is indistinguishable from one that found nothing.
+            echo "::error title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            exit 1
           fi

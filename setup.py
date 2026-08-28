@@ -28,19 +28,6 @@ tkml_version = "5.0.4"
 # the incident. Do not move this back into extras_require until the wheels
 # are live on PyPI.
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-summarize",
-    "gaia-agent-sd",
-    "gaia-agent-fileio",
-    "gaia-agent-docker",
-    "gaia-agent-jira",
-    "gaia-agent-blender",
-    "gaia-agent-emr",
-    "gaia-agent-code",
-    "gaia-agent-connectors-demo",
-    "gaia-agent-analyst",
-    "gaia-agent-browser",
-    "gaia-agent-docqa",
-    "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
     "gaia-agent-gaia",
@@ -74,11 +61,7 @@ setup(
         "gaia.testing",
         "gaia.utils",
         "gaia.apps",
-        "gaia.apps.docker",
-        "gaia.apps.jira",
         "gaia.apps.llm",
-        "gaia.apps.summarize",
-        "gaia.apps.summarize.templates",
         "gaia.eval",
         "gaia.installer",
         "gaia.hub",
@@ -134,7 +117,9 @@ setup(
         ],
     },
     install_requires=[
-        "openai",
+        # Staged by #382 for the Lemonade Realtime transcription work in #372.
+        # OpenAI 1.58.0 is the first release with Realtime API support.
+        "openai>=1.58.0",
         "pydantic>=2.9.2",
         "transformers",
         "accelerate",
@@ -150,10 +135,6 @@ setup(
         "apscheduler>=3.10.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
-        # Required by the `gaia-mcp` bridge (base console_script), which parses
-        # multipart uploads via python_multipart at import time. Base — not an
-        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
-        "python-multipart>=0.0.9",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
@@ -183,6 +164,10 @@ setup(
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
+            # The daemon's sidecar registry imports psutil at module scope and
+            # _check_daemon_deps refuses to start without it — declare it rather
+            # than rely on accelerate pulling it in transitively.
+            "psutil>=5.9.0",
         ],
         "ui": [
             "fastapi>=0.115.0",
@@ -220,9 +205,6 @@ setup(
             "torch>=2.0.0,<2.14",
             "torchvision<0.29.0",
             "torchaudio",
-        ],
-        "blender": [
-            "bpy",
         ],
         "mcp": [
             # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
@@ -297,6 +279,9 @@ setup(
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
+            # WebSocket transport for the Lemonade Realtime transcription work
+            # tracked in #372; #382 stages the packaging dependency first.
+            "websockets",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",

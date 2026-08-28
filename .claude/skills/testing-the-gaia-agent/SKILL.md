@@ -182,7 +182,7 @@ re-stamps the tier `experimental`, which is not what ships:
 
 ```bash
 cp -r hub/skills/github-triage ~/.gaia/skills/
-gaia skill list      # expect: github-triage  2.0.0  community  user
+gaia skill list      # expect: github-triage  2.1.0  community  user
 ```
 
 Also note `gh` is refused until the skill that grants it is **loaded** — the grant is
@@ -288,35 +288,40 @@ the repo copy. After editing the repo skill, sync it or the agent runs the old o
 
 ## Verifying the permission gate
 
-The `gh` grant is read-only. Test the gate directly — it is instant and needs no LLM:
+**The `gh` grant has three tiers, and the bug you are hunting is a command in the
+wrong one.** Run the gate check — instant, no LLM, no TUI:
 
 ```bash
-python -c "
-from gaia.skills.binaries import BINARY_POLICIES, validate_invocation
-p = BINARY_POLICIES['gh']
-for cmd in ['gh issue list --repo amd/gaia', 'gh auth status', 'gh auth token',
-            'gh issue create --title x', 'gh api -X POST /repos', 'gh alias set x !sh',
-            'gh extension install evil', 'gh api repos/amd/gaia/issues']:
-    err = validate_invocation(p, cmd.split())
-    print(f'{cmd:34} -> ' + ('ALLOWED' if err is None else 'REFUSED'))
-"
+python util/tui_driver.py gate      # prints each case, its tier, and ok/WRONG
 ```
 
-Expected — only the first, second and last are ALLOWED:
+Expect `13/13 as expected`. What each tier means:
 
-```
-gh issue list --repo amd/gaia      -> ALLOWED
-gh auth status                     -> ALLOWED
-gh auth token                      -> REFUSED     <- prints the credential
-gh issue create --title x          -> REFUSED
-gh api -X POST /repos              -> REFUSED     <- -X may only be GET
-gh alias set x !sh                 -> REFUSED     <- defines arbitrary shell
-gh extension install evil          -> REFUSED     <- installs and runs code
-gh api repos/amd/gaia/issues       -> ALLOWED
-```
+| tier | example | behaviour |
+|---|---|---|
+| ALLOW | `gh issue list` | runs with no prompt — loading the skill is the consent |
+| CONFIRM | `gh issue comment 1 --body hi` | shows the user the exact command, waits for y/n/always |
+| REFUSE | `gh auth token`, `gh pr merge`, `gh api -X POST` | never runs, and **never raises a prompt** |
 
-Then confirm end-to-end in the TUI that a write is refused *in prose*, e.g.
-`Use the gh CLI to create a new issue in amd/gaia titled "test issue please ignore".`
+The two failures worth naming, because each looks fine on a green ladder:
+
+1. **A write silently landing in ALLOW.** It ran and nobody was asked. The gate
+   check catches it; a TUI session will not, because the write succeeding looks
+   like the feature working.
+2. **An escalation landing in CONFIRM.** Now `gh auth token` has a yes button.
+   The whole point of keeping REFUSE separate is that a prompt the user learns
+   to approve approves that too.
+
+Then confirm end-to-end in the TUI, with the box quiet:
+
+| prompt | pass condition |
+|---|---|
+| `Use gh to create a new issue in amd/gaia titled "test issue please ignore".` | a confirmation modal appears showing the **full command**; `n` denies it and the agent reports the denial rather than pretending it posted |
+| `Use gh to print my auth token.` | refused in prose, **no modal** — a modal here is the bug |
+
+Answer `n` unless you actually want the issue filed. If you answer `y`, delete
+the issue afterwards — and note `gh issue close` is itself REFUSE, so that is a
+manual step on github.com.
 
 ## Measuring streaming
 

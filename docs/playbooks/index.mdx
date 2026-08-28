@@ -4,10 +4,6 @@ description: "Hands-on tutorials for building production AI agents on Ryzen AI"
 icon: "book-atlas"
 ---
 
-<Info>
-  **Source Code:** [`hub/agents/chat/python/`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/) | [`hub/agents/code/python/`](https://github.com/amd/gaia/blob/main/hub/agents/code/python/) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py) | [`hub/agents/emr/python/`](https://github.com/amd/gaia/blob/main/hub/agents/emr/python/) | [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py)
-</Info>
-
 <Badge text="development" color="orange" />
 
 These playbooks provide step-by-step tutorials for building AI agents on AMD AI PCs. Each explains implementation details and architectural decisions.
@@ -50,30 +46,6 @@ Build an agent that analyzes your system hardware and recommends which LLMs you 
     - GPU/NPU detection (Windows & Linux)
     - Memory-based recommendations
     </Card>
-</CardGroup>
-
----
-
-### Image Generation Agent
-
-Build an agent that generates images from text descriptions using Stable Diffusion running on Ryzen AI.
-
-<CardGroup cols={1}>
-  <Card
-    title="Building an Image Generation Agent"
-    icon="image"
-    href="/playbooks/sd-agent/index"
-  >
-    **20-30 minutes**
-
-    Build an agent that generates images using SDToolsMixin.
-
-    - Quick start (5 min working example)
-    - SDToolsMixin pattern
-    - Tool registration and orchestration
-    - Prompt enhancement strategies
-    - Multiple model support (SD-Turbo, SDXL)
-  </Card>
 </CardGroup>
 
 ---
@@ -132,115 +104,6 @@ Build an agent that searches, indexes, and answers questions about documents. Sp
 
 ---
 
-### Medical Intake Agent (EMR)
-
-Build an automated patient intake processor with VLM extraction, database storage, and a real-time web dashboard. Perfect for learning FileWatcherMixin and DatabaseMixin.
-
-<CardGroup cols={3}>
-  <Card
-    title="Part 1: Getting Started"
-    icon="notes-medical"
-    href="/playbooks/emr-agent/part-1-getting-started"
-  >
-    **20-25 minutes**
-
-    Build an automated intake form processor.
-
-    - FileWatcherMixin for auto-detection
-    - VLM extraction from images/PDFs
-    - DatabaseMixin for patient storage
-    - Natural language patient queries
-  </Card>
-
-  <Card
-    title="Part 2: Dashboard & API"
-    icon="chart-line"
-    href="/playbooks/emr-agent/part-2-dashboard"
-  >
-    **20-25 minutes**
-
-    Create a real-time monitoring dashboard.
-
-    - FastAPI server setup
-    - Server-Sent Events (SSE)
-    - React frontend components
-    - REST API endpoints
-  </Card>
-
-  <Card
-    title="Part 3: Architecture"
-    icon="sitemap"
-    href="/playbooks/emr-agent/part-3-architecture"
-  >
-    **15-20 minutes**
-
-    Deep dive into system design.
-
-    - Database schema design
-    - Processing pipeline steps
-    - Time savings calculation
-    - Production considerations
-  </Card>
-</CardGroup>
-
----
-
-### Code Generation Agent
-
-Build an AI-powered agent that generates complete Next.js applications from natural language descriptions. Split into 3 progressive parts.
-
-<CardGroup cols={3}>
-  <Card
-    title="Part 1: Introduction & Architecture"
-    icon="code"
-    href="/playbooks/code-agent/part-1-introduction"
-  >
-    **20-25 minutes**
-
-    Understanding GAIA Code Agent architecture.
-
-    - What is GAIA Code?
-    - System architecture
-    - MVP approach
-    - Technology stack
-    - Quick start example
-  </Card>
-
-  <Card
-    title="Part 2: App Creation & Components"
-    icon="puzzle-piece"
-    href="/playbooks/code-agent/part-2-app-creation"
-  >
-    **20-25 minutes**
-
-    Schema, API, and React component generation.
-
-    - Database schema generation
-    - API route creation with validation
-    - React component creation
-    - Tailwind CSS styling
-    - Working examples
-  </Card>
-
-  <Card
-    title="Part 3: Validation & Building"
-    icon="hammer"
-    href="/playbooks/code-agent/part-3-validation-building"
-  >
-    **15-20 minutes**
-
-    TypeScript validation and error iteration.
-
-    - TypeScript validation process
-    - Next.js build pipeline
-    - Error iteration loop
-    - Auto-fix process
-    - Testing final applications
-  </Card>
-</CardGroup>
-
----
-
 ### More Guides
 
 <CardGroup cols={2}>
@@ -254,78 +117,14 @@ Build an AI-powered agent that generates complete Next.js applications from natu
   </Card>
 
   <Card
-    title="Routing Agent"
-    icon="route"
-    href="/guides/routing"
+    title="The Flagship GAIA Agent"
+    icon="robot"
+    href="/guides/gaia"
     color="#16a34a"
   >
-    Intelligent request analysis and agent selection through conversational disambiguation.
+    Conversation, documents, data, web, memory, and skills in one agent.
   </Card>
 </CardGroup>
-
----
-
-## How to Use Playbooks
-
-<Steps>
-  <Step title="Choose your playbook">
-    Pick a use case that matches your needs. Each playbook is self-contained.
-  </Step>
-
-  <Step title="Follow the journey">
-    Start from Step 1 and work through sequentially. Each step builds on the previous one.
-  </Step>
-
-  <Step title="Understand the implementation">
-    Read the "Under the Hood" sections to understand the technical details and design decisions.
-  </Step>
-
-  <Step title="Extend and customize">
-    Use the "Making It Your Own" sections to adapt the agent for your specific use case.
-  </Step>
-
-  <Step title="Deploy to production">
-    Review deployment patterns for packaging and distribution.
-  </Step>
-</Steps>
-
----
-
-## Playbook Structure
-
-Each playbook follows this format:
-
-<Accordion title="1. Why Build This? (Context)">
-  Sets the stage - what problem does this solve? What will you build?
-</Accordion>
-
-<Accordion title="2. Quick Start (5 min)">
-  Minimal working example to verify setup and understand basic usage.
-</Accordion>
-
-<Accordion title="3. Architecture Overview">
-  Visual diagram showing how components fit together.
-</Accordion>
-
-<Accordion title="4. Understanding Components">
-  Deep dive into each piece with "under the hood" explanations.
-</Accordion>
-
-<Accordion title="5. Step-by-Step Build">
-  Incremental construction - each step adds one feature and explains it.
-</Accordion>
-
-<Accordion title="6. Making It Your Own">
-  Customization patterns, extensions, and advanced use cases.
-</Accordion>
-
-<Accordion title="7. Production Deployment">
-  API servers, CLI tools, and distribution patterns.
-</Accordion>
-
-<Accordion title="8. Real-World Examples">
-  Complete, copy-paste ready examples for common scenarios.
-</Accordion>
 
 ---
 
@@ -381,55 +180,7 @@ All playbooks assume you have:
 
 ## Learning Path
 
-<Steps>
-  <Step title="Start here" icon="rocket">
-    Begin with **[Document Q&A Agent](/playbooks/chat-agent/part-1-getting-started)** - it covers foundational concepts used in all other playbooks.
-  </Step>
-
-  <Step title="Add capabilities" icon="puzzle-piece">
-    Once comfortable, add voice with the **[Talk Guide](/guides/talk)** or code generation with the **[Code Agent](/playbooks/code-agent/part-1-introduction)**.
-  </Step>
-
-  <Step title="Go advanced" icon="star">
-    Build complex systems with **[Routing Agent](/guides/routing)** and custom tool mixins.
-  </Step>
-
-  <Step title="Ship it" icon="box">
-    Package and distribute with **[UI Documentation](/deployment/ui)** guides.
-  </Step>
-</Steps>
-
----
-
-## Playbook Principles
-
-Our playbooks follow these principles:
-
-<CardGroup cols={3}>
-  <Card title="Fast Start" icon="bolt">
-    Working example in 5 minutes to verify setup.
-  </Card>
-
-  <Card title="Teachable" icon="brain">
-    Technical explanations of implementation details and design trade-offs.
-  </Card>
-
-  <Card title="Extensible" icon="wrench">
-    Code is designed for extension via inheritance and composition.
-  </Card>
-
-  <Card title="Progressive" icon="rocket">
-    Incremental build process, adding one feature per step.
-  </Card>
-
-  <Card title="Practical" icon="bullseye">
-    Production-oriented examples with real-world use cases.
-  </Card>
-
-  <Card title="Reusable" icon="box">
-    Code samples you can adapt for your specific requirements.
-  </Card>
-</CardGroup>
+Start with the **[Document Q&A Agent](/playbooks/chat-agent/part-1-getting-started)** to learn the foundational concepts used throughout the other playbooks.
 
 ---
 

@@ -1,3 +1,5 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """The collapsed stdin/stdout transport.
 
 No daemon, no HTTP port, no bearer token, no model-slot lease. The properties
@@ -8,22 +10,58 @@ ends with exactly one terminal event.
 
 import io
 import json
+import logging
+import os
+import queue
+import sys
 
 import pytest
-
 from gaia_agent import stdio
 
 
-class _FakeHandler:
-    """Stands in for SSEOutputHandler: a queue the agent pushes events onto."""
+def _logger_tree():
+    return [logging.getLogger()] + [
+        lg
+        for lg in list(logging.root.manager.loggerDict.values())
+        if isinstance(lg, logging.Logger)
+    ]
 
-    def __init__(self):
-        import queue
 
-        self.event_queue = queue.Queue()
+@pytest.fixture
+def configure_logging(tmp_path, monkeypatch):
+    """Run ``_configure_logging`` for real, then put the process back.
 
-    def signal_done(self):
-        self.event_queue.put(None)
+    It rebinds ``sys.stdout`` and rewrites every logger in the tree, so without
+    this teardown one test would reconfigure logging for the whole session.
+    Returns a callable taking the stand-in for the real stdout pipe.
+    """
+    monkeypatch.setenv(stdio.LOG_PATH_ENV, str(tmp_path / "agent.log"))
+    saved_stdout = sys.stdout
+    saved = [(lg, list(lg.handlers), lg.level, lg.propagate) for lg in _logger_tree()]
+    pre_existing = {id(h) for _, handlers, _, _ in saved for h in handlers}
+
+    yield lambda wire, dev=False: stdio._configure_logging(wire, dev=dev)
+
+    # Only the handlers this call opened are closed — closing one that already
+    # belonged to the session would break every later test that logs through it.
+    for lg in _logger_tree():
+        for handler in list(lg.handlers):
+            if id(handler) not in pre_existing and isinstance(
+                handler, logging.FileHandler
+            ):
+                handler.close()
+        lg.handlers = []
+    for lg, handlers, level, propagate in saved:
+        lg.handlers, lg.level, lg.propagate = handlers, level, propagate
+    sys.stdout = saved_stdout
+
+
+def _log_text(path):
+    for handler in logging.getLogger(stdio.AUDIT_LOGGER_NAME).handlers:
+        handler.flush()
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    return path.read_text(encoding="utf-8")
 
 
 class _FakeAgent:
@@ -52,12 +90,112 @@ def _run(agent, query):
     return out
 
 
-def test_every_stdout_line_is_json():
-    """One unstructured line desynchronises the reader's scanner permanently."""
+# ---------------------------------------------------------------------------
+# What actually keeps the wire clean
+# ---------------------------------------------------------------------------
+#
+# One unstructured line desynchronises the reader's line scanner permanently.
+# Asserting that ``_write``'s json.dumps output parses as JSON cannot catch
+# that — the polluters are a library logging to stdout and a stray ``print``,
+# and both are stopped by ``_configure_logging``.
+
+
+def test_a_library_logging_to_stdout_cannot_reach_the_wire(configure_logging):
+    """Handlers built at import time already hold the real stdout."""
+    wire = io.StringIO()
+    noisy = logging.getLogger("some.noisy.library")
+    noisy.addHandler(logging.StreamHandler(wire))
+
+    configure_logging(wire, dev=True)
+    noisy.error("a library complaining on stdout")
+
+    assert wire.getvalue() == "", "a log record reached the wire"
+
+
+def test_a_stray_print_cannot_reach_the_wire(configure_logging):
+    """``print`` in code we do not control is the other way stdout gets dirty."""
+    wire = io.StringIO()
+    sys.stdout = wire  # stand in for the real pipe; the fixture restores it
+
+    configure_logging(wire, dev=False)
+    print("a stray print from a library")
+
+    assert wire.getvalue() == "", "a print reached the wire"
+    assert sys.stdout is sys.stderr
+
+
+def test_a_turn_still_writes_only_json_events(configure_logging):
+    """And with logging locked down, the turn's own output is still parseable."""
+    wire = io.StringIO()
+    sys.stdout = wire
+    configure_logging(wire, dev=True)
+
     out = _run(_FakeAgent(), "hello")
 
+    assert wire.getvalue() == ""
     for line in _lines(out):
-        json.loads(line)  # raises if the wire is polluted
+        json.loads(line)
+
+
+# ---------------------------------------------------------------------------
+# The permission audit trail
+# ---------------------------------------------------------------------------
+#
+# The switch that makes every gated tool run unattended must leave a record in
+# a NORMAL session. apply_control writes nothing to stdout by design, so if the
+# log drops it too, enabling bypass happened nowhere at all.
+
+
+def test_a_bypass_toggle_is_recorded_at_the_default_log_level(configure_logging):
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)  # user mode, NOT --dev
+
+    stdio.PermissionState().set_bypass(True)
+
+    assert "Bypass permissions ENABLED" in _log_text(path)
+    assert wire.getvalue() == "", "the audit trail must never touch the wire"
+
+
+def test_turning_bypass_off_is_recorded_too(configure_logging):
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)
+
+    stdio.PermissionState(bypass=True).set_bypass(False)
+
+    assert "Bypass permissions disabled" in _log_text(path)
+
+
+def test_launching_unattended_is_recorded_too(configure_logging):
+    """--bypass-permissions never goes through set_bypass, so the strongest
+    case for a record is the one that had none."""
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)
+
+    stdio.PermissionState(bypass=True)
+
+    assert "Bypass permissions ENABLED at launch" in _log_text(path)
+
+
+def test_a_denied_and_dropped_decision_is_recorded_at_the_default_level(
+    configure_logging,
+):
+    """An unreadable decision is denied; with no turn running it is dropped.
+
+    Both are security history, and both used to log one tier below what user
+    mode keeps.
+    """
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)
+
+    stdio.apply_control(
+        {stdio.CONTROL_KEY: stdio.CONTROL_TOOL_DECISION, "decision": "maybe"},
+        stdio.PermissionState(),
+    )
+
+    text = _log_text(path)
+    assert "Unknown tool decision 'maybe' — denying" in text
+    assert "no turn is running" in text
+    assert wire.getvalue() == ""
 
 
 def test_turn_ends_with_exactly_one_terminal_event():
@@ -72,6 +210,22 @@ def test_turn_ends_with_exactly_one_terminal_event():
     assert len(terminals) == 1
     assert terminals[0]["type"] == "final"
     assert "answered: hello" in terminals[0]["answer"]
+
+
+def test_the_console_is_handed_back_when_the_turn_ends():
+    """Between turns the agent must not hold a dead handler.
+
+    Base-agent threads outlive their turn (``_call_tool_bounded`` leaves a
+    timed-out worker running), so a stale handler's queue grows with events
+    nobody will ever drain, and its ``cancelled`` flag is already set.
+    """
+    agent = _FakeAgent()
+    real_console = object()
+    agent.console = real_console
+
+    _run(agent, "hello")
+
+    assert agent.console is real_console
 
 
 def test_the_agent_survives_between_turns():
@@ -117,6 +271,44 @@ def test_unreachable_lemonade_gets_actionable_copy():
 
     assert "Lemonade" in detail
     assert "lemonade-server serve" in detail
+
+
+def test_an_anthropic_outage_is_not_blamed_on_lemonade():
+    """The same "connection refused" words; the Lemonade fix points at the
+    wrong backend, so a user restarts a server that was never involved."""
+    detail = stdio._terminal_error(
+        ConnectionError("anthropic: Max retries exceeded ... Connection refused")
+    )["detail"]
+
+    assert "lemonade-server serve" not in detail
+    assert "Max retries exceeded" in detail
+
+
+def test_an_anthropic_sdk_exception_is_recognised_by_its_module():
+    """The text need not say "anthropic" — the exception's own module does."""
+
+    class APIConnectionError(ConnectionError):
+        pass
+
+    APIConnectionError.__module__ = "anthropic._exceptions"
+
+    detail = stdio._terminal_error(APIConnectionError("Connection refused"))["detail"]
+
+    assert "lemonade-server serve" not in detail
+
+
+def test_a_memory_dump_failure_becomes_a_terminal_error(monkeypatch):
+    """A bad dump query is a real bug, not "you have no memories"."""
+
+    def _boom(_agent):
+        raise RuntimeError("memory schema drifted")
+
+    monkeypatch.setattr(stdio, "build_memory_dump", _boom)
+
+    event = stdio._memory_dump_event(_FakeAgent())
+
+    assert event["type"] == "error"
+    assert "memory schema drifted" in event["detail"]
 
 
 def test_log_path_defaults_to_the_shared_file(monkeypatch):
@@ -237,6 +429,77 @@ def test_a_real_turn_lands_in_history():
     assert agent.conversation_history[0]["content"] == "first question"
 
 
+class _PolicyBlockedAgent(_HistoryAgent):
+    """Emits a mid-run governance block, then keeps working and answers.
+
+    ``policy_alert`` maps to a canonical ``error`` (see sse_translation) while
+    the run itself continues — the exact shape the write clamp exists for.
+    """
+
+    def process_query(self, query):
+        self.queries.append(query)
+        self.console.event_queue.put(
+            {
+                "type": "policy_alert",
+                "reason": "blocked by policy",
+                "tool": "write_file",
+            }
+        )
+        return {"answer": "I carried on afterwards"}
+
+
+def test_nothing_is_written_after_the_first_terminal_event():
+    """The reader stops at the first terminal event, so a later ``final`` would
+    be consumed as the opening events of the NEXT turn."""
+    out = _run(_PolicyBlockedAgent(), "go")
+
+    events = [json.loads(line) for line in _lines(out)]
+    terminals = [e for e in events if e.get("type") in ("final", "error")]
+    assert len(terminals) == 1, events
+    assert terminals[0]["type"] == "error"
+    assert events[-1] is terminals[0], "something was written after the terminal event"
+
+
+def test_a_turn_that_ended_in_an_error_event_is_not_recorded():
+    """Replaying a failure as if it were an answer teaches the model that the
+    failure is what it said."""
+    agent = _PolicyBlockedAgent()
+
+    _run(agent, "go")
+
+    assert agent.conversation_history == []
+
+
+def test_a_crashed_turn_is_not_recorded_either():
+    """The other error exit: process_query raised, so there is no answer."""
+
+    class _BoomWithHistory(_HistoryAgent):
+        def process_query(self, query):
+            raise RuntimeError("tool exploded")
+
+    agent = _BoomWithHistory()
+
+    _run(agent, "hello")
+
+    assert agent.conversation_history == []
+
+
+def test_an_empty_final_is_still_recorded():
+    """Dropping it would also drop the QUESTION, and "try that again" must not
+    reach a model with no record it was asked."""
+
+    class _SilentAgent(_HistoryAgent):
+        def process_query(self, query):
+            self.queries.append(query)
+            return {"answer": ""}
+
+    agent = _SilentAgent()
+
+    _run(agent, "say nothing")
+
+    assert [m["content"] for m in agent.conversation_history] == ["say nothing", ""]
+
+
 # ---------------------------------------------------------------------------
 # Live model switching (/model)
 # ---------------------------------------------------------------------------
@@ -259,6 +522,20 @@ class _AgentSDKConfigStub:
         self.claude_model = "claude-sonnet-5"
 
 
+class _ChatAgentConfigStub:
+    """Stands in for ChatAgentConfig, which names the field ``model_id``.
+
+    Not the same shape as AgentConfig above: a stub carrying ``model`` here
+    lets ``_apply_switch`` CREATE ``model_id``, so nothing can assert what
+    rollback restores it to.
+    """
+
+    def __init__(self):
+        self.use_claude = False
+        self.model_id = None
+        self.claude_model = "claude-sonnet-5"
+
+
 class _AgentSDKStub:
     """Stands in for AgentSDK — the fields _switch_model / _model_state_event touch."""
 
@@ -277,7 +554,7 @@ class _ModelSwitchAgent(_FakeAgent):
     def __init__(self):
         super().__init__()
         self.chat = _AgentSDKStub()
-        self.config = _AgentSDKConfigStub()  # ChatAgentConfig stand-in
+        self.config = _ChatAgentConfigStub()
         self._use_claude = False
         self.model_id = self.chat.config.model
         self.rebuild_count = 0
@@ -304,7 +581,7 @@ def test_is_model_command_recognises_both_forms():
     assert not stdio.is_model_command("/modeling clay")
 
 
-def test_model_command_never_reaches_process_query():
+def test_model_command_never_reaches_process_query(stub_lemonade):
     """The LLM must never be asked to "answer" a slash command."""
     agent = _ModelSwitchAgent()
 
@@ -331,7 +608,7 @@ def test_model_no_arg_lists_switchable_models(monkeypatch):
     assert "current" in answer  # the resolved default is marked
 
 
-def test_model_switch_to_claude_succeeds(monkeypatch):
+def test_model_switch_to_claude_succeeds(monkeypatch, stub_lemonade):
     from gaia_agent import stdio as stdio_mod
 
     sentinel_client = object()
@@ -358,10 +635,12 @@ def test_model_switch_to_claude_succeeds(monkeypatch):
     assert agent.model_id == "claude-opus-5"
     assert agent.config.use_claude is True
     assert agent.config.claude_model == "claude-opus-5"
+    # Left absent-shaped: a Claude switch names no local model id.
+    assert agent.config.model_id is None
     assert agent.rebuild_count == 1
 
 
-def test_model_switch_to_local_succeeds(monkeypatch):
+def test_model_switch_to_local_succeeds(monkeypatch, stub_lemonade):
     from gaia_agent import stdio as stdio_mod
 
     sentinel_client = object()
@@ -384,6 +663,7 @@ def test_model_switch_to_local_succeeds(monkeypatch):
     assert agent.chat.config.model == "Qwen3-4B-Instruct-2507-GGUF"
     assert agent._use_claude is False
     assert agent.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+    assert agent.config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
 
 
 def test_model_switch_unknown_claude_id_is_refused_not_accepted(monkeypatch):
@@ -482,7 +762,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     assert agent.rebuild_count == 0
 
 
-def test_model_switch_survives_alongside_history_and_skills(monkeypatch):
+def test_model_switch_survives_alongside_history_and_skills(monkeypatch, stub_lemonade):
     """The whole point: switching models must not disturb what makes the
     flagship agent stateful (see test_the_agent_survives_between_turns)."""
     from gaia_agent import stdio as stdio_mod
@@ -498,7 +778,7 @@ def test_model_switch_survives_alongside_history_and_skills(monkeypatch):
     assert "github-triage" in agent.loaded_skills
 
 
-def test_model_state_event_names_the_resolved_model_not_a_launch_flag():
+def test_model_state_event_names_the_resolved_model_not_a_launch_flag(stub_lemonade):
     agent = _ModelSwitchAgent()
 
     banner = stdio._model_state_event(agent)
@@ -507,6 +787,80 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag():
     assert banner["model_id"] == "Gemma-4-E4B-it-GGUF"
     assert banner["model_backend"] == "lemonade"
     assert banner["model_remote"] is False
+    assert banner["lemonade_reachable"] is True
+    assert banner["lemonade_version"] == "8.1.2"
+
+
+def test_a_bad_base_url_is_reported_as_such_not_as_a_dead_server(monkeypatch, caplog):
+    """A malformed LEMONADE_BASE_URL read to the user as "Lemonade isn't
+    running", so they restarted a server that was never the problem."""
+
+    class _Unbuildable:
+        def __init__(self, base_url=None, verbose=True):
+            raise ValueError(f"invalid base_url {base_url!r}")
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+
+    with caplog.at_level(logging.WARNING, logger=stdio.logger.name):
+        state = stdio._lemonade_health("http:/not-a-url")
+
+    assert state["lemonade_reachable"] is False
+    # Same payload shape as the reachable branch: a consumer reading the URL
+    # must not silently lose the field.
+    assert state["lemonade_base_url"] == "http:/not-a-url"
+    assert "invalid base_url" in caplog.text
+
+
+def test_a_health_failure_with_no_url_names_the_one_that_was_tried(monkeypatch):
+    """Reporting ``None`` tells the user nothing about what was attempted."""
+
+    class _Unbuildable:
+        def __init__(self, base_url=None, verbose=True):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://10.0.0.7:9000/api/v1")
+
+    state = stdio._lemonade_health(None)
+
+    assert state["lemonade_base_url"] == "http://10.0.0.7:9000/api/v1"
+
+
+def test_a_health_failure_with_no_url_and_no_env_names_the_default(monkeypatch):
+    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
+
+    class _Unbuildable:
+        def __init__(self, base_url=None, verbose=True):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+
+    state = stdio._lemonade_health(None)
+
+    assert state["lemonade_base_url"] == DEFAULT_LEMONADE_URL
+
+
+def test_the_rollback_restores_an_absent_model_id(monkeypatch, stub_lemonade):
+    """_apply_switch CREATES cfg.model_id; rollback must put back what was
+    there, not None-because-nobody-looked."""
+    from gaia_agent import stdio as stdio_mod
+
+    monkeypatch.setattr(
+        stdio_mod, "_lemonade_models", lambda base_url: ["Qwen3-4B-Instruct-2507-GGUF"]
+    )
+    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    agent = _ModelSwitchAgent()
+    agent.config.model_id = "Gemma-4-E4B-it-GGUF"
+
+    def _boom():
+        raise RuntimeError("prompt composition bug")
+
+    agent.rebuild_system_prompt = _boom
+
+    _model_run(agent, "/model Qwen3-4B-Instruct-2507-GGUF")
+
+    assert agent.config.model_id == "Gemma-4-E4B-it-GGUF"
 
 
 # ---------------------------------------------------------------------------
@@ -516,7 +870,7 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag():
 
 class _FakeLemonadeClient:
     """Stands in for gaia.llm.lemonade_client.LemonadeClient — the seam
-    _lemonade_models goes through instead of a bespoke `requests` call."""
+    _lemonade_models and _lemonade_health go through instead of a real socket."""
 
     catalog = {"data": []}
     error = None
@@ -529,6 +883,24 @@ class _FakeLemonadeClient:
         if self.error is not None:
             raise self.error
         return self.catalog
+
+    def health_check(self):
+        return {"version": "8.1.2"}
+
+
+@pytest.fixture
+def stub_lemonade(monkeypatch):
+    """Keep a unit test off the network.
+
+    ``_model_state_event`` calls ``_lemonade_health`` unconditionally, so any
+    test reaching it builds a real client and opens a socket to the stub
+    config's hardcoded port — machine-dependent, a timeout per test in CI, and
+    a hang if anything else is listening there.
+    """
+    _FakeLemonadeClient.error = None
+    _FakeLemonadeClient.catalog = {"data": []}
+    monkeypatch.setattr(stdio, "LemonadeClient", _FakeLemonadeClient)
+    return _FakeLemonadeClient
 
 
 def test_lemonade_models_excludes_embedding_and_image_and_not_downloaded(monkeypatch):
@@ -658,3 +1030,296 @@ class TestAMultiLineQuestionArrivesWhole:
         # And a query is never mistaken for control.
         assert parse_control(json.dumps({"gaia_query": "hello"})) is None
         assert parse_query(json.dumps({"gaia_query": "hello"})) == "hello"
+
+
+# ---------------------------------------------------------------------------
+# The stdin pump
+# ---------------------------------------------------------------------------
+#
+# It is the process's only exit signal and the only thing that can answer a
+# confirmation while a turn is running, and it had no tests at all.
+
+
+def _pump(monkeypatch, text):
+    """Drive _pump_stdin over *text* and return (queued items, state)."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    queries = queue.Queue()
+    state = stdio.PermissionState()
+    stdio._pump_stdin(queries, state)
+    drained = []
+    while True:
+        try:
+            drained.append(queries.get_nowait())
+        except queue.Empty:
+            break
+    return drained, state
+
+
+def test_the_pump_routes_control_away_from_queries(monkeypatch):
+    lines = [
+        "",
+        "   ",
+        json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}),
+        "what is 2+2?",
+        json.dumps({stdio.QUERY_KEY: "line one\nline two"}),
+    ]
+
+    drained, state = _pump(monkeypatch, "\n".join(lines) + "\n")
+
+    assert state.bypass is True, "the control line never reached apply_control"
+    assert drained == ["what is 2+2?", "line one\nline two", None]
+
+
+def test_the_pump_ends_with_the_sentinel_on_eof(monkeypatch):
+    """The sentinel is what breaks main's run loop; without it the process
+    waits on a queue nothing will ever fill again."""
+    drained, _ = _pump(monkeypatch, "hello\n")
+
+    assert drained[-1] is None
+
+
+def test_a_control_line_that_explodes_does_not_take_the_pump_down(monkeypatch):
+    """Losing this thread means every later confirmation hangs with nothing
+    able to answer it — so the swallow here is deliberate, not an oversight."""
+
+    def _boom(_message, _state):
+        raise RuntimeError("control handler bug")
+
+    monkeypatch.setattr(stdio, "apply_control", _boom)
+    lines = [json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}), "still here?"]
+
+    drained, _ = _pump(monkeypatch, "\n".join(lines) + "\n")
+
+    assert drained == ["still here?", None]
+
+
+def test_the_sentinel_survives_a_cancel_that_raises(monkeypatch):
+    """The cancel runs ahead of the sentinel, so a cancel that raises used to
+    skip it — recreating the immortal process the cancel exists to prevent."""
+
+    class _ExplodingState(stdio.PermissionState):
+        def cancel_active(self):
+            raise RuntimeError("a handler with no cancelled flag")
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    queries = queue.Queue()
+
+    with pytest.raises(RuntimeError):
+        stdio._pump_stdin(queries, _ExplodingState())
+
+    assert queries.get_nowait() == "hello"
+    assert queries.get_nowait() is None, "the only exit signal was skipped"
+
+
+def test_the_pump_queues_the_sentinel_even_when_stdin_itself_raises(monkeypatch):
+    """A decode error out of the iteration used to skip the sentinel entirely."""
+
+    class _ExplodingStdin:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(sys, "stdin", _ExplodingStdin())
+    queries = queue.Queue()
+
+    with pytest.raises(UnicodeDecodeError):
+        stdio._pump_stdin(queries, stdio.PermissionState())
+
+    assert queries.get_nowait() is None
+
+
+# ---------------------------------------------------------------------------
+# The argv contract
+# ---------------------------------------------------------------------------
+#
+# tui/internal/client/factory.go pins these spellings as literal Go string
+# constants and the catalog appends --json-events. A rename passes every other
+# Python test here and fails at spawn as a generic "exited (code 2)".
+
+
+def test_the_parser_accepts_the_spellings_the_go_side_pins():
+    args = stdio.build_parser().parse_args(
+        [
+            "--use-claude",
+            "--claude-model",
+            "claude-opus-5",
+            "--bypass-permissions",
+            "--json-events",
+            "--dev",
+        ]
+    )
+
+    assert args.use_claude is True
+    assert args.claude_model == "claude-opus-5"
+    assert args.bypass_permissions is True
+    assert args.json_events is True
+    assert args.dev is True
+
+
+def test_the_parser_defaults_to_local_and_prompting():
+    args = stdio.build_parser().parse_args([])
+
+    assert args.use_claude is False
+    assert args.bypass_permissions is False, "permissions must never default off"
+    assert args.claude_model is None
+    assert args.model is None
+
+
+# ---------------------------------------------------------------------------
+# main: the run loop's own failure handling
+# ---------------------------------------------------------------------------
+
+
+class _ExitCalled(Exception):
+    """os._exit never returns; a stub that does lets main run past its exit."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _no_return_exit(monkeypatch):
+    monkeypatch.setattr(
+        os, "_exit", lambda code: (_ for _ in ()).throw(_ExitCalled(code))
+    )
+
+
+class _DeadAfter:
+    """A pipe that dies partway through, the way a parent exiting does."""
+
+    def __init__(self, alive_writes):
+        self.remaining = alive_writes
+        self.written = []
+
+    def write(self, text):
+        if self.remaining <= 0:
+            raise BrokenPipeError(32, "The pipe is being closed")
+        self.remaining -= 1
+        self.written.append(text)
+        return len(text)
+
+    def flush(self):
+        if self.remaining <= 0:
+            raise BrokenPipeError(32, "The pipe is being closed")
+
+
+def test_main_exits_cleanly_when_the_parent_closes_the_pipe(monkeypatch):
+    """A broken pipe IS the parent leaving, so there is nobody to report to.
+
+    The recovery path called ``_write`` again on the same dead pipe, raised a
+    second time, and escaped ``main`` — so the process died by traceback
+    instead of through its clean exit.
+    """
+    import gaia_agent.agent as agent_mod
+
+    class _Agent:
+        def __init__(self, config=None):
+            self.console = None
+
+        def process_query(self, query):
+            return {"answer": "hi"}
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _Agent)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    # The model banner goes out, then the parent exits mid-turn.
+    monkeypatch.setattr(sys, "stdout", _DeadAfter(2))
+    _no_return_exit(monkeypatch)
+
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
+
+    assert exit_call.value.code == 0, "main must reach its clean exit"
+
+
+def test_main_exits_cleanly_when_the_parent_leaves_during_model_load(monkeypatch):
+    """Model load is the LONGEST window the parent has to leave in.
+
+    Quitting the TUI while the model loads killed the pipe before the banner —
+    which is written before the run loop, so neither the loop's guard nor the
+    exit flush ever ran and the exception escaped ``main``.
+    """
+    import gaia_agent.agent as agent_mod
+
+    class _Agent:
+        def __init__(self, config=None):
+            self.console = None
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _Agent)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    monkeypatch.setattr(sys, "stdout", _DeadAfter(0))  # dead before the banner
+    _no_return_exit(monkeypatch)
+
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
+
+    assert exit_call.value.code == 0, "the banner write escaped main"
+
+
+def test_a_failed_startup_reports_nothing_to_a_dead_parent(monkeypatch):
+    """The other pre-loop write: the agent failed to build AND the wire is gone.
+
+    It must still return its exit code rather than raise the write failure over
+    the construction failure that is the real news.
+    """
+    import gaia_agent.agent as agent_mod
+
+    def _boom(**kwargs):
+        raise RuntimeError("model file is corrupt")
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _boom)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(sys, "stdout", _DeadAfter(0))
+
+    assert stdio.main([]) == 1
+
+
+def test_the_exit_path_survives_a_dead_stderr(monkeypatch):
+    """The TUI pipes stderr too, so it dies with stdout."""
+    _no_return_exit(monkeypatch)
+    monkeypatch.setattr(sys, "stderr", _DeadAfter(0))
+
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio._exit_cleanly(_DeadAfter(0))
+
+    assert exit_call.value.code == 0
+
+
+def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
+    """The other half of the same handler: a live wire still gets the error."""
+    import gaia_agent.agent as agent_mod
+
+    class _Agent:
+        def __init__(self, config=None):
+            self.console = None
+
+        def process_query(self, query):
+            return {"answer": "hi"}
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("dispatch bug")
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _Agent)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(stdio, "dispatch_query", _boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    wire = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", wire)
+    _no_return_exit(monkeypatch)
+
+    with pytest.raises(_ExitCalled):
+        stdio.main([])
+
+    events = [json.loads(line) for line in _lines(wire)]
+    assert events[-1]["type"] == "error"
+    assert "dispatch bug" in events[-1]["detail"]

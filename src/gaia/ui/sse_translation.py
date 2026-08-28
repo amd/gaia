@@ -384,6 +384,9 @@ class CanonicalTranslator:
             ("elapsed", "elapsed"),
             ("tokens", "tokens"),
             ("ttft", "ttft"),
+            # Dev-mode per-turn record, passed through verbatim — the client
+            # decides what of it to show, so a new field needs no change here.
+            ("metrics", "metrics"),
         ):
             if event.get(src) is not None:
                 usage[dst] = event[src]
@@ -597,10 +600,16 @@ def render_labelled_summary(
 #: Longest a single argument value may be in a confirmation summary. Past this
 #: the value is elided: the prompt has to fit a modal, and a payload nobody can
 #: read is not disclosure.
-INVOCATION_VALUE_CHARS = 180
+#:
+#: Sized for the longest thing a person actually has to read before answering —
+#: the body of a comment about to be posted publicly. At 180 a routine triage
+#: reply was cut mid-sentence, so "approve this exact command" meant approving
+#: text the user could not see. A modal wraps, so the cost of the extra lines is
+#: scrolling; the cost of the old cap was unread consent.
+INVOCATION_VALUE_CHARS = 600
 
 #: Longest the whole rendered argument clause may be.
-INVOCATION_TOTAL_CHARS = 600
+INVOCATION_TOTAL_CHARS = 1200
 
 
 def render_invocation(args: Dict[str, Any]) -> str:
@@ -619,7 +628,10 @@ def render_invocation(args: Dict[str, Any]) -> str:
         text = value if isinstance(value, str) else json.dumps(value, default=str)
         text = " ".join(text.split())
         if len(text) > INVOCATION_VALUE_CHARS:
-            text = text[:INVOCATION_VALUE_CHARS] + "…"
+            hidden = len(text) - INVOCATION_VALUE_CHARS
+            # Never a bare "…". A silent cut reads as the whole value, so the
+            # user approves text they were never shown and does not know it.
+            text = f"{text[:INVOCATION_VALUE_CHARS]}… [+{hidden:,} more characters not shown]"
         parts.append(f'{key}="{text}"')
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:

@@ -252,7 +252,9 @@ checked into the repo:
    redeployed, so every publish failed with `language "go" is not supported`
    while the source said otherwise.
 
-   The job needs two secrets on the **`agent-publish`** environment:
+   The job needs two secrets on the **`worker-deploy`** environment — a second
+   environment with no required reviewers (so a release still prompts once)
+   but the same deployment ref allowlist as `agent-publish`:
 
    | Secret | How to get it |
    |---|---|
@@ -260,6 +262,15 @@ checked into the repo:
    | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → Account ID |
 
    Without them the job fails loudly rather than publishing to a stale Worker.
+
+   **Creating the environment** (Settings → Environments → New environment,
+   named `worker-deploy`). Both settings below are load-bearing, and the second
+   one is easy to miss:
+
+   | Setting | Value | Why |
+   |---|---|---|
+   | Required reviewers | *leave empty* | The publish jobs are already gated on `agent-publish`. A reviewer here would add a second approval prompt to every release, which is the thing this environment exists to avoid. |
+   | Deployment branches and tags | `main`, `v*`, `agent-pkg-*` — the same allowlist as `agent-publish` | This is the *only* remaining restriction on the job. Without it, anyone with write access can dispatch the workflow from an arbitrary branch with `dry_run` unchecked and push that branch's Worker to production — and the Worker is the manifest validator that holds the R2 binding. |
 
    The deploy stamps the commit into `WORKER_BUILD`, which `GET /health`
    returns, so the workflow can assert *which* build went live instead of
@@ -275,6 +286,64 @@ checked into the repo:
 
 `MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
 overridden per environment without a secret.
+
+### Publishing origins (one Worker, two doors)
+
+There is exactly **one Agent Hub Worker and one R2 bucket** — `hub.amd-gaia.ai`
+and the `workers.dev` URL are two front doors onto the same Worker
+(`workers/agent-hub/wrangler.toml`): the custom domain is the user-facing
+download door, and the `workers.dev` origin is the CI upload door. The managed
+WAF fronting the custom domain **403s large uploads** (the `POST /publish`
+path), so CI publishes through the `workers.dev` origin, which has no such
+ruleset and hits the same Worker + bucket. A publish through the wrong door
+fails loudly at the WAF — it does not land somewhere else.
+
+CI uses two repository variables (set at **repository** level, not environment
+level — the version jobs have no `environment:` and an environment-scoped
+variable would resolve empty and silently fall back to the hardcode):
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `GAIA_HUB_BASE_URL` | `https://hub.amd-gaia.ai` | Downloads + the lock `baseUrl` (GETs aren't WAF-blocked) |
+| `GAIA_HUB_PUBLISH_URL` | `<worker>.workers.dev` | The origin CI POSTs uploads to. **Required** — the release fails loudly if unset (no silent fallback to a hardcoded URL) |
+
+The publish jobs (`release_agent_*.yml`, `release_components.yml`) now assert
+`GAIA_HUB_PUBLISH_URL` is set before publishing, mirroring the existing
+`GAIA_HUB_TOKEN` asserts. A missing variable is a startup-time `::error::`
+naming what is missing and where to set it, not a 403 halfway through a
+release.
+
+## Publishing artifacts larger than 100 MB
+
+A Worker request body is capped by the Cloudflare **account plan** — 100 MB on
+Free and Pro, 200 MB Business, 500 MB Enterprise. `POST /publish` therefore
+cannot carry the Agent UI installers (106-135 MiB); they are rejected with a
+`413` by Cloudflare's edge before the Worker executes, so `MAX_ARTIFACT_BYTES`
+is not involved and raising it changes nothing.
+
+Artifacts at or above 90 MiB are instead PUT straight into the bucket over R2's
+S3 API and published **by reference**: the POST carries
+`artifact_ref_{filename,sha256,size,content_type}` in place of the file part.
+
+Integrity is not relaxed. Before recording anything the Worker heads the object
+and checks its size and SHA-256 against what R2 stored at PUT time. R2 keeps a
+whole-object SHA-256 only for **single-part** uploads, so an object without one
+is refused (`artifact_unverifiable`) rather than accepted on the publisher's
+word — the uploader must use `put_object` with `ChecksumSHA256`, never
+`upload_file`, which switches to multipart and drops the checksum.
+
+The publisher needs three extra secrets for this path:
+
+| Secret | How to get it |
+|---|---|
+| `R2_ACCESS_KEY_ID` | Cloudflare dashboard → R2 → **Manage API Tokens** → create a token with **Object Read & Write** on the hub bucket |
+| `R2_SECRET_ACCESS_KEY` | Shown once alongside the access key id |
+| `CLOUDFLARE_ACCOUNT_ID` | Same value the Worker deploy uses |
+
+These are R2 S3 credentials and are **not** the same as `CLOUDFLARE_API_TOKEN`,
+which deploys the Worker. Missing any of them is a loud failure naming all
+three; the publisher never silently falls back to the Worker path, because that
+path 413s and would waste the release.
 
 ## Deploying on Railway (demo)
 

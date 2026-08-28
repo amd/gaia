@@ -48,57 +48,93 @@ env:
   AGENT_UI_MANIFEST: hub/components/agent-ui/gaia-agent.yaml
 
 jobs:
-  # ── Resolve the version once, and prove every manifest agrees with the tag ──
-  # A manifest that still says 0.22.0 under a v0.23.0 tag would publish the new
-  # binaries under the OLD immutable version path — silently, and unfixably,
-  # because the path is immutable. Fail before anything is built.
+  # ── Resolve each component's own version ───────────────────────────────────
+  # Every component publishes under the version in its OWN manifest. They are
+  # independent of the core release and of each other, so a terminal-hub rebuild
+  # ships without a core release and bumping one never forces the other.
   version:
     name: Resolve & gate version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      tui_version: ${{ steps.v.outputs.tui_version }}
       dry_run: ${{ steps.v.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
 
+      # Both components ship as part of the core release and carry its version,
+      # deliberately: one number for the whole release is simpler to reason
+      # about than three, and agent-ui's npm package already tracks
+      # src/gaia/version.py through installer/version/bump-ui-version.mjs.
+      #
+      # A TAG therefore requires both manifests to already match it (asserted
+      # below). A DISPATCH does not: re-running a publish, or shipping a rebuilt
+      # binary between core releases, must not require cutting a core release —
+      # that coupling is what made every terminal-hub re-run fail.
+      #
+      # Each still publishes under the version in its own manifest, read by
+      # publish_to_r2.py. The assertion keeps them equal to the release; it is
+      # not what supplies the path.
       - id: v
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --quiet pyyaml
+          read_ver() { python -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['version'])" "$1"; }
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # A dispatch has no tag to read; take the version from the manifests
-            # themselves and default to a dry run unless explicitly disabled.
-            VERSION="$(python -c "import yaml,sys; print(yaml.safe_load(open('${TERMINAL_HUB_MANIFEST}'))['version'])")"
+            CORE="$(python -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('src/gaia/version.py').read_text()).group(1))")"
             if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
               echo "dry_run=false" >> "$GITHUB_OUTPUT"
             else
               echo "dry_run=true" >> "$GITHUB_OUTPUT"
             fi
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            CORE="${GITHUB_REF_NAME#v}"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "resolved version: ${VERSION}"
 
-      - name: Assert both manifests match the resolved version
-        shell: bash
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
-        run: |
-          set -euo pipefail
-          python -m pip install --quiet pyyaml
-          fail=0
-          for m in "${TERMINAL_HUB_MANIFEST}" "${AGENT_UI_MANIFEST}"; do
-            got="$(python -c "import yaml; print(yaml.safe_load(open('${m}'))['version'])")"
-            if [ "${got}" != "${VERSION}" ]; then
-              echo "::error file=${m}::version ${got} does not match the release version ${VERSION}. Bump it — R2 paths are immutable, so publishing under a stale version cannot be undone."
-              fail=1
-            else
-              echo "✓ ${m} = ${got}"
+          TUI_V="$(read_ver "${TERMINAL_HUB_MANIFEST}")"
+          UI_V="$(read_ver "${AGENT_UI_MANIFEST}")"
+
+          for pair in "terminal-hub:${TUI_V}" "agent-ui:${UI_V}" "core:${CORE}"; do
+            name="${pair%%:*}"; val="${pair#*:}"
+            if ! printf '%s' "${val}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+              echo "::error::${name} version '${val}' is not a valid x.y.z version."
+              exit 1
             fi
           done
-          exit "${fail}"
+
+          # Both components ship as part of the core release and carry its
+          # version, so a TAG must find them already bumped: publishing under a
+          # stale version writes to an immutable path that cannot be corrected,
+          # and the catalog picks latest_version by highest SemVer, so a stale
+          # one is not even reachable as "latest".
+          #
+          # A DISPATCH is deliberately exempt. That is the whole point of the
+          # split: re-running a component publish, or shipping a rebuilt binary
+          # between core releases, must not require cutting a core release.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            fail=0
+            for pair in "${TERMINAL_HUB_MANIFEST}:${TUI_V}" "${AGENT_UI_MANIFEST}:${UI_V}"; do
+              m="${pair%:*}"; got="${pair##*:}"
+              if [ "${got}" != "${CORE}" ]; then
+                echo "::error file=${m}::version ${got} does not match the release ${CORE}. Bump it before tagging — R2 paths are immutable, so publishing under a stale version cannot be undone."
+                fail=1
+              else
+                echo "✓ ${m} = ${got}"
+              fi
+            done
+            [ "${fail}" -eq 0 ] || exit 1
+          fi
+
+          echo "version=${CORE}"       >> "$GITHUB_OUTPUT"
+          echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
+          echo "core release : ${CORE}  (min_gaia_version gate only)"
+          echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/"
+          # agent-ui publishes under its manifest version, read by
+          # publish_to_r2.py itself -- logged here, not passed as an output.
+          echo "agent-ui     : ${UI_V} -> agents/agent-ui/${UI_V}/"
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
       # needs daemon host API v1.1, which released 0.22.0 does not serve.
@@ -161,15 +197,26 @@ jobs:
   # other deploy path (agent_hub_worker_ci.yml only tests), so the Worker drifts
   # until someone runs `wrangler deploy` by hand.
   #
-  # Deploying here rather than on push-to-main is deliberate: this job inherits
-  # the agent-publish reviewer gate, so a production Worker deploy still needs a
-  # human, and it lands in the same approval as the upload it has to match.
+  # A SECOND environment, not agent-publish, and not no-environment at all.
+  #
+  # GitHub raises one approval per batch of jobs that pend together. This job
+  # must finish before the publishes, so putting it in agent-publish costs a
+  # second prompt. Dropping `environment:` entirely would fix that but throw
+  # away more than the prompt: agent-publish also carries the deployment ref
+  # allowlist (main / v* / agent-pkg-*), and without it anyone with write access
+  # could dispatch this workflow from an arbitrary branch with dry_run unchecked
+  # and push that branch's Worker straight to production — the Worker being the
+  # manifest validator and the holder of the R2 binding.
+  #
+  # worker-deploy therefore has NO required reviewers (so no second prompt) but
+  # the SAME ref allowlist as agent-publish, and holds the Cloudflare secrets so
+  # they stay environment-scoped rather than readable by every workflow.
   deploy-worker:
     name: Deploy Agent Hub Worker
     needs: [version, worker-check]
     if: needs.version.outputs.dry_run == 'false'
     runs-on: ubuntu-latest
-    environment: agent-publish
+    environment: worker-deploy
     steps:
       - uses: actions/checkout@v7
 
@@ -193,7 +240,7 @@ jobs:
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ]  || missing="${missing} CLOUDFLARE_API_TOKEN"
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
           if [ -n "${missing}" ]; then
-            echo "::error::missing environment secret(s) on agent-publish:${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both secrets to the agent-publish environment. See workers/agent-hub/README.md."
+            echo "::error::missing environment secret(s) on worker-deploy:${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both to the worker-deploy environment (which has no reviewers, so the release still needs only one approval). See workers/agent-hub/README.md."
             exit 1
           fi
           # Stamp the commit so the check below can prove WHICH build went live.
@@ -207,10 +254,17 @@ jobs:
       - name: Verify the deployed build is live
         env:
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
-          base="${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}"
+          # No default. Falling back to the custom domain would verify a
+          # DIFFERENT origin than the publish jobs upload to (they go through
+          # workers.dev because the WAF fronts hub.amd-gaia.ai), so a silent
+          # default here reports freshness for something we are not publishing to.
+          base="${GAIA_HUB_PUBLISH_URL:-}"
+          if [ -z "${base}" ]; then
+            echo "::error::GAIA_HUB_PUBLISH_URL resolved empty for this job. It must be a REPOSITORY variable — an environment-scoped one resolves empty here, and this check would then target the custom domain rather than the origin the publish jobs POST to."
+            exit 1
+          fi
           for i in 1 2 3 4 5 6; do
             live="$(curl -fsS --max-time 15 "${base}/health" | python -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
             if [ "${live}" = "${GITHUB_SHA}" ]; then
@@ -259,17 +313,21 @@ jobs:
       - name: Build all targets
         shell: bash
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
           mkdir -p bin
           PKG=github.com/amd/gaia/tui/internal/cli
-          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
+          # rebuild of the same commit differ, so re-publishing a released
+          # version can never reconcile against the bytes already stored.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           cd tui
           while read -r goos goarch platform; do
             EXT=""
             [ "${goos}" = "windows" ] && EXT=".exe"
-            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+            # -trimpath keeps the runner's absolute paths out of the binary.
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
               -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
               -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
             echo "built gaia-${platform}${EXT}"
@@ -285,7 +343,7 @@ jobs:
       - name: Verify the built binary reports the release version
         shell: bash
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
           # `version` is a cobra subcommand — rootCmd sets no Version field, so
@@ -310,9 +368,20 @@ jobs:
             exit 1
           fi
 
+      - name: Require the publish URL
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Install publisher deps
         if: needs.version.outputs.dry_run == 'false'
-        run: python -m pip install --upgrade requests pyyaml
+        run: python -m pip install --upgrade requests pyyaml boto3
 
       - name: Publish to the Agent Hub (POST /publish)
         if: needs.version.outputs.dry_run == 'false'
@@ -320,13 +389,19 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+          # Artifacts at/over 90 MiB cannot travel through the Worker at all
+          # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
+          # publisher PUTs them straight into R2 and publishes them by
+          # reference. Only the Agent UI installers hit this today.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           # Explicit =<platform-key> on every artifact: the publisher's
           # inference only special-cases email-agent-* filenames.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${TERMINAL_HUB_MANIFEST}" \
             --artifact "bin/gaia-linux-x64=linux-x64" \
             --artifact "bin/gaia-linux-arm64=linux-arm64" \
@@ -366,6 +441,41 @@ jobs:
       # yet. Wait for the full set, bounded — and fail loudly on timeout rather
       # than publishing a partial platform set that the catalog would then
       # advertise as complete.
+      # Before the wait, not after: this job can sit for up to an hour on the
+      # installer assets and then pull ~400 MB, and discovering a missing secret
+      # at the end wastes all of it. Covers the R2 credentials too — the
+      # installers are large enough to take the direct-to-R2 lane, so those are
+      # as load-bearing here as the hub token.
+      - name: Require the publish credentials
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${GAIA_HUB_TOKEN:-}" ]        || missing="${missing} GAIA_HUB_TOKEN"
+          [ -n "${R2_ACCESS_KEY_ID:-}" ]      || missing="${missing} R2_ACCESS_KEY_ID"
+          [ -n "${R2_SECRET_ACCESS_KEY:-}" ]  || missing="${missing} R2_SECRET_ACCESS_KEY"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "${missing}" ]; then
+            echo "::error::missing secret(s):${missing}. GAIA_HUB_TOKEN must match the Worker's PUBLISH_TOKENS; the R2_* pair are R2 S3 credentials (Cloudflare -> R2 -> Manage API Tokens, Object Read & Write) needed because these installers exceed the Worker request-body cap and go straight to R2. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Require the publish URL
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Wait for the installer assets on the release
         if: needs.version.outputs.dry_run == 'false'
         shell: bash
@@ -412,20 +522,9 @@ jobs:
             --pattern "gaia-agent-ui-${VERSION}-x86_64.AppImage"
           ls -la dist
 
-      - name: Require the publish token
-        if: needs.version.outputs.dry_run == 'false'
-        env:
-          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
-            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
-            exit 1
-          fi
-
       - name: Install publisher deps
         if: needs.version.outputs.dry_run == 'false'
-        run: python -m pip install --upgrade requests pyyaml
+        run: python -m pip install --upgrade requests pyyaml boto3
 
       - name: Publish to the Agent Hub (POST /publish)
         if: needs.version.outputs.dry_run == 'false'
@@ -433,7 +532,13 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+          # Artifacts at/over 90 MiB cannot travel through the Worker at all
+          # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
+          # publisher PUTs them straight into R2 and publishes them by
+          # reference. Only the Agent UI installers hit this today.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -441,7 +546,7 @@ jobs:
           # for apt users — publishing it as a second linux-x64 object would
           # make the catalog's per-platform download ambiguous.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${AGENT_UI_MANIFEST}" \
             --artifact "dist/gaia-agent-ui-${VERSION}-x64-setup.exe=win-x64" \
             --artifact "dist/gaia-agent-ui-${VERSION}-arm64.dmg=darwin-arm64" \
@@ -465,5 +570,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh workflow run deploy_website.yml --ref main
+          # --repo: this job has no checkout, so gh cannot infer the repository.
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "✓ requested website redeploy (deploy_website.yml on main)"

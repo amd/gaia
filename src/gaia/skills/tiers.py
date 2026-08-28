@@ -30,7 +30,7 @@ refused outright by
 :func:`gaia.skills.permissions.refuse_unbridged_permissions` because the sandbox
 that would contain it does not exist yet. So the ceilings below discriminate
 between *bridged* permissions: the connector domains, plus
-``shell:execute:<binary>``, which is gated by the read-only command policy in
+``shell:execute:<binary>``, which is gated by the command policy in
 :mod:`gaia.skills.binaries` rather than by a sandbox. ``shell:execute`` stays in
 :data:`DANGEROUS_GRANTS`, so at ``community`` it prompts; ``desktop:control`` and
 ``database:write`` remain unreachable — a skill declaring them never gets as far
@@ -61,7 +61,7 @@ LOWEST_TIER = TIER_ORDER[0]
 #:
 #: ``shell:execute`` / ``desktop:control`` / ``database:write`` are the spec's
 #: original three. ``shell:execute:<binary>`` is reachable today through the
-#: read-only binary bridge and stays dangerous — running someone else's CLI on
+#: policed binary bridge and stays dangerous — running someone else's CLI on
 #: the user's machine warrants a prompt even when every subcommand is a read.
 #: ``desktop:control`` and ``database:write`` have no bridge, so they are still
 #: refused before any tier check — kept here so the set stays the single

@@ -35,6 +35,7 @@ Endpoints covered:
 
 import contextlib
 import sqlite3
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -874,7 +875,17 @@ class TestReconcileEndpoint:
 
     def test_reconcile_returns_503_when_no_agent_and_faiss_missing(self, client):
         """POST /api/memory/reconcile returns 503 when no agent and faiss unavailable."""
-        resp = client.post("/api/memory/reconcile")
+        # Import faiss first when it is present so patch.dict restores the
+        # cached module instead of dropping the key — the native extension
+        # refuses a second load per process.
+        with contextlib.suppress(ImportError):
+            import faiss  # noqa: F401
+
+        # None in sys.modules makes the endpoint's local `import faiss` raise
+        # ImportError, so the 503 branch is exercised whether or not the [rag]
+        # extra is installed.
+        with patch.dict(sys.modules, {"faiss": None}):
+            resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 503
         assert "faiss" in resp.json()["detail"].lower()
 

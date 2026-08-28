@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/ui"
 )
 
@@ -76,10 +77,16 @@ func binaryName(argv0 string) string {
 	return name
 }
 
+// mockAgent overrides the agent binary with a stand-in, for tests that need a
+// deterministic child. Declared here rather than beside the flag so every entry
+// point that honours it reads the same variable.
+var mockAgent string
+
 var rootCmd = &cobra.Command{
 	Use:   defaultBinaryName,
-	Short: "GAIA Terminal Agent Hub",
-	Long:  "Terminal-native hub for browsing, launching, and chatting with GAIA agents.",
+	Short: "GAIA in your terminal",
+	Long: "Chat with GAIA — documents, data, web research, memory and skills — " +
+		"running on this machine.",
 	// A one-line refusal followed by 20 lines of command listing pushes the
 	// actual error off a short terminal. Usage is what --help is for.
 	SilenceUsage: true,
@@ -88,7 +95,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
+		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
 	},
 }
 
@@ -110,17 +117,27 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
 		"run the agent against Anthropic's Claude API instead of the local Lemonade "+
 			"backend — your conversation is sent to Anthropic, not processed on this "+
-			"machine. Requires ANTHROPIC_API_KEY. The chat header shows a \"claude\" "+
-			"chip while this is on")
+			"machine. Requires ANTHROPIC_API_KEY. The local server is NOT started and "+
+			"first-run setup is skipped; the chat header names the model in use "+
+			"(e.g. \"claude · haiku-4.5\") while this is on")
 	rootCmd.PersistentFlags().StringVar(&claudeModel, "claude-model", defaultClaudeModel,
-		"Claude model id to use with --use-claude (pass \"\" to let the agent pick)")
-	// --claude-model without --use-claude would be accepted and then change
-	// nothing; refuse it before any UI opens.
+		"Claude model id to use with --use-claude: "+
+			strings.Join(client.ClaudeModelIDs(), ", ")+
+			" (pass \"\" to let the agent pick)")
+	// Both --claude-model refusals happen here, before any UI opens: a flag
+	// that will not do what it says must fail as a command-line error, not as
+	// something the user has to notice inside a running TUI.
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		if rootCmd.PersistentFlags().Changed("claude-model") && !useClaude {
 			return fmt.Errorf(
 				"--claude-model only applies with --use-claude: the local Lemonade " +
 					"backend does not run Claude models. Add --use-claude, or drop --claude-model")
+		}
+		// An id nothing accepts reaches Anthropic verbatim and comes back a
+		// 404 mid-turn — see client.ValidateClaudeModel for why nothing
+		// downstream catches it.
+		if err := client.ValidateClaudeModel(claudeModel); err != nil {
+			return fmt.Errorf("--claude-model: %w", err)
 		}
 		return nil
 	}
@@ -128,17 +145,20 @@ func init() {
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,
 		"control API port (implies --control; 0 auto-assigns)")
-	rootCmd.Flags().StringVar(&mockAgent, "mock", "", "path to mock agent binary for testing (overrides all agent binaries)")
+	// Persistent: `run` launches an agent too, and a --mock that only worked on
+	// the bare launch let a test spawn the real agent while believing it had
+	// substituted a stand-in.
+	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
+		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
 }
 
 // Execute runs the CLI.
 //
 // A leading `tui` word is accepted and dropped. This binary is addressed as
 // `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui install email` — the exact line
-// the docs and the install refusal tell people to run — would fail with
-// "unknown command". Both spellings work; only the first argument is
-// considered, so an agent named "tui" is unaffected.
+// binary's own name, so without this `gaia tui run email` — the exact spelling
+// the docs use — would fail with "unknown command". Both spellings work; only
+// the first argument is considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

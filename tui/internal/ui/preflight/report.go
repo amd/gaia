@@ -129,6 +129,8 @@ const (
 	FixPullModel
 	// FixConnectMailbox — hand off to the connector flow (Stage 4).
 	FixConnectMailbox
+	// FixRunSetup — run `gaia init` for the flagship profile and stream it.
+	FixRunSetup
 )
 
 // Label is the key hint shown next to `f`.
@@ -142,6 +144,8 @@ func (k FixKind) Label() string {
 		return "download it now"
 	case FixConnectMailbox:
 		return "connect a mailbox"
+	case FixRunSetup:
+		return "set it up now"
 	default:
 		return ""
 	}
@@ -233,12 +237,14 @@ func (r Row) Outcome() status.Outcome {
 	return status.New(r.Key, r.Label, levelFor(r.State), r.Disposition, summary)
 }
 
-// Stable row keys. The first four are generic to any sidecar agent that
-// implements GET /v1/<agent>/init; KeyMailbox is email-specific and arrives
-// through Config.Extras.
+// Stable row keys. KeyDaemon/KeySidecar are the daemon runner's; KeyBinary is
+// the local runner's. KeyLemonade and KeyModel are asked by both, over
+// different probes. KeyMailbox is email-specific and arrives through
+// Config.Extras.
 const (
 	KeyDaemon   = "daemon"
 	KeySidecar  = "sidecar"
+	KeyBinary   = "binary"
 	KeyLemonade = "lemonade"
 	KeyModel    = "model"
 	KeyMailbox  = "mailbox"

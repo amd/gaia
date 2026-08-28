@@ -26,13 +26,13 @@ func haltOnDisposition(o status.Outcome) bool {
 // (preflight.Model) already pauses itself and explains why; this is purely
 // a signal ControlSnapshot's Overlay exposes to automation, so it can wait
 // on "this TUI is waiting" without scraping the screen.
-func (m RootModel) Halted() bool { return len(m.halted) > 0 }
+func (m FlagshipModel) Halted() bool { return len(m.halted) > 0 }
 
 // applyOutcome runs o past every listener. A StepID already suppressed this
 // session (the user has already proceeded past it once, see
 // suppressHalted) never halts again; an already-tracked StepID is not added
 // twice.
-func (m RootModel) applyOutcome(o status.Outcome) (tea.Model, tea.Cmd) {
+func (m FlagshipModel) applyOutcome(o status.Outcome) (tea.Model, tea.Cmd) {
 	if m.suppressed[o.StepID] {
 		return m, nil
 	}
@@ -63,7 +63,7 @@ func (m RootModel) applyOutcome(o status.Outcome) (tea.Model, tea.Cmd) {
 // be the exact confirm-fatigue the Notify/Halt split exists to avoid. It
 // does not change what the screen itself asks for on the next launch — only
 // what automation is told about it.
-func (m *RootModel) suppressHalted() {
+func (m *FlagshipModel) suppressHalted() {
 	if len(m.halted) == 0 {
 		return
 	}

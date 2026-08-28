@@ -71,13 +71,35 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
         return 1, f"Command not found: {cmd[0]}"
 
 
+#: Versions the formatters are PINNED to.
+#:
+#: Unpinned, `uvx <tool>` resolves to whatever is newest on PyPI at the moment
+#: CI runs — so the job silently follows upstream and goes red the day a major
+#: lands, on files nobody touched, while every contributor's local run stays
+#: clean against their older install. isort 9 changed how it collapses a
+#: multi-name import and did exactly that.
+#:
+#: Bumping one of these is a deliberate change: run `python util/lint.py --all
+#: --fix` in the same commit so the repo is reformatted for the new version.
+#: isort only, for now. black is unpinned because it currently agrees with the
+#: repo and pinning it to a version this was not verified against would risk
+#: the very breakage above, in the other direction. It carries the same latent
+#: risk; pin it the first time it drifts, with the reformat in that commit.
+TOOL_VERSIONS = {
+    "isort": "8.0.1",
+}
+
+
 def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
     # Check if uvx is available
     import shutil
 
     if shutil.which("uvx"):
-        return ["uvx", tool, *args]
+        spec = tool
+        if tool in TOOL_VERSIONS:
+            spec = f"{tool}=={TOOL_VERSIONS[tool]}"
+        return ["uvx", spec, *args]
     else:
         # Fall back to direct tool execution (assumes tools are installed)
         return [tool, *args]
@@ -166,7 +188,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("isort", *LINT_DIRS)
+        cmd = uvx("isort", *LINT_DIRS, "--settings-path", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -183,7 +205,19 @@ def check_isort(fix: bool = False) -> CheckResult:
             print("[OK] No import sorting needed.")
             return CheckResult("Import Sorting (isort)", True, False, 0, output)
     else:
-        cmd = uvx("isort", "--check-only", "--diff", *LINT_DIRS)
+        # The settings path is explicit, exactly as check_black passes --config.
+        # Left implicit, `uvx isort` did not pick up [tool.isort] at all: it
+        # asked for a 96-column line that line_length = 88 forbids, and
+        # disagreed with black on three files no contributor had touched — so
+        # the job was red for everyone while every local run was clean.
+        cmd = uvx(
+            "isort",
+            "--check-only",
+            "--diff",
+            *LINT_DIRS,
+            "--settings-path",
+            "pyproject.toml",
+        )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
@@ -414,24 +448,9 @@ def check_imports() -> CheckResult:
         ("from", "gaia.agents.base.agent", "Agent", "Base Agent class", False),
         ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin", False),
         ("from", "gaia.agents.base", "tool", "Tool decorator", False),
-        # Specialized Agents
+        # Specialized Agents — optional so a framework-only env (no
+        # gaia-agent-<id> installed) skips rather than fails.
         ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", True),
-        ("from", "gaia_agent_code", "CodeAgent", "Code agent", True),
-        ("from", "gaia_agent_jira", "JiraAgent", "Jira agent", True),
-        ("from", "gaia_agent_docker", "DockerAgent", "Docker agent", True),
-        ("from", "gaia_agent_blender", "BlenderAgent", "Blender agent", True),
-        ("from", "gaia_agent_routing", "RoutingAgent", "Routing agent", True),
-        ("from", "gaia_agent_docqa", "DocumentQAAgent", "Document Q&A agent", True),
-        # Migrated to standalone wheels (#1102) — optional so a framework-only
-        # env (no gaia-agent-<id> installed) skips rather than fails.
-        ("from", "gaia_agent_sd", "SDAgent", "SD agent", True),
-        (
-            "from",
-            "gaia_agent_emr",
-            "MedicalIntakeAgent",
-            "Medical intake agent",
-            True,
-        ),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),

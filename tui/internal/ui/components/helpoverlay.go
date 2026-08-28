@@ -10,8 +10,9 @@ import (
 type HelpContext int
 
 const (
-	HelpContextHub HelpContext = iota
-	HelpContextChat
+	// HelpContextChat is the only context there is, and deliberately the zero
+	// value: a HelpContext nobody set opens the panel the user is looking at.
+	HelpContextChat HelpContext = iota
 )
 
 var helpBoxStyle = lipgloss.NewStyle().Padding(1, 2)
@@ -78,14 +79,7 @@ func HelpMaxScroll(ctx HelpContext, width, height int) int {
 	return maxScrollFor(len(lines), helpContentRows(rows))
 }
 
-func helpTextFor(ctx HelpContext) string {
-	switch ctx {
-	case HelpContextHub:
-		return hubHelpText
-	default:
-		return chatHelpText
-	}
-}
+func helpTextFor(HelpContext) string { return chatHelpText }
 
 // helpBoxSize returns the box's own width, the content columns inside its
 // padding, and the content row budget for a panel at width x height — the
@@ -190,39 +184,20 @@ func helpScrollIndicator(scroll, maxScroll int) string {
 	}
 }
 
-// hubHelpText and chatHelpText are no longer bounded to a fixed line count —
-// RenderHelpOverlay scrolls whatever does not fit (see fitHelpLines) — but
-// every line still has to fit helpBoxMaxWidth-4 columns, or it soft-wraps and
-// throws off the row count the box was told to draw.
-const hubHelpText = `  GAIA Agent Hub
-  ──────────────────
-  Enter       Run the selected agent
-  i           Install it (or update it)
-  d           Uninstall it
-  r           Refresh the agent list
-  /           Search agents
-  Tab / S-Tab Next / previous category
-  v           Vote for a coming-soon agent
-  ?           Toggle this help
-  q, Ctrl+C   Quit
-
-  Installing a non-verified agent runs
-  third-party code — GAIA asks first and
-  shows you exactly what you're trusting.
-
-  Votes send only the agent ID to
-  amd-gaia.ai; no personal data. Request
-  an agent at github.com/amd/gaia/issues.`
-
+// chatHelpText is no longer bounded to a fixed line count — RenderHelpOverlay
+// scrolls whatever does not fit (see fitHelpLines) — but every line still has
+// to fit helpBoxMaxWidth-4 columns, or it soft-wraps and throws off the row
+// count the box was told to draw.
 const chatHelpText = `  GAIA Chat
   ──────────────────
   Enter       Send (queues if the agent is busy)
   Alt+Enter   New line in the composer (Ctrl+J too)
-  Esc         Cancel the turn — or back to the hub
+  Esc         Cancel the turn (clears the composer
+              when there is nothing running)
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /hub /clear /bypass
+  Commands    /help /clear /bypass
               /setup /memory /model
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or

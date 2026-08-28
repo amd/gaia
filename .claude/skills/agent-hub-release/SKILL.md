@@ -177,7 +177,8 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   `baseUrl` (default `https://hub.amd-gaia.ai`).
 - **Var `GAIA_HUB_PUBLISH_URL`** — the Worker's **workers.dev** URL for uploads. The
   free-plan WAF on the proxied `hub.amd-gaia.ai` custom domain blocks large binary
-  uploads (but not GETs). Unset → uploads fall back to the custom domain and **403**.
+  uploads (but not GETs). **Required** — the release fails loudly if it is unset (no
+  silent fallback to the custom domain).
 - **Railway `HUB_CATALOG_URL=https://hub.amd-gaia.ai`** so the website rebuild
   reflects the new entry.
 

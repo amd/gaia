@@ -40,8 +40,8 @@ except ImportError:
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Gemma-4-E4B-it-GGUF")
 
 HOST = "localhost"
-# Respect LEMONADE_PORT env var so Linux CI (lemonade-server-dev, port 8000)
-# can override. Default 13305 matches C++ server / lemonade-server v10.1.0+.
+# Respect LEMONADE_PORT env var so CI can override for non-default setups.
+# Default 13305 matches C++ server / lemonade-server v10.1.0+ (also what Linux CI uses).
 PORT = int(os.environ.get("LEMONADE_PORT", 13305))
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
 

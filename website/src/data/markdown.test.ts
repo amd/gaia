@@ -173,3 +173,37 @@ describe('renderMarkdown sanitization', () => {
     expect(html).not.toContain('<em>action'); // _action_ was NOT italicized
   });
 });
+
+// A published agent README links its sibling docs at the release tag it was
+// published from. Those tags are never pushed to github.com/amd/gaia, so the
+// links 404 — and the markdown is frozen inside the published catalog entry, so
+// the fix has to happen at render time. The email agent's live entry (v0.6.0)
+// is the case this was found on.
+describe('release-tag links are rewritten to a ref GitHub serves', () => {
+  it('rewrites an agent-pkg tag to main', () => {
+    const html = renderMarkdown(
+      '[SPEC](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SPEC.md)',
+    );
+    expect(html).toContain(
+      'href="https://github.com/amd/gaia/blob/main/hub/agents/email/npm/SPEC.md"',
+    );
+    expect(html).not.toContain('agent-pkg-email-v0.6.0');
+  });
+
+  it('keeps the anchor when the link carries one', () => {
+    const html = renderMarkdown(
+      '[repro](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SCORECARD.md#reproduction)',
+    );
+    expect(html).toContain('/blob/main/hub/agents/email/npm/SCORECARD.md#reproduction"');
+  });
+
+  it('leaves every other GitHub ref alone', () => {
+    for (const url of [
+      'https://github.com/amd/gaia/blob/main/hub/agents/email/python/CAPABILITY_MATRIX.md',
+      'https://github.com/amd/gaia/tree/main/hub/agents',
+      'https://github.com/amd/gaia/blob/v0.23.0/README.md',
+    ]) {
+      expect(renderMarkdown(`[x](${url})`)).toContain(`href="${url}"`);
+    }
+  });
+});

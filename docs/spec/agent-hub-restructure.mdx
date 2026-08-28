@@ -5,29 +5,30 @@ icon: "folder-tree"
 ---
 
 <Note>
-**Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** In Progress
+**Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** Superseded by the agent collapse
 </Note>
 
 ## Migration status
 
-Step 1 (mixin promotion) and the registry's installed-agent discovery are
-landed. Production agents are migrating to `hub/agents/<id>/python/` in batches.
+This restructure moved production agents from `src/gaia/agents/` into
+standalone `hub/agents/<id>/python/` packages, one migration batch at a time.
+That approach was overtaken by a more direct move: instead of packaging every
+per-task agent as its own hub wheel, per-task agents were **deleted**, and
+their capability now lives in the flagship [GaiaAgent](/guides/gaia)'s tool
+surface, driven by a `SKILL.md` under `hub/skills/`.
 
-| Agent(s) | Status | Package |
-|----------|--------|---------|
-| `summarize`, `sd`, `docker`, `jira`, `fileio`, `blender`, `emr` | ✅ Migrated | `gaia-agent-<id>` under `hub/agents/<id>/python/` |
-| `chat` (chat/doc/file profiles + lite), `analyst` (data), `browser` (web), `docqa`, `email`, `code`, `routing`, `connectors-demo` | ⏳ Pending | still in `src/gaia/agents/` |
+| Agent(s) | Status |
+|----------|--------|
+| `chat`, `email` | Migrated to `hub/agents/<id>/python/` — the pattern below still describes them |
+| `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, composing `chat` as its base class |
+| `code`, `analyst`, `browser`, `fileio`, `docqa`, `doc-search`, `summarize`, `jira`, `docker`, `blender`, `sd`, `emr`, `routing` | **Deleted.** Capability moved to flagship skills in `hub/skills/` — see [Skill Format](/plans/skill-format) |
+| `hello-world`, `word-count`, `connectors-demo` | Kept as teaching templates, not catalog agents |
 
-The pending set is deferred because of deeper coupling: `chat`/`doc`/`file`
-sit on the Agent UI hot path (13+ callsites), `email` has a large API/MCP/eval
-surface, `code`↔`routing` are interdependent, and `docqa` depends on
-`chat.tools`. They migrate once their callsites are rewired through the
-registry. `gaia-code` stays as a core console script until `code` moves.
-
-Migrated agents install as standalone wheels (`pip install gaia-agent-<id>` or
-`pip install -e hub/agents/<id>/python`) and are discovered via the `gaia.agent`
-entry-point group. The core `amd-gaia` wheel no longer ships them; in-core
-callsites lazy-import each agent and fail loudly when the wheel is absent.
+The package format below (`gaia-agent.yaml`, `pyproject.toml`, entry-point
+discovery) is still how `chat`, `email`, and `gaia` ship, and still the
+pattern a third-party contributor follows to add a **new** agent. It is no
+longer the destination for GAIA's own per-task capabilities — those are
+skills now, not agents.
 
 ## Problem
 
@@ -169,7 +170,7 @@ dependencies = ["amd-gaia>=0.18.0"]
 chat = "gaia_agent_chat.agent:ChatAgent"
 ```
 
-Agents with cross-agent dependencies (e.g. RoutingAgent uses CodeAgent) declare them as package dependencies: `dependencies = ["amd-gaia>=0.18.0", "gaia-agent-code>=0.1.0"]`.
+Agents with cross-agent dependencies declare them as package dependencies: `dependencies = ["amd-gaia>=0.18.0", "gaia-agent-<other-id>>=0.1.0"]`.
 
 ## Inherited init
 
@@ -274,46 +275,27 @@ Move agent-specific tests to `hub/agents/{id}/python/tests/`. Framework tests st
 </Step>
 </Steps>
 
-## Legacy Agent Modernization
+## Legacy Agent Modernization (superseded)
 
-Several agents predate the Agent UI and the connectors framework. They work only via standalone CLI/app entry points, aren't in the registry, lack the modern class attributes, and have no web UI presence. Moving them to `hub/agents/` is not enough — they must also be **modernized** to the Agent Hub package standard.
+This section originally tracked bringing `jira`, `docker`, `blender`, `sd`,
+`emr`, `code`, `docqa`, `fileio`, `summarize`, and `routing` up to the modern
+Agent Hub package standard (registry entry, `gaia-agent.yaml`, conversational
+response mode). That work is moot: every one of those agents was **deleted**
+rather than modernized, and their capability now lives in flagship skills
+(`hub/skills/`) instead. `chat`, `email`, and `builder` were already modern
+and are unaffected. `jira` and `docker` specifically are planned to come back
+as **connectors**, not agents — tracked separately, not as a modernization of
+the deleted agent code.
 
-| Agent | Registered? | Standalone CLI/app | Modern class attrs | Status |
-|-------|:-----------:|:------------------:|:------------------:|--------|
-| chat, analyst, browser | ✅ (factory) | — | factory-based | **Modern** |
-| email, connectors-demo | ✅ | email has `cli.py` | ✅ full attrs + connectors | **Modern** |
-| builder | ✅ (hidden) | — | factory-based | **Modern** |
-| **jira** | ❌ | — | ❌ | **Legacy** |
-| **docker** | ❌ | — (MCPAgent base) | ❌ | **Legacy** |
-| **blender** | ❌ | `app.py` | ❌ | **Legacy** |
-| **sd** | ❌ | — | ❌ | **Legacy** |
-| **emr** | ❌ | `cli.py` + `gaia-emr` | ❌ | **Legacy** |
-| **code** | entry_points only | `cli.py` + `gaia-code` | ❌ | **Partial** |
-| docqa, fileio, summarize | ❌ | — | ❌ | **Example/util** |
-| routing | ❌ | — | not an `Agent` subclass | **Utility** (keep as-is) |
+## Cross-Agent Dependencies (superseded)
 
-**Modernization per legacy agent** (tracked in [#1397](https://github.com/amd/gaia/issues/1397)):
-
-1. Add modern class attributes: `AGENT_ID`, `AGENT_NAME`, `AGENT_DESCRIPTION`, `CONVERSATION_STARTERS`, and `REQUIRED_CONNECTORS` where applicable (e.g. jira → Atlassian OAuth).
-2. Author the `gaia-agent.yaml` manifest (category, icon, tags, requirements, interfaces) so the agent renders as a Hub card.
-3. Register via the `gaia.agent` entry point — discoverable in the web UI, not just standalone CLI.
-4. Adopt the conversational/streaming response mode so the agent works in the chat surface.
-5. Keep the standalone CLI/app as a thin wrapper over the registry-created agent (no duplicate logic).
-6. `docker` inherits `MCPAgent` — confirm it composes with the framework server (Step 8) or document why it diverges.
-
-**Not modernized:** `routing` stays a utility dispatcher (not user-discoverable). `docqa`/`fileio`/`summarize` are example/building-block agents — `summarize` becomes the migration pilot (Step 3); `docqa`/`fileio` may collapse into the `chat` profiles (see [#1162](https://github.com/amd/gaia/issues/1162)).
-
-## Cross-Agent Dependencies
-
-The exploration found these agent-to-agent couplings that must be resolved:
-
-| Dependency | Resolution |
-|-----------|-----------|
-| RoutingAgent → CodeAgent | `gaia-agent-routing` declares `gaia-agent-code` dependency |
-| ChatAgent → FileIOToolsMixin (from code) | Resolved by mixin promotion (Step 1) |
-| DocQAAgent → RAG + FileIO mixins | Resolved by mixin promotion (Step 1) |
-| FileIOAgent → Shell + FileIO mixins | Resolved by mixin promotion (Step 1) |
-| code/cli.py → RoutingAgent, CodeAgent | Internal to code package, no external visibility |
+This section tracked agent-to-agent couplings (e.g. `RoutingAgent` depending
+on `CodeAgent`) that the hub-package split needed to resolve. Both agents in
+that example are deleted, so the coupling no longer exists. The mixin
+promotion this section also depended on (RAG, FileIO, Shell, CodeIndex moving
+to `src/gaia/agents/tools/`) already landed and still holds — see
+[Pre-requisite: Promote shared tool mixins](#pre-requisite-promote-shared-tool-mixins)
+above.
 
 ## Risks
 
@@ -331,9 +313,9 @@ The exploration found these agent-to-agent couplings that must be resolved:
 python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
-pip install -e hub/agents/summarize/python/
-gaia agent run summarize --prompt "Summarize this text"
-python -m pytest hub/agents/summarize/python/tests/ -xvs
+pip install -e hub/agents/email/python/
+gaia agent run email --prompt "Triage my inbox"
+python -m pytest hub/agents/email/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
 pip install -e ".[dev]"        # framework

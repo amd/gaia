@@ -42,6 +42,19 @@ _PASSTHROUGH_KWARGS = frozenset({"max_tokens", "stop_sequences", "metadata", "ti
 #: models, so small caps sized for Lemonade truncate mid-answer.
 _MIN_MAX_TOKENS = 8192
 
+#: Anthropic prompt caching is opt-in: without a ``cache_control`` breakpoint
+#: nothing is ever cached. Anthropic renders ``tools`` -> ``system`` ->
+#: ``messages``, so a breakpoint at the end of the system block covers the tool
+#: schemas *and* the system prompt — the whole fixed prefill an agent re-sends
+#: on every call of every turn.
+#:
+#: Two breakpoints, not one, because caching is a prefix match with no partial
+#: credit: with only the system marker, one byte of drift anywhere in the
+#: system prompt (a memory confidence score, a skill body swapping in) would
+#: throw away the tool schemas as well. The second marker after the last tool
+#: keeps that segment readable whenever the tools themselves are unchanged.
+_CACHE_CONTROL = {"type": "ephemeral"}
+
 _FINISH_REASON_MAP = {
     "tool_use": "tool_calls",
     "end_turn": "stop",
@@ -58,6 +71,71 @@ def _require_anthropic():
             '(or the eval extras: uv pip install -e ".[eval]")'
         )
     return anthropic
+
+
+#: Usage counters read off every response. ``input_tokens`` is the uncached
+#: remainder — the two cache fields carry the rest of the prompt.
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _usage_field(usage: Any, name: str) -> int:
+    """One usage counter as a non-negative int. Absent or non-numeric reads 0 —
+    older API versions omit the cache fields entirely."""
+    value = getattr(usage, name, 0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+class _UsageTotals:
+    """Usage accumulated across a stream's events.
+
+    ``message_start`` is the only event carrying the cache counters;
+    ``message_delta`` later reports the final ``output_tokens``. A counter is
+    only ever replaced by a positive value, so a later event that omits a field
+    (or reports it as 0) cannot erase what an earlier one established.
+    """
+
+    def __init__(self) -> None:
+        for field in _USAGE_FIELDS:
+            setattr(self, field, 0)
+
+    def absorb(self, usage: Any) -> None:
+        if usage is None:
+            return
+        for field in _USAGE_FIELDS:
+            value = _usage_field(usage, field)
+            if value:
+                setattr(self, field, value)
+
+
+def _cached_system(system: str) -> List[dict]:
+    """System prompt as one text block carrying the cache breakpoint.
+
+    Deliberately a block-level breakpoint rather than top-level
+    ``cache_control=`` on ``messages.create()``: top-level auto-placement marks
+    the *last* cacheable block, which in an agent loop is the newest user turn
+    or tool result — content that differs on every call, so each request would
+    write a fresh entry and read almost nothing. Marking the system block pins
+    the boundary at the tools+system prefix, which is byte-identical across
+    calls and turns.
+    """
+    return [{"type": "text", "text": system, "cache_control": dict(_CACHE_CONTROL)}]
+
+
+def _cache_last_tool(tools: List[dict]) -> List[dict]:
+    """Breakpoint on the final tool definition — the end of the tools segment.
+
+    Copies rather than mutating: the agent hands the same list to every call.
+    """
+    marked = list(tools)
+    marked[-1] = {**marked[-1], "cache_control": dict(_CACHE_CONTROL)}
+    return marked
 
 
 class ClaudeProvider(LLMClient):
@@ -194,11 +272,11 @@ class ClaudeProvider(LLMClient):
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
         params["max_tokens"] = max(int(params.get("max_tokens") or 0), _MIN_MAX_TOKENS)
-        if system:
-            params["system"] = system
         anthropic_tools = self._to_anthropic_tools(tools)
         if anthropic_tools:
-            params["tools"] = anthropic_tools
+            params["tools"] = _cache_last_tool(anthropic_tools)
+        if system:
+            params["system"] = _cached_system(system)
         return params
 
     # ── error translation ───────────────────────────────────────────────
@@ -290,11 +368,7 @@ class ClaudeProvider(LLMClient):
                 )
             # thinking / redacted_thinking blocks are never answer text.
 
-        self._capture_usage(
-            getattr(response.usage, "input_tokens", 0),
-            getattr(response.usage, "output_tokens", 0),
-            elapsed,
-        )
+        self._capture_usage(response.usage, elapsed)
 
         stop_reason = response.stop_reason or ""
         if stop_reason == "refusal":
@@ -324,13 +398,14 @@ class ClaudeProvider(LLMClient):
         text_parts: List[str] = []
         tool_slots: Dict[int, dict] = {}
         stop_reason = ""
-        input_tokens = 0
-        output_tokens = 0
+        usage_totals = _UsageTotals()
         try:
             for event in events:
                 etype = event.type
                 if etype == "message_start":
-                    input_tokens = getattr(event.message.usage, "input_tokens", 0)
+                    # The only event carrying the cache counters; message_delta
+                    # then supersedes output_tokens with the final figure.
+                    usage_totals.absorb(getattr(event.message, "usage", None))
                 elif etype == "content_block_start":
                     block = event.content_block
                     if block.type == "tool_use":
@@ -353,16 +428,12 @@ class ClaudeProvider(LLMClient):
                     stop_reason = (
                         getattr(event.delta, "stop_reason", None) or stop_reason
                     )
-                    usage = getattr(event, "usage", None)
-                    if usage is not None:
-                        output_tokens = (
-                            getattr(usage, "output_tokens", 0) or output_tokens
-                        )
+                    usage_totals.absorb(getattr(event, "usage", None))
         except Exception as exc:
             self._raise_actionable(exc)
             raise  # unreachable — _raise_actionable always raises
 
-        self._capture_usage(input_tokens, output_tokens, time.monotonic() - start)
+        self._capture_usage(usage_totals, time.monotonic() - start)
 
         if stop_reason == "refusal":
             raise RuntimeError(
@@ -381,13 +452,27 @@ class ClaudeProvider(LLMClient):
                 }
             )
 
-    def _capture_usage(
-        self, input_tokens: int, output_tokens: int, elapsed: float
-    ) -> None:
+    def _capture_usage(self, usage: Any, elapsed: float) -> None:
+        """Record one call's usage, cache counters included.
+
+        ``usage.input_tokens`` from Anthropic is the *uncached remainder*, not
+        the prompt size: the prompt is that plus the cached reads and writes.
+        Reporting the remainder as ``prompt_tokens`` would make a working cache
+        look like the prompt had shrunk by 90%.
+        """
+        uncached = _usage_field(usage, "input_tokens")
+        cache_read = _usage_field(usage, "cache_read_input_tokens")
+        cache_write = _usage_field(usage, "cache_creation_input_tokens")
+        output_tokens = _usage_field(usage, "output_tokens")
+        prompt_tokens = uncached + cache_read + cache_write
+
         self._last_usage = {
-            "prompt_tokens": int(input_tokens or 0),
-            "completion_tokens": int(output_tokens or 0),
-            "total_tokens": int(input_tokens or 0) + int(output_tokens or 0),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
+            "uncached_input_tokens": uncached,
             "tokens_per_second": (
                 round(output_tokens / elapsed, 2)
                 if elapsed > 0 and output_tokens

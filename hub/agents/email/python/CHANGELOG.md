@@ -9,6 +9,18 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **An Outlook search containing a quoted value no longer sends Graph a malformed
+  `$search` (#3021).** `from:"Acme Corp"` was wrapped verbatim, producing
+  `$search="from:"Acme Corp""` nested unescaped quotes. Inner quotes and
+  backslashes are now escaped per OData search phrase rules.
+- **A request that omits its `Host` header is now refused (400).** The
+  DNS-rebinding check only compared the header when one was present, so a caller
+  could skip the control by leaving it out. Browsers always send `Host`, so the
+  drive-by vector this guards was never open and the token check applied
+  regardless — this closes a defence-in-depth fail-open, not a live bypass. The
+  refusal message quotes the header back when one was sent, so a malformed value
+  (`:8131`, an unbracketed `::1`) no longer reports as "no Host header".
+
 - **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
   `require_caller_token` enforces a per-session bearer token at runtime, but was
   invisible to schema generation (it's a plain `Request` dependency, not a
@@ -33,11 +45,10 @@ contract version is tracked separately as
   (post-normalization) query and retry state are now logged for
   `search_messages`, so a future zero-result report is diagnosable from
   `~/.gaia/gaia.log` without reproducing it live.
-  **Outlook mailboxes are unaffected by this fix** — `outlook_backend.py`
-  sends the whole query as a single quoted Microsoft Graph `$search` phrase
-  and never parses Gmail operator syntax, so the corrected duration handling
-  has no effect there; operator search against Outlook was already
-  non-functional before and after this change.
+  **Outlook mailboxes are unaffected by this duration fix** —
+  `outlook_backend.py` never parses Gmail operator syntax, so converting
+  `w` to days has no effect there. Quoted Outlook `$search` values are
+  escaped separately (see the Graph quote escape entry above).
 
 ### Changed
 

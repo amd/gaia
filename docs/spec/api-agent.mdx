@@ -106,15 +106,15 @@ class ApiAgent(Agent):
             pass
 
     Example:
-        >>> class CodeAgent(ApiAgent, Agent):
+        >>> class WeatherAgent(ApiAgent, Agent):
         ...     def get_model_id(self) -> str:
-        ...         return "gaia-code-agent"
+        ...         return "gaia-weather-agent"
         ...
         ...     def get_model_info(self) -> Dict:
         ...         return {
         ...             "max_input_tokens": 32768,
         ...             "max_output_tokens": 8192,
-        ...             "description": "Autonomous Python coding agent"
+        ...             "description": "Weather lookup agent"
         ...         }
     """
 
@@ -126,12 +126,12 @@ class ApiAgent(Agent):
         Default: gaia-{classname} (with 'Agent' suffix removed)
 
         Returns:
-            Model ID string (e.g., "gaia-code", "gaia-jira")
+            Model ID string (e.g., "gaia-weather", "gaia-search")
 
         Example:
-            CodeAgent -> gaia-code
-            JiraAgent -> gaia-jira
-            DockerAgent -> gaia-docker
+            WeatherAgent -> gaia-weather
+            SearchAgent -> gaia-search
+            TranslateAgent -> gaia-translate
 
         Note:
             Model IDs should be lowercase with hyphens, following OpenAI convention.
@@ -225,9 +225,9 @@ class ApiAgent(Agent):
 def get_model_id(self) -> str:
     # Extract class name and remove "Agent" suffix
     # Examples:
-    #   CodeAgent -> code
-    #   JiraAgent -> jira
-    #   DockerAgent -> docker
+    #   WeatherAgent -> weather
+    #   SearchAgent -> search
+    #   TranslateAgent -> translate
     class_name = self.__class__.__name__[:-5].lower()
     return f"gaia-{class_name}"
 ```
@@ -265,14 +265,14 @@ def estimate_tokens(self, text: str) -> int:
 
 ```python
 # Single protocol (API only)
-class CodeAgent(ApiAgent, Agent):
+class WeatherAgent(ApiAgent, Agent):
     def get_model_id(self) -> str:
-        return "gaia-code-agent"
+        return "gaia-weather-agent"
 
 # Multiple protocols (MCP + API)
-class JiraAgent(MCPAgent, ApiAgent, Agent):
+class SearchAgent(MCPAgent, ApiAgent, Agent):
     def get_model_id(self) -> str:
-        return "gaia-jira"
+        return "gaia-search"
 
     def get_mcp_tool_definitions(self) -> List[Dict]:
         return [...]  # MCP tools
@@ -478,9 +478,9 @@ def test_api_agent_works_without_overrides():
 
 def test_naming_conventions():
     """Test model ID naming conventions."""
-    class CodeAgent(ApiAgent, Agent):
+    class WeatherAgent(ApiAgent, Agent):
         def _get_system_prompt(self):
-            return "Code"
+            return "Weather"
 
         def _create_console(self):
             from gaia.agents.base.console import SilentConsole
@@ -489,9 +489,9 @@ def test_naming_conventions():
         def _register_tools(self):
             pass
 
-    class JiraAgent(ApiAgent, Agent):
+    class SearchAgent(ApiAgent, Agent):
         def _get_system_prompt(self):
-            return "Jira"
+            return "Search"
 
         def _create_console(self):
             from gaia.agents.base.console import SilentConsole
@@ -500,11 +500,11 @@ def test_naming_conventions():
         def _register_tools(self):
             pass
 
-    code_agent = CodeAgent(silent_mode=True)
-    jira_agent = JiraAgent(silent_mode=True)
+    weather_agent = WeatherAgent(silent_mode=True)
+    search_agent = SearchAgent(silent_mode=True)
 
-    assert code_agent.get_model_id() == "gaia-code"
-    assert jira_agent.get_model_id() == "gaia-jira"
+    assert weather_agent.get_model_id() == "gaia-weather"
+    assert search_agent.get_model_id() == "gaia-search"
 ```
 
 ---
@@ -545,36 +545,35 @@ from gaia.agents.base import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from typing import Dict, Any
 
-class CodeAgent(ApiAgent, Agent):
-    """Autonomous Python coding agent."""
+class WeatherAgent(ApiAgent, Agent):
+    """Weather lookup agent."""
 
     def _get_system_prompt(self) -> str:
-        return "You are an autonomous Python coding agent."
+        return "You are a weather lookup assistant."
 
     def _create_console(self):
         from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
-        # Register code-related tools
+        # Register weather-related tools
         pass
 
     def get_model_id(self) -> str:
-        return "gaia-code-agent"
+        return "gaia-weather-agent"
 
     def get_model_info(self) -> Dict[str, Any]:
         return {
             "max_input_tokens": 32768,
             "max_output_tokens": 8192,
-            "description": "Autonomous Python coding agent with file operations",
+            "description": "Weather lookup agent with forecast and alert tools",
             "supports_tools": True,
             "supports_streaming": True,
-            "languages": ["python"],
         }
 
 # Usage via API:
 # POST /v1/chat/completions
-# {"model": "gaia-code-agent", "messages": [...]}
+# {"model": "gaia-weather-agent", "messages": [...]}
 ```
 
 ### Example 3: Custom Token Estimation
@@ -616,11 +615,11 @@ from gaia.agents.base import Agent, MCPAgent
 from gaia.agents.base.api_agent import ApiAgent
 from typing import List, Dict, Any
 
-class JiraAgent(MCPAgent, ApiAgent, Agent):
-    """Jira agent exposed via both MCP and OpenAI API."""
+class SearchAgent(MCPAgent, ApiAgent, Agent):
+    """Search agent exposed via both MCP and OpenAI API."""
 
     def _get_system_prompt(self) -> str:
-        return "You are a Jira project management assistant."
+        return "You are a web search assistant."
 
     def _create_console(self):
         from gaia.agents.base.console import AgentConsole
@@ -631,29 +630,29 @@ class JiraAgent(MCPAgent, ApiAgent, Agent):
 
     # ApiAgent methods
     def get_model_id(self) -> str:
-        return "gaia-jira"
+        return "gaia-search"
 
     def get_model_info(self) -> Dict[str, Any]:
         return {
             "max_input_tokens": 16384,
             "max_output_tokens": 4096,
-            "description": "Jira project management agent",
+            "description": "Web search agent",
         }
 
     # MCPAgent methods
     def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
         return [
             {
-                "name": "create-issue",
-                "description": "Create a Jira issue",
+                "name": "search-web",
+                "description": "Search the web",
                 "inputSchema": {...}
             }
         ]
 
     def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
-        if tool_name == "create-issue":
-            # Create issue logic
-            return {"status": "created"}
+        if tool_name == "search-web":
+            # Search logic
+            return {"status": "ok", "results": []}
         raise ValueError(f"Unknown tool: {tool_name}")
 
 # Can be used via:

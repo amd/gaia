@@ -71,7 +71,7 @@ func TestRenderAllFailedAt80x24(t *testing.T) {
 		"Getting Email ready",
 		"Background service",
 		"Email agent",
-		"Local AI",
+		"Lemonade",
 		"AI model",
 		"Mailbox",
 	} {

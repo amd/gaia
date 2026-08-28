@@ -32,7 +32,6 @@ func quits(cmd tea.Cmd) bool {
 func TestIdleEscDoesNotQuitTheSession(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
-	m.fromHub = false
 	m.messages = []Message{{Role: RoleUser, Content: "an answer worth keeping"}}
 
 	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
@@ -77,27 +76,6 @@ func TestTheIdleFooterStillNamesTheWayOut(t *testing.T) {
 	out := ansi.Strip(m.View())
 	if !strings.Contains(out, "Ctrl+C quit") {
 		t.Errorf("nothing on an idle screen says how to leave:\n%s", out)
-	}
-}
-
-// Launched from the hub, Esc is the way back — that path predates this fix and
-// is advertised ("Esc back"), so it must survive it.
-func TestEscFromTheHubStillGoesBack(t *testing.T) {
-	m := newTestChat(t)
-	m.streaming = false
-	m.fromHub = true
-	m.agentID = "gaia"
-
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd == nil {
-		t.Fatal("Esc from the hub returned no command at all")
-	}
-	back, ok := cmd().(ReturnToHubMsg)
-	if !ok {
-		t.Fatalf("Esc from the hub no longer returns to it: %T", cmd())
-	}
-	if back.AgentID != "gaia" {
-		t.Errorf("the return carried the wrong agent: %q", back.AgentID)
 	}
 }
 
