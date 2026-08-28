@@ -127,7 +127,8 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
+1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
+   one, so `gaia daemon start` is normally all that is needed.
 2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
    `gaia init`).
 
@@ -150,7 +151,7 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  "hint": "Local Lemonade Server is not reachable at … — start it with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+  "hint": "Local Lemonade Server is not reachable at …. GAIA starts it automatically — run `gaia daemon start` if the background service is not running. Or set LEMONADE_BASE_URL to a running server."
 }
 ```
 
