@@ -88,8 +88,15 @@ def build_gateway_router(token: str) -> APIRouter:
     @router.delete("/token")
     def forget() -> dict:
         """Remove the stored token. Idempotent."""
-        from gaia.llm.gateway import forget_token
+        from gaia.connectors.errors import ConnectorsError
+        from gaia.llm.gateway import GatewayError, forget_token
 
-        return {"removed": forget_token()}
+        try:
+            return {"removed": forget_token()}
+        except (GatewayError, ConnectorsError) as e:
+            # An unusable backend raises on the delete even though the read
+            # before it swallowed the same failure and returned None. Without
+            # this the caller gets a 500 for "there was nothing stored anyway".
+            raise HTTPException(status_code=503, detail=str(e)) from e
 
     return router

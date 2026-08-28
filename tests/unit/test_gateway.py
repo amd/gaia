@@ -25,6 +25,7 @@ from gaia.llm.gateway import (
     GatewayModel,
     GatewayState,
 )
+from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
 
 
 def _response(status_code=200, body=None):
@@ -794,3 +795,57 @@ class TestProbeDoesNotLeakTheTokenOverPlaintext:
             get.return_value = _response(body={"data": []})
             manager.check_reachable("http://gw.example.com/v1")
         assert get.called
+
+
+class TestPreCloudOffloadServerIsRejected:
+    """A Lemonade older than 11.8 answers the cloud routes with 200, reports
+    success, lists the provider — and discovers nothing. It also exposes no
+    ``version`` field, so the 404 check and any version comparison both miss
+    it. Observed live on 11.5.0, where it cost an evening of debugging a token
+    that was never the problem.
+    """
+
+    def _install(self, manager, body):
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body=body)
+            return manager.install("https://gw.example.com/v1", api_key="sk-real")
+
+    def test_success_with_zero_models_and_a_key_is_an_error(
+        self, manager, isolated_state
+    ):
+        with pytest.raises(GatewayError, match=LEMONADE_GATEWAY_MIN_VERSION):
+            self._install(
+                manager,
+                {
+                    "status": "success",
+                    "models_discovered": 0,
+                    "auth_state": {"runtime_key_set": True, "env_var_set": False},
+                },
+            )
+
+    def test_a_working_server_is_untouched(self, manager, isolated_state):
+        result = self._install(
+            manager,
+            {
+                "status": "success",
+                "models_discovered": 76,
+                "auth_state": {"runtime_key_set": True, "env_var_set": False},
+            },
+        )
+        assert result["models_discovered"] == 76
+
+    def test_registering_without_a_key_still_reports_zero_models(
+        self, manager, isolated_state
+    ):
+        """Zero models before a token is the normal state, not a bad server."""
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(
+                body={
+                    "status": "success",
+                    "models_discovered": 0,
+                    "auth_state": {"runtime_key_set": False, "env_var_set": False},
+                }
+            )
+            assert (
+                manager.install("https://gw.example.com/v1")["models_discovered"] == 0
+            )

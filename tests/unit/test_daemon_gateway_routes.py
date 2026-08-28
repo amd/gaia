@@ -127,3 +127,25 @@ def test_forget_is_idempotent(client, auth, monkeypatch):
 
     assert first.status_code == second.status_code == 200
     assert len(calls) == 2
+
+
+def test_forget_on_an_unusable_store_is_a_503_not_a_500(client, auth, monkeypatch):
+    """Exercises the real forget_token, not a stand-in.
+
+    On a headless box the read inside forget_token swallows the unavailable
+    backend and returns None, then the delete raises ConnectorsError — so
+    mocking forget_token wholesale hides the one path that fails. The caller
+    must get a structured 503, not FastAPI's 500 for an unhandled exception.
+    """
+    from gaia.connectors.errors import ConnectorsError
+
+    def unusable(_name):
+        raise ConnectorsError("no usable keyring backend on this host")
+
+    monkeypatch.setattr("gaia.connectors.store.peek_secret", lambda _n: None)
+    monkeypatch.setattr("gaia.connectors.store.delete_secret", unusable)
+
+    resp = client.delete("/daemon/v1/gateway/token", headers=auth)
+
+    assert resp.status_code == 503
+    assert "keyring" in resp.json()["detail"]

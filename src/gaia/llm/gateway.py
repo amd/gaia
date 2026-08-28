@@ -554,10 +554,44 @@ class GatewayManager:
         result = self._request(
             "POST", "install", payload=payload, timeout=_DISCOVERY_TIMEOUT, redact=True
         )
+        self._reject_server_without_cloud_offload(result, api_key)
         state = GatewayState.load()
         state.base_url = payload["base_url"]
         state.save()
         return result
+
+    def _reject_server_without_cloud_offload(
+        self, install_result: Dict[str, Any], api_key: Optional[str]
+    ) -> None:
+        """Fail loudly when the running Lemonade predates cloud offload.
+
+        The 404 check in ``_http_error`` cannot catch this. A pre-11.8 server
+        answers the cloud routes with 200, reports ``status: success``, lists
+        the provider in ``system-info`` — and discovers nothing. It also has no
+        ``version`` field to compare, so a version check reads ``None`` and
+        skips. Observed on 11.5.0: every signal said the gateway was registered
+        while zero models existed, and the user is then sent to debug a token
+        that is fine.
+
+        Only decides when a key was supplied. Without one, zero models is the
+        expected pre-auth state and means nothing about the server.
+        """
+        if not api_key:
+            return
+        if install_result.get("models_discovered"):
+            return
+        auth = install_result.get("auth_state") or {}
+        if not (auth.get("runtime_key_set") or auth.get("env_var_set")):
+            return
+        raise GatewayError(
+            f"Lemonade accepted the gateway registration but discovered no "
+            f"models. The usual cause is a Lemonade older than "
+            f"{LEMONADE_GATEWAY_MIN_VERSION}: cloud offload arrived in that "
+            f"release, and earlier servers answer these routes with success "
+            f"while doing nothing. Check with `lemonade --version` and upgrade "
+            f"via `gaia init`. If the server is new enough, the gateway "
+            f"rejected the key — run scripts/diagnose-gateway-auth.ps1."
+        )
 
     def uninstall(self) -> Dict[str, Any]:
         """Remove the provider and forget the enabled-model selection."""
