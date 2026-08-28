@@ -440,17 +440,6 @@ export interface InstallMethod {
   note: string;
 }
 
-/**
- * Install methods for an agent, derived from the MANIFEST — never from README
- * markup. We only ever show channels that actually work:
- *
- *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
- *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
- *    and npm as the embed option — no broken `pip install` (there's no wheel)
- *    and no unverified source build.
- *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
- *    source build (language-driven, the long-standing default).
- */
 /** An entry's package type, defaulting to 'agent' as the manifest schema does. */
 export function packageType(agent: Agent): PackageType {
   return agent.type ?? "agent";
@@ -466,6 +455,17 @@ export function isSkill(agent: Agent): boolean {
   return packageType(agent) === "skill";
 }
 
+/**
+ * Install methods for an agent, derived from the MANIFEST — never from README
+ * markup. We only ever show channels that actually work:
+ *
+ *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
+ *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
+ *    and npm as the embed option — no broken `pip install` (there's no wheel)
+ *    and no unverified source build.
+ *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
+ *    source build (language-driven, the long-standing default).
+ */
 export function installMethods(agent: Agent): InstallMethod[] {
   // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
   // composed by any agent, so `gaia agent install` would not work for it.
@@ -519,7 +519,7 @@ export function installMethods(agent: Agent): InstallMethod[] {
         key: "npm",
         label: "npm",
         command: `npm i ${agent.npm_package}`,
-        note: "For embedding the agent in a JS/TS app — fetches the same binary at build time.",
+        note: "For embedding the agent in a JS/TS app — fetches the same binary at build time or first run.",
       },
     ];
   }

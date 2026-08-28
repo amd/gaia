@@ -43,7 +43,10 @@ const meta = [
 
   <div class="mt-[18px] flex flex-wrap gap-3">
     {isNpm ? (
-      <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-primary">View on npm</a>
+      <>
+        <a href={deepLink} class="g-btn g-btn-primary">Open in GAIA</a>
+        <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-secondary">View on npm</a>
+      </>
     ) : (
       <a href={deepLink} class="g-btn g-btn-primary">Open in GAIA</a>
     )}
