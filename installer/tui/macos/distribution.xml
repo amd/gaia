@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Distribution template for the GAIA terminal hub, rendered and handed to
+  productbuild by build-pkg.sh.
+
+  Placeholders are substituted by build-pkg.sh. Every value it injects is
+  derived from the CLI arguments, so the rendered file is deterministic:
+    @VERSION@             release version, e.g. 1.4.0
+    @HOST_ARCHITECTURES@  arm64 | x86_64  (matches the payload's architecture)
+    @PKG_IDENTIFIER@      bundle identifier of the component package
+    @COMPONENT_PKG@       filename of the component package productbuild locates
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>GAIA Terminal Hub @VERSION@</title>
+
+    <!-- macOS 11 Big Sur is the floor: it is the first release with arm64
+         support, so a single minimum covers both slices we ship. -->
+    <allowed-os-versions>
+        <os-version min="11.0"/>
+    </allowed-os-versions>
+
+    <!-- System volume only. /usr/local/bin is not relocatable, so offering a
+         destination choice would only let the user pick one that breaks. -->
+    <domains enable_anywhere="false"
+             enable_currentUserHome="false"
+             enable_localSystem="true"/>
+
+    <!-- customize="never": one component, nothing to opt out of.
+         require-scripts="false": this distribution contains no JavaScript, so
+         every attribute below is a literal, not an expression.
+         hostArchitectures selects the architecture Installer.app itself runs
+         as, which is the closest thing to an arch gate a script-free
+         distribution has. Pinning it to the payload's own arch means the
+         arm64 package will not open on Intel — better than installing a
+         binary that cannot execute — and the x86_64 package asks for Rosetta
+         on Apple silicon, which its payload needs anyway. -->
+    <options customize="never"
+             require-scripts="false"
+             hostArchitectures="@HOST_ARCHITECTURES@"/>
+
+    <choices-outline>
+        <line choice="@PKG_IDENTIFIER@"/>
+    </choices-outline>
+
+    <choice id="@PKG_IDENTIFIER@"
+            title="GAIA Terminal Hub"
+            description="Installs the gaia-tui and gaia-agent command-line tools into /usr/local/bin."
+            visible="false"
+            selected="true"
+            enabled="false">
+        <pkg-ref id="@PKG_IDENTIFIER@"/>
+    </choice>
+
+    <pkg-ref id="@PKG_IDENTIFIER@"
+             version="@VERSION@"
+             onConclusion="none">@COMPONENT_PKG@</pkg-ref>
+</installer-gui-script>

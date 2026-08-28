@@ -94,6 +94,14 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// Empty is cobra's documented opt-out for the Windows Explorer guard. Left
+	// at its default, cobra refuses to run and prints "This is a command line
+	// tool" for ANY launch it did not trace to a console — which includes the
+	// Start Menu and desktop shortcuts the installer creates. This binary opens
+	// its own full-screen TUI, so an Explorer launch is a supported entry point,
+	// not a mistake. root_test.go pins this.
+	cobra.MousetrapHelpText = ""
+
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
 		"developer mode: show per-turn timings, steps, and tool arguments and output "+
 			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/)")

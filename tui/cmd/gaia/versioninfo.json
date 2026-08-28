@@ -1,0 +1,30 @@
+{
+  "FixedFileInfo": {
+    "FileVersion": { "Major": 0, "Minor": 0, "Patch": 0, "Build": 0 },
+    "ProductVersion": { "Major": 0, "Minor": 0, "Patch": 0, "Build": 0 },
+    "FileFlagsMask": "3f",
+    "FileFlags": "00",
+    "FileOS": "040004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "Comments": "Terminal-native hub for browsing, launching, and chatting with GAIA agents.",
+    "CompanyName": "Advanced Micro Devices, Inc.",
+    "FileDescription": "GAIA Terminal Agent Hub",
+    "FileVersion": "0.0.0.0",
+    "InternalName": "gaia-tui",
+    "LegalCopyright": "Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.",
+    "LegalTrademarks": "",
+    "OriginalFilename": "gaia-tui.exe",
+    "PrivateBuild": "",
+    "ProductName": "GAIA Terminal Agent Hub",
+    "ProductVersion": "0.0.0.0",
+    "SpecialBuild": ""
+  },
+  "VarFileInfo": {
+    "Translation": { "LangID": "0409", "CharsetID": "04B0" }
+  },
+  "IconPath": "",
+  "ManifestPath": ""
+}

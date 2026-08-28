@@ -236,6 +236,20 @@ jobs:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
 
+      - uses: actions/setup-python@v7
+        if: matrix.goos == 'windows'
+        with:
+          python-version: '3.x'
+
+      # Go links no Windows resource unless a .syso sits beside the main
+      # package, so without this every gaia-win-*.exe draws with the generic
+      # console icon and reports no version to Explorer. goversioninfo is a
+      # pinned `tool` dependency in tui/go.mod, so nothing extra is installed.
+      - name: Generate Windows resources (icon + version)
+        if: matrix.goos == 'windows'
+        working-directory: ${{ github.workspace }}
+        run: tui/scripts/gen-winres.sh --version "${{ github.ref_name }}"
+
       - name: Build
         env:
           CGO_ENABLED: '0'
@@ -253,6 +267,16 @@ jobs:
           go build -trimpath -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=${DATE}" \
             -o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
+
+      # Reads the PE resource directory of the LINKED binary. Asserting the
+      # .syso exists would prove nothing -- the Go linker silently ignores a
+      # resource object whose GOARCH suffix does not match the target.
+      - name: Verify the icon reached the binary
+        if: matrix.goos == 'windows'
+        working-directory: ${{ github.workspace }}
+        run: |
+          python util/check_pe_resources.py \
+            bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

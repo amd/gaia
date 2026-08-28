@@ -1,0 +1,34 @@
+#!/bin/bash
+# Runs after the payload lands. Installer.app surfaces a non-zero exit as a
+# visible failure, so every check here is a real gate — not a log line.
+set -euo pipefail
+
+# $2 is the INSTALL LOCATION, not the volume ($3 is) — it equals "/" only
+# because pkgbuild ran with --install-location "/". Changing that flag in
+# build-pkg.sh must change this line with it.
+DEST_ROOT="${2:-/}"
+BIN_DIR="${DEST_ROOT%/}/usr/local/bin"
+
+for binary in gaia-tui gaia-agent; do
+    path="${BIN_DIR}/${binary}"
+
+    if [ ! -f "$path" ]; then
+        echo "GAIA install failed: ${path} is missing after the payload was written." >&2
+        echo "The package payload is incomplete — re-download the installer from" >&2
+        echo "https://amd-gaia.ai and try again. If it recurs, attach the installer" >&2
+        echo "log (Installer.app > Window > Installer Log) to a report at" >&2
+        echo "https://github.com/amd/gaia/issues." >&2
+        exit 1
+    fi
+
+    if [ ! -x "$path" ]; then
+        echo "GAIA install failed: ${path} is not executable." >&2
+        echo "Run 'sudo chmod 755 ${path}' to repair it, or re-run the installer." >&2
+        exit 1
+    fi
+done
+
+echo "GAIA Terminal Hub installed:"
+echo "  ${BIN_DIR}/gaia-tui"
+echo "  ${BIN_DIR}/gaia-agent"
+echo "Run \`gaia-tui\` to start."
