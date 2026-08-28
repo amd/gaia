@@ -168,7 +168,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI on `PATH` for the daemon the TUI starts.
+  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
+  starts. 0.23.1 is the first core whose daemon knows how to supervise this
+  agent; on 0.23.0 the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.

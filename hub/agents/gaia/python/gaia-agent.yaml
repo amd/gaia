@@ -23,12 +23,17 @@ icon: sparkles
 tools_count: 67
 
 language: python
+# 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise
+# this sidecar at all; 0.23.1 is the first core that can (#2932).
 min_gaia_version: "0.23.1"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
+  dependencies:
+    - "amd-gaia>=0.23.1"
+    - "gaia-agent-chat>=0.1.0"
 
 interfaces:
   tui: true
@@ -40,10 +45,6 @@ interfaces:
 requirements:
   min_memory_gb: 8
   platforms: [win-x64, linux-x64, darwin-arm64]
-
-dependencies:
-  - amd-gaia>=0.23.0
-  - gaia-agent-chat>=0.1.0
 
 # ---------------------------------------------------------------------------
 # Skills

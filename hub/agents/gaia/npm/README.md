@@ -36,8 +36,10 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI on `PATH` for the daemon the terminal UI starts. Install it
-  with `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
+- The `gaia` Python CLI **0.23.1 or newer** on `PATH` for the daemon the terminal
+  UI starts. Earlier cores start a daemon that has no entry for this agent, so the
+  UI comes up with nothing behind it. Install it with
+  `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
   `irm https://amd-gaia.ai/install.ps1 | iex`).
 
 ## Supported platforms

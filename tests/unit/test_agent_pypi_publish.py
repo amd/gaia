@@ -9,7 +9,8 @@ invariants that make dual distribution (R2 + PyPI) correct and drift-proof:
   cleanly to packages under ``hub/agents/<id>/python/`` (via
   ``util/list_agent_packages.py``);
 * every such wheel declares the ``gaia-agent-<id>`` name and an ``amd-gaia``
-  framework dependency (issue #1179 scope item 3);
+  framework dependency (issue #1179 scope item 3), pinned at the same floor the
+  agent manifest advertises as ``min_gaia_version``;
 * the publish workflow derives its matrix from that same list, so a new agent
   added to ``AGENT_WHEEL_PACKAGES`` is published automatically with no second
   list to sync. That list is a plain module-level constant rather than an
@@ -27,6 +28,14 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # setup.py pins tomli for 3.10, which has no stdlib tomllib.
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UTIL_DIR = REPO_ROOT / "util"
@@ -80,6 +89,70 @@ def test_every_wheel_declares_amd_gaia_dependency(packages):
         assert pat.search(
             pyproject
         ), f"{p.dist_name}: pyproject.toml is missing an 'amd-gaia>=' dependency"
+
+
+def _release(version):
+    """("0.23" -> (0, 23, 0)) so a shortened floor doesn't false-fail on length."""
+    parts = tuple(int(p) for p in str(version).strip().split(".")[:3])
+    return (parts + (0, 0, 0))[:3]
+
+
+def _amd_gaia_floor(requirements):
+    """The >= floor of the amd-gaia requirement in *requirements*, or None.
+
+    Parsed with ``packaging`` rather than a regex so PEP 508 spelling that is
+    legal but unusual — ``amd-gaia >= 0.23.1``, an ``[api]`` extras group — is
+    read the same way pip reads it.
+    """
+    for raw in requirements:
+        parsed = Requirement(str(raw))
+        if canonicalize_name(parsed.name) != "amd-gaia":
+            continue
+        for spec in parsed.specifier:
+            if spec.operator == ">=":
+                return spec.version
+    return None
+
+
+def test_amd_gaia_floor_matches_manifest_min_gaia_version(packages):
+    """Every declared amd-gaia floor names the core the manifest advertises.
+
+    ``min_gaia_version`` gates nothing — it only renders on the hub listing. The
+    dependency floor is what pip resolves against, so a lower one silently wins
+    and installs the agent onto a core that cannot run it, while the hub page
+    still advertises the newer one.
+    """
+    for p in packages:
+        manifest = yaml.safe_load(
+            (p.path / "gaia-agent.yaml").read_text(encoding="utf-8")
+        )
+        declared = manifest.get("min_gaia_version")
+        assert declared, f"{p.dist_name}: manifest has no min_gaia_version"
+
+        with (p.path / "pyproject.toml").open("rb") as fh:
+            pyproject = tomllib.load(fh)
+
+        floors = {
+            "pyproject.toml": _amd_gaia_floor(
+                pyproject["project"].get("dependencies") or []
+            ),
+            # The manifest restates the floor; the schema puts it under `python`.
+            "the manifest's python.dependencies": _amd_gaia_floor(
+                (manifest.get("python") or {}).get("dependencies") or []
+            ),
+        }
+        assert floors["pyproject.toml"], (
+            f"{p.dist_name}: pyproject.toml declares no amd-gaia>= floor, so "
+            f"nothing stops pip resolving a core older than {declared}"
+        )
+        for where, floor in floors.items():
+            if floor is None:
+                continue
+            assert _release(floor) == _release(declared), (
+                f"{p.dist_name}: {where} pins amd-gaia>={floor} but the manifest "
+                f"declares min_gaia_version {declared}. A core below {declared} "
+                f"cannot run this agent, so the floors must match."
+            )
 
 
 def test_pyproject_name_matches_dist(packages):
