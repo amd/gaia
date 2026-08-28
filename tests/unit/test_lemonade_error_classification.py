@@ -107,7 +107,11 @@ def test_upstream_timeout_user_message_is_actionable() -> None:
     assert "qwen3-0.6b" not in msg.lower()
     assert "smaller model" not in msg.lower()
     # Concrete next steps the user can actually run.
-    assert "gaia kill" in msg or "lemonade-server serve" in msg
+    # `gaia kill` only: the other branch of this `or` named a command
+    # Lemonade 10.7 removed, so the assertion would have kept passing
+    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
+    # started").
+    assert "gaia kill" in msg
 
 
 # ── UI side: exception-string classification ────────────────────────────
@@ -240,7 +244,11 @@ def test_agent_extract_lemonade_user_message_typed_direct() -> None:
     msg = agent._extract_lemonade_user_message(exc)
     assert msg is not None
     assert "didn't respond in time" in msg
-    assert "gaia kill" in msg or "lemonade-server serve" in msg
+    # `gaia kill` only: the other branch of this `or` named a command
+    # Lemonade 10.7 removed, so the assertion would have kept passing
+    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
+    # started").
+    assert "gaia kill" in msg
 
 
 def test_agent_extract_lemonade_user_message_typed_in_cause_chain() -> None:

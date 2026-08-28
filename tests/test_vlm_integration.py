@@ -38,7 +38,7 @@ def test_vlm_availability():
     else:
         print("❌ FAIL: VLM model not available")
         print(f"   Expected: {vlm.vlm_model}")
-        print("\n   Run: lemonade-server serve")
+        print("\n   Run: gaia daemon start")
         print("   Then verify model is in list")
         return False
 
