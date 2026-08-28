@@ -18,6 +18,13 @@ the terminal UI meant building it from source.
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
   bug-shaped `500`. See SPEC §5.2.
+- **Three further client-visible refusals from `/query`.** Reusing a `run_id`
+  that is still in flight gets `409` — it used to replace the live run, leaving
+  it with no way to be cancelled. Supplying a `model` that differs from the one
+  the `session_id` was built with gets `409` rather than silently answering on
+  the old model. A request with an absent or empty `Host` header gets `400`
+  rather than being served, closing a DNS-rebinding check that failed open.
+  See SPEC §5 and §5.2.
 - **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
   only renders in the prompt on turns whose query matches its description; the
   rest collapse to a one-line menu the model re-activates with `load_skill`.

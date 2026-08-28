@@ -12,12 +12,13 @@ The event translation itself is NOT reimplemented here — it lives in
 ``gaia.ui.sse_translation.CanonicalTranslator``, shared with the email sidecar,
 so the two agents cannot drift into private dialects of the same contract.
 
-Scope note: this deliberately implements ``/query`` and ``/query/{run_id}/cancel``
-only. ``needs_confirmation`` ends the run with a refusal (the stateless D1 stub,
-same as email) rather than pretending to support server-side resume, and there is
-no ``/respond`` yet — the flagship's tools are read-mostly, so neither gate is
-exercised. Both are additive when a tool needs them; claiming support we haven't
-built would be worse than the honest gap.
+Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
+``/query/{run_id}/cancel`` and ``/query/{run_id}/respond``. ``needs_input`` is
+answered over ``/respond`` on the run's existing stream. ``needs_confirmation``
+is the one gate still unimplemented: it ends the run with a refusal (the
+stateless D1 stub, same as email) rather than pretending to support server-side
+resume. That is additive when a tool needs it; claiming support we haven't built
+would be worse than the honest gap.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
-from gaia_agent.session_registry import SessionCapacityError
+from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
@@ -154,24 +155,100 @@ class _QueryRun:
         self.result: Optional[Dict[str, Any]] = None
 
 
+class DuplicateRunError(RuntimeError):
+    """A ``run_id`` already in flight was submitted again.
+
+    ``run_id`` is client-minted, so this is reachable from a client bug. Taking
+    the newer run would make the older one uncancellable and let either stream's
+    teardown drop the other's run-table entry.
+    """
+
+
+#: Cap on remembered cancel-before-start ids. Each is one short string, consumed
+#: the moment its run registers; this only bounds cancels whose run never came.
+_MAX_PRECANCELLED = 256
+
+#: Cap on remembered just-finished ids, which is what lets ``cancel`` tell a run
+#: that ended a moment ago from one that has not registered yet.
+_MAX_FINISHED = 256
+
+_MISSING = object()
+
+
+def _remember_bounded(store: Dict[str, None], key: str, cap: int) -> None:
+    """Record ``key`` as the newest entry, dropping the oldest past ``cap``."""
+    store.pop(key, None)  # re-insert at the end, so this is the newest
+    store[key] = None
+    while len(store) > cap:
+        store.pop(next(iter(store)))
+
+
 class _RunRegistry:
     """Process-local run table so ``/cancel`` can find a live run."""
 
     def __init__(self) -> None:
         self._runs: Dict[str, _QueryRun] = {}
+        #: run_ids cancelled before their ``/query`` registered. Insertion
+        #: ordered, so the oldest is the one evicted at the cap.
+        self._precancelled: Dict[str, None] = {}
+        #: run_ids whose run has already ended. Same shape, and the reason
+        #: ``cancel`` does not tombstone them.
+        self._finished: Dict[str, None] = {}
         self._lock = threading.Lock()
 
-    def add(self, run: _QueryRun) -> None:
+    def add(self, run: _QueryRun) -> bool:
+        """Register an in-flight run; returns whether it arrives pre-cancelled.
+
+        Raises :class:`DuplicateRunError` rather than overwriting: the run
+        already under this id is live, and clobbering it strands it.
+        """
         with self._lock:
+            if run.run_id in self._runs:
+                raise DuplicateRunError(
+                    f"run_id {run.run_id} is already running on this sidecar. "
+                    "run_id is minted by the caller, so mint a fresh UUID per "
+                    "request — reusing one would leave the earlier run with no "
+                    "way to be cancelled."
+                )
             self._runs[run.run_id] = run
+            return self._precancelled.pop(run.run_id, _MISSING) is not _MISSING
 
     def get(self, run_id: str) -> Optional[_QueryRun]:
         with self._lock:
             return self._runs.get(run_id)
 
+    def cancel(self, run_id: str) -> bool:
+        """Stop a live run, or remember the cancel for one about to register.
+
+        Returns whether a LIVE run was stopped; an id with no live run stays
+        ``False``, because a cancel racing a run's own completion should not
+        claim to have stopped anything.
+
+        Two different situations miss ``_runs``, and only one of them may be
+        tombstoned. A run that ALREADY ENDED is the common, documented race, and
+        arming a tombstone for it would leave an entry nothing can consume — and
+        would pre-cancel the next run if the caller reused that id. A run that
+        has NOT REGISTERED YET is the real ordering this exists for: the caller
+        mints ``run_id`` before it POSTs ``/query``, so a cancel can genuinely
+        arrive first. Only the latter is remembered, and it is consumed on use,
+        so it fires at most once.
+        """
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                run.cancel_event.set()
+                run.handler.cancelled.set()
+                return True
+            if run_id not in self._finished:
+                _remember_bounded(self._precancelled, run_id, _MAX_PRECANCELLED)
+            return False
+
     def remove(self, run_id: str) -> None:
+        """Retire a finished run, remembering the id so a late cancel knows it
+        ended rather than treating it as one that has yet to start."""
         with self._lock:
             self._runs.pop(run_id, None)
+            _remember_bounded(self._finished, run_id, _MAX_FINISHED)
 
 
 _registry = _RunRegistry()
@@ -360,7 +437,7 @@ router = APIRouter(
 
 
 @router.get("/init")
-async def init(response: Any = None) -> Dict[str, Any]:
+async def init() -> Dict[str, Any]:
     """Readiness preflight — the row data the TUI's preflight screen renders.
 
     Unlike ``/health`` (liveness only, never touches the model server) this
@@ -433,6 +510,23 @@ async def query(request: QueryRequest):
 
     handler = SSEOutputHandler()
     session = None
+    #: Set only on the one-shot path. A session agent belongs to the registry
+    #: and must never be closed here.
+    one_shot_agent: Optional[Any] = None
+    #: Whether THIS request owns the run-table entry under its run_id. A request
+    #: that fails before registering must not remove that id: it may belong to
+    #: the live run it collided with.
+    registered = False
+
+    def _unwind_setup() -> None:
+        """Undo the setup done so far, on a path that never reaches the loop."""
+        if registered:
+            _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
+        if one_shot_agent is not None:
+            close_agent(one_shot_agent)
+
     try:
         kwargs: Dict[str, Any] = {}
         if request.model:
@@ -456,6 +550,21 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            if request.model and request.model != session.model_id:
+                # Only construction reads a model, and this session's agent is
+                # already built — running the old one silently would answer a
+                # request the caller did not make.
+                current = session.model_id or "the agent's default model"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"session {request.session_id} is already running "
+                        f"{current}, and a model cannot be switched on a live "
+                        f"session. Start a new session_id to use "
+                        f"{request.model!r}, or omit 'model' to continue on "
+                        "the current one."
+                    ),
+                )
             agent = session.agent
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
@@ -468,22 +577,17 @@ async def query(request: QueryRequest):
                     AGENT_ID,
                     request.session_id,
                 )
-                handler._emit(
-                    {
-                        "type": "status",
-                        "status": "warning",
-                        "message": (
-                            "This session was reclaimed after being idle or "
-                            "crowded out by other sessions — loaded skills "
-                            "and other per-turn state were reset. Reload any "
-                            "skill you still need."
-                        ),
-                    }
+                handler.print_warning(
+                    "This session was reclaimed after being idle or crowded "
+                    "out by other sessions — loaded skills and other per-turn "
+                    "state were reset. Reload any skill you still need."
                 )
         else:
             # No session handle — a genuine one-shot. Nothing persists past this
-            # turn, and the agent is told so rather than over-promising.
+            # turn, and the agent is told so rather than over-promising. Nothing
+            # else will ever reference it either, so this run owns its teardown.
             agent = build_query_agent(**kwargs)
+            one_shot_agent = agent
         agent.console = handler
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
@@ -497,26 +601,30 @@ async def query(request: QueryRequest):
             ]
 
         run = _QueryRun(request.run_id, agent, handler)
-        _registry.add(run)
+        precancelled = _registry.add(run)
+        registered = True
         agent._cancel_event = run.cancel_event
+        if precancelled:
+            # A /cancel for this run_id landed before it registered. The loop
+            # checks the flag at its first step boundary, so it stops without
+            # ever calling the model.
+            run.cancel_event.set()
+            handler.cancelled.set()
+    except DuplicateRunError as exc:
+        _unwind_setup()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         # Already an actionable status (e.g. the 409 above) — do not relabel it
         # as a generic 500.
-        _registry.remove(request.run_id)
-        if session is not None:
-            session.run_lock.release()
+        _unwind_setup()
         raise
     except SessionCapacityError as exc:
         # Actionable and temporary ("N sessions are already active and none
         # are idle enough to evict") — 503, not a bug-shaped 500.
-        _registry.remove(request.run_id)
-        if session is not None:
-            session.run_lock.release()
+        _unwind_setup()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        _registry.remove(request.run_id)
-        if session is not None:
-            session.run_lock.release()
+        _unwind_setup()
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
@@ -531,15 +639,21 @@ async def query(request: QueryRequest):
                 run.result = agent.process_query(request.query)
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
-            handler._emit(
-                {"type": "agent_error", "content": _terminal_error_detail(exc)}
-            )
+            handler.print_error(_terminal_error_detail(exc))
         finally:
             handler.signal_done()
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
             if session is not None:
                 session.run_lock.release()
+            # This thread is the last thing to touch a one-shot agent — the
+            # stream reads only run.result and the handler — so its RAG index,
+            # scratchpad DB and HTTP session go now rather than accumulating one
+            # leaked agent per request for the life of the process. Covers the
+            # client-disconnect path too: the stream sets the cancel flag, which
+            # ends the loop, which lands here.
+            if one_shot_agent is not None:
+                close_agent(one_shot_agent)
 
     thread = threading.Thread(target=_run_agent, daemon=True)
     try:
@@ -548,9 +662,7 @@ async def query(request: QueryRequest):
         # _run_agent never got to run, so its own finally: never fires —
         # release the run_lock here or a thread-exhaustion failure leaves
         # this session_id permanently 409ing for the life of the process.
-        _registry.remove(request.run_id)
-        if session is not None:
-            session.run_lock.release()
+        _unwind_setup()
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
@@ -622,14 +734,15 @@ async def query(request: QueryRequest):
 
 @router.post("/query/{run_id}/cancel", response_model=QueryCancelResponse)
 async def cancel_query(run_id: str) -> QueryCancelResponse:
-    """Ask a live run to stop. Unknown ids report ``cancelled=False``, not 404 —
-    a race between the client's cancel and the run's own completion is normal."""
-    run = _registry.get(run_id)
-    if run is None:
-        return QueryCancelResponse(run_id=run_id, cancelled=False)
-    run.cancel_event.set()
-    run.handler.cancelled.set()
-    return QueryCancelResponse(run_id=run_id, cancelled=True)
+    """Ask a live run to stop.
+
+    Unknown ids report ``cancelled=False``, not 404 — a cancel racing the run's
+    own completion is normal, and reporting it stopped something would be a lie.
+    The id is still remembered, so a run that registers *after* this call starts
+    cancelled: the caller mints ``run_id`` before it POSTs ``/query``, which
+    makes cancel-arrives-first a real ordering, not a hypothetical one.
+    """
+    return QueryCancelResponse(run_id=run_id, cancelled=_registry.cancel(run_id))
 
 
 DEFAULT_HOST = "127.0.0.1"

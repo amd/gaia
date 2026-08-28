@@ -222,3 +222,166 @@ def test_reclaimed_flag_is_not_repeated_on_the_next_lookup(monkeypatch):
     assert same is reclaimed
     assert same.reclaimed_after_eviction is False
     reg.clear()
+
+
+# ---------------------------------------------------------------------------
+# Teardown: the helper must actually reach a real agent's handles. It probed
+# only ``close_db`` — which GaiaAgent does not define — so every eviction was a
+# silent no-op that leaked the whole agent while looking like it had cleaned up.
+# ---------------------------------------------------------------------------
+
+
+class _ClosableAgent:
+    """The flagship's shape: teardown behind ``close()``, not ``close_db()``."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _UncloseableAgent:
+    """An agent with no teardown at all."""
+
+
+def test_close_agent_uses_close_when_that_is_what_the_agent_has():
+    agent = _ClosableAgent()
+    sr.close_agent(agent)
+    assert agent.closed is True
+
+
+def test_close_agent_still_accepts_the_email_agents_close_db():
+    agent = _FakeAgent()
+    sr.close_agent(agent)
+    assert agent.closed is True
+
+
+def test_close_agent_is_loud_when_an_agent_exposes_no_teardown(caplog):
+    """A silent no-op here is the whole bug: the caller believes it cleaned up."""
+    with caplog.at_level("ERROR"):
+        sr.close_agent(_UncloseableAgent())
+    assert any(
+        "neither close() nor close_db()" in r.getMessage() for r in caplog.records
+    ), caplog.text
+
+
+def test_the_real_gaia_agent_exposes_the_teardown_the_registry_calls():
+    """The regression itself, asserted against the shipped class rather than a
+    fake — a fake that defines ``close_db`` proved nothing about GaiaAgent."""
+    from gaia_agent.agent import GaiaAgent
+
+    assert callable(getattr(GaiaAgent, "close", None)) or callable(
+        getattr(GaiaAgent, "close_db", None)
+    ), "GaiaAgent has no teardown, so every evicted session leaks its handles"
+
+
+def test_evicting_a_session_actually_closes_a_close_only_agent(monkeypatch):
+    """End-to-end of the same bug, through the registry's own eviction path."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _ClosableAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+    first = reg.get_or_create("a")
+    reg.get_or_create("b")  # evicts "a"
+    assert first.agent.closed is True
+    reg.clear()
+
+
+# ---------------------------------------------------------------------------
+# The session cap must be a real bound. The check and the install sat in two
+# different lock sections with a slow agent build between them, so two creators
+# for two NEW ids could both pass at len == max-1 and both install.
+# ---------------------------------------------------------------------------
+
+
+def test_racing_creators_for_new_ids_cannot_exceed_the_cap(monkeypatch):
+    """Both racers reach the capacity check before either installs."""
+    max_sessions = 4
+    entered = threading.Semaphore(0)
+    released = threading.Event()
+
+    def slow_build(**kw):
+        # Park INSIDE construction — exactly the window the old code left open
+        # between passing the check and installing the session.
+        entered.release()
+        released.wait(timeout=10)
+        return _FakeAgent(**kw)
+
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=max_sessions)
+    # Fill to max-1, all idle so they are evictable rather than capacity errors.
+    for i in range(max_sessions - 1):
+        reg.get_or_create(f"filler-{i}")
+
+    monkeypatch.setattr(sr, "build_session_agent", slow_build)
+    outcomes = []
+
+    def create(session_id):
+        try:
+            outcomes.append(reg.get_or_create(session_id))
+        except sr.SessionCapacityError as exc:
+            outcomes.append(exc)
+
+    threads = [
+        threading.Thread(target=create, args=(sid,)) for sid in ("racer-x", "racer-y")
+    ]
+    for t in threads:
+        t.start()
+    try:
+        # Hold both racers inside slow_build, i.e. both past the capacity check,
+        # before letting either install.
+        assert entered.acquire(timeout=10)
+        assert entered.acquire(timeout=10)
+    finally:
+        released.set()
+        for t in threads:
+            t.join(timeout=10)
+
+    assert len(outcomes) == 2
+    assert (
+        len(reg._sessions) <= max_sessions
+    ), f"cap of {max_sessions} exceeded: {sorted(reg._sessions)}"
+    reg.clear()
+
+
+def test_a_pending_build_counts_against_the_cap(monkeypatch):
+    """The reservation, stated directly: a slot being built is a slot taken."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=2)
+    reg.get_or_create("a")
+    assert len(reg._sessions) + len(reg._pending) == 1
+    reg.get_or_create("b")
+    assert len(reg._sessions) + len(reg._pending) == 2
+    reg.clear()
+
+
+def test_a_failed_build_releases_its_reservation(monkeypatch):
+    """A construction error must not permanently consume a session slot."""
+
+    def boom(**kw):
+        raise RuntimeError("no model server")
+
+    monkeypatch.setattr(sr, "build_session_agent", boom)
+    reg = sr._SessionRegistry(max_sessions=1)
+    with pytest.raises(RuntimeError):
+        reg.get_or_create("a")
+    assert reg._pending == set()
+
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    assert reg.get_or_create("a") is not None
+    reg.clear()
+
+
+# ---------------------------------------------------------------------------
+# The model a session was built with, which the server compares a later turn
+# against instead of silently running the old one.
+# ---------------------------------------------------------------------------
+
+
+def test_a_session_records_the_model_it_was_built_with(registry):
+    session = registry.get_or_create("s", model_id="model-a")
+    assert session.model_id == "model-a"
+
+
+def test_a_session_built_without_a_model_records_none(registry):
+    assert registry.get_or_create("s").model_id is None

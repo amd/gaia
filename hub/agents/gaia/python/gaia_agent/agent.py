@@ -42,7 +42,6 @@ unchanged.
 
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,8 +56,9 @@ from gaia.agents.base.skill_loader import (
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -207,7 +207,25 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
+        if config is not None and kwargs:
+            raise TypeError(
+                "GaiaAgent takes either a ready GaiaAgentConfig or the config "
+                f"fields as keyword arguments, not both. Got config= plus "
+                f"{sorted(kwargs)}; those keywords would be silently dropped. "
+                "Set them on the config object, or drop the config= argument."
+            )
         super().__init__(config=config or GaiaAgentConfig(**kwargs))
+
+    def close(self) -> None:
+        """Release this agent's watchers, HTTP session and SQLite handles now.
+
+        ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
+        whose tool registry holds bound methods only runs when the cyclic
+        collector gets to it — far too late for a sidecar that builds an agent
+        per one-shot request. Every step is individually guarded and idempotent,
+        so the later ``__del__`` is harmless.
+        """
+        self.__del__()
 
     def _register_tools(self) -> None:
         """ChatAgent's profile tools, plus runtime access to the skill library.
