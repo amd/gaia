@@ -11,24 +11,34 @@ Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
 
-The payload carries **only those three files** — no directory entry for `/usr`,
-`/usr/local`, `/usr/local/bin` or `/usr/local/share`. Shipping one would reset
-that directory to `root:wheel` on install, which breaks `brew` on an Intel Mac
-where Homebrew owns `/usr/local` as the user. `pkgbuild --filter` drops the
-entries, `scripts/preinstall` creates whichever directory is missing (`mkdir -p`
-leaves an existing one alone), and `build-pkg.sh` reads the BOM back and fails if
-either half of that stopped holding.
+No directory entry for `/usr`, `/usr/local`, `/usr/local/bin` or
+`/usr/local/share` is shipped. Installing one would reset that directory to
+`root:wheel`, which breaks `brew` on an Intel Mac where Homebrew owns
+`/usr/local` as the user. That is why there are **two** component packages
+rather than one: each is rooted at a staging directory holding only its own
+files, so the shared parents are the `--install-location` and never payload.
+
+| Component | Identifier | Install location |
+| --- | --- | --- |
+| binaries | `ai.amd.gaia.terminal-hub` | `/usr/local/bin` |
+| licence | `ai.amd.gaia.terminal-hub.docs` | `/usr/local/share/doc/gaia-tui` |
+
+`productbuild` combines them into the single `.pkg` a user double-clicks. Both
+BOMs are read back after `pkgbuild` and the build fails if either the expected
+files are missing or a `/usr` entry appears. The installer creates a missing
+install location itself, so nothing has to `mkdir` it first.
 
 ## Uninstall it
 
 A `.pkg` ships no uninstaller — that is the macOS convention. Remove the files,
-then forget the receipt (`--forget` drops the receipt only; it deletes nothing,
+then forget both receipts (`--forget` drops the receipt only; it deletes nothing,
 so the order matters):
 
 ```bash
 sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
+sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
 
 `~/.gaia` — chats, documents, memory, config — is never touched.
@@ -127,11 +137,10 @@ other than `Accepted`.
 | File | Role |
 | --- | --- |
 | `build-pkg.sh` | Entry point; the only thing CI calls |
-| `distribution.xml` | `productbuild --distribution` template; `@VERSION@`, `@HOST_ARCHITECTURES@`, `@PKG_IDENTIFIER@` and `@COMPONENT_PKG@` are substituted at build time |
-| `scripts/preinstall` | Creates `/usr/local/bin` and the doc directory if absent, because the payload deliberately ships no directory entries |
-| `scripts/postinstall` | Verifies both binaries landed and are executable, then prints their paths. A non-zero exit here is surfaced by Installer.app |
+| `distribution.xml` | `productbuild --distribution` template; `@VERSION@`, `@HOST_ARCHITECTURES@`, `@PKG_IDENTIFIER@`, `@DOCS_IDENTIFIER@`, `@COMPONENT_PKG@` and `@DOCS_COMPONENT_PKG@` are substituted at build time |
+| `scripts/postinstall` | Runs with the binaries component. Verifies both binaries landed and are executable, then prints their paths. A non-zero exit here is surfaced by Installer.app |
 
-Bundle identifier: `ai.amd.gaia.terminal-hub`. Minimum OS: macOS 11.
+Minimum OS: macOS 11.
 
 ## Architecture gating
 

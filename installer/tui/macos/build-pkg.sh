@@ -15,38 +15,26 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# One source of truth for the identifier: distribution.xml takes it as a
-# placeholder rather than repeating it.
+# One source of truth for the identifiers: distribution.xml takes them as
+# placeholders rather than repeating them.
 readonly PKG_IDENTIFIER="ai.amd.gaia.terminal-hub"
+readonly DOCS_IDENTIFIER="ai.amd.gaia.terminal-hub.docs"
 readonly COMPONENT_PKG="gaia-terminal-hub-component.pkg"
+readonly DOCS_COMPONENT_PKG="gaia-terminal-hub-docs-component.pkg"
 readonly MIN_OS_VERSION="11.0"
-readonly INSTALL_PREFIX="usr/local/bin"
+
+# Two components so that /usr/local* is only ever an --install-location, never a
+# payload entry: `--ownership recommended` would stamp such an entry root:wheel,
+# which breaks `brew` on an Intel Mac where Homebrew owns /usr/local as the user.
+readonly BIN_INSTALL_LOCATION="/usr/local/bin"
 # Mirrors the .deb/.rpm layout (usr/share/doc/gaia-tui), under /usr/local
 # because that is where this package installs.
-readonly DOC_PREFIX="usr/local/share/doc/gaia-tui"
+readonly DOC_INSTALL_LOCATION="/usr/local/share/doc/gaia-tui"
 readonly LICENSE_NAME="LICENSE.md"
 # Not `readonly`: bash 3.2, which is what /bin/bash still is on macOS, rejects
 # `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
-PKG_SCRIPTS=(preinstall postinstall)
-
-# Directory entries the payload must NOT carry. `--ownership recommended` stamps
-# every directory in the root root:wheel, and installing that resets /usr/local
-# on an Intel Mac where Homebrew owns it as the user -- which breaks `brew`.
-# preinstall creates whichever of these is missing instead; mkdir -p leaves an
-# existing one, and its ownership, alone.
-#
-# The first --filter disables pkgbuild's built-in ones, so they are restated.
-PAYLOAD_FILTERS=(
-    '^\.?/?usr$'
-    '^\.?/?usr/local$'
-    '^\.?/?usr/local/bin$'
-    '^\.?/?usr/local/share$'
-    '^\.?/?usr/local/share/doc$'
-    '\.DS_Store$'
-    '(^|/)\.svn(/|$)'
-    '(^|/)CVS(/|$)'
-)
+PKG_SCRIPTS=(postinstall)
 
 readonly DISTRIBUTION_TEMPLATE="${SCRIPT_DIR}/distribution.xml"
 readonly SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
@@ -211,18 +199,23 @@ WORK_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
-PKG_ROOT="${WORK_DIR}/root"
+BIN_ROOT="${WORK_DIR}/bin-root"
+DOC_ROOT="${WORK_DIR}/doc-root"
 STAGED_SCRIPTS="${WORK_DIR}/scripts"
 
-mkdir -p "${PKG_ROOT}/${INSTALL_PREFIX}"
+# Each root's own mode becomes the BOM's "." entry, which is what the installer
+# creates the install location with when it is absent. Pin it rather than
+# inherit the build host's umask.
+mkdir -p "$BIN_ROOT" "$DOC_ROOT"
+chmod 0755 "$BIN_ROOT" "$DOC_ROOT"
+
 for binary in "${PAYLOAD_BINARIES[@]}"; do
-    cp "${PAYLOAD_DIR}/${binary}" "${PKG_ROOT}/${INSTALL_PREFIX}/${binary}"
-    chmod 0755 "${PKG_ROOT}/${INSTALL_PREFIX}/${binary}"
+    cp "${PAYLOAD_DIR}/${binary}" "${BIN_ROOT}/${binary}"
+    chmod 0755 "${BIN_ROOT}/${binary}"
 done
 
-mkdir -p "${PKG_ROOT}/${DOC_PREFIX}"
-cp "${PAYLOAD_DIR}/${LICENSE_NAME}" "${PKG_ROOT}/${DOC_PREFIX}/${LICENSE_NAME}"
-chmod 0644 "${PKG_ROOT}/${DOC_PREFIX}/${LICENSE_NAME}"
+cp "${PAYLOAD_DIR}/${LICENSE_NAME}" "${DOC_ROOT}/${LICENSE_NAME}"
+chmod 0644 "${DOC_ROOT}/${LICENSE_NAME}"
 
 # Copy rather than point pkgbuild at the checkout: the executable bit on
 # scripts/postinstall does not survive every clone (Windows checkouts drop it),
@@ -243,7 +236,7 @@ if [ "$SIGN_PKG" -eq 1 ]; then
     for binary in "${PAYLOAD_BINARIES[@]}"; do
         # Captured, not piped: `grep -q` exits on first match and would SIGPIPE
         # codesign, which `pipefail` then reports as a failure on a good binary.
-        CODESIGN_INFO="$(codesign --display --verbose=2 "${PKG_ROOT}/${INSTALL_PREFIX}/${binary}" 2>&1 || true)"
+        CODESIGN_INFO="$(codesign --display --verbose=2 "${BIN_ROOT}/${binary}" 2>&1 || true)"
 
         case "$CODESIGN_INFO" in
             *"Authority=Developer ID Application"*) ;;
@@ -271,55 +264,72 @@ if [ "$SIGN_PKG" -eq 1 ]; then
     done
 fi
 
-# ── Component package ───────────────────────────────────────────────────────
+# ── Component packages ──────────────────────────────────────────────────────
+
+# Read the BOM back: a component that shipped no files, or one that reached
+# outside its install location, is only visible here -- both install "fine".
+assert_payload() {
+    local pkg="$1" identifier="$2" location="$3"
+    shift 3
+
+    local listing entries expected
+    listing="$(pkgutil --payload-files "$pkg")" \
+        || die "could not read back the payload listing for ${identifier}."
+    echo "build-pkg.sh: ${identifier} payload (install location ${location})"
+    printf '%s\n' "$listing" | sed 's/^/  /'
+
+    # Compare on content, not on pkgutil's "./" path spelling.
+    entries="$(printf '%s\n' "$listing" | sed -e 's|^\./||' -e 's|^/||')"
+
+    # Here-strings, not pipes: `grep -q` exits on the first match and would
+    # SIGPIPE the writer, which `pipefail` then reports as a failed check.
+    for expected in "$@"; do
+        grep -Fqx "$expected" <<<"$entries" \
+            || die "${identifier} does not carry ${location}/${expected}." \
+                   "pkgbuild produced a package with nothing in it, or with the file under a" \
+                   "different path. The payload listing above is the whole BOM."
+    done
+
+    if grep -qE '^usr(/|$)' <<<"$entries"; then
+        die "${identifier} carries a directory entry under /usr." \
+            "Its root must hold only the files it installs -- the parent directories are the" \
+            "--install-location (${location}), not payload. Installing a /usr/local entry resets" \
+            "that directory to root:wheel, which breaks Homebrew on an Intel Mac where the user owns it."
+    fi
+}
 
 echo "build-pkg.sh: building component package (${PKG_IDENTIFIER} ${VERSION}, ${ARCH})"
-FILTER_ARGS=()
-for pattern in "${PAYLOAD_FILTERS[@]}"; do
-    FILTER_ARGS+=(--filter "$pattern")
-done
-
 pkgbuild \
-    --root "$PKG_ROOT" \
+    --root "$BIN_ROOT" \
     --identifier "$PKG_IDENTIFIER" \
     --version "$VERSION" \
-    --install-location "/" \
+    --install-location "$BIN_INSTALL_LOCATION" \
     --scripts "$STAGED_SCRIPTS" \
     --ownership recommended \
     --min-os-version "$MIN_OS_VERSION" \
-    "${FILTER_ARGS[@]}" \
     "${WORK_DIR}/${COMPONENT_PKG}" \
     || die "pkgbuild failed for ${PKG_IDENTIFIER}." \
-           "Re-run with the pkgbuild output above; the usual causes are an unreadable payload staged at ${PKG_ROOT} or a malformed --scripts directory."
+           "Re-run with the pkgbuild output above; the usual causes are an unreadable payload staged at ${BIN_ROOT} or a malformed --scripts directory."
 
-# The filters above are the only thing keeping /usr/local out of the payload, and
-# a regex that matched too much would ship an empty package that fails at INSTALL
-# time. Read the BOM back and assert both halves of the intent.
-PAYLOAD_LISTING="$(pkgutil --payload-files "${WORK_DIR}/${COMPONENT_PKG}")" \
-    || die "could not read back the component package's payload listing."
-echo "build-pkg.sh: payload"
-printf '%s\n' "$PAYLOAD_LISTING" | sed 's/^/  /'
+assert_payload "${WORK_DIR}/${COMPONENT_PKG}" "$PKG_IDENTIFIER" "$BIN_INSTALL_LOCATION" \
+    "${PAYLOAD_BINARIES[@]}"
 
-payload_has() {
-    printf '%s\n' "$PAYLOAD_LISTING" | grep -qx "\./$1"
-}
+echo "build-pkg.sh: building component package (${DOCS_IDENTIFIER} ${VERSION})"
+pkgbuild \
+    --root "$DOC_ROOT" \
+    --identifier "$DOCS_IDENTIFIER" \
+    --version "$VERSION" \
+    --install-location "$DOC_INSTALL_LOCATION" \
+    --ownership recommended \
+    --min-os-version "$MIN_OS_VERSION" \
+    "${WORK_DIR}/${DOCS_COMPONENT_PKG}" \
+    || die "pkgbuild failed for ${DOCS_IDENTIFIER}." \
+           "Re-run with the pkgbuild output above; the usual cause is an unreadable payload staged at ${DOC_ROOT}."
 
-for expected in "${PAYLOAD_BINARIES[@]/#/${INSTALL_PREFIX}/}" "${DOC_PREFIX}/${LICENSE_NAME}"; do
-    if ! payload_has "$expected"; then
-        die "the component package does not carry /${expected}." \
-            "A --filter pattern is excluding more than the parent directory entries." \
-            "Patterns: ${PAYLOAD_FILTERS[*]}"
-    fi
-done
+assert_payload "${WORK_DIR}/${DOCS_COMPONENT_PKG}" "$DOCS_IDENTIFIER" "$DOC_INSTALL_LOCATION" \
+    "$LICENSE_NAME"
 
-for unwanted in usr usr/local usr/local/bin usr/local/share usr/local/share/doc; do
-    if payload_has "$unwanted"; then
-        die "the component package carries a directory entry for /${unwanted}." \
-            "Installing it resets that directory to root:wheel, which breaks Homebrew on an" \
-            "Intel Mac where /usr/local is owned by the user. Fix the --filter patterns."
-    fi
-done
-echo "build-pkg.sh: payload owns only its own files (no /usr/local directory entries)"
+echo "build-pkg.sh: both payloads own only their own files (no /usr/local directory entries)"
 
 # ── Product archive ─────────────────────────────────────────────────────────
 
@@ -328,7 +338,9 @@ sed \
     -e "s|@VERSION@|${VERSION}|g" \
     -e "s|@HOST_ARCHITECTURES@|${HOST_ARCHITECTURES}|g" \
     -e "s|@PKG_IDENTIFIER@|${PKG_IDENTIFIER}|g" \
+    -e "s|@DOCS_IDENTIFIER@|${DOCS_IDENTIFIER}|g" \
     -e "s|@COMPONENT_PKG@|${COMPONENT_PKG}|g" \
+    -e "s|@DOCS_COMPONENT_PKG@|${DOCS_COMPONENT_PKG}|g" \
     "$DISTRIBUTION_TEMPLATE" > "$DISTRIBUTION"
 
 PRODUCTBUILD_ARGS=(

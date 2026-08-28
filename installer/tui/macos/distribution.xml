@@ -7,8 +7,15 @@
   derived from the CLI arguments, so the rendered file is deterministic:
     @VERSION@             release version, e.g. 1.4.0
     @HOST_ARCHITECTURES@  arm64 | x86_64  (matches the payload's architecture)
-    @PKG_IDENTIFIER@      bundle identifier of the component package
-    @COMPONENT_PKG@       filename of the component package productbuild locates
+    @PKG_IDENTIFIER@      bundle identifier of the binaries component
+    @DOCS_IDENTIFIER@     bundle identifier of the licence component
+    @COMPONENT_PKG@       filename of the binaries component productbuild locates
+    @DOCS_COMPONENT_PKG@  filename of the licence component productbuild locates
+
+  Two components, not one: each is rooted at a directory holding only its own
+  files, so its install location (/usr/local/bin, /usr/local/share/doc/gaia-tui)
+  is never a payload entry. A package that shipped a /usr/local directory entry
+  would reset it to root:wheel and break Homebrew on an Intel Mac.
 -->
 <installer-gui-script minSpecVersion="2">
     <title>GAIA Terminal Hub @VERSION@</title>
@@ -25,7 +32,8 @@
              enable_currentUserHome="false"
              enable_localSystem="true"/>
 
-    <!-- customize="never": one component, nothing to opt out of.
+    <!-- customize="never": the split into two components is a packaging
+         detail, not a choice to offer; both are always installed.
          require-scripts="false": this distribution contains no JavaScript, so
          every attribute below is a literal, not an expression.
          hostArchitectures selects the architecture Installer.app itself runs
@@ -38,9 +46,22 @@
              require-scripts="false"
              hostArchitectures="@HOST_ARCHITECTURES@"/>
 
+    <!-- Install order. The binaries component is last because it carries the
+         postinstall that prints the finished install, and Installer runs the
+         components in the order they are listed here. -->
     <choices-outline>
+        <line choice="@DOCS_IDENTIFIER@"/>
         <line choice="@PKG_IDENTIFIER@"/>
     </choices-outline>
+
+    <choice id="@DOCS_IDENTIFIER@"
+            title="GAIA Terminal Hub licence"
+            description="Installs LICENSE.md into /usr/local/share/doc/gaia-tui."
+            visible="false"
+            selected="true"
+            enabled="false">
+        <pkg-ref id="@DOCS_IDENTIFIER@"/>
+    </choice>
 
     <choice id="@PKG_IDENTIFIER@"
             title="GAIA Terminal Hub"
@@ -50,6 +71,10 @@
             enabled="false">
         <pkg-ref id="@PKG_IDENTIFIER@"/>
     </choice>
+
+    <pkg-ref id="@DOCS_IDENTIFIER@"
+             version="@VERSION@"
+             onConclusion="none">@DOCS_COMPONENT_PKG@</pkg-ref>
 
     <pkg-ref id="@PKG_IDENTIFIER@"
              version="@VERSION@"

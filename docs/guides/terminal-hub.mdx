@@ -84,10 +84,12 @@ omission — so remove the files and then forget the receipt:
 sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
+sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
 
-`pkgutil --forget` drops only the installation receipt and deletes nothing, which
-is why the `rm` comes first. `~/.gaia` is untouched either way.
+There are two receipts because the tools and the licence ship as separate
+components — forget both. `pkgutil --forget` drops only the installation receipt
+and deletes nothing, which is why the `rm` comes first. `~/.gaia` is untouched either way.
 
 macOS packages are unsigned unless the release was built with Apple credentials
 configured. Unsigned, Gatekeeper warns that the package comes from an

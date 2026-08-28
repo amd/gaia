@@ -469,10 +469,19 @@ jobs:
           arm64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-arm64)"
           x64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-x64)"
 
-          # /usr/local and /usr/local/bin must come out of this with the
-          # ownership they went in with -- the package ships no directory entry
-          # for either, because installing one breaks Homebrew on Intel.
-          before_local="$(stat -f '%Su:%Sg %Lp' /usr/local)"
+          # The Homebrew-on-Intel state, reproduced: /usr/local and its two
+          # subdirectories owned by the user, group admin, group-writable. A
+          # stock runner has them root:wheel already, so comparing before and
+          # after there would pass whether or not the package resets them.
+          WATCHED="/usr/local /usr/local/bin /usr/local/share"
+          for d in ${WATCHED}; do
+            sudo mkdir -p "${d}"
+            sudo chown "$(id -un):admin" "${d}"
+            sudo chmod 0775 "${d}"
+          done
+          before_dirs="$(stat -f '%N %Su:%Sg %Lp' ${WATCHED})"
+          echo "--- before install ---"
+          echo "${before_dirs}"
 
           # macos-latest is arm64, so only the arm64 package can be exercised
           # end to end. The x64 package is verified by its payload listing --
@@ -488,10 +497,14 @@ jobs:
           echo "gaia-tui version -> ${got}"
           case "${got}" in *"${VERSION}"*) ;; *) echo "::error::gaia-tui did not report ${VERSION}"; exit 1 ;; esac
           pkgutil --pkg-info ai.amd.gaia.terminal-hub
+          pkgutil --pkg-info ai.amd.gaia.terminal-hub.docs
 
-          after_local="$(stat -f '%Su:%Sg %Lp' /usr/local)"
-          if [ "${before_local}" != "${after_local}" ]; then
-            echo "::error::installing changed /usr/local from '${before_local}' to '${after_local}'. That is what breaks Homebrew on an Intel Mac; the payload must carry no directory entry for it."
+          after_dirs="$(stat -f '%N %Su:%Sg %Lp' ${WATCHED})"
+          echo "--- after install ---"
+          echo "${after_dirs}"
+          if [ "${before_dirs}" != "${after_dirs}" ]; then
+            echo "::error::installing changed the ownership or mode of a /usr/local directory. That is what breaks Homebrew on an Intel Mac; neither component may carry a directory entry above its own install location."
+            diff <(echo "${before_dirs}") <(echo "${after_dirs}") || true
             exit 1
           fi
 
@@ -507,11 +520,18 @@ jobs:
             x64_tmp="$(mktemp -d)"
             trap 'rm -rf "${x64_tmp}"' EXIT
             pkgutil --expand-full "dist/${x64_pkg}" "${x64_tmp}/expanded"
-            find "${x64_tmp}/expanded" -path '*/Payload/usr/local/bin/*' -print
-            for b in gaia-tui gaia-agent; do
-              test -n "$(find "${x64_tmp}/expanded" -path "*/Payload/usr/local/bin/${b}" -print -quit)" \
+            find "${x64_tmp}/expanded" -maxdepth 4 -path '*/Payload/*' -print
+            # Each component's Payload is rooted at its own install location, so
+            # the binaries sit directly under it -- and a `usr` there would mean
+            # a component reclaimed the parent directories.
+            for b in gaia-tui gaia-agent LICENSE.md; do
+              test -n "$(find "${x64_tmp}/expanded" -path "*/Payload/${b}" -print -quit)" \
                 || { echo "::error::the x64 package does not carry ${b}"; exit 1; }
             done
+            if [ -n "$(find "${x64_tmp}/expanded" -path '*/Payload/usr' -print -quit)" ]; then
+              echo "::error::the x64 package carries a /usr directory entry; installing it would reset /usr/local to root:wheel and break Homebrew on Intel"
+              exit 1
+            fi
             rm -rf "${x64_tmp}"
             trap - EXIT
           fi
@@ -521,6 +541,7 @@ jobs:
           sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
           sudo rm -rf /usr/local/share/doc/gaia-tui
           sudo pkgutil --forget ai.amd.gaia.terminal-hub
+          sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
           test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui survived removal"; exit 1; }
           echo "OK - installed, ran, removed"
 

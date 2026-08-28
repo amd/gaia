@@ -3,11 +3,10 @@
 # visible failure, so every check here is a real gate — not a log line.
 set -euo pipefail
 
-# $2 is the INSTALL LOCATION, not the volume ($3 is) — it equals "/" only
-# because pkgbuild ran with --install-location "/". Changing that flag in
-# build-pkg.sh must change this line with it.
-DEST_ROOT="${2:-/}"
-BIN_DIR="${DEST_ROOT%/}/usr/local/bin"
+# $3 is the destination VOLUME ("/" for a normal install) — unlike $2, it does
+# not move when build-pkg.sh changes --install-location.
+DEST_VOLUME="${3:-/}"
+BIN_DIR="${DEST_VOLUME%/}/usr/local/bin"
 
 for binary in gaia-tui gaia-agent; do
     path="${BIN_DIR}/${binary}"
