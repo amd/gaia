@@ -86,8 +86,8 @@ export interface Agent {
   // when none was published or parseable. Drives the sidebar score badge.
   eval_score?: number;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
-  // distributed as an npm client + frozen sidecar. Present → npm is the install
-  // path. Absent → the agent installs via pip/GAIA (language-driven).
+  // distributed as an npm client + frozen sidecar. Present → GAIA install is
+  // shown first, with npm as the embed path. Absent → pip/GAIA (language-driven).
   npm_package?: string;
   // Localhost URL of the agent's interactive playground, served by its sidecar
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
@@ -445,9 +445,9 @@ export interface InstallMethod {
  * markup. We only ever show channels that actually work:
  *
  *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
- *    client + frozen binary, NOT a PyPI wheel. npm is its single supported path,
- *    so we show only that — no broken `pip install` (there's no wheel) and no
- *    unverified source build.
+ *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
+ *    and npm as the embed option — no broken `pip install` (there's no wheel)
+ *    and no unverified source build.
  *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
  *    source build (language-driven, the long-standing default).
  */
@@ -510,10 +510,16 @@ export function installMethods(agent: Agent): InstallMethod[] {
   if (agent.npm_package) {
     return [
       {
+        key: "gaia",
+        label: "GAIA",
+        command: `gaia agent install ${agent.id}`,
+        note: "Recommended — installs the binary sidecar into your GAIA app and registers the agent automatically.",
+      },
+      {
         key: "npm",
         label: "npm",
         command: `npm i ${agent.npm_package}`,
-        note: "",
+        note: "For embedding the agent in a JS/TS app — fetches the same binary at build time.",
       },
     ];
   }

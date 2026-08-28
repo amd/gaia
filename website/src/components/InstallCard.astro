@@ -7,7 +7,7 @@
 // from the catalog — nothing about a specific agent is written into the markup.
 
 import InstallMethods from './InstallMethods.astro';
-import { formatBytes, languageLabel, type Agent } from '../data/catalog';
+import { formatBytes, isAgent, languageLabel, type Agent } from '../data/catalog';
 
 interface Props {
   agent: Agent;
@@ -35,8 +35,8 @@ const meta = [
   <InstallMethods agent={agent} />
 
   <p class="mt-3.5 text-[13px] leading-[1.6] text-g-faint">
-    {isNpm && (
-      <span>Ships as an npm client plus a frozen binary sidecar — npm is its only supported install path (there is no PyPI wheel). </span>
+    {isAgent(agent) && isNpm && (
+      <span>Ships as an npm client plus a frozen binary sidecar — GAIA is the recommended install path (there is no PyPI wheel). The npm package is for embedding the agent in a JS/TS app. </span>
     )}
     A local model must be running first: <span class="mono text-g-muted">gaia init</span> then <span class="mono text-g-muted">lemonade-server serve</span>.
   </p>
