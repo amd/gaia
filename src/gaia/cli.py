@@ -179,6 +179,16 @@ def initialize_lemonade_for_agent(
                 _ctx_override,
             )
 
+    # The CLI is a front-end, so it is allowed to bring up the machine's
+    # background service — and it has to, because the daemon is what owns the
+    # model server. ensure_ready deliberately only ATTACHES: a readiness check
+    # that boots a daemon behind the caller's back costs every library and test
+    # caller 30 seconds and a process they did not ask for. One status probe
+    # when a daemon is already running.
+    from gaia.llm.lemonade_service import ensure_daemon_owns_lemonade
+
+    ensure_daemon_owns_lemonade()
+
     # LemonadeManager handles all validation and error printing
     # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
     try:
