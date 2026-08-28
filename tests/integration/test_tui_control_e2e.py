@@ -159,11 +159,25 @@ def live_tui(tui_binary, tmp_path, monkeypatch):
 
 
 def _ready(cols=120, rows=40):
-    """Give the TUI a terminal size and wait for the hub to lay out."""
+    """Give the TUI a terminal size and wait for it to be past the splash.
+
+    The anchor has to hold whatever this machine has installed. `gaia-tui` boots
+    splash -> readiness gate -> chat, and where it STOPS depends on whether
+    Lemonade is up and the models are down — so the only host-independent
+    landmark is the product name, which the gate header ("Getting GAIA ready")
+    and the chat welcome ("Welcome to GAIA") both carry.
+    """
     resized = tui_mcp._resize(cols, rows)
     assert resized.get("status") != "error", resized
-    waited = tui_mcp._wait_for(contains="Installed", timeout_ms=10000)
+    waited = tui_mcp._wait_for(contains="GAIA", timeout_ms=20000)
     assert waited.get("matched") is True, waited
+
+
+def _settled_view():
+    """The view the launch came to rest on: preflight, or chat if all is well."""
+    view = tui_mcp._status()["state"]["view"]
+    assert view in ("splash", "preflight", "chat"), view
+    return view
 
 
 @pytest.mark.integration
@@ -189,43 +203,48 @@ def test_status_state_field_names_match_the_server(live_tui):
 
     state = status["state"]
     # Every key the Python side reads must exist on the Go side.
-    for key in (
-        "view",
-        "agent",
-        "streaming",
+    for key in ("view", "agent", "streaming"):
+        assert key in state, f"{key!r} missing from the real /status payload: {state}"
+
+    # And the hub-era keys must be GONE, not merely unset: a Python side still
+    # reading them would silently get None and report "0 agents visible"
+    # forever instead of failing.
+    for gone in (
         "hub_tab",
         "hub_tab_index",
         "selected_agent_id",
         "visible_agent_ids",
         "filtering",
-        # Drives whether esc returns to the hub or QUITS the TUI, so the client
-        # must never have to guess it.
         "can_return_to_hub",
     ):
-        assert key in state, f"{key!r} missing from the real /status payload: {state}"
-    assert state["view"] == "hub"
-    assert isinstance(state["visible_agent_ids"], list)
-    assert "hub view" in status["summary"]
+        assert gone not in state, f"{gone!r} is still served: {state}"
+
+    assert _settled_view() in ("preflight", "chat")
+    assert status["summary"]
 
 
 @pytest.mark.integration
 def test_keys_and_screen_round_trip(live_tui):
     _ready()
-    before = tui_mcp._status()["state"]["hub_tab"]
+    view = _settled_view()
 
-    sent = tui_mcp._send_keys(["tab"])
+    # `d` toggles the readiness screen's details pane; in chat it types a
+    # character. Either way the frame changes, which is what proves the key
+    # reached the model rather than being accepted and dropped.
+    before = tui_mcp._screen()["screen"]
+    sent = tui_mcp._send_keys(["d"])
     assert sent.get("status") != "error", sent
     # The contract that makes "send then read" race-free: the call returns only
     # once the key has been handled AND redrawn.
     assert sent["settled"] is True, sent
+    assert tui_mcp._screen()["screen"] != before, "the key changed nothing on screen"
 
-    after = tui_mcp._status()["state"]["hub_tab"]
-    assert after != before, f"the tab key did not switch category (still {after!r})"
+    # A key that is not a quit must never move the launch to another view.
+    assert _settled_view() == view
 
     screen = tui_mcp._screen()
     assert screen.get("status") != "error", screen
     assert "\x1b[" not in screen["screen"], "plain format leaked ANSI escapes"
-    assert after in screen["screen"]
 
     ansi = tui_mcp._screen("ansi")
     assert "\x1b[" in ansi["screen"], "ansi format stripped the escapes"
@@ -239,15 +258,13 @@ def test_status_reports_running_true_against_a_live_loop(live_tui):
 
 
 @pytest.mark.integration
-def test_send_text_types_into_the_filter(live_tui):
+def test_send_text_reports_what_it_sent(live_tui):
+    """There is no search filter to type into any more, but the transport
+    contract — every rune accounted for — is what this always tested."""
     _ready()
-    tui_mcp._send_keys(["/"])
-    typed = tui_mcp._send_text("bash")
-    assert typed.get("sent_runes") == 4, typed
-
-    waited = tui_mcp._wait_for(contains="bash", timeout_ms=5000)
-    assert waited.get("matched") is True, waited
-    assert tui_mcp._status()["state"]["filtering"] is True
+    typed = tui_mcp._send_text("hello")
+    assert typed.get("status") != "error", typed
+    assert typed.get("sent_runes") == 5, typed
 
 
 @pytest.mark.integration
@@ -257,29 +274,8 @@ def test_wait_timeout_reports_the_real_screen(live_tui):
     out = tui_mcp._wait_for(contains="text that is on no screen", timeout_ms=500)
     assert out["status"] == "error"
     assert out["timed_out"] is True
-    assert "Installed" in out["screen"], out["screen"][:400]
-    assert "Installed" in out["detail"]
-
-
-@pytest.mark.integration
-def test_launch_agent_opens_the_chat_view(live_tui):
-    _ready()
-    out = tui_mcp._launch_agent("bash", timeout_ms=15000)
-    assert out.get("launched") is True, out
-
-    state = tui_mcp._status()["state"]
-    assert state["view"] == "chat"
-    assert state["agent"] == "bash"
-
-
-@pytest.mark.integration
-def test_install_agent_reports_the_missing_binding(live_tui):
-    """The hub has no install key today; the tool must say so, not guess one."""
-    _ready()
-    out = tui_mcp._install_agent("bash")
-    assert out["status"] == "error"
-    assert "not yet available" in out["detail"]
-    assert "Enter=launch" in out["detail"]
+    assert "GAIA" in out["screen"], out["screen"][:400]
+    assert "GAIA" in out["detail"]
 
 
 @pytest.mark.integration

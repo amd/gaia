@@ -1,6 +1,6 @@
 ---
 title: "TUI Control MCP Server"
-description: "Let Claude Code drive the GAIA terminal hub while you watch the same live session"
+description: "Let Claude Code drive the GAIA terminal UI while you watch the same live session"
 icon: "terminal"
 ---
 
@@ -12,7 +12,7 @@ icon: "terminal"
 ## Overview
 
 The GAIA TUI can expose a loopback control API, and this MCP server wraps it as
-tools. An assistant then navigates the hub, types into chat, and launches agents
+tools. An assistant then reads the screen, sends keys and types into chat
 **in the session you are looking at** — same process, same terminal, frames
 updating live. It is not a headless replica and not a replay.
 
@@ -20,8 +20,8 @@ That makes two things possible that were not before:
 
 - **Testing the TUI without a human at the keyboard.** Send keys, wait for a
   condition, read the rendered screen, assert.
-- **Watching an assistant work.** You keep your terminal open; navigation,
-  filtering, and agent launches happen in front of you.
+- **Watching an assistant work.** You keep your terminal open; the readiness
+  gate, the questions, and the answers happen in front of you.
 
 ```
 ┌──────────────┐    stdio/HTTP    ┌───────────────────┐
@@ -44,26 +44,37 @@ back is the exact frame the renderer just drew.
 
 | Tool | Description |
 |------|-------------|
-| `tui_status` | Is a TUI running, and what is on screen conceptually: view, active agent, streaming, hub tab, selection, terminal size |
+| `tui_status` | Is a TUI running, and what is on screen conceptually: view, active agent, streaming, the readiness row refusing a launch, terminal size |
 | `tui_screen` | The rendered screen as plain text (ANSI stripped). The workhorse — read it after every action |
-| `tui_send_keys` | Inject named keys: `enter`, `esc`, `tab`, `shift+tab`, arrows, `pgup`/`pgdown`, `backspace`, `ctrl+c`, `?`, `/` … |
+| `tui_send_keys` | Inject named keys: `enter`, `esc`, arrows, `pgup`/`pgdown`, `backspace`, `ctrl+c`, `?` … |
 | `tui_send_text` | Type a string as runes (what a human typing produces) |
-| `tui_wait_for` | Block until text appears (or disappears), with a timeout. **Use this instead of polling** |
-| `tui_launch_agent` | High level: find the agent by id across hub tabs, move the selection, launch it |
-| | *(refuses in a standalone `gaia chat` session, where esc quits instead of returning to a hub)* |
-| `tui_install_agent` / `tui_uninstall_agent` | High level: navigate to an agent and trigger the hub's install/uninstall binding |
+| `tui_wait_for` | Block until text appears (or disappears), or the state matches, with a timeout. **Use this instead of polling** |
 | `tui_resize` | Re-lay-out at a given size, e.g. 80x24 versus 200x50 |
 
+### What `view` can be
+
+`gaia-tui` boots straight into one agent, so there is nothing to browse and no
+agent to pick. `tui_status` reports `view` as one of:
+
+| `view` | What it is |
+|--------|------------|
+| `splash` | The mascot, for one render while the readiness gate starts. Takes no input |
+| `preflight` | The readiness gate. `blocker` names the row refusing the launch — `binary`, `lemonade`, `model` for the flagship; `daemon`, `sidecar`, `mailbox` for a daemon-backed agent. Keys: `d` details, `r` re-check, `f` fix, `enter` proceed, `esc` quit |
+| `chat` | The conversation. `esc` clears the composer, `ctrl+c` quits |
+
+<Note>
+  Wait on **state**, not on a substring, wherever you can:
+  `tui_wait_for(state={"view": "chat"})` returns the moment the gate hands off,
+  and `tui_wait_for(state={"blocker": "lemonade"})` tells you *which* row is
+  holding without parsing the remedy text — that wording is allowed to change,
+  the row key is not.
+</Note>
+
 <Warning>
-  `tui_install_agent` needs an install keybinding on the hub screen, and the
-  hub does not have one yet — the tool reads the bindings off the footer rather
-  than guessing a key, so today it returns "not yet available" and lists what
-  the hub does offer. It starts working the moment the binding lands, with no
-  change here. Neither tool takes "the key was pressed" as success:
-  `tui_uninstall_agent` requires the agent to be gone from the hub's list, and
-  `tui_install_agent` requires the screen to have changed at all (an install
-  promotes the row to a different tab, so it may legitimately leave the current
-  one). A refusal quotes the hub's own status line.
+  There is no `tui_launch_agent`, `tui_install_agent` or `tui_uninstall_agent`.
+  They drove the hub browser, which no longer exists. Launching **is** running
+  `gaia tui`; a different agent is `gaia tui chat --agent <id>`; and installing
+  a hub agent is `gaia hub install <id>` in the Python CLI.
 </Warning>
 
 <Note>
@@ -139,25 +150,25 @@ uv run python -m gaia.mcp.servers.tui_mcp --port 9100
 
 ## Usage Examples
 
-### Navigate the hub
+### See why a launch is stuck
 
 ```
-"Show me what's on the TUI right now, then switch to the Available tab
- and tell me which agents are listed."
+"The TUI won't start — what is it waiting on?"
 ```
 
-The assistant calls `tui_status`, `tui_send_keys(["tab"])`, `tui_wait_for`, and
-`tui_screen`. You watch the tab change in your terminal.
+The assistant calls `tui_status`. A `preflight` view with `blocker: "lemonade"`
+names the row without reading a single pixel; `tui_screen` then shows the
+remedy the gate resolved for this machine.
 
-### Launch an agent and ask it something
+### Ask the agent something
 
 ```
-"Launch the email agent in the TUI and ask it to triage my inbox."
+"Ask the TUI's agent to summarise the README."
 ```
 
-`tui_launch_agent("email")` walks the hub tabs until the agent is visible,
-moves the selection onto it, presses Enter, and waits for the chat view to
-open. Then `tui_send_text` + `tui_send_keys(["enter"])` sends the query.
+`tui_wait_for(state={"view": "chat"})` waits out the readiness gate, then
+`tui_send_text` + `tui_send_keys(["enter"])` sends the query, and
+`tui_wait_for(state={"streaming": False})` returns the moment the turn ends.
 
 ### Check the layout at a small terminal
 
@@ -222,9 +233,10 @@ Environment:
   </Accordion>
 
   <Accordion title="Keys seem to do nothing">
-    Check `tui_status` first: a help overlay or confirmation dialog swallows
-    keys until it is dismissed (`esc`). If the hub still shows `Loading...`,
-    it has not received a terminal size — call `tui_resize`.
+    Check `tui_status` first. A help overlay swallows keys until it is
+    dismissed (`esc`), and the `splash` view takes no input at all — wait for
+    `preflight` or `chat`. If the screen looks unlaid-out, it has not received
+    a terminal size: call `tui_resize`.
   </Accordion>
 
   <Accordion title="tui_wait_for keeps timing out">
