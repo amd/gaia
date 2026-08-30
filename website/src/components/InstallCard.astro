@@ -36,7 +36,7 @@ const meta = [
 
   <p class="mt-3.5 text-[13px] leading-[1.6] text-g-faint">
     {isNpm && (
-      <span>Ships as an npm client plus a frozen binary sidecar — npm is its only supported install path (there is no PyPI wheel). </span>
+      <span>Installs with <span class="mono text-g-muted">gaia hub install {agent.id}</span>, which fetches the frozen binary sidecar into your GAIA agents directory. The npm package is an embed path for JS/TS apps rather than a way to install the agent itself. </span>
     )}
     A local model must be running first: <span class="mono text-g-muted">gaia init</span> then <span class="mono text-g-muted">lemonade-server serve</span>.
   </p>
