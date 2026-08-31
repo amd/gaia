@@ -11,6 +11,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import signal
 import tempfile
@@ -43,6 +44,29 @@ def get_or_create_session(user_id: int) -> AgentSDK:
         return sdk
 
 
+UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+
+def require_allowed(handler):
+    """Enforce the allowlist on a Telegram update handler.
+
+    Every handler needs its own check: command updates are routed to their
+    ``CommandHandler`` and never reach the ``~filters.COMMAND`` message handler.
+    """
+
+    @functools.wraps(handler)
+    async def guarded(self, update, context):
+        user = update.effective_user
+        if not self._allowed(user.id):
+            log.warning("Refused Telegram message from unauthorized user %s", user.id)
+            await update.message.reply_text(UNAUTHORIZED_REPLY)
+            return None
+        return await handler(self, update, context)
+
+    guarded.__gaia_allowlist_guarded__ = True
+    return guarded
+
+
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
         self.token = token
@@ -54,20 +78,15 @@ class TelegramAdapter:
             return True
         return user_id in self.allowed_users
 
+    @require_allowed
     async def _handle_start(self, update, context):
         await update.message.reply_text(
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
 
+    @require_allowed
     async def _handle_message(self, update, context):
         user = update.effective_user
-        if not self._allowed(user.id):
-            log.warning("Refused Telegram message from unauthorized user %s", user.id)
-            await update.message.reply_text(
-                "Sorry — you're not authorized to use this bot."
-            )
-            return
-
         text = update.message.text or ""
 
         # If the user sent media, note it and download to tmp for later ingestion
