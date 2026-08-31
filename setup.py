@@ -77,6 +77,8 @@ setup(
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.governance",
+        "gaia.factory",
+        "gaia.factory.harvest",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
