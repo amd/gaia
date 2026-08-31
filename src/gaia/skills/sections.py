@@ -13,7 +13,7 @@ Two properties the rest of the overlay depends on, and which the tests pin:
 
 * **Deterministic.** The same body always yields the same slugs and the same
   digests, so a delta written today still resolves tomorrow without re-anchoring.
-* **Lossless.** ``"".join(s.text for s in parse_sections(body)) == body`` exactly.
+* **Lossless.** ``render_sections(parse_sections(body)) == body`` exactly.
   Resolution rebuilds the body from these pieces, so anything this parser drops
   would silently vanish from the agent's instructions.
 

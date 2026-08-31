@@ -71,34 +71,21 @@ def add_deltas_parser(sub: Any) -> None:
     )
 
 
-def _as_delta(row: Dict[str, Any]):
-    from gaia.agents.base.skill_deltas import SkillDelta
-
-    return SkillDelta(
-        id=row["id"],
-        base_name=row["base_name"],
-        scope=row["scope"],
-        kind=row["kind"],
-        anchor_section=row["anchor_section"],
-        anchor_digest=row["anchor_digest"],
-        payload=row["payload"],
-        provenance=row["provenance"],
-        status=row["status"],
-        superseded_by=row["superseded_by"],
-        created_at=row["created_at"],
-        approved_at=row["approved_at"],
-    )
-
-
 def handle_deltas(args: argparse.Namespace, skill) -> int:
     """Run the ``deltas`` subcommand against an already-loaded *skill*."""
     from gaia.agents.base.memory_store import MemoryStore
     from gaia.agents.base.skill_deltas import (
         KIND_DROP_SECTION,
+        STATUS_ARCHIVED,
+        DeltaRefused,
+        SkillDelta,
+        approve_delta,
         preview_diff,
         resolve_skill_body,
     )
     from gaia.skills.sections import find_section, parse_sections
+
+    _as_delta = SkillDelta.from_row
 
     base_body = skill.body or ""
     store = MemoryStore(db_path=Path(args.db) if args.db else None)
@@ -108,13 +95,27 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
 
     # --- mutating actions -------------------------------------------------
     if args.approve:
-        if store.approve_delta(args.approve):
-            print(f"Approved {args.approve} — it applies from the next session.")
+        # Retires the live correction this one replaces, which is deferred to
+        # here: until now the replacement had no consent behind it.
+        try:
+            approved = approve_delta(
+                store,
+                args.approve,
+                base_body,
+                base_name=args.name,
+                scope=args.scope,
+            )
+        except DeltaRefused as exc:
+            sys.stderr.write(f"gaia skill deltas: {exc}\n")
+            return EXIT_USAGE
+        if approved is not None:
+            print(f"Approved {args.approve} — it applies from the next launch.")
             return EXIT_OK
         sys.stderr.write(
-            f"gaia skill deltas: {args.approve!r} is not a staged change on "
-            f"{args.name!r}. Run with --pending to see what is awaiting "
-            "approval.\n"
+            f"gaia skill deltas: {args.approve!r} is not a staged change "
+            f"awaiting approval on {args.name!r}. It may already be approved, "
+            "or superseded by a newer one. Run with --pending to see what is "
+            "actually awaiting approval.\n"
         )
         return EXIT_USAGE
 
@@ -132,12 +133,18 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
         return EXIT_USAGE
 
     if args.reset:
-        current = rows()
-        for row in current:
-            store.archive_delta(row["id"])
+        # Count what this run actually retired: an unfiltered read re-counts
+        # rows archived by an earlier --reset, so the tally would overstate.
+        # Anything not already archived is in scope, so a status added later
+        # cannot silently escape a reset.
+        archived = [
+            row["id"]
+            for row in rows()
+            if row["status"] != STATUS_ARCHIVED and store.archive_delta(row["id"])
+        ]
         print(
             f"{args.name!r} is back to the shipped skill — archived "
-            f"{len(current)} learned change(s). Nothing was deleted."
+            f"{len(archived)} learned change(s). Nothing was deleted."
         )
         return EXIT_OK
 
@@ -169,7 +176,21 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
             base_root=skill.root,
             base_version=skill.version,
         )
-        store.approve_delta(delta_id)
+        # The user typed this command, so consent is on record already.
+        try:
+            approved = approve_delta(
+                store, delta_id, base_body, base_name=args.name, scope=args.scope
+            )
+        except DeltaRefused as exc:
+            sys.stderr.write(f"gaia skill deltas: {exc}\n")
+            return EXIT_USAGE
+        if approved is None:
+            sys.stderr.write(
+                f"gaia skill deltas: stored {delta_id} but could not activate "
+                "it. Approve it explicitly with "
+                f"`gaia skill deltas {args.name} --approve {delta_id}`.\n"
+            )
+            return EXIT_USAGE
         print(
             f"Removed section {args.drop_section!r} from {args.name!r} for "
             f"{args.scope} ({delta_id}). The shipped skill file is unchanged."
@@ -179,6 +200,16 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
     # --- read-only views --------------------------------------------------
     listed = rows(status="staged" if args.pending else "active")
     resolved = resolve_skill_body(base_body, [_as_delta(r) for r in rows("active")])
+
+    # Without --scope this merges every agent's changes into one body that no
+    # single agent actually runs. Harmless to read, misleading unnamed.
+    merged_scopes = sorted({r["scope"] for r in listed})
+    if not args.scope and len(merged_scopes) > 1:
+        sys.stderr.write(
+            f"gaia skill deltas: merging changes from {len(merged_scopes)} "
+            f"agent scopes ({', '.join(merged_scopes)}). No single agent runs "
+            "this combination — pass --scope <agent> for one agent's view.\n"
+        )
 
     if args.as_json:
         print(
@@ -219,8 +250,22 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
         f"{skill.name}  {skill.version or '(unversioned)'}  "
         f"— learned changes ({label})"
     )
+
+    # Surface the queue on the view users actually type. Staging is the whole
+    # consent mechanism, so it must not take a flag to discover it exists.
+    def _pending_hint() -> None:
+        if args.pending:
+            return
+        waiting = len(rows(status="staged"))
+        if waiting:
+            print(
+                f"  ({waiting} change(s) awaiting your approval — "
+                f"`gaia skill deltas {args.name} --pending --diff`)"
+            )
+
     if not listed:
         print("  none — this agent runs the skill exactly as shipped.")
+        _pending_hint()
         return EXIT_OK
 
     for row in listed:
@@ -235,6 +280,7 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
             print(f"    approved: {row['approved_at']}")
 
     print()
+    _pending_hint()
     print(
         f"  effective skill: {resolved.resolved_tokens} tokens vs "
         f"{resolved.base_tokens} as shipped ({resolved.token_delta:+d})"

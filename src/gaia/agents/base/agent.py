@@ -115,9 +115,10 @@ def effective_skill_body(agent, skill) -> str:
     duck-types, and an object with no memory store simply renders its authored
     skills — which is exactly what "no learned changes" should look like.
 
-    Resolution is cached per (skill, base digest) for the session's life, so a
-    delta approved mid-session takes effect on the *next* one — stated in the
-    approval prompt rather than discovered.
+    Resolution is cached per (skill, base digest) on the agent *instance*, which
+    outlives a session — ``gaia chat`` reuses one agent across ``/new`` and a
+    daemon sidecar is longer-lived still. So a delta approved from the CLI takes
+    effect on the next agent launch, which is what the approval prompt says.
 
     **This must never raise.** ``_get_mixin_prompts`` invokes the calling
     fragment inside a bare ``except`` that drops it on error, so an exception
@@ -145,31 +146,15 @@ def effective_skill_body(agent, skill) -> str:
             return cache[key]
 
         store = agent._memory_store
+        # limit=None: a truncated read would drop the oldest deltas from the
+        # body the agent runs, with nothing to show it happened.
         rows = store.search_deltas(
             base_name=skill.name,
             scope=agent.learned_skill_scope(),
             status="active",
+            limit=None,
         )
-        resolved = resolve_skill_body(
-            base,
-            [
-                SkillDelta(
-                    id=r["id"],
-                    base_name=r["base_name"],
-                    scope=r["scope"],
-                    kind=r["kind"],
-                    anchor_section=r["anchor_section"],
-                    anchor_digest=r["anchor_digest"],
-                    payload=r["payload"],
-                    provenance=r["provenance"],
-                    status=r["status"],
-                    superseded_by=r["superseded_by"],
-                    created_at=r["created_at"],
-                    approved_at=r["approved_at"],
-                )
-                for r in rows
-            ],
-        )
+        resolved = resolve_skill_body(base, [SkillDelta.from_row(r) for r in rows])
 
         for note in resolved.notes:
             if note.outcome != "applied":
@@ -310,6 +295,11 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Writes to the instructions the agent itself runs under. Gated here rather
+    # than on one agent because SkillLearningToolsMixin is composable by name
+    # (KNOWN_TOOLS["skill_learning"]) — a per-agent set leaves every other
+    # composer ungated.
+    "remember_skill_lesson",
 }
 
 

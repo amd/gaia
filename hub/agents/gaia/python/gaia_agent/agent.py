@@ -219,6 +219,8 @@ class GaiaAgent(
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
     # removing one deletes it, so both are gated the way file mutation is.
+    # remember_skill_lesson is gated in the base TOOLS_REQUIRING_CONFIRMATION,
+    # so every agent composing the mixin inherits it — not just this one.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
         {"install_skill", "remove_skill"}
     )
@@ -267,8 +269,9 @@ class GaiaAgent(
         self.skill_loader = self._maybe_build_skill_loader()
         self._skill_discovery = self._maybe_build_skill_discovery()
         self.register_skill_library_tools()
-        # Adaptive skills (#2674): lets the agent correct a loaded skill that does
-        # not fit, under the same confirmation gate as any other write.
+        # Adaptive skills (#2674): lets the agent propose a correction to a
+        # loaded skill that does not fit. It only ever stages one — activating
+        # it is the user's own step through `gaia skill deltas --approve`.
         self.register_skill_learning_tools()
         # Same scope as allowed_paths, for the same reason that field rejects
         # cwd: the daemon launches this sidecar with cwd = the package

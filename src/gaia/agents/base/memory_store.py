@@ -2928,12 +2928,19 @@ class MemoryStore:
         status: str | None = None,
         delta_id: str | None = None,
         include_superseded: bool = False,
-        limit: int = 200,
+        limit: int | None = 200,
     ) -> List[Dict]:
-        """Return delta rows as dicts, newest first.
+        """Return delta rows as dicts, oldest first.
+
+        Chronological because resolution replays them in order: the last write
+        to a section is the one that wins.
 
         ``include_superseded=False`` is the resolution view: a superseded row is
         retained forever but never applies.
+
+        ``limit=None`` lifts the ceiling. Hitting the ceiling is logged rather
+        than passed off as a complete result — a truncated read would silently
+        drop the oldest deltas from a resolved skill.
         """
         clauses: List[str] = []
         params: List[Any] = []
@@ -2958,12 +2965,28 @@ class MemoryStore:
             "learn_tier, anchor_section, anchor_digest, payload, provenance, "
             "status, success_count, attempt_count, superseded_by, created_at, "
             "approved_at, last_used_at FROM skill_deltas "
-            f"{where} ORDER BY created_at ASC, id ASC LIMIT ?"
+            f"{where} ORDER BY created_at ASC, id ASC"
         )
-        params.append(limit)
+        if limit is not None:
+            # Fetch one extra so "exactly at the ceiling" and "truncated" are
+            # distinguishable — otherwise the warning cries wolf on every
+            # result that happens to land on the limit.
+            sql += " LIMIT ?"
+            params.append(limit + 1)
 
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
+        if limit is not None and len(rows) > limit:
+            rows = rows[:limit]
+            logger.warning(
+                "[MemoryStore] search_deltas hit its %d-row ceiling for "
+                "base_name=%r scope=%r status=%r — newer deltas are missing "
+                "from this result. Pass limit=None for the full set.",
+                limit,
+                base_name,
+                scope,
+                status,
+            )
         return [self._row_to_delta_dict(row) for row in rows]
 
     @staticmethod
@@ -2999,9 +3022,13 @@ class MemoryStore:
         stamp = when or _now_iso()
         with self._lock:
             try:
+                # superseded_by IS NULL: a retired row can never resolve, so
+                # activating one would report consent for a change that is
+                # structurally incapable of applying.
                 rowcount = self._conn.execute(
                     "UPDATE skill_deltas SET status = 'active', approved_at = ? "
-                    "WHERE id = ? AND status = 'staged'",
+                    "WHERE id = ? AND status = 'staged' "
+                    "AND superseded_by IS NULL",
                     (stamp, delta_id),
                 ).rowcount
                 self._conn.commit()

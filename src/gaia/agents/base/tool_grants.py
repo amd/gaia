@@ -104,7 +104,9 @@ _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
 _SKILL_ARG_NAMES = ("skill", "skill_name", "skill_id", "name")
 
-_SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
+# Each takes the skill as its first argument, so an "always" answer scopes to
+# that one skill rather than to the tool at large.
+_SKILL_TOOLS = frozenset({"install_skill", "remove_skill", "remember_skill_lesson"})
 
 
 @dataclass(frozen=True)

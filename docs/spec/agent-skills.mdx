@@ -405,12 +405,16 @@ Three properties are load-bearing:
 
 - **Learned changes replace, they do not accumulate.** A correction substitutes
   the text it fixes rather than being appended beneath it, and a second
-  correction to the same section supersedes the first. A skill an agent has been
-  taught ten things about is no larger in the prompt than one taught a single
-  thing — and adapting a skill to the workflow you actually use usually makes it
-  *smaller*, because the workflow you do not use gets replaced rather than kept.
-- **Nothing applies without your consent.** A learned change is stored inert and
-  shown to you — the exact diff — before it ever reaches the model.
+  correction to the same section supersedes the first. Ten corrections *to the
+  same section* cost what one costs; across different sections they add up, and
+  a total that would push the skill past its overlay budget is refused at
+  approval with the reason. Adapting a skill to the workflow you actually use
+  usually makes it *smaller*, because the workflow you do not use gets replaced
+  rather than kept.
+- **Nothing applies without your consent.** A learned change is stored inert —
+  the agent can only ever propose one — and stays inert until you approve it
+  with `gaia skill deltas <name> --approve <id>`. Review the exact diff first
+  with `gaia skill deltas <name> --pending --diff`.
 - **It is always recoverable.** `gaia skill deltas <name> --reset` returns the
   agent to the shipped skill, and `--no-learned-skills` runs a session with none
   of them; the composed prompt is then byte-identical to a build with no overlay.

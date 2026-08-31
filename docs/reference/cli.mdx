@@ -780,6 +780,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
 | `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
+| `--no-learned-skills` | flag | false | Run with no learned skill changes applied. Skills compose exactly as authored, so the prompt is byte-identical to a build with no overlay. Not supported with `--ui` |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |

@@ -13,6 +13,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from gaia.agents.base.agent import Agent as _Agent
+
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "skills"
 
 
@@ -289,8 +291,6 @@ class LearnedOverlayStubMixin:
     files already needed the identical block, and the third would have been
     debugged from an ``AttributeError`` rather than found.
     """
-
-    from gaia.agents.base.agent import Agent as _Agent
 
     _effective_skill_body = _Agent._effective_skill_body
     learned_skills_enabled = _Agent.learned_skills_enabled

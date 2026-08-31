@@ -46,6 +46,7 @@ from gaia.agents.base.skill_deltas import (
     STATUS_ACTIVE,
     DeltaRefused,
     SkillDelta,
+    approve_delta,
     estimate_tokens,
     preview_diff,
     resolve_skill_body,
@@ -889,6 +890,7 @@ class _LearningAgent(_OverlayStubAgent):
 
 
 def test_the_tool_corrects_a_broken_command_by_replacement(store):
+    """The correction reaches the prompt on approval — and not one turn before."""
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
 
     result = agent.call(
@@ -900,11 +902,43 @@ def test_the_tool_corrects_a_broken_command_by_replacement(store):
     )
     assert result["status"] == "success", result
     assert result["change"] == KIND_REPLACE_SNIPPET
+    assert result["applied"] is False
+
+    # The model wrote it, so nothing may have moved yet.
+    staged_prompt = agent.get_skills_system_prompt()
+    assert BROKEN_INBOX_CMD in staged_prompt
+    assert FIXED_INBOX_CMD not in staged_prompt
+
+    approve_delta(store, result["delta_id"], BASE_SKILL)
+    agent._effective_skill_cache = None
+    agent._overlaid_skills = None
 
     prompt = agent.get_skills_system_prompt()
     assert FIXED_INBOX_CMD in prompt
     assert BROKEN_INBOX_CMD not in prompt
     assert "--jq '" not in prompt
+
+
+def test_the_tool_stages_and_never_activates(store):
+    """The consent gate, at the only layer that can enforce it.
+
+    The model may propose a change to the instructions it runs under; only the
+    user may activate one. A tool that approved its own write would make every
+    "nothing applies without your consent" claim in the docs false.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+    assert result["status"] == "success", result
+
+    rows = store.search_deltas(base_name="github-triage", scope=SCOPE)
+    assert [r["status"] for r in rows] == ["staged"]
+    assert rows[0]["approved_at"] is None
+    assert store.search_deltas(base_name="github-triage", status="active") == []
 
 
 def test_the_tool_supersedes_instead_of_stacking(store):
@@ -920,13 +954,48 @@ def test_the_tool_supersedes_instead_of_stacking(store):
             reason=f"revision {n}",
         )
         assert result["status"] == "success", result
+        approve_delta(store, result["delta_id"], BASE_SKILL)
         agent._effective_skill_cache = None
         agent._overlaid_skills = None
         sizes.append(len(agent.get_skills_system_prompt()))
 
     live = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
     assert len(live) == 1, "each correction must retire the last, not stack"
+    # The revisions the user never approved must not pile up either.
+    pending = store.search_deltas(
+        base_name="github-triage", scope=SCOPE, status="staged"
+    )
+    assert pending == []
     assert max(sizes) - min(sizes) <= 20, sizes
+
+
+def test_an_unapproved_revision_leaves_the_live_correction_alone(store):
+    """Staging a replacement must not retire the correction it would replace."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    first = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+    approve_delta(store, first["delta_id"], BASE_SKILL)
+
+    agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE + "\n\n5. Unapproved revision.",
+        reason="a revision the user has not seen",
+    )
+
+    live = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
+    assert [r["id"] for r in live] == [first["delta_id"]]
+
+    agent._effective_skill_cache = None
+    agent._overlaid_skills = None
+    prompt = agent.get_skills_system_prompt()
+    assert "Unapproved revision." not in prompt
+    assert "--involves @me" in prompt
 
 
 def test_the_tool_refuses_an_unloaded_skill(store):
@@ -989,21 +1058,24 @@ def test_the_tool_reports_the_token_cost_it_added(store):
     # procedure REPLACES the old one instead of sitting beneath it. Contrast
     # the two alternatives measured on this fixture — appending the same lesson
     # costs +36%, hand-patching the authored file cost +48%.
-    assert abs(result["token_delta_vs_authored"]) <= MAX_OVERLAY_TOKENS
-    assert result["token_delta_vs_authored"] < 0.05 * estimate_tokens(BASE_SKILL)
-    # ...and the tool reports the cost rather than a bare "saved".
+    cost = result["token_delta_vs_authored_if_approved"]
+    assert abs(cost) <= MAX_OVERLAY_TOKENS
+    assert cost < 0.05 * estimate_tokens(BASE_SKILL)
+    # ...and the tool reports the cost, and that nothing has applied yet.
     assert "prompt tokens" in result["message"]
+    assert "approve" in result["message"]
 
 
 def test_shape_adaptation_plus_pruning_makes_the_skill_cheaper(store):
     """Replacement is neutral; removing what the user never uses is the saving."""
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    agent.call(
+    correction = agent.call(
         skill="github-triage",
         section="procedure",
         corrected_text=INBOX_PROCEDURE,
         reason="inbox, not backlog",
     )
+    approve_delta(store, correction["delta_id"], BASE_SKILL)
     # The user prunes a section they never exercise (a human action, via CLI).
     drop_id = store.put_delta(
         base_name="github-triage",
@@ -1056,3 +1128,135 @@ def test_a_skill_with_no_headings_anchors_to_the_whole_body():
         created_at="2026-08-18T00:00:00Z",
     )
     assert resolve_skill_body(bare, [delta]).body == "Better prose."
+
+
+# --------------------------------------------------------------------------
+# The consent gate is a floor, and a floor may only grow
+# --------------------------------------------------------------------------
+
+
+def test_remember_skill_lesson_is_in_the_base_confirmation_floor():
+    """Pins the tool into the gate so it cannot quietly fall back out.
+
+    The tool writes to the instructions the agent runs under. It shipped absent
+    from every confirmation set once already; this is the test that catches the
+    second time.
+
+    Asserted on the BASE set, not one agent's: the mixin is composable by name
+    (``KNOWN_TOOLS["skill_learning"]``), so a per-agent gate would leave every
+    other composer ungated. No hub wheel needed, so this always runs in CI.
+    """
+    from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+
+    assert "remember_skill_lesson" in TOOLS_REQUIRING_CONFIRMATION
+    assert "remember_skill_lesson" in Agent.confirmation_required_tools()
+
+
+def test_every_skill_learning_tool_is_gated():
+    """The floor covers the whole mixin, not just the one name known today."""
+    from gaia.agents.tools.skill_learning_tools import SKILL_LEARNING_TOOL_NAMES
+
+    gated = Agent.confirmation_required_tools()
+    assert set(SKILL_LEARNING_TOOL_NAMES) <= gated, (
+        "a skill-learning tool ships ungated: "
+        f"{sorted(set(SKILL_LEARNING_TOOL_NAMES) - gated)}"
+    )
+
+
+def test_an_always_allow_grant_scopes_to_one_skill():
+    """ "Always" on a learning call must not become "always, for every skill"."""
+    from gaia.agents.base.tool_grants import grant_scope
+
+    scope = grant_scope("remember_skill_lesson", {"skill": "github-triage"})
+    assert scope is not None, "no grant scope means the UI cannot offer 'always'"
+    assert "github-triage" in scope.key
+
+
+def test_the_ceiling_is_re_checked_at_approval(store):
+    """Write-time validation cannot see the deltas queued behind it.
+
+    Each staged lesson is validated against the deltas active *at write time*,
+    so N of them can each pass alone and still blow the overlay budget once
+    approved in turn. Approval is the only point that sees the real resolved
+    skill, so the ceiling has to hold there too.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    # Sized so each lesson clears the ceiling alone but the three together do not.
+    filler = "\n".join(f"- padding line {n} to grow the section." for n in range(13))
+
+    staged = []
+    for section in ("setup", "rules", "fork-this"):
+        result = agent.call(
+            skill="github-triage",
+            section=section,
+            corrected_text=f"## {section.title()}\n\n{filler}",
+            reason=f"grow {section}",
+        )
+        assert result["status"] == "success", result
+        staged.append(result["delta_id"])
+
+    approved, refused = 0, 0
+    for delta_id in staged:
+        try:
+            if approve_delta(store, delta_id, BASE_SKILL) is not None:
+                approved += 1
+        except DeltaRefused:
+            refused += 1
+    assert refused, "the ceiling never fired — approval accepted every delta"
+
+    rows = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
+    resolved = resolve_skill_body(BASE_SKILL, [SkillDelta.from_row(r) for r in rows])
+    assert resolved.token_delta <= MAX_OVERLAY_TOKENS, resolved.token_delta
+
+
+def test_a_superseded_staged_delta_cannot_be_approved(store):
+    """No success receipt for a change that can never apply.
+
+    Staging a revision retires the staged one it replaces. Approving the older
+    id — the one the user may still have in front of them — must fail, not
+    report success and silently activate a row that can never resolve.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    first = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+    second = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE + "\n\n5. Revised.",
+        reason="a better version",
+    )
+
+    assert approve_delta(store, first["delta_id"], BASE_SKILL) is None
+    assert store.search_deltas(base_name="github-triage", status="active") == []
+
+    assert approve_delta(store, second["delta_id"], BASE_SKILL) is not None
+    live = store.search_deltas(base_name="github-triage", status="active")
+    assert [r["id"] for r in live] == [second["delta_id"]]
+
+
+def test_approval_is_bound_to_the_skill_the_user_named(store):
+    """An id from another skill must not be approved under this one's name."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    staged = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+
+    assert (
+        approve_delta(
+            store, staged["delta_id"], BASE_SKILL, base_name="some-other-skill"
+        )
+        is None
+    )
+    assert store.search_deltas(base_name="github-triage", status="active") == []
+
+    assert (
+        approve_delta(store, staged["delta_id"], BASE_SKILL, base_name="github-triage")
+        is not None
+    )

@@ -112,6 +112,28 @@ class SkillDelta:
     created_at: str = ""
     approved_at: Optional[str] = None
 
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "SkillDelta":
+        """Build one from a ``skill_deltas`` row.
+
+        The single mapper: a new required column breaks here, not separately in
+        each caller that used to keep its own copy.
+        """
+        return cls(
+            id=row["id"],
+            base_name=row["base_name"],
+            scope=row["scope"],
+            kind=row["kind"],
+            anchor_section=row["anchor_section"],
+            anchor_digest=row["anchor_digest"],
+            payload=row["payload"],
+            provenance=row["provenance"],
+            status=row["status"],
+            superseded_by=row["superseded_by"],
+            created_at=row["created_at"],
+            approved_at=row["approved_at"],
+        )
+
     @property
     def is_resolvable(self) -> bool:
         """Approved, not retired, not superseded."""
@@ -350,14 +372,17 @@ def validate_delta(
             "See src/gaia/agents/base/skill_deltas.py for the v1 grammar."
         )
 
+    # A caller contract, not a detector: nothing here can tell where a lesson
+    # really came from. It holds the store to the one source v1 supports, so a
+    # future write path must widen this deliberately rather than by omission.
     source = str((delta.provenance or {}).get("source", ""))
     if source != "user_instruction":
         raise DeltaRefused(
             f"provenance {source or '(absent)'!r} is not accepted in v1 — only "
-            "'user_instruction'. A lesson inferred from fetched or received "
-            "content cannot be persisted until the injection analyzer (#2468) "
-            "ships, because a persisted instruction outlives the turn it "
-            "arrived in."
+            "'user_instruction'. A write path that learns from fetched or "
+            "received content cannot store deltas until the injection analyzer "
+            "(#2468) ships, because a persisted instruction outlives the turn "
+            "it arrived in."
         )
 
     payload_size = sum(len(str(v)) for v in (delta.payload or {}).values())
@@ -457,3 +482,82 @@ def supersession_key(delta: SkillDelta) -> tuple:
             str((delta.payload or {}).get("old", "")),
         )
     return (delta.base_name, delta.scope, delta.anchor_section, delta.kind)
+
+
+def retire_staged_siblings(store: Any, delta: SkillDelta) -> List[str]:
+    """Retire the *staged* deltas *delta* replaces. Returns their ids.
+
+    Safe before consent precisely because a staged delta has no effect: this
+    only keeps the pending queue from growing one row per revision.
+    """
+    key = supersession_key(delta)
+    retired: List[str] = []
+    for row in store.search_deltas(
+        base_name=delta.base_name, scope=delta.scope, status=STATUS_STAGED
+    ):
+        if row["id"] == delta.id:
+            continue
+        if supersession_key(SkillDelta.from_row(row)) == key:
+            store.supersede_delta(row["id"], delta.id)
+            retired.append(row["id"])
+    return retired
+
+
+def approve_delta(
+    store: Any,
+    delta_id: str,
+    base_body: str,
+    *,
+    base_name: Optional[str] = None,
+    scope: Optional[str] = None,
+) -> Optional[SkillDelta]:
+    """Approve a staged delta and retire the active ones it replaces.
+
+    Returns the approved delta, or ``None`` if *delta_id* is not a live staged
+    row of the named skill. Raises :class:`DeltaRefused` if approving it would
+    push the resolved skill over the overlay ceiling.
+
+    Supersession of *active* rows belongs here rather than at write time: the
+    replacement has no consent until this runs, so retiring the live correction
+    any earlier would revert the skill while its replacement sat pending.
+
+    ``base_body`` is required because the ceiling is a property of the resolved
+    skill, and write-time validation only saw the deltas active at that moment
+    — the staged siblings queued behind it were invisible to it.
+    """
+    rows = store.search_deltas(delta_id=delta_id, include_superseded=True)
+    if not rows:
+        return None
+    candidate = SkillDelta.from_row(rows[0])
+
+    # Bind approval to the object the user reviewed: an id from another skill
+    # or another agent must not be approved under the name they typed.
+    if base_name is not None and candidate.base_name != base_name:
+        return None
+    if scope is not None and candidate.scope != scope:
+        return None
+    # A superseded staged row can never resolve, so approving it would hand
+    # back a success receipt for a change that will never apply.
+    if candidate.status != STATUS_STAGED or candidate.superseded_by:
+        return None
+
+    key = supersession_key(candidate)
+    actives = [
+        SkillDelta.from_row(r)
+        for r in store.search_deltas(
+            base_name=candidate.base_name, scope=candidate.scope, status=STATUS_ACTIVE
+        )
+        if r["id"] != delta_id
+    ]
+    survivors = [d for d in actives if supersession_key(d) != key]
+    replaced = [d for d in actives if supersession_key(d) == key]
+
+    validate_delta(base_body, candidate, existing=survivors)
+
+    if not store.approve_delta(delta_id):
+        return None
+    for old in replaced:
+        store.supersede_delta(old.id, delta_id)
+
+    fresh = store.search_deltas(delta_id=delta_id, include_superseded=True)
+    return SkillDelta.from_row(fresh[0]) if fresh else candidate

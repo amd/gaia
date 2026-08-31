@@ -692,6 +692,12 @@ async def async_main(action, **kwargs):
             # Create Chat Agent with configuration
             agent = ChatAgent(config)
 
+            # Set on the instance, not through ChatAgentConfig: the attribute is
+            # core-owned, but gaia-agent-chat is an independently-versioned
+            # wheel — an unknown config kwarg would crash `gaia chat` outright.
+            if kwargs.get("no_learned_skills", False):
+                agent._learned_skills_enabled = False
+
             # Create initial session if not loading one. ``_ensure_tool_loader_reset``
             # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
             # and gaia-agent-chat (an independently-versioned hub wheel) can drift —
@@ -1355,6 +1361,14 @@ def build_parser():
         "Larger tool sets bloat the system prompt and degrade small-model "
         "tool-calling accuracy — keep this as low as your workflow allows. "
         "Workflows with >50 tools warrant a fresh eval run on the target model.",
+    )
+
+    chat_parser.add_argument(
+        "--no-learned-skills",
+        action="store_true",
+        help="Run this session with no learned skill changes applied. Skills are "
+        "composed exactly as authored, so the prompt is byte-identical to a build "
+        "with no overlay.",
     )
 
     # Agent UI
@@ -3216,6 +3230,17 @@ def main():
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
+        if getattr(args, "no_learned_skills", False):
+            print(
+                "❌ --no-learned-skills has no effect with --ui: the Agent UI "
+                "builds its own agents per session, so the CLI flag never "
+                "reaches them.\n"
+                "   Run `gaia chat --no-learned-skills` without --ui, or turn "
+                "memory off for the session in the UI (learned skills are "
+                "disabled whenever memory is).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         max_files = getattr(args, "max_indexed_files", 0)
         if max_files:
             os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
