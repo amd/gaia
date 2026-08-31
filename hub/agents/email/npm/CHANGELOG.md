@@ -23,6 +23,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
   No normal client is affected — this package, the Python client, and curl all
   send `Host` — but a request that left it out used to get a `200` and now gets
   a `400`.
+- **Searching a connected Outlook mailbox with Gmail-style operators
+  (`from:`, `subject:`, `is:unread`, `newer_than:`) now returns results
+  instead of nothing.** Those operators used to be sent to Microsoft Graph
+  as literal search text; they are now translated to the matching Graph
+  query so `search({ query: "is:unread" })` and similar calls behave the
+  way they do for Gmail (#2996).
 
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the
