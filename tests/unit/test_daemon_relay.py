@@ -288,9 +288,7 @@ def test_connection_stopped_after_running_raises_again(monkeypatch):
     # flakes when the fake pid collides with a live process on the runner. Model
     # the fake sidecar as fully terminated so the check reflects the double's
     # intent, not the host's process table.
-    monkeypatch.setattr(
-        "gaia.daemon.sidecars.registry.psutil.pid_exists", lambda pid: False
-    )
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
     reg = _toy_registry()
     reg.ensure("toy")
     reg.stop("toy")

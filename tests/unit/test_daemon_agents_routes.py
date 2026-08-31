@@ -402,7 +402,7 @@ def test_stop_running_shuts_down_and_verifies_pid_gone(monkeypatch):
 
     import gaia.daemon.sidecars.registry as registry_mod
 
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: False)
     result = reg.stop("toy-a")
     assert result["state"] == "stopped"
 
@@ -416,10 +416,28 @@ def test_stop_survivor_pid_raises_stop_failed_error(monkeypatch):
     import gaia.daemon.sidecars.registry as registry_mod
 
     # shutdown() "succeeds" but the pid stubbornly still exists afterward.
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: True)
     with pytest.raises(StopFailedError) as exc_info:
         reg.stop("toy-a")
     assert str(ensured["pid"]) in str(exc_info.value)
+
+
+def test_stop_treats_an_unreaped_zombie_as_gone(monkeypatch):
+    """A killed sidecar the OS has not reaped yet still has a pid, and
+    ``psutil.pid_exists`` calls that alive — which would 500 an uninstall for a
+    process that has already exited. Liveness must exclude zombies (#3228)."""
+    import psutil
+
+    reg = _make_registry({"toy-a": _TOY_A})
+    ensured = reg.ensure("toy-a")
+
+    class _Zombie:
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: pid == ensured["pid"])
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Zombie())
+    assert reg.stop("toy-a")["state"] == "stopped"
 
 
 def test_shutdown_all_stops_every_running_manager():
