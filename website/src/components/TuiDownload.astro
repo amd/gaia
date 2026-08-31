@@ -137,29 +137,46 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             )}
       </div>
 
+      {/* Every sentence here is written for ONE architecture — it names a chip,
+          or links the one standalone binary this block owns. When two blocks
+          merge, the script drops `[data-dl-one-arch]` and reveals the
+          `[data-dl-multi-arch]` wording instead. */}
       <p class:list={['g-body mt-3 max-w-[440px] text-[13px]', centered && 'mx-auto']}>
         {row.installers.length > 0 ? (
           <Fragment>
             Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
             {row.binary && (
-              <Fragment>
+              <span data-dl-one-arch>
                 {' '}Or take the{' '}
                 <a href={row.binary.url} class="text-g-gold-text underline-offset-2 hover:underline">
                   standalone binary
                 </a>{' '}— one file, no PATH entry and no agent alongside it.
-              </Fragment>
+              </span>
             )}
           </Fragment>
         ) : anyInstaller ? (
           <Fragment>
-            No installer is published for {PLATFORM_LABELS[row.platform]} — the agent has no
-            build for that architecture. This is the standalone binary: put it on your PATH
-            yourself.
+            <span data-dl-one-arch>
+              No installer is published for {PLATFORM_LABELS[row.platform]} — the agent has no
+              build for that architecture. This is the standalone binary: put it on your PATH
+              yourself.
+            </span>
+            <span data-dl-multi-arch hidden>
+              No installer is published for either architecture — the agent has no build for
+              them. These are the standalone binaries: put the one you pick on your PATH
+              yourself.
+            </span>
           </Fragment>
         ) : (
           <Fragment>
-            The standalone binary — put it on your PATH and run{' '}
-            <code class="text-g-text">gaia-tui</code>.
+            <span data-dl-one-arch>
+              The standalone binary — put it on your PATH and run{' '}
+              <code class="text-g-text">gaia-tui</code>.
+            </span>
+            <span data-dl-multi-arch hidden>
+              Standalone binaries — put the one you pick on your PATH and run{' '}
+              <code class="text-g-text">gaia-tui</code>.
+            </span>
           </Fragment>
         )}
       </p>
@@ -227,7 +244,23 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     const buttons = primary.querySelector('[data-dl-buttons]');
     for (const extra of rest) {
       const extraButtons = extra.querySelector('[data-dl-buttons]');
-      if (buttons && extraButtons) buttons.append(...extraButtons.children);
+      // Both wrappers are rendered above, so a miss means the markup changed
+      // out from under this — say so rather than drop an install button.
+      if (!buttons || !extraButtons) {
+        console.warn('[tui-download] no [data-dl-buttons]; dropped', extra.dataset.platform);
+        continue;
+      }
+      buttons.append(...extraButtons.children);
+    }
+
+    // The copy under the buttons names ONE architecture — its chip, its own
+    // standalone binary. With two merged in, that link hands half of these
+    // visitors a binary that cannot run; the disclosure lists both, labelled.
+    if (rest.length) {
+      primary.querySelectorAll('[data-dl-one-arch]').forEach((el) => el.remove());
+      primary
+        .querySelectorAll<HTMLElement>('[data-dl-multi-arch]')
+        .forEach((el) => (el.hidden = false));
     }
 
     // Every platform stays reachable, one disclosure away — including this

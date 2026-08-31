@@ -7,10 +7,11 @@
 // The hub publishes six: {win,darwin,linux} x {x64,arm64}, so unlike a
 // single-architecture installer this has to resolve the ARCHITECTURE too, and
 // only the client hints report it truthfully — every OS masks arm64 in the UA
-// string to keep old sites working. A machine we cannot place resolves to null
-// and the caller keeps its full platform list on screen, which is the honest
-// outcome: an arm64 user handed an x64 binary gets a failure at exec time, not
-// a download error they can act on.
+// string to keep old sites working. Nothing here guesses: a machine we cannot
+// place resolves to no platform at all and the caller keeps its full list on
+// screen, and a Mac — whose architecture Safari never reports — resolves to
+// both builds, for the caller to offer side by side. An arm64 user handed an
+// x64 binary gets a failure at exec time, not a download error they can act on.
 
 export type Os = 'win' | 'darwin' | 'linux';
 export type Arch = 'x64' | 'arm64';
