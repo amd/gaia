@@ -1,0 +1,76 @@
+name: DevLab Ephemeral CI - smoke
+
+# Lives in amd/gaia as .github/workflows/devlab-smoke.yml, on the feature
+# branch named in the push trigger below. Nothing watches
+# rradjabi/ephemeral-ci, so it does not run from where this copy lives.
+#
+# This is the first job gaia sends to the pool and it deliberately builds
+# nothing. It answers one question -- does a runner come up on a Halo when this
+# repository asks for one -- and it is worth asking on its own because the
+# answer has never been yes for a repository authenticated by the GitHub App.
+# The four App-scoped repos onboarded before this one all name labels the pool
+# retired ('stx', 'stx-halo', 'devlab-ephemeral', 'halo'), so each polls and
+# never matches. This file is written against the canonical labels instead, so
+# the App path is exercised end to end the first time it runs.
+#
+# Two triggers, and both are needed for a feature branch:
+#
+#   push, scoped to the one branch, is what makes this runnable *before* it is
+#   merged. `workflow_dispatch` only reaches a workflow the default branch
+#   carries, so on a feature branch the dispatch button does not exist yet.
+#
+#   workflow_dispatch is for afterwards, so the job can be re-run on demand
+#   once the branch lands without pushing an empty commit to do it.
+#
+# The branch scope is not decoration. gaia's own workflows are untouched by
+# this file and must stay that way -- an unscoped `push:` here would fire this
+# job on every branch in the repository, which is both noise for them and load
+# on a pool they are still evaluating.
+on:
+  push:
+    branches:
+      - devlab/ephemeral-ci
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Strix Halo - Linux
+    # 'ephemeral' alongside 'strix-halo' is not redundant. It is the label that
+    # says this job wants a runner that does not exist yet, and it is what keeps
+    # the DevLab pool and the XSJ static runners from both answering. See
+    # pool.match_labels: a job naming only generic labels -- self-hosted, Linux,
+    # X64 -- is refused outright, which is why gaia cannot reach us by asking
+    # for [self-hosted, Linux] the way lemonade-sdk/vllm-rocm does.
+    runs-on: [self-hosted, Linux, strix-halo, ephemeral]
+    # A smoke job that hangs holds a machine until the stale reaper takes it
+    # back at JOB_TIMEOUT_HOURS. Nothing here should take a minute, so cap it
+    # well under that and fail loudly instead.
+    timeout-minutes: 10
+    steps:
+      - name: Hello
+        run: echo "Hello from $(hostname) - $(uname -sr)"
+
+      - name: Which slot ran this
+        run: |
+          echo "runner:    ${{ runner.name }}"
+          echo "workspace: ${GITHUB_WORKSPACE}"
+
+      # The runner name is the orchestrator's own -- ephemeral-<resource>-<job
+      # id> -- so this line is the proof that the runner was built for this job
+      # rather than being a static one that happened to carry the labels.
+      - name: Accelerators
+        run: lspci -nn | grep -iE 'vga|display|processing accelerator' || echo "none reported"
+
+      # Reconnaissance, not a test. Every line is allowed to report nothing:
+      # "ROCm is absent" is a useful answer, and this job must not fail for it.
+      # What gaia's real jobs will need is a separate question from whether the
+      # pool can place them, and this file only answers the second.
+      - name: Toolchain reconnaissance
+        run: |
+          echo "--- rocm"
+          ls -d /opt/rocm* 2>/dev/null || echo "no /opt/rocm"
+          command -v rocminfo >/dev/null 2>&1 && rocminfo | grep -iE 'Name:|gfx' | head -10 || echo "rocminfo not installed"
+          echo "--- python"
+          command -v python3 >/dev/null 2>&1 && python3 --version || echo "python3 not installed"
+          echo "--- git"
+          command -v git >/dev/null 2>&1 && git --version || echo "git not installed"
