@@ -17,6 +17,11 @@ on:
       - '.github/actions/install-lemonade/**'
       - '.github/scripts/**'
       - 'cpp/**'
+      # test_skill.cpp discovers these corpora from disk, so adding a fixture
+      # can break the C++ build. Without them here the breaking PR never runs
+      # this workflow and main goes red on the next unrelated push (#2693).
+      - 'tests/fixtures/skills/**'
+      - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
   pull_request:
@@ -27,6 +32,8 @@ on:
       - '.github/actions/install-lemonade/**'
       - '.github/scripts/**'
       - 'cpp/**'
+      - 'tests/fixtures/skills/**'
+      - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
   merge_group:
