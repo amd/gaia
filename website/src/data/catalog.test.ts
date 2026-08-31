@@ -90,6 +90,16 @@ describe('installMethods', () => {
     const methods = installMethods(entry({ id: 'chat', type: 'agent', language: 'python' }));
     expect(methods[0].command).toBe('gaia agent install chat');
   });
+
+  it('offers GAIA first for an npm agent, then npm', () => {
+    const methods = installMethods(
+      entry({ id: 'email', type: 'agent', language: 'typescript', npm_package: '@amd-gaia/agent-email' }),
+    );
+    expect(methods[0].key).toBe('gaia');
+    expect(methods[0].command).toBe('gaia agent install email');
+    expect(methods[1].key).toBe('npm');
+    expect(methods[1].command).toBe('npm i @amd-gaia/agent-email');
+  });
 });
 
 describe('display labels', () => {
