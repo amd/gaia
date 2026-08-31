@@ -334,6 +334,8 @@ MANIFEST_PY
 # so there is exactly one place the verification rule lives.
 #
 # Args: url, temp path, expected digest, destination path, label.
+# Returns: 0 installed, 2 checksum mismatch, 1 anything else. Callers that treat
+# the artifact as optional must still abort on 2 — only integrity is fatal there.
 download_and_verify() {
     _url="$1"; _tmp="$2"; _want="$3"; _dest="$4"; _label="$5"
 
@@ -360,7 +362,7 @@ download_and_verify() {
         echo "  expected $_want"
         echo "  got      $_got"
         echo "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues"
-        return 1
+        return 2
     fi
 
     # Checked, because this is where a verified download still fails: an
@@ -449,14 +451,13 @@ install_tui() {
 # child process, so without this binary the flagship is listed but cannot run —
 # which is what `curl | sh` left behind before: a UI with no agent under it.
 #
-# Installed BESIDE gaia-tui on purpose. The hub resolves its agent from its own
-# directory first (catalog.resolveAgentBinary), so a stale gaia-agent elsewhere
-# on PATH cannot shadow the one this script just verified.
+# Installed into $GAIA_BIN because that is the directory this installer owns and
+# has already put on PATH, so the hub's exec.LookPath finds gaia-agent there.
 #
-# Not fatal when a platform has no published sidecar: the hub itself still works
-# and other agents still run, so this warns and continues rather than failing an
-# otherwise good install. It is never silent — an unrunnable flagship is exactly
-# the thing a user must be told about.
+# Only a checksum mismatch is fatal. A missing build or a failed download leaves
+# a working hub and a working Python CLI, so those warn and continue rather than
+# failing an otherwise complete install. Never silent — an unrunnable flagship is
+# exactly the thing a user must be told about.
 install_flagship_agent() {
     print_step "Installing the GAIA flagship agent"
 
@@ -487,7 +488,7 @@ install_flagship_agent() {
 
     resolved=""
     if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
-        print_warning "The hub publishes no flagship agent for $platform — skipping."
+        print_warning "Could not resolve the flagship agent for $platform — skipping."
         echo "  Reported above by the manifest reader."
         echo "  Look: $manifest_url"
         return 0
@@ -498,11 +499,19 @@ install_flagship_agent() {
 
     binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
     print_step "Downloading GAIA agent $version for $platform"
-    if ! download_and_verify "$binary_url" "$tmp/$filename" "$want" \
-            "$GAIA_BIN/gaia-agent" "GAIA agent"; then
+    # `|| _rc=$?` rather than `if !`: `set -e` must stay armed, and the two
+    # failure modes are not the same failure.
+    _rc=0
+    download_and_verify "$binary_url" "$tmp/$filename" "$want" \
+            "$GAIA_BIN/gaia-agent" "GAIA agent" || _rc=$?
+    if [ "$_rc" -eq 2 ]; then
         # A checksum mismatch is never downgraded to a warning.
         echo "  Look: $manifest_url"
         exit 1
+    elif [ "$_rc" -ne 0 ]; then
+        print_warning "The GAIA agent did not install — skipping."
+        echo "  The terminal hub still works; re-run this installer to retry."
+        return 0
     fi
     # Read by show_next_steps: every path above this line leaves the machine
     # without an agent, and the closing banner must not promise one.

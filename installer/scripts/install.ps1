@@ -322,9 +322,9 @@ function Install-Tui {
 # child process, so without this binary the flagship cannot run -- which is what
 # this one-liner left behind before: a UI with no agent under it.
 #
-# Installed BESIDE gaia-tui.exe on purpose. The hub resolves its agent from its
-# own directory before consulting PATH (catalog.resolveAgentBinary), so a stale
-# gaia-agent elsewhere cannot shadow the one this script just verified.
+# Installed into $GAIA_BIN because that is the directory this installer owns and
+# has already put on PATH, so the hub's exec.LookPath finds gaia-agent there.
+#
 # Returns $true only when the agent binary is on disk. The caller uses that to
 # decide what to promise: the hub spawns gaia-agent as a child process, so
 # without it `gaia-tui` opens an agent list rather than a chat. ARM64 Windows
@@ -339,9 +339,8 @@ function Install-FlagshipAgent {
     }
     # The sidecar is published under win32-x64; the terminal hub uses win-x64.
     $lockPlatform = $platform -replace '^win-', 'win32-'
-    $suffix = if ($lockPlatform -like 'win32-*') { ".exe" } else { "" }
 
-    $ok = Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform$suffix" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
+    $ok = Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform.exe" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
     return [bool]$ok
 }
 
