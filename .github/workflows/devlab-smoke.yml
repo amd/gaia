@@ -35,13 +35,13 @@ on:
 jobs:
   smoke:
     name: Strix Halo - Linux
-    # 'ephemeral' alongside 'strix-halo' is not redundant. It is the label that
-    # says this job wants a runner that does not exist yet, and it is what keeps
-    # the DevLab pool and the XSJ static runners from both answering. See
-    # pool.match_labels: a job naming only generic labels -- self-hosted, Linux,
-    # X64 -- is refused outright, which is why gaia cannot reach us by asking
-    # for [self-hosted, Linux] the way lemonade-sdk/vllm-rocm does.
-    runs-on: [self-hosted, Linux, strix-halo, ephemeral]
+    # 'devlab-dispatch' is the label that reaches this pool, and it is the only
+    # one here that does. 'strix-halo' narrows the job to Halo silicon but would
+    # not on its own be a request for these machines -- gaia's own
+    # test_npu_embedder.yml and test_agent_behavior_e2e.yml already name
+    # [self-hosted, strix-halo] meaning this repository's static Windows runner,
+    # and every word of that is true of the pool as well. See pool.match_labels.
+    runs-on: [self-hosted, Linux, devlab-dispatch, strix-halo]
     # A smoke job that hangs holds a machine until the stale reaper takes it
     # back at JOB_TIMEOUT_HOURS. Nothing here should take a minute, so cap it
     # well under that and fail loudly instead.
