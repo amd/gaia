@@ -7,7 +7,7 @@
 // from the catalog — nothing about a specific agent is written into the markup.
 
 import InstallMethods from './InstallMethods.astro';
-import { formatBytes, isAgent, languageLabel, type Agent } from '../data/catalog';
+import { formatBytes, installCta, isAgent, languageLabel, type Agent } from '../data/catalog';
 
 interface Props {
   agent: Agent;
@@ -18,6 +18,7 @@ const { agent } = Astro.props;
 const isNpm = !!agent.npm_package;
 const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_package}` : '';
 const deepLink = `gaia://hub/install/${agent.id}`;
+const cta = installCta(agent);
 
 const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_bytes) : '';
 const meta = [
@@ -42,7 +43,9 @@ const meta = [
   </p>
 
   <div class="mt-[18px] flex flex-wrap gap-3">
-    {isNpm ? (
+    {cta === 'npm' ? (
+      <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-primary">View on npm</a>
+    ) : cta === 'gaia+npm' ? (
       <>
         <a href={deepLink} class="g-btn g-btn-primary">Open in GAIA</a>
         <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-secondary">View on npm</a>
