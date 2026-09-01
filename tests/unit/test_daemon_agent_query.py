@@ -43,4 +43,4 @@ def test_run_query_passes_configured_read_timeout(monkeypatch):
     outcome = agent_query.run_query("email", "triage", renderer=renderer)
 
     assert outcome.exit_code == 0
-    assert observed["timeout"] == (10.0, 900.0)
+    assert observed["timeout"] == (10.0, 960.0)

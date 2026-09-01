@@ -289,8 +289,12 @@ def build_relay_router(token: str, registry):
         upstream_headers["Accept-Encoding"] = "identity"
         url = f"{base_url}/v1/{agent_id}/{path}"
 
+        try:
+            read_timeout = agent_read_timeout()
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         client = httpx.AsyncClient(
-            timeout=httpx.Timeout(agent_read_timeout(), connect=CONNECT_TIMEOUT)
+            timeout=httpx.Timeout(read_timeout, connect=CONNECT_TIMEOUT)
         )
         try:
             upstream = await client.send(

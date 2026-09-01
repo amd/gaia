@@ -81,10 +81,58 @@ def test_agent_read_timeout_defaults_to_relay_budget(monkeypatch):
 
 def test_agent_read_timeout_honours_only_longer_override(monkeypatch):
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "900")
-    assert agent_read_timeout() == 900.0
+    assert agent_read_timeout() == 960.0
 
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "120")
     assert agent_read_timeout() == DEFAULT_AGENT_READ_TIMEOUT
+
+
+def test_relay_uses_configured_read_timeout(monkeypatch):
+    from gaia.daemon import relay as relay_mod
+
+    observed = {}
+
+    class _Response:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aread(self):
+            return b"{}"
+
+        async def aclose(self):
+            pass
+
+    class _Client:
+        def __init__(self, *, timeout):
+            observed["timeout"] = timeout
+
+        def build_request(self, *_args, **_kwargs):
+            return object()
+
+        async def send(self, *_args, **_kwargs):
+            return _Response()
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(relay_mod.httpx, "AsyncClient", _Client)
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "900")
+
+    client = _daemon_test_client(_StubRegistry(base_url="http://sidecar"))
+    response = client.post("/v1/email/triage", json={"query": "q"}, headers=_auth())
+
+    assert response.status_code == 200
+    assert observed["timeout"].read == 960.0
+
+
+def test_relay_rejects_invalid_read_timeout(monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "not-a-number")
+    client = _daemon_test_client(_StubRegistry(base_url="http://sidecar"))
+
+    response = client.post("/v1/email/triage", json={"query": "q"}, headers=_auth())
+
+    assert response.status_code == 500
+    assert "GAIA_AGENT_TOOL_TIMEOUT" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("raw", ["not-a-number", "0", "-1"])
