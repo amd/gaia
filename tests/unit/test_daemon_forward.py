@@ -14,6 +14,7 @@ Pure fakes — no keyring, no real sidecar, no subprocess.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from gaia.connectors.errors import AuthRequiredError
@@ -262,6 +263,24 @@ def test_forward_provider_mint_failure_withdraws_stale_forward_and_reraises():
     assert http.posts == []
     assert len(http.deletes) == 1
     assert http.deletes[0]["url"] == "http://127.0.0.1:9/v1/connections/google"
+
+
+def test_forward_provider_transport_mint_failure_retains_stale_forward(caplog):
+    """A transient transport failure must leave a valid stale forward alone."""
+
+    def _mint(*, provider, scopes, agent_id):
+        raise httpx.ConnectTimeout("OAuth provider timed out")
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(httpx.ConnectTimeout):
+            fwd.forward_provider(
+                "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+            )
+
+    assert http.posts == []
+    assert http.deletes == []
+    assert "retaining any existing forward" in caplog.text
 
 
 def test_forward_provider_delivery_failure_raises_forward_delivery_error():
