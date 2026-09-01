@@ -25,7 +25,7 @@ from typing import Optional
 import requests
 
 from gaia.daemon import paths
-from gaia.daemon.client import attach, start_or_attach
+from gaia.daemon.client import UPGRADE_CORE_GUIDANCE, attach, start_or_attach
 from gaia.daemon.errors import DaemonError
 from gaia.daemon.instance import DaemonInstance
 from gaia.daemon.sidecars.errors import SidecarError
@@ -81,7 +81,7 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         raise SidecarError(
             f"the running daemon (host API v{inst.api_version}) predates the "
             "sidecar control plane (needs v1.1+) — it would 404 every agents "
-            "route. Run `gaia daemon restart`, then retry."
+            f"route. {UPGRADE_CORE_GUIDANCE}"
         )
 
 
