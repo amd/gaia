@@ -3873,7 +3873,14 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
-            expected_ctx = profile_ctx_size(self.device)
+            device = self.device
+            if device is None:
+                # Match the device used by model loading when an agent was
+                # constructed without an explicit device (e.g. email).
+                from gaia.config import GaiaConfig
+
+                device = GaiaConfig.load().default_device
+            expected_ctx = profile_ctx_size(device)
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0

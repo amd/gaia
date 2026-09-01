@@ -1,8 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Issue #1139: the base Agent's ``_is_loaded_ctx_too_small`` health probe
-must carry ``Authorization: Bearer <key>`` when ``LEMONADE_API_KEY`` is set.
+"""Tests for the base Agent's Lemonade context-overflow health probe.
+
+Issue #1139: the probe must carry ``Authorization: Bearer <key>`` when
+``LEMONADE_API_KEY`` is set. Issue #2884: its loaded-context comparison must
+use the active device profile, including when the agent resolves the device
+from persisted configuration.
 
 This probe runs in EVERY GAIA agent on context-overflow recovery — leaving
 it unauthenticated would 401 against any remote authenticated Lemonade.
@@ -73,6 +77,7 @@ def test_is_loaded_ctx_too_small_omits_authorization_header_when_no_key(
         ("npu", 32768, False),
         ("npu", 16384, True),
         ("gpu", 32768, True),
+        (None, 32768, False),
     ],
 )
 @patch("httpx.get")
@@ -83,6 +88,7 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
     device,
     loaded_ctx,
     expected_too_small,
+    monkeypatch,
 ):
     """A correctly loaded NPU 32K model must not be routed to reload."""
     from gaia.agents.base.agent import Agent
@@ -92,6 +98,13 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
             return None
 
     agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device=device)
+    if device is None:
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "gaia.config.GaiaConfig.load",
+            lambda: SimpleNamespace(default_device="npu"),
+        )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()
     mock_resp.status_code = 200
