@@ -21,8 +21,9 @@ on:
       - 'src/gaia/skills/**'
       - 'src/gaia/code_index/**'
       # agent_registry.py's init_params are pinned against the flagship's
-      # constructor, so editing it alone must still run that gate.
-      - 'src/gaia/api/agent_registry.py'
+      # constructor, and sse_handler.py against its console, so editing the
+      # API layer alone must still run that gate.
+      - 'src/gaia/api/**'
       - 'setup.py'
       - '.github/workflows/test_gaia_agent.yml'
   pull_request:
@@ -36,8 +37,9 @@ on:
       - 'src/gaia/skills/**'
       - 'src/gaia/code_index/**'
       # agent_registry.py's init_params are pinned against the flagship's
-      # constructor, so editing it alone must still run that gate.
-      - 'src/gaia/api/agent_registry.py'
+      # constructor, and sse_handler.py against its console, so editing the
+      # API layer alone must still run that gate.
+      - 'src/gaia/api/**'
       - 'setup.py'
       - '.github/workflows/test_gaia_agent.yml'
   merge_group:

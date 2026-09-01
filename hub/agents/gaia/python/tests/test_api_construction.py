@@ -107,13 +107,27 @@ def test_debug_env_overrides_stay_within_the_config_fields():
             ):
                 mp.setenv(var, "1")
             _apply_env_overrides()
-        injected = set(init_params) - set(saved)
-        undeclared = sorted(set(init_params) - declared)
+        applied = dict(init_params)
+        undeclared = sorted(set(applied) - declared)
     finally:
         init_params.clear()
         init_params.update(saved)
 
-    assert injected, "_apply_env_overrides injected nothing — the flags are dead."
+    # Asserted by VALUE, not by key presence. ``streaming`` and ``silent_mode``
+    # are already keys of AGENT_MODELS' init_params, so every key-based check —
+    # a diff against the pre-call state or a subset test — stays green when
+    # GAIA_API_STREAMING stops being read. Only the value moves.
+    expected = {
+        "debug": True,
+        "show_prompts": True,
+        "streaming": True,
+        "silent_mode": False,
+    }
+    dead = sorted(k for k, v in expected.items() if applied.get(k) != v)
+    assert not dead, (
+        f"_apply_env_overrides did not apply every flag: {dead}. Expected "
+        f"{expected}, got { {k: applied.get(k) for k in expected} }."
+    )
     assert not undeclared, (
         f"init_params keys absent from GaiaAgentConfig: {undeclared}. get_agent "
         "passes each one as a keyword, so this is a TypeError per request."
