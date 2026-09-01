@@ -403,6 +403,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
 
       - name: Assert the eval actually reached the LLM
+        # Matches email_scorecard_refresh.yml's copy of this step: a filesystem
+        # hang must die at a named step, not silently eat the 90-min job cap.
+        timeout-minutes: 10
         run: |
           # Blocks the heuristic-only path from passing as a green triage result:
           # no LLM call means no usage block, so `llm_classified_count` is absent
