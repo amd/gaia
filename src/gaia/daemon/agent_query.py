@@ -44,6 +44,8 @@ TERMINAL_TYPES = frozenset({"final", "error"})
 #: Connect fast (a dead daemon should fail quickly); read generously — a single
 #: upstream chunk spans a whole agent-loop step (matches the relay's READ_TIMEOUT).
 _CONNECT_TIMEOUT = 10.0
+# Historical floor retained for callers that inspect this module; run_query()
+# resolves the effective value at request time with agent_read_timeout().
 _READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
 #: Cancel POST must never wait out the read timeout.
 _CANCEL_TIMEOUT = 10.0
