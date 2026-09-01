@@ -218,6 +218,15 @@ class TestConnectGrantAgent:
         assert "Connected as alice@example.com" in out
         assert "granted google → installed:email" in out
 
+    @pytest.mark.allow_network
+    def test_explicit_scope_outside_catalog_is_rejected_by_the_flow(self):
+        bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
+
+        rc, _out, err = _run("connectors", "connect", "google", "--scopes", bogus_scope)
+
+        assert rc == 5
+        assert bogus_scope in err
+
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 

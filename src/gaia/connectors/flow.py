@@ -49,6 +49,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
@@ -260,6 +261,20 @@ async def start_authorization(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # Validate the final request at the shared OAuth boundary. The CLI's
+    # explicit ``--scopes`` path and Agent UI both call this function, so a
+    # caller cannot bypass the catalog ceiling by skipping agent resolution.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    try:
+        connector_spec = REGISTRY.get(provider_id)
+    except KeyError:
+        connector_spec = None
+    if connector_spec is not None:
+        disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
+        if disallowed:
+            raise ScopeNotAllowedError(None, provider_id, disallowed)
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)

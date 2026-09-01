@@ -113,6 +113,21 @@ class TestSuccessPath:
         assert result["scopes"] == ["openid"]
 
 
+class TestScopeCatalogBoundary:
+    async def test_start_authorization_rejects_scope_outside_catalog(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ScopeNotAllowedError
+
+        bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
+        with pytest.raises(ScopeNotAllowedError) as exc_info:
+            await start_authorization("google", scopes=[bogus_scope])
+
+        assert exc_info.value.agent_id is None
+        assert exc_info.value.connector_id == "google"
+        assert exc_info.value.scopes == [bogus_scope]
+
+
 class TestGrantedScopesTruthfulness:
     """D6/AC-10 (#2730): the connection record must carry the scopes the
     token endpoint actually returned, not the ones GAIA asked for. Google's
