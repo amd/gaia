@@ -65,3 +65,41 @@ def test_is_loaded_ctx_too_small_omits_authorization_header_when_no_key(
 
     headers = mock_httpx_get.call_args.kwargs.get("headers")
     assert headers == {}, f"Expected empty headers dict, got {headers}"
+
+
+@pytest.mark.parametrize(
+    ("device", "loaded_ctx", "expected_too_small"),
+    [
+        ("npu", 32768, False),
+        ("npu", 16384, True),
+        ("gpu", 32768, True),
+    ],
+)
+@patch("httpx.get")
+@patch("gaia.llm.lemonade_manager.LemonadeManager.get_base_url")
+def test_is_loaded_ctx_too_small_uses_active_device_profile(
+    mock_get_base_url,
+    mock_httpx_get,
+    device,
+    loaded_ctx,
+    expected_too_small,
+):
+    """A correctly loaded NPU 32K model must not be routed to reload."""
+    from gaia.agents.base.agent import Agent
+
+    class _DeviceAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device=device)
+    mock_get_base_url.return_value = "http://localhost:13305/api/v1"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "all_models_loaded": [
+            {"type": "llm", "recipe_options": {"ctx_size": loaded_ctx}}
+        ]
+    }
+    mock_httpx_get.return_value = mock_resp
+
+    assert agent._is_loaded_ctx_too_small() is expected_too_small
