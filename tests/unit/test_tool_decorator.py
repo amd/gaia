@@ -69,6 +69,19 @@ class TestToolDecorator:
         assert "explicit_non_atomic" in _TOOL_REGISTRY
         assert _TOOL_REGISTRY["explicit_non_atomic"]["atomic"] is False
 
+    def test_supported_kwargs_are_registered_unchanged(self):
+        """All supported decorator kwargs retain their registry values."""
+
+        @tool(atomic=True, display_label="Run report", timeout=42.5)
+        def configured_tool() -> str:
+            """A configured tool."""
+            return "result"
+
+        metadata = _TOOL_REGISTRY["configured_tool"]
+        assert metadata["atomic"] is True
+        assert metadata["display_label"] == "Run report"
+        assert metadata["timeout"] == 42.5
+
     def test_multiple_tools_mixed_atomic(self):
         """Test that multiple tools can have different atomic values."""
 
@@ -123,3 +136,28 @@ class TestToolDecorator:
         func = _TOOL_REGISTRY["working_tool"]["function"]
         result = func(value="hello")
         assert result == {"processed": "HELLO"}
+
+    def test_tool_empty_parentheses_registers(self):
+        """The explicit empty-parentheses form remains supported."""
+
+        @tool()
+        def empty_parentheses_tool() -> str:
+            return "result"
+
+        assert "empty_parentheses_tool" in _TOOL_REGISTRY
+
+    @pytest.mark.parametrize("unexpected", ["risk_tier", "atmoic", "timeuot"])
+    def test_unexpected_kwargs_fail_at_decoration(self, unexpected):
+        """Unknown and misspelled kwargs fail before registry insertion."""
+
+        def demo_tool() -> str:
+            return "result"
+
+        with pytest.raises(TypeError) as exc_info:
+            tool(**{unexpected: True})(demo_tool)
+
+        assert str(exc_info.value) == (
+            f"@tool(...) got unexpected keyword argument '{unexpected}' for tool "
+            "'demo_tool'. Accepted: atomic, display_label, timeout."
+        )
+        assert "demo_tool" not in _TOOL_REGISTRY

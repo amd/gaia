@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
+_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
 
 
 def tool(
@@ -22,14 +23,13 @@ def tool(
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
-    **kwargs,  # pylint: disable=unused-argument
+    **unexpected_kwargs: object,
 ) -> Callable:
     """
     Decorator to register a function as a tool.
     Similar to smolagents tool decorator but simpler.
 
     Supports both @tool and @tool(...) syntax for backward compatibility.
-    Extra keyword arguments are ignored.
 
     Args:
         func: Function to register as a tool (when used as @tool)
@@ -40,13 +40,19 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
-        **kwargs: Optional arguments (ignored, for backward compatibility)
-
     Returns:
         The original function or decorator, unchanged
     """
 
     def decorator(f: Callable) -> Callable:
+        if unexpected_kwargs:
+            unexpected_name = next(iter(unexpected_kwargs))
+            accepted = ", ".join(_SUPPORTED_TOOL_KWARGS)
+            raise TypeError(
+                f"@tool(...) got unexpected keyword argument {unexpected_name!r} "
+                f"for tool {f.__name__!r}. Accepted: {accepted}."
+            )
+
         # Extract function name and signature for the tool registry
         tool_name = f.__name__
         sig = inspect.signature(f)

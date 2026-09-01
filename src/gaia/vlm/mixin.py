@@ -80,20 +80,6 @@ class VLMToolsMixin:
 
         @tool(
             atomic=True,
-            name="analyze_image",
-            description="Analyze an image and provide a detailed description including colors, composition, mood, style, and interesting elements.",
-            parameters={
-                "image_path": {
-                    "type": "str",
-                    "description": "Path to the image file to analyze",
-                    "required": True,
-                },
-                "focus": {
-                    "type": "str",
-                    "description": "Optional focus area: 'composition', 'colors', 'mood', 'details', or 'all' (default)",
-                    "required": False,
-                },
-            },
         )
         def analyze_image(image_path: str, focus: str = "all") -> Dict[str, Any]:
             """Analyze an image with VLM."""
@@ -101,20 +87,6 @@ class VLMToolsMixin:
 
         @tool(
             atomic=True,
-            name="answer_question_about_image",
-            description="Answer a specific question about an image using visual analysis.",
-            parameters={
-                "image_path": {
-                    "type": "str",
-                    "description": "Path to the image file",
-                    "required": True,
-                },
-                "question": {
-                    "type": "str",
-                    "description": "Specific question to answer about the image",
-                    "required": True,
-                },
-            },
         )
         def answer_question_about_image(
             image_path: str, question: str

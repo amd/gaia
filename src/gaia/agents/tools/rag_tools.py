@@ -74,15 +74,6 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
-            name="query_documents",
-            description="Query indexed documents using RAG to find relevant information. Returns document chunks that the agent should use to answer the user's question.",
-            parameters={
-                "query": {
-                    "type": "str",
-                    "description": "The question or query to search for in documents",
-                    "required": True,
-                }
-            },
         )
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
@@ -503,20 +494,6 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
-            name="query_specific_file",
-            description="Query a SPECIFIC file by name for targeted, fast retrieval. Use when user mentions a specific file or needs information from one document.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Name or path of the specific file to query (e.g., 'document.pdf' or full path)",
-                    "required": True,
-                },
-                "query": {
-                    "type": "str",
-                    "description": "Question to ask about this specific file",
-                    "required": True,
-                },
-            },
         )
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
@@ -1004,15 +981,6 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_indexed_chunks",
-            description="Search for exact text patterns within RAG-indexed document chunks. Use for finding specific phrases in indexed documents.",
-            parameters={
-                "pattern": {
-                    "type": "str",
-                    "description": "Text pattern or keyword to search for",
-                    "required": True,
-                },
-            },
         )
         def search_indexed_chunks(pattern: str) -> Dict[str, Any]:
             """
@@ -1128,22 +1096,7 @@ class RAGToolsMixin:
         # NOTE: search_file_content (disk-based grep) and write_file are now
         # provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
 
-        @tool(
-            name="evaluate_retrieval",
-            description="Evaluate if retrieved information is sufficient to answer the question. Use before providing final answer.",
-            parameters={
-                "question": {
-                    "type": "str",
-                    "description": "The original question",
-                    "required": True,
-                },
-                "retrieved_info": {
-                    "type": "str",
-                    "description": "Summary of information retrieved so far",
-                    "required": True,
-                },
-            },
-        )
+        @tool()
         def evaluate_retrieval(question: str, retrieved_info: str) -> Dict[str, Any]:
             """
             Evaluate if retrieved information sufficiently answers the question.
@@ -1198,26 +1151,10 @@ class RAGToolsMixin:
                 }
 
         @tool(
-            name="index_document",
             # Indexing a large PDF (parse + chunk + embed) can run past the
             # default per-tool cap; it also writes to the shared FAISS index, so
             # abandoning it mid-write must not happen on a legitimate operation.
             timeout=600,
-            description=(
-                "Add a document to the RAG index so its contents can be queried. "
-                "IMPORTANT: After successfully indexing a document, you MUST call "
-                "query_specific_file (or query_documents) to retrieve the relevant "
-                "information before answering the user's question. "
-                "Never answer from memory/knowledge after indexing — always query the "
-                "indexed document to get the actual content."
-            ),
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the document (PDF, markdown, text) to index",
-                    "required": True,
-                }
-            },
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
@@ -1329,9 +1266,6 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
-            name="list_indexed_documents",
-            description="List all currently indexed documents with per-document chunk counts, file sizes, and types",
-            parameters={},
         )
         def list_indexed_documents() -> Dict[str, Any]:
             """List indexed documents with detailed per-document statistics."""
@@ -1409,9 +1343,6 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
-            name="rag_status",
-            description="Get the status of the RAG system including indexed files, chunks, index size, and configuration",
-            parameters={},
         )
         def rag_status() -> Dict[str, Any]:
             """Get RAG system status with comprehensive details."""
@@ -1451,28 +1382,9 @@ class RAGToolsMixin:
                 }
 
         @tool(
-            name="summarize_document",
             # Iterative section-by-section summarization of a large document on a
             # local NPU can legitimately exceed the default per-tool cap.
             timeout=600,
-            description="Generate a comprehensive summary of a large indexed document by iterating through its content in sections. Best for getting an overview of lengthy documents.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Name or path of the document to summarize",
-                    "required": True,
-                },
-                "summary_type": {
-                    "type": "str",
-                    "description": "Type of summary: 'brief' (2-3 paragraphs), 'detailed' (comprehensive with all key points), 'bullets' (key points as bullets) - default: 'detailed'",
-                    "required": False,
-                },
-                "max_words_per_section": {
-                    "type": "int",
-                    "description": "Maximum words to process per section (default: 20000). Larger documents will be split into multiple sections and summarized iteratively.",
-                    "required": False,
-                },
-            },
         )
         def summarize_document(
             file_path: str,
@@ -1810,20 +1722,6 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
         @tool(
             atomic=True,
-            name="dump_document",
-            description="Export the cached extracted text from an indexed document to a markdown file. Useful for reviewing extracted content or debugging.",
-            parameters={
-                "file_name": {
-                    "type": "str",
-                    "description": "Name or path of the indexed document to dump",
-                    "required": True,
-                },
-                "output_path": {
-                    "type": "str",
-                    "description": "Output path for the markdown file (optional, defaults to .gaia/{filename}.md)",
-                    "required": False,
-                },
-            },
         )
         def dump_document(file_name: str, output_path: str = None) -> Dict[str, Any]:
             """
@@ -1932,24 +1830,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
         @tool(
             atomic=True,
-            name="index_directory",
             # Bulk ingest of a whole directory (many files, each parsed + embedded
             # into the shared FAISS index) routinely runs minutes; don't abandon a
             # legitimate ingest mid-write at the default cap.
             timeout=900,
-            description="Index all supported files in a directory. Supports PDF, TXT, CSV, JSON, and code files.",
-            parameters={
-                "directory_path": {
-                    "type": "str",
-                    "description": "Path to directory to index",
-                    "required": True,
-                },
-                "recursive": {
-                    "type": "bool",
-                    "description": "Whether to recursively index subdirectories (default: False)",
-                    "required": False,
-                },
-            },
         )
         def index_directory(
             directory_path: str, recursive: bool = False

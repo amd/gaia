@@ -87,35 +87,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_file",
-            description=(
-                "Search for files by filename keywords. Searches CWD (recursively) and common folders. "
-                "RULE: Use document-type keywords, NOT the user's question topic. "
-                "HR/policy questions → try 'handbook', 'employee', 'policy', 'HR'. "
-                "Sales/finance questions → try 'sales', 'budget', 'revenue', 'report'. "
-                "REQUIRED STRATEGY: "
-                "1. First call: use doc-type keyword (e.g. 'handbook' for PTO/remote work/HR questions). "
-                "2. If no results: try alternate keywords ('policy', 'employee', 'manual', 'guide'). "
-                "3. If 2+ searches fail: call browse_files to see all available files. "
-                "NEVER give up after just 1-2 failed searches."
-            ),
-            parameters={
-                "file_pattern": {
-                    "type": "str",
-                    "description": "Filename keyword(s) to search. Use document-type words: 'handbook', 'policy', 'report', 'manual'. NOT question topics like 'PTO' or 'remote work'. Supports plain text, globs (*.pdf), regex (employ.*book), OR syntax ('handbook OR policy').",
-                    "required": True,
-                },
-                "deep_search": {
-                    "type": "bool",
-                    "description": "If True, extends search to all drives (slower). Use if CWD+common-folders search found nothing. Default: False",
-                    "required": False,
-                },
-                "file_types": {
-                    "type": "str",
-                    "description": "Comma-separated file extensions to filter (e.g., 'pdf,docx,txt'). Default: all document types",
-                    "required": False,
-                },
-            },
         )
         def search_file(
             file_pattern: str, deep_search: bool = False, file_types: str = None
@@ -463,25 +434,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_directory",
-            description="Search for a directory by name starting from a root path. Use when user asks to find or index 'my data folder' or similar.",
-            parameters={
-                "directory_name": {
-                    "type": "str",
-                    "description": "Name of directory to search for (e.g., 'data', 'documents')",
-                    "required": True,
-                },
-                "search_root": {
-                    "type": "str",
-                    "description": "Root path to start search from (default: user's home directory)",
-                    "required": False,
-                },
-                "max_depth": {
-                    "type": "int",
-                    "description": "Maximum depth to search (default: 4)",
-                    "required": False,
-                },
-            },
         )
         def search_directory(
             directory_name: str, search_root: str = None, max_depth: int = 4
@@ -559,15 +511,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="read_file",
-            description="Read any file and intelligently analyze based on file type. Supports Python, Markdown, and other text files.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file to read",
-                    "required": True,
-                }
-            },
         )
         def read_file(file_path: str) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
@@ -752,40 +695,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_file_content",
-            description=(
-                "Search for text patterns within files on disk (like grep). "
-                "Searches actual file contents, not indexed documents. "
-                "Use context_lines=5 when you need to see surrounding content after finding a section header "
-                "(e.g., search 'Section 52' with context_lines=5 to see the content below the heading)."
-            ),
-            parameters={
-                "pattern": {
-                    "type": "str",
-                    "description": "Text pattern or keyword to search for",
-                    "required": True,
-                },
-                "directory": {
-                    "type": "str",
-                    "description": "Directory to search in (default: current directory)",
-                    "required": False,
-                },
-                "file_pattern": {
-                    "type": "str",
-                    "description": "File pattern to filter (e.g., '*.py', '*.txt'). Default: all text files",
-                    "required": False,
-                },
-                "case_sensitive": {
-                    "type": "bool",
-                    "description": "Whether search should be case-sensitive (default: False)",
-                    "required": False,
-                },
-                "context_lines": {
-                    "type": "int",
-                    "description": "Lines of context to show before and after each match (like grep -C). Default: 0",
-                    "required": False,
-                },
-            },
         )
         def search_file_content(
             pattern: str,
@@ -977,25 +886,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="write_file",
-            description="Write content to any file with security guardrails. Creates parent directories if needed. Validates path access, blocks writes to system directories and sensitive files.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path where to write the file",
-                    "required": True,
-                },
-                "content": {
-                    "type": "str",
-                    "description": "Content to write to the file",
-                    "required": True,
-                },
-                "create_dirs": {
-                    "type": "bool",
-                    "description": "Whether to create parent directories (default: True)",
-                    "required": False,
-                },
-            },
         )
         def write_file(
             file_path: str, content: str, create_dirs: bool = True
@@ -1305,25 +1195,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="edit_file",
-            description="Edit a file by replacing specific content. Finds old_content in the file and replaces it with new_content. Creates a backup before editing.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file to edit",
-                    "required": True,
-                },
-                "old_content": {
-                    "type": "str",
-                    "description": "Exact content to find and replace in the file",
-                    "required": True,
-                },
-                "new_content": {
-                    "type": "str",
-                    "description": "New content to replace the old content with",
-                    "required": True,
-                },
-            },
         )
         def edit_file(
             file_path: str, old_content: str, new_content: str
@@ -1465,25 +1336,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="browse_directory",
-            description="List files and folders in a directory. Use for navigating the filesystem to help users find files.",
-            parameters={
-                "directory_path": {
-                    "type": "str",
-                    "description": "Directory path to browse (default: user's home directory)",
-                    "required": False,
-                },
-                "show_hidden": {
-                    "type": "bool",
-                    "description": "Whether to show hidden files/folders (default: False)",
-                    "required": False,
-                },
-                "sort_by": {
-                    "type": "str",
-                    "description": "Sort by: 'name', 'size', 'modified', 'type' (default: 'name')",
-                    "required": False,
-                },
-            },
         )
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
@@ -1636,15 +1488,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="get_file_info",
-            description="Get detailed information about a file including size, type, dates, and content preview. Use before deciding how to process a file.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file",
-                    "required": True,
-                },
-            },
         )
         def get_file_info(file_path: str) -> Dict[str, Any]:
             """
@@ -1807,41 +1650,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="analyze_data_file",
-            description=(
-                "Parse and analyze CSV, Excel, or tabular data files with full row-level aggregation. "
-                "Reads the ENTIRE file (all rows) and computes statistics, group-by aggregations, and top-N rankings. "
-                "Use this tool for: best-selling product by revenue, top salesperson by sales, "
-                "total revenue by category, GROUP BY queries on any column, date-filtered aggregations. "
-                "Perfect for sales data, financial reports, bank statements, and any CSV with numeric metrics."
-            ),
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the data file (CSV, XLSX, XLS, TSV)",
-                    "required": True,
-                },
-                "analysis_type": {
-                    "type": "str",
-                    "description": "Type of analysis: 'summary' (column stats), 'spending' (categorize expenses), 'trends' (time patterns), 'full' (all). Default: 'summary'",
-                    "required": False,
-                },
-                "columns": {
-                    "type": "str",
-                    "description": "Comma-separated column names to focus analysis on. If not specified, all columns are analyzed.",
-                    "required": False,
-                },
-                "group_by": {
-                    "type": "str",
-                    "description": "Column name to group rows by, then sum numeric columns per group and rank by the first numeric column. Example: group_by='product' with columns='revenue' returns revenue per product sorted descending. Use for 'top product by revenue', 'best salesperson', etc.",
-                    "required": False,
-                },
-                "date_range": {
-                    "type": "str",
-                    "description": "Filter rows by date before aggregating. Formats: '2025-03' (one month), '2025-Q1' (Q1 = Jan-Mar), '2025-01 to 2025-03' (range). Requires a date/time column in the file.",
-                    "required": False,
-                },
-            },
         )
         def analyze_data_file(
             file_path: str,
@@ -2570,30 +2378,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="list_recent_files",
-            description="Find recently modified files in common locations (Documents, Downloads, Desktop). Useful for finding files the user recently worked with.",
-            parameters={
-                "location": {
-                    "type": "str",
-                    "description": "Where to search: 'all', 'documents', 'downloads', 'desktop' (default: 'all')",
-                    "required": False,
-                },
-                "file_types": {
-                    "type": "str",
-                    "description": "Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf'). Default: all common types",
-                    "required": False,
-                },
-                "max_results": {
-                    "type": "int",
-                    "description": "Maximum number of results (default: 20)",
-                    "required": False,
-                },
-                "days": {
-                    "type": "int",
-                    "description": "Only show files modified within this many days (default: 30)",
-                    "required": False,
-                },
-            },
         )
         def list_recent_files(
             location: str = "all",
