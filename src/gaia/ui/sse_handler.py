@@ -399,6 +399,11 @@ class SSEOutputHandler(OutputHandler):
                 data.get("status") != "error" if isinstance(data, dict) else True
             ),
         }
+        # String-returning tools (notably email envelopes) are summarized by a
+        # hard character cap. Tell downstream classifiers that an unparsable
+        # summary may be incomplete instead of making them infer truncation.
+        if isinstance(data, str) and len(data) > 300:
+            event["summary_truncated"] = True
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
