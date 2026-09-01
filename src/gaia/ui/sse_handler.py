@@ -29,6 +29,8 @@ from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
 
+_SUMMARY_CHAR_CAP = 300
+
 #: Seconds the agent thread waits for a tool-confirm response from the frontend.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 60
 
@@ -402,7 +404,7 @@ class SSEOutputHandler(OutputHandler):
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
-        if isinstance(data, str) and len(data) > 300:
+        if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
 
         # Attach latency for tool calls (measured from print_tool_usage)
@@ -1340,7 +1342,7 @@ def _count_summary(data: Dict[str, Any]) -> Optional[str]:
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
-        return str(data)[:300]
+        return str(data)[:_SUMMARY_CHAR_CAP]
 
     # Command execution results
     if "command" in data and "stdout" in data:

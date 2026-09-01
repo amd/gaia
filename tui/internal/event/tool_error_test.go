@@ -197,3 +197,29 @@ func TestToolErrorStillFailsOnTruncatedFailure(t *testing.T) {
 		t.Fatal("a truncated failure without successes was not reported")
 	}
 }
+
+func TestToolErrorIgnoresPartialSuccessWithoutTruncatedHint(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary": `{"succeeded":["a"],"failed":[{"error":"already archived"`,
+		"success": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); failed {
+		t.Fatal("a truncated partial-success batch without a producer hint was reported as failed")
+	}
+}
+
+func TestToolErrorHonorsExplicitFailureBeforePartialSuccess(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary": `{"succeeded":["a"],"ok":false,"failed":[{"error":"rejected"`,
+		"success": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); !failed {
+		t.Fatal("an explicit nested ok:false was hidden by partial-success evidence")
+	}
+}

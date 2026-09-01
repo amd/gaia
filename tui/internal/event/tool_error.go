@@ -221,10 +221,18 @@ func toolErrorFromEncoded(encoded string, truncatedHint bool) (ToolError, bool) 
 		return te, failed
 	}
 	// Unparsable: look for the markers a failed GAIA tool result carries.
-	if truncatedHint && truncatedPayloadShowsPartialSuccess(trimmed) {
+	for _, marker := range []string{`"ok": false`, `"ok":false`} {
+		if strings.Contains(trimmed, marker) {
+			return ToolError{Message: trimmed + "\n" + TruncatedNote}, true
+		}
+	}
+	// Older producers do not send summary_truncated. The encoded summary is
+	// already known to be incomplete because it failed JSON parsing, so visible
+	// successes still settle a batch result without that optional hint.
+	if truncatedPayloadShowsPartialSuccess(trimmed) {
 		return ToolError{}, false
 	}
-	for _, marker := range []string{`"error"`, `"ok": false`, `"ok":false`} {
+	for _, marker := range []string{`"error"`} {
 		if strings.Contains(trimmed, marker) {
 			return ToolError{Message: trimmed + "\n" + TruncatedNote}, true
 		}

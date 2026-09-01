@@ -504,6 +504,12 @@ class TestPrettyPrintJsonToolResults:
         assert event["summary_truncated"] is True
         assert len(event["summary"]) == 300
 
+    def test_long_non_dict_result_marks_summary_truncated(self, handler):
+        handler.pretty_print_json(["result"] * 100, title="Result")
+        event = _drain(handler)[0]
+        assert event["summary_truncated"] is True
+        assert len(event["summary"]) == 300
+
     def test_command_output_included(self, handler):
         data = {
             "command": "ls -la",
