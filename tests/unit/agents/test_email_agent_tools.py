@@ -303,6 +303,37 @@ class TestPreScanInbox:
         )
         assert with_pref_decision.get("preference_applied") == "priority_sender"
 
+    def test_priority_sender_is_first_within_a_section(self, fake_gmail):
+        out = pre_scan_inbox_impl(
+            fake_gmail,
+            max_messages=50,
+            actionable_cap=1,
+            session_preferences={
+                "priority_senders": {"boss@company.example"},
+                "low_priority_senders": set(),
+                "category_defaults": {},
+            },
+        )
+        assert len(out["actionable"]) == 1
+        assert extract_sender_email(out["actionable"][0]["sender"]) == (
+            "boss@company.example"
+        )
+
+    def test_low_priority_sender_is_last_within_a_section(self, fake_gmail):
+        out = pre_scan_inbox_impl(
+            fake_gmail,
+            max_messages=50,
+            session_preferences={
+                "priority_senders": set(),
+                "low_priority_senders": {"boss@company.example"},
+                "category_defaults": {},
+            },
+        )
+        assert len(out["actionable"]) >= 2
+        assert extract_sender_email(out["actionable"][-1]["sender"]) == (
+            "boss@company.example"
+        )
+
     def test_low_priority_sender_does_not_change_category(self, fake_gmail):
         """A sender flagged low-priority via session preference is tagged
         for de-prioritization but never has its category overridden
