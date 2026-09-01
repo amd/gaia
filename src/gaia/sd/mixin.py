@@ -56,6 +56,12 @@ class SDToolsMixin:
         Constants SD_MODELS and SD_SIZES are duplicated from LemonadeClient for convenience.
         Primary source of truth is LemonadeClient, but having them here allows direct access
         via SDToolsMixin.SD_MODELS for better API ergonomics.
+
+        ``get_sd_system_prompt`` is opt-in. ChatAgent drops it so the ~5K-char
+        "expert image generation assistant" persona does not front-load every
+        turn; that guidance lives in the ``image-gen`` skill instead. A
+        standalone agent composing this mixin gets no SD prompt unless its own
+        ``_get_system_prompt`` returns one.
     """
 
     # Supported configurations (duplicated from LemonadeClient for API convenience)

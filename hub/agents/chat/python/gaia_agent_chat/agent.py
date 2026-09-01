@@ -1494,12 +1494,16 @@ No documents are currently indexed.
                     "get_generation_history), output=%s",
                     sd_output_dir,
                 )
-            except Exception as _sd_err:
-                # Not debug: the caller explicitly asked for these tools, so
-                # losing them must leave a reason in the log.
+            except OSError as _sd_err:
+                # Only the output-dir mkdir can fail here — the SD client makes
+                # no network call at construction — so a down server is not a
+                # trigger. Anything other than OSError is a bug and propagates.
                 logger.warning(
-                    "SD tools requested but registration failed — image "
-                    "generation will be unavailable: %s",
+                    "Image generation unavailable: could not create the SD "
+                    "output directory %s (%s). Fix that directory's "
+                    "permissions, or point GAIA_CONFIG_DIR somewhere writable. "
+                    "Every other tool is unaffected.",
+                    sd_output_dir,
                     _sd_err,
                     exc_info=True,
                 )

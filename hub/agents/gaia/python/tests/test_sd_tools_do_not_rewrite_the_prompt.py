@@ -64,8 +64,10 @@ def _select_fresh(agent, query):
     """
     agent.tool_loader.reset_session()
     selected = agent.tool_loader.select(query, agent._registry_snapshot)
-    if selected is None and agent.tool_loader.session_disabled:
-        pytest.skip("semantic tool selection needs a reachable embedder")
+    if selected is None:
+        if agent.tool_loader.session_disabled:
+            pytest.skip("semantic tool selection needs a reachable embedder")
+        pytest.fail("select() returned None with the session still enabled")
     return selected
 
 
