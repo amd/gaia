@@ -214,6 +214,21 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
     return "default"
 
 
+def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
+    """Reject OAuth scopes outside the connector catalog ceiling (#2736).
+
+    The imports stay local because the catalog loads OAuth providers which
+    eventually import this flow module.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connector_spec = REGISTRY.get(provider_id)
+    disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
+    if disallowed:
+        raise ScopeNotAllowedError(None, provider_id, disallowed)
+
+
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
@@ -261,20 +276,8 @@ async def start_authorization(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
-    # Validate the final request at the shared OAuth boundary. The CLI's
-    # explicit ``--scopes`` path and Agent UI both call this function, so a
-    # caller cannot bypass the catalog ceiling by skipping agent resolution.
-    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.connectors.registry import REGISTRY
-
-    try:
-        connector_spec = REGISTRY.get(provider_id)
-    except KeyError:
-        connector_spec = None
-    if connector_spec is not None:
-        disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
-        if disallowed:
-            raise ScopeNotAllowedError(None, provider_id, disallowed)
+    # Both CLI and Agent UI browser flows converge here.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -652,6 +655,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:

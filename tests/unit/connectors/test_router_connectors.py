@@ -366,7 +366,10 @@ class TestAuthorizeGrantAgents:
         )
 
         assert resp.status_code == 400
-        assert bogus_scope in resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "scope_not_allowed"
+        assert detail["connector_id"] == "google"
+        assert detail["scopes"] == [bogus_scope]
 
     def test_authorize_unknown_agent_is_404(self, ui_api_client, monkeypatch):
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())

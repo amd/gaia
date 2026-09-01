@@ -40,6 +40,7 @@ from gaia.connectors.flow import (
     cancel_flow,
     complete_authorization,
     start_authorization,
+    start_device_flow,
 )
 from gaia.connectors.providers import _registry
 
@@ -125,6 +126,18 @@ class TestScopeCatalogBoundary:
 
         assert exc_info.value.agent_id is None
         assert exc_info.value.connector_id == "google"
+        assert exc_info.value.scopes == [bogus_scope]
+
+    async def test_start_device_flow_rejects_scope_outside_catalog(self, monkeypatch):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        _registry.clear()
+
+        bogus_scope = "https://graph.microsoft.com/not-in-catalog"
+        from gaia.connectors.errors import ScopeNotAllowedError
+
+        with pytest.raises(ScopeNotAllowedError) as exc_info:
+            await start_device_flow("microsoft", scopes=[bogus_scope])
+
         assert exc_info.value.scopes == [bogus_scope]
 
 
