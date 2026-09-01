@@ -167,8 +167,11 @@ please anything something nothing everything
 """.split())
 
 #: Deliberately tiny and suffix-only. A real stemmer would need a dependency and
-#: conflates words this corpus needs kept apart.
-_SUFFIXES = ("ing", "ed", "es", "s")
+#: conflates words this corpus needs kept apart. Plurals normally lose only the
+#: final ``s`` (``notes`` -> ``note``); the spellings below need ``es`` removed
+#: to keep their singular form (``boxes`` -> ``box``).
+_SUFFIXES = ("ing", "ed", "s")
+_ES_PLURAL_SUFFIXES = ("ches", "shes", "sses", "xes", "zes")
 
 #: Shortest a stem may be. Below this, suffix stripping starts merging unrelated
 #: words ("gas" -> "ga") and a three-letter stem matches far too much.
@@ -179,6 +182,8 @@ def _stem(word: str) -> str:
     """Strip a common English suffix, never taking a word below :data:`_MIN_STEM`."""
     if word.endswith("ies") and len(word) > 5:
         return word[:-3] + "y"
+    if word.endswith(_ES_PLURAL_SUFFIXES) and len(word) - 2 >= _MIN_STEM:
+        return word[:-2]
     for suffix in _SUFFIXES:
         if word.endswith(suffix) and len(word) - len(suffix) >= _MIN_STEM:
             return word[: -len(suffix)]
