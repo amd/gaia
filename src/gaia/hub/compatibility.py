@@ -309,8 +309,8 @@ def check_compatibility(
                 )
         elif npu_probe_error:
             warnings.append(
-                f"{subject} could not query Lemonade for NPU availability; "
-                "the NPU result is unknown."
+                "GAIA could not query Lemonade for NPU availability; the NPU "
+                f"result for {subject.lower()} is unknown."
             )
         else:
             warnings.append(

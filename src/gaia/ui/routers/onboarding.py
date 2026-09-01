@@ -52,6 +52,7 @@ _RECOMMENDED_MODEL = "Gemma-4-E4B-it-GGUF"
 _RECOMMENDED_DISK_GB = 6.0
 # RAM below which the recommended model is likely to swap/fail to load.
 _RECOMMENDED_MEMORY_GB = 8.0
+_LEMONADE_SYSTEM_INFO_ERROR = "Lemonade system-info query failed"
 
 _INIT_MARKER = Path.home() / ".gaia" / "chat" / "initialized"
 
@@ -92,7 +93,7 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base_url}/system-info", headers=auth)
             if resp.status_code != 200:
-                result["lemonade_error"] = "Lemonade system-info query failed"
+                result["lemonade_error"] = _LEMONADE_SYSTEM_INFO_ERROR
                 return result
             result["lemonade_running"] = True
             devices = resp.json().get("devices", {})
@@ -109,9 +110,13 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
                         result["npu_detected"] = True
             if result["npu_detected"] is None and npu_seen:
                 result["npu_detected"] = False
+    except httpx.ConnectError as exc:
+        # A refused connection is a confirmed "not running" result, not an
+        # ambiguous probe failure. Keep the existing not-running/unknown copy.
+        logger.debug("onboarding: Lemonade is not running: %s", exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.debug("onboarding: lemonade device probe failed: %s", exc)
-        result["lemonade_error"] = "Lemonade system-info query failed"
+        result["lemonade_error"] = _LEMONADE_SYSTEM_INFO_ERROR
     return result
 
 

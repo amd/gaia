@@ -660,6 +660,11 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             break
                 else:
                     status.lemonade_error = "Lemonade health query failed"
+    except httpx.ConnectError as exc:
+        # Nothing listening is a confirmed outage; preserve the actionable
+        # "not responding" banner rather than calling it an ambiguous probe.
+        logger.debug("system status: Lemonade is not running: %s", exc)
+        status.lemonade_running = False
     except Exception:
         status.lemonade_running = False
         status.lemonade_error = "Lemonade health query failed"
