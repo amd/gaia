@@ -434,7 +434,7 @@ class TestGrantOnConnect:
         "https://www.googleapis.com/auth/gmail.send",
     ]
 
-    async def test_commit_grants_intersects_token_scopes(self, monkeypatch):
+    async def test_commit_grants_intersects_token_scopes(self, monkeypatch, caplog):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
 
@@ -451,12 +451,19 @@ class TestGrantOnConnect:
         )
         granted_scope = self._EMAIL_SCOPES[0]
 
-        await _commit_grants(flow, [granted_scope])
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            await _commit_grants(flow, [granted_scope])
 
         grant_agent.assert_called_once_with(
             "google", "installed:email", [granted_scope]
         )
         assert emit.await_args.args[1]["scopes"] == [granted_scope]
+        assert "narrowed grant" in caplog.text
+
+    def test_explicit_empty_scope_field_means_no_scopes(self):
+        from gaia.connectors.flow import _resolve_granted_scopes
+
+        assert _resolve_granted_scopes({"scope": ""}, ["openid"]) == []
 
     @respx.mock
     async def test_grant_committed_on_success(self, google_provider):

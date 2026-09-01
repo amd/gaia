@@ -484,6 +484,15 @@ async def _commit_grants_for_provider(
                     "screen."
                 ),
             )
+        if len(effective_scopes) != len(requested_scopes):
+            logger.warning(
+                "flow: narrowed grant connector_id=%s agent_id=%s requested=%d "
+                "granted=%d — the user declined some scopes at consent",
+                provider_id,
+                agent_id,
+                len(requested_scopes),
+                len(effective_scopes),
+            )
         try:
             grant_agent(provider_id, agent_id, effective_scopes)
         except Exception as e:
@@ -520,17 +529,24 @@ def _resolve_granted_scopes(
 
     Per RFC 6749 §5.1 the token endpoint returns ``scope`` only when the
     granted set differs from what was requested; its absence means "as
-    requested." Google's granular-consent screen lets a user untick Calendar
-    while approving Gmail, so trusting the request unconditionally (what this
-    code did before) records a connection that lies about carrying scopes the
-    user declined — every downstream coverage check then passes against a
-    fabricated record instead of catching the shortfall here, loudly, with an
-    actionable message.
+    requested." An explicitly empty ``scope`` therefore means that none of the
+    requested scopes were granted. Google's granular-consent screen lets a user
+    untick Calendar while approving Gmail, so trusting the request
+    unconditionally (what this code did before) records a connection that lies
+    about carrying scopes the user declined — every downstream coverage check
+    then passes against a fabricated record instead of catching the shortfall
+    here, loudly, with an actionable message.
     """
-    raw = payload.get("scope") or ""
-    returned = raw.split()
-    if not returned:
+    if "scope" not in payload:
         return list(requested)
+    raw = payload.get("scope")
+    if not isinstance(raw, str):
+        logger.warning(
+            "flow: token response contained a non-string scope; treating it "
+            "as no granted scopes"
+        )
+        return []
+    returned = raw.split()
     requested_set = set(requested)
     return [s for s in returned if s in requested_set]
 

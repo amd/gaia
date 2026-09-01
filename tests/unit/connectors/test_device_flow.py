@@ -279,9 +279,8 @@ class TestPollDeviceFlow:
         assert grants.get("installed:email") == [MAIL_READ]
 
     def test_empty_effective_grant_fails_loudly(self, monkeypatch):
-        other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
         payload = self._success_payload()
-        payload["scope"] = other_scope
+        payload["scope"] = ""
         _install_responses(monkeypatch, [_FakeResp(200, payload)])
 
         with pytest.raises(GrantAfterConnectError, match="granted none"):
