@@ -332,38 +332,41 @@ async def test_document_ingest_success_is_included_in_session_input(
 
 
 @pytest.mark.asyncio
-async def test_unsupported_media_type_is_actionable_in_session_input(monkeypatch):
+@pytest.mark.parametrize(
+    "media_type", ["video", "voice", "audio", "sticker", "animation", "video_note"]
+)
+async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
     adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
-    streamed_reply = AsyncMock()
-    reply_text = AsyncMock(return_value=streamed_reply)
+    reply_text = AsyncMock()
+    media = {
+        "video": None,
+        "voice": None,
+        "audio": None,
+        "sticker": None,
+        "animation": None,
+        "video_note": None,
+    }
+    media[media_type] = SimpleNamespace(file_id=f"{media_type}-1")
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=12345),
         message=SimpleNamespace(
             text="",
             photo=[],
             document=None,
-            video=SimpleNamespace(file_id="video-1"),
-            voice=None,
-            audio=None,
-            sticker=None,
-            animation=None,
-            video_note=None,
             reply_text=reply_text,
+            **media,
         ),
     )
-    sent_inputs = []
-
-    class StubSession:
-        def send_stream(self, text):
-            sent_inputs.append(text)
-            return iter([SimpleNamespace(text="Unsupported media")])
 
     monkeypatch.setattr(
-        "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda user_id: (_ for _ in ()).throw(
+            AssertionError("unsupported media should not create a session")
+        ),
     )
 
     await adapter._handle_message(update, None)
 
-    assert sent_inputs == [
-        "[unsupported media type — supported types are photos and documents]"
-    ]
+    reply_text.assert_awaited_once_with(
+        "Unsupported media type — I can handle photos and documents."
+    )

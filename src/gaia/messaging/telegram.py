@@ -132,9 +132,10 @@ class TelegramAdapter:
                 "video_note",
             )
         ):
-            media_note = (
-                "[unsupported media type — supported types are photos and documents]"
+            await update.message.reply_text(
+                "Unsupported media type — I can handle photos and documents."
             )
+            return
 
         user_input = f"{text} {media_note}".strip()
 
