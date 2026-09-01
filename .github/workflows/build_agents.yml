@@ -93,6 +93,7 @@ jobs:
         with:
           path: cpp/build/_deps
           key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-agents-${{ matrix.platform }}-
 
       - name: Install static OpenSSL via vcpkg (${{ matrix.triplet }})
         shell: bash
