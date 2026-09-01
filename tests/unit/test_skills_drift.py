@@ -481,9 +481,10 @@ def test_creating_over_a_hub_install_retires_its_lock_entry(
 
 
 def _lock_args(**kwargs):
-    return argparse.Namespace(
-        skill_action="lock", check=False, relock=False, as_json=False, **kwargs
-    )
+    kwargs.setdefault("check", False)
+    kwargs.setdefault("relock", False)
+    kwargs.setdefault("as_json", False)
+    return argparse.Namespace(skill_action="lock", **kwargs)
 
 
 def test_cli_skill_lock_exits_invalid_on_drift_and_ok_when_clean(
@@ -681,6 +682,50 @@ def test_cli_skill_list_json_carries_the_lock_error_instead_of_crashing(
     assert payload["drift"] is None
     assert "not readable JSON" in payload["lock_error"]
     assert [s["name"] for s in payload["skills"]] == ["web-research"]
+
+
+@pytest.mark.parametrize("relock_flag", [False, True], ids=["check", "relock"])
+@pytest.mark.parametrize(
+    "lock_text,expected",
+    [
+        ("{trunca", "not readable JSON"),
+        ('{"schema_version": 99, "skills": {}}', "is schema v99"),
+    ],
+    ids=["truncated", "future-schema"],
+)
+def test_cli_skill_lock_reports_a_damaged_lock_cleanly(
+    marketplace, attested, monkeypatch, capsys, relock_flag, lock_text, expected
+):
+    """`gaia skill lock` must exit 4 with the message, never a traceback.
+
+    Unlike ``list``, this verb has nothing to render alongside the failure, so
+    ``handle()``'s ``SkillValidationError`` arm is the whole error path. Pinned
+    here because narrowing that arm would turn every corrupt-lock run into a
+    stack trace, and only an end-to-end assertion catches that.
+    """
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (marketplace.skills_root / "skill-lock.json").write_text(lock_text, "utf-8")
+
+    args = _lock_args()
+    args.relock = relock_flag
+
+    assert skills_cli.handle(args) == skills_cli.EXIT_INVALID
+    assert expected in capsys.readouterr().err
+
+
+def test_cli_skill_lock_json_does_not_emit_a_half_report_for_a_damaged_lock(
+    marketplace, attested, monkeypatch, capsys
+):
+    """Nothing on stdout beats JSON describing a check that never ran."""
+    monkeypatch.setattr(skills_cli, "_manager", lambda: marketplace.manager)
+    (marketplace.skills_root / "skill-lock.json").write_text("{trunca", "utf-8")
+
+    exit_code = skills_cli.handle(_lock_args(as_json=True))
+
+    captured = capsys.readouterr()
+    assert exit_code == skills_cli.EXIT_INVALID
+    assert captured.out == ""
+    assert "not readable JSON" in captured.err
 
 
 def test_a_damaged_lock_still_refuses_to_load_a_user_root_skill(marketplace, attested):
