@@ -289,11 +289,11 @@ class ConnectionForwarder:
                 )
             raise
         except Exception as e:
-            # A transport or otherwise transient failure must not turn a
-            # short-lived network blip into a mailbox outage by withdrawing a
-            # still-valid forward. The refresh loop will retry on its next tick.
+            # An unclassified failure must not turn a short-lived network blip
+            # into a mailbox outage by withdrawing a still-valid forward. The
+            # refresh loop will retry on its next tick.
             logger.warning(
-                "forward-out: transient mint failure for '%s' on agent '%s' "
+                "forward-out: unclassified mint failure for '%s' on agent '%s' "
                 "(%s); retaining any existing forward for the next refresh",
                 provider,
                 agent_id,
