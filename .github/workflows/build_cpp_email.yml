@@ -16,6 +16,11 @@
 # existing C++ build) so that, on activation, this is a real build + mock-test
 # gate, not a placeholder. Until then it is intentionally inert.
 #
+# Do NOT add this file's own path to the filters above. While the module is
+# absent, self-triggering only ever reaches the guard step below and reports a
+# red X that says nothing about the edit — every run since 2026-06 failed that
+# way, including two on main. Re-add it in the PR that adds cpp/agents/email/.
+#
 # Tracking: the broader C++ email work is in the C++ milestone (#1110); this is
 # the CI hook that gates it once the source exists.
 # ============================================================================
@@ -28,13 +33,11 @@ on:
     branches: [ main ]
     paths:
       - 'cpp/agents/email/**'
-      - '.github/workflows/build_cpp_email.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'cpp/agents/email/**'
-      - '.github/workflows/build_cpp_email.yml'
   merge_group:
   workflow_dispatch:
 
