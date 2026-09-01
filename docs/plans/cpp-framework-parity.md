@@ -313,7 +313,7 @@ missing piece of research.
 |---|---|---|---|
 | `src/gaia/skills/sets.py` — `SkillRef`, `SkillSets`, `SkillSetResolution`, `SkillSetError` | **PR #2695** (`feat(email,skills): bundled skills + account-keyed skill-set selection`) | **P3.4** skill sets | P3.4 blocks. It is a port of that module, and porting a moving target produces two divergent implementations. Do not start P3.4 until #2695 merges. |
 | `workers/agent-hub/src/skill-manifest.ts` — a TypeScript reimplementation of the frontmatter validator | **PR #2668** (`feat(hub,skills): publish and serve skills as a first-class hub catalog lane`) | **P3.1** parser (as a template, not a dependency) | P3.1 proceeds regardless — it ports from `src/gaia/skills/format.py`, which *is* on `main`. #2668 is a convenience: a second-language port of the same validator, including its error wording and BOM/CRLF handling, is the closest prior art for a third. Use it if available. |
-| `tests/fixtures/openclaw_skills/` — 26 real ClawHub skills, commit-pinned with `PROVENANCE.md` | **PR #2693** (`feat(skills): gaia skill migrate`) | **P3.1** tests, **P5.2** CI gate | Both proceed against the 6-skill `tests/fixtures/skills/` corpus that is on `main`. When #2693 merges, extend the conformance gate to the full 32. P5.2 must not make a nonexistent path a required check. |
+| `tests/fixtures/openclaw_skills/` — 26 real ClawHub skills, commit-pinned with `PROVENANCE.md` | **PR #2693** (`feat(skills): gaia skill migrate`) | **P3.1** tests, **P5.2** CI gate | Both proceed against the 6-skill `tests/fixtures/skills/` corpus that is on `main`. Do **not** fold these 26 into the conformance gate when #2693 merges — they are migration input, invalid frontmatter included, so they belong in their own verdict-per-skill suite. P5.2 must not make a nonexistent path a required check. |
 
 **Consequence for wave scheduling:** P3.4 is gated on an external PR, not just on P3.1–P3.3.
 Everything else in Phase 3 is independent of these and can proceed immediately.
@@ -408,7 +408,10 @@ level-1 disclosure), `validateSkill`, `toMarkdown`. Constants ported **verbatim*
 ≤1024, SemVer 2.0.0, `0.0.0` reserved, tier enum defaulting to `experimental`, name must equal
 directory name, `compatibility`/`allowed-tools`/`disallowed-tools` parsed and deliberately
 ignored. BOM and CRLF tolerant. Tested against the 6-skill `tests/fixtures/skills/` corpus on
-`main`; extend to `tests/fixtures/openclaw_skills/` (26 more) once PR #2693 merges.
+`main`. `tests/fixtures/openclaw_skills/` (26 more, from PR #2693) is **not** conformance
+material: those files are third-party migration *input* and several are invalid by design.
+They get their own suite asserting the parser reaches a verdict on each — parses cleanly, or
+refuses with a message naming the file — never that all 32 parse.
 
 **P3.2 — Skill permissions**
 New `cpp/include/gaia/skill_permissions.h`. `<domain>:<level>[:scope]` parser (split on `:`, max

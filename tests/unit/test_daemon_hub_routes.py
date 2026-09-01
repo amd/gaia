@@ -520,6 +520,7 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
     check is exercised against the OS rather than a mocked process table.
     """
     import os
+    import signal
     import subprocess
 
     if os.name == "nt":
@@ -532,7 +533,9 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
     stray = install_root / "email" / "email-agent"
     stray.write_text("#!/bin/sh\nsleep 120\n", encoding="utf-8")
     stray.chmod(0o755)
-    proc = subprocess.Popen([str(stray)])
+    # Own session, so the whole tree can be killed: /bin/sh forks `sleep`
+    # rather than exec'ing it, and killing only the shell orphans the child.
+    proc = subprocess.Popen([str(stray)], start_new_session=True)
     try:
         fetcher = _RecordingFetcher(_hub_files())
         _patch_hub(monkeypatch, fetcher)
@@ -548,11 +551,17 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
         assert r.status_code == 500
         assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
     finally:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait(timeout=10)
 
-    # With the stray gone, the same uninstall succeeds.
-    assert client.delete("/daemon/v1/agents/email", headers=_auth()).status_code == 200
+    # With the stray gone, the same uninstall succeeds. Carry the refusal
+    # detail into the message: a bare `500 == 200` names neither the pid that
+    # blocked it nor which guard fired.
+    final = client.delete("/daemon/v1/agents/email", headers=_auth())
+    assert final.status_code == 200, final.json().get("detail")
 
 
 def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(
