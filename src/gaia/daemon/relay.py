@@ -60,6 +60,7 @@ from gaia.daemon.sidecars.errors import (
     SidecarUnresponsiveError,
     UnknownAgentError,
 )
+from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,7 +69,7 @@ logger = get_logger(__name__)
 CONNECT_TIMEOUT = 10.0
 #: Read timeout between upstream chunks — spans a whole agent-loop step, so it
 #: matches the sidecar proxy's long per-request budget, not the connect one.
-READ_TIMEOUT = 300.0
+READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
 #: Cancel POST timeout — best-effort cleanup must never wait out READ_TIMEOUT.
 CANCEL_TIMEOUT = 10.0
 
@@ -289,7 +290,7 @@ def build_relay_router(token: str, registry):
         url = f"{base_url}/v1/{agent_id}/{path}"
 
         client = httpx.AsyncClient(
-            timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT)
+            timeout=httpx.Timeout(agent_read_timeout(), connect=CONNECT_TIMEOUT)
         )
         try:
             upstream = await client.send(

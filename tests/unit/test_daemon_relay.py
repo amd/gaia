@@ -51,6 +51,7 @@ from gaia.daemon.relay import (
     stream_ended_unexpectedly_detail,
 )
 from gaia.daemon.sidecars.errors import SidecarNotRunningError, UnknownAgentError
+from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
 
 _HAS_FASTAPI = importlib.util.find_spec("fastapi") is not None
 _HAS_UVICORN = importlib.util.find_spec("uvicorn") is not None
@@ -71,6 +72,26 @@ needs_live_servers = pytest.mark.skipif(
 
 _DAEMON_TOKEN = "daemon-client-tok"
 _SIDECAR_TOKEN = "sidecar-bearer-tok"
+
+
+def test_agent_read_timeout_defaults_to_relay_budget(monkeypatch):
+    monkeypatch.delenv("GAIA_AGENT_TOOL_TIMEOUT", raising=False)
+    assert agent_read_timeout() == DEFAULT_AGENT_READ_TIMEOUT
+
+
+def test_agent_read_timeout_honours_only_longer_override(monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "900")
+    assert agent_read_timeout() == 900.0
+
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "120")
+    assert agent_read_timeout() == DEFAULT_AGENT_READ_TIMEOUT
+
+
+@pytest.mark.parametrize("raw", ["not-a-number", "0", "-1"])
+def test_agent_read_timeout_rejects_invalid_override(monkeypatch, raw):
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", raw)
+    with pytest.raises(ValueError, match="GAIA_AGENT_TOOL_TIMEOUT"):
+        agent_read_timeout()
 
 
 # ---------------------------------------------------------------------------
