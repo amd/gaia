@@ -1,6 +1,10 @@
 import logging
 import os
+import signal
 import sys
+import threading
+import time
+import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
@@ -29,6 +33,77 @@ def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
     assert 12345 in adapter.allowed_users
     # Application may be None if the telegram dependency is missing.
     assert hasattr(adapter, "application")
+
+
+def test_background_start_keeps_polling_process_alive_until_stopped(
+    mock_home, monkeypatch
+):
+    poll_started = threading.Event()
+    poll_stopped = threading.Event()
+    signal_handlers = {}
+
+    class FakeApplication:
+        def add_handler(self, handler):
+            pass
+
+        def run_polling(self):
+            poll_started.set()
+            poll_stopped.wait(timeout=5)
+
+        def stop_running(self):
+            poll_stopped.set()
+
+    app = FakeApplication()
+
+    class FakeBuilder:
+        def token(self, token):
+            assert token == "fake-token"
+            return self
+
+        def build(self):
+            return app
+
+    class FakeFilter:
+        def __and__(self, other):
+            return self
+
+        def __invert__(self):
+            return self
+
+    fake_telegram = types.ModuleType("telegram")
+    fake_ext = types.ModuleType("telegram.ext")
+    fake_ext.ApplicationBuilder = FakeBuilder
+    fake_ext.CommandHandler = lambda *args: object()
+    fake_ext.MessageHandler = lambda *args: object()
+    fake_ext.filters = SimpleNamespace(ALL=FakeFilter(), COMMAND=FakeFilter())
+    fake_telegram.ext = fake_ext
+    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
+    monkeypatch.setitem(sys.modules, "telegram.ext", fake_ext)
+
+    class FakeHTTPServer:
+        def __init__(self, address, handler):
+            self.timeout = 0.01
+
+        def handle_request(self):
+            time.sleep(self.timeout)
+
+    monkeypatch.setattr("http.server.HTTPServer", FakeHTTPServer)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.signal.signal",
+        lambda sig, handler: signal_handlers.__setitem__(sig, handler),
+    )
+
+    adapter = TelegramAdapter(token="fake-token")
+    adapter.start(token="fake-token", background=True)
+
+    assert poll_started.wait(timeout=2)
+    assert adapter._poll_thread is not None
+    assert not adapter._poll_thread.daemon
+    assert signal.SIGTERM in signal_handlers
+
+    signal_handlers[signal.SIGTERM](signal.SIGTERM, None)
+    adapter._poll_thread.join(timeout=2)
+    assert not adapter._poll_thread.is_alive()
 
 
 @pytest.mark.asyncio
