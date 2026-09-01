@@ -22,6 +22,8 @@ pytest.importorskip("gaia_agent_email")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.allow_network
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -191,9 +193,10 @@ class TestListEmailConnectorsCanSend:
             },
         )
 
-        from gaia_agent_email.connector_routes import _can_send
-
-        assert _can_send("google") is True
+        client = self._make_client()
+        body = client.get("/v1/email/connectors").json()
+        by = {p["provider"]: p for p in body["providers"]}
+        assert by["google"]["can_send"] is True
 
     def test_can_send_false_when_grant_overclaims_connection_scope(self, monkeypatch):
         """A stale ledger grant cannot make the badge claim a declined scope."""

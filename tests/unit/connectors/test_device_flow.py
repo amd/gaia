@@ -28,7 +28,10 @@ from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
     FlowTimeoutError,
+    GrantAfterConnectError,
 )
+
+pytestmark = pytest.mark.allow_network
 
 MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 
@@ -258,19 +261,38 @@ class TestPollDeviceFlow:
         assert blob["scopes"] == [MAIL_READ]
 
     def test_grant_agents_committed_on_success(self, monkeypatch):
-        _install_responses(monkeypatch, [_FakeResp(200, self._success_payload())])
+        other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
+        payload = self._success_payload()
+        payload["scope"] = MAIL_READ
+        _install_responses(monkeypatch, [_FakeResp(200, payload)])
         asyncio.run(
             flow_mod.poll_device_flow(
                 "microsoft",
                 "DEV",
-                scopes=[MAIL_READ],
-                grant_agents={"installed:email": [MAIL_READ]},
+                scopes=[MAIL_READ, other_scope],
+                grant_agents={"installed:email": [MAIL_READ, other_scope]},
             )
         )
         from gaia.connectors.grants import list_agent_grants
 
         grants = list_agent_grants("microsoft")
         assert grants.get("installed:email") == [MAIL_READ]
+
+    def test_empty_effective_grant_fails_loudly(self, monkeypatch):
+        other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
+        payload = self._success_payload()
+        payload["scope"] = other_scope
+        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+
+        with pytest.raises(GrantAfterConnectError, match="granted none"):
+            asyncio.run(
+                flow_mod.poll_device_flow(
+                    "microsoft",
+                    "DEV",
+                    scopes=[MAIL_READ],
+                    grant_agents={"installed:email": [MAIL_READ]},
+                )
+            )
 
     def test_account_email_falls_back_to_userinfo(self, monkeypatch):
         # Device-code id_token often carries no decodable email — the flow then

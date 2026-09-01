@@ -449,7 +449,18 @@ async def _commit_grants(flow: _PendingFlow, granted_scopes: Iterable[str]) -> N
     Connecting-without-granting is the bug this flow exists to prevent, so a
     grant failure must not be swallowed.
     """
-    if not flow.grant_agents:
+    await _commit_grants_for_provider(
+        flow.provider_id, flow.grant_agents, granted_scopes
+    )
+
+
+async def _commit_grants_for_provider(
+    provider_id: str,
+    grant_agents: Optional[Mapping[str, Iterable[str]]],
+    granted_scopes: Iterable[str],
+) -> None:
+    """Commit effective per-agent grants for either OAuth flow entry point."""
+    if not grant_agents:
         return
 
     # Local import mirrors the lazy-keyring contract in connectors/__init__.py
@@ -457,34 +468,46 @@ async def _commit_grants(flow: _PendingFlow, granted_scopes: Iterable[str]) -> N
     from gaia.connectors.grants import grant_agent
 
     granted_scope_set = set(granted_scopes)
-    for agent_id, agent_scopes in flow.grant_agents.items():
+    for agent_id, agent_scopes in grant_agents.items():
+        requested_scopes = list(agent_scopes)
         effective_scopes = [
-            scope for scope in agent_scopes if scope in granted_scope_set
+            scope for scope in requested_scopes if scope in granted_scope_set
         ]
+        if not effective_scopes:
+            raise GrantAfterConnectError(
+                provider_id,
+                agent_id,
+                reason=(
+                    "the provider granted none of the scopes this agent asked "
+                    f"for ({' '.join(requested_scopes)}). The connection was "
+                    "saved; re-run connect and approve them on the consent "
+                    "screen."
+                ),
+            )
         try:
-            grant_agent(flow.provider_id, agent_id, effective_scopes)
+            grant_agent(provider_id, agent_id, effective_scopes)
         except Exception as e:
             raise GrantAfterConnectError(
-                flow.provider_id,
+                provider_id,
                 agent_id,
                 reason=(
                     f"{e}. The connection was saved; grant the agent manually "
                     f"from Settings → Connectors, or via `gaia connectors "
-                    f"grants grant {flow.provider_id} {agent_id} --scopes "
+                    f"grants grant {provider_id} {agent_id} --scopes "
                     f"{' '.join(effective_scopes)}`"
                 ),
             ) from e
         await emit(
             "connector.grant.changed",
             {
-                "connector_id": flow.provider_id,
+                "connector_id": provider_id,
                 "agent_id": agent_id,
                 "scopes": effective_scopes,
             },
         )
         logger.info(
             "flow: granted connector_id=%s agent_id=%s scopes=%d on connect",
-            flow.provider_id,
+            provider_id,
             agent_id,
             len(effective_scopes),
         )
@@ -790,22 +813,7 @@ async def poll_device_flow(
         account_type=account_type,
     )
 
-    if grant_agents:
-        from gaia.connectors.grants import grant_agent
-
-        for agent_id, agent_scopes in grant_agents.items():
-            try:
-                grant_agent(provider_id, agent_id, list(agent_scopes))
-            except Exception as e:
-                raise GrantAfterConnectError(
-                    provider_id,
-                    agent_id,
-                    reason=(
-                        f"{e}. Grant it manually with `gaia connectors grants "
-                        f"grant {provider_id} {agent_id} --scopes "
-                        f"{' '.join(agent_scopes)}`"
-                    ),
-                ) from e
+    await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 
     await emit(
         "connector.oauth.completed",
