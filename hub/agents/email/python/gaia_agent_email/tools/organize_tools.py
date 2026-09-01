@@ -254,12 +254,16 @@ def move_to_label_impl(
     mailbox: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Add a label and remove INBOX.
+    """Add a label and remove INBOX, unless the target is INBOX itself.
+
+    Selecting ``INBOX`` restores a message to the inbox and therefore must not
+    archive it immediately after adding the label. Other labels retain the
+    existing move-out-of-inbox behavior.
 
     Non-atomic: two public Protocol calls (``add_label`` then
-    ``archive_message``). If the second call raises, the message will
-    have the new label but still be in INBOX. The ``prior_labels`` field
-    in the action row captures both the original label set so
+    ``archive_message`` for non-INBOX targets). If the second call raises, the
+    message will have the new label but still be in INBOX. The ``prior_labels``
+    field in the action row captures both the original label set so
     ``restore_message`` can recover either partial state.
     """
     with log_tool_call(
@@ -274,7 +278,8 @@ def move_to_label_impl(
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call first (ordering invariant: DB write only on success).
         gmail.add_label(message_id, label_id)
-        gmail.archive_message(message_id)
+        if label_id != "INBOX":
+            gmail.archive_message(message_id)
         action_id = action_store.record_action(
             db,
             action_type="move_to_label",
@@ -819,11 +824,12 @@ class OrganizeToolsMixin:
 
         @tool
         def move_to_label(message_id: str, label_id: str, mailbox: str = "") -> str:
-            """Move a message out of INBOX into a label.
+            """Move a message out of INBOX into a label, or restore it to INBOX.
 
             ``label_id`` may be the label's display name or its id; the name is
-            resolved to an id automatically. ``mailbox`` (optional) routes when
-            multiple mailboxes are connected.
+            resolved to an id automatically. Use ``INBOX`` to restore a message
+            to the inbox. ``mailbox`` (optional) routes when multiple mailboxes
+            are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
