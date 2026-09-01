@@ -332,10 +332,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
     # Importing the catalog registers the built-in specs so an unknown-connector
     # error is actionable rather than a bare KeyError.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-
-    if getattr(args, "device", False):
-        return _handle_connect_device(args)
-
     from gaia.connectors.api import (
         complete_authorization,
         resolve_declared_scopes,
@@ -415,13 +411,18 @@ def _handle_connect(args: argparse.Namespace) -> int:
         grant_agents = {grant_agent: list(scopes)} if grant_agent else None
 
     if scopes:
-        # Human-readable preview before the browser opens (#2603) — the same
-        # descriptions the Agent UI's consent dialog renders for a scope.
+        # Human-readable preview before authorization (#2603) — the same
+        # descriptions the Agent UI's consent dialog renders for a scope. Keep
+        # this before the device/browser split so both paths show the same
+        # requested access.
         from gaia.connectors.providers.google import SCOPE_DESCRIPTIONS
 
         sys.stdout.write(f"Requesting access to {args.connector_id}:\n")
         for scope in scopes:
             sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
+
+    if getattr(args, "device", False):
+        return _handle_connect_device(args, scopes=scopes, grant_agents=grant_agents)
 
     async def _run() -> str:
         info = await start_authorization(
@@ -451,12 +452,21 @@ def _handle_connect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_connect_device(args: argparse.Namespace) -> int:
-    """Device-code connect: print the code + URL, then poll until sign-in."""
+def _handle_connect_device(
+    args: argparse.Namespace,
+    *,
+    scopes: list[str],
+    grant_agents: dict[str, list[str]] | None,
+) -> int:
+    """Device-code connect: print the code + URL, then poll until sign-in.
+
+    ``scopes`` and ``grant_agents`` are resolved by ``_handle_connect`` before
+    this device/browser split, keeping both authorization paths on one contract.
+    """
     from gaia.connectors.api import poll_device_flow, start_device_flow
 
     async def _run() -> str:
-        info = await start_device_flow(args.connector_id, scopes=args.scopes or [])
+        info = await start_device_flow(args.connector_id, scopes=scopes)
         # Prefer the provider's own message (it already contains the URL + code);
         # fall back to a constructed instruction line.
         if info.get("message"):
@@ -468,12 +478,17 @@ def _handle_connect_device(args: argparse.Namespace) -> int:
             )
         sys.stdout.write("Waiting for sign-in...\n")
         sys.stdout.flush()
+        poll_kwargs = {
+            "scopes": info["scopes"],
+            "interval": info["interval"],
+            "expires_in": info["expires_in"],
+        }
+        if grant_agents:
+            poll_kwargs["grant_agents"] = grant_agents
         result = await poll_device_flow(
             args.connector_id,
             info["device_code"],
-            scopes=info["scopes"],
-            interval=info["interval"],
-            expires_in=info["expires_in"],
+            **poll_kwargs,
         )
         return result.get("account_email") or "<unknown>"
 
@@ -482,7 +497,14 @@ def _handle_connect_device(args: argparse.Namespace) -> int:
     except ConnectorsError as e:
         sys.stderr.write(f"gaia connectors connect --device: {e}\n")
         return 1
-    sys.stdout.write(f"Connected as {email}\n")
+    msg = f"Connected as {email}"
+    if grant_agents:
+        agent_id, granted_scopes = next(iter(grant_agents.items()))
+        msg += (
+            f"; granted {args.connector_id} → {agent_id}: "
+            f"{', '.join(granted_scopes)}"
+        )
+    sys.stdout.write(msg + "\n")
     return 0
 
 
