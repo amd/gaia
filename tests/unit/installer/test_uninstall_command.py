@@ -143,6 +143,7 @@ class TestBuildPlan:
             gaia / "venv",
             gaia / "chat",
             gaia / "documents",
+            gaia / "lemonade",
             gaia / "electron-config.json",
             gaia / "gaia.log",
             gaia / "electron-install-state.json",
@@ -176,6 +177,7 @@ class TestDryRun:
                     ".gaia/venv",
                     ".gaia/chat",
                     ".gaia/documents",
+                    ".gaia/lemonade",
                     "electron-config.json",
                     "gaia.log",
                     "electron-install-state.json",
@@ -247,6 +249,10 @@ class TestVenvRemoval:
 class TestPurgeRemoval:
     def test_removes_all_tier3_paths_but_keeps_gaia_root(self, fake_home):
         _seed_gaia_tree(fake_home)
+        embedded = fake_home / ".gaia" / "lemonade"
+        embedded.mkdir()
+        (embedded / "cache").mkdir()
+        (embedded / "cache" / "backend.bin").write_bytes(b"backend")
         captured = _Capture()
 
         exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
@@ -258,6 +264,7 @@ class TestPurgeRemoval:
             "venv",
             "chat",
             "documents",
+            "lemonade",
             "electron-config.json",
             "gaia.log",
             "electron-install-state.json",
@@ -270,8 +277,10 @@ class TestPurgeRemoval:
         # And our neighbour file stays put.
         assert (gaia / "mcp_servers.json").exists()
 
-    def test_does_not_touch_lemonade_without_opt_in(self, fake_home, monkeypatch):
-        """--purge alone must NOT run Lemonade removal."""
+    def test_does_not_touch_system_lemonade_without_opt_in(
+        self, fake_home, monkeypatch
+    ):
+        """--purge alone must not run system-wide Lemonade removal."""
         _seed_gaia_tree(fake_home)
         _seed_models_cache(fake_home)
 

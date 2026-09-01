@@ -14,9 +14,10 @@ Tiers:
       entries) is always the responsibility of the platform's native
       uninstaller; this command only owns the shared Python-side state.
     * ``--venv``          — Tier 2: remove ``~/.gaia/venv/``.
-    * ``--purge``         — Tier 3: venv + chat data + documents + electron
-      config + install logs / state files. Always keeps ``~/.gaia/`` itself
-      so other tools that store data there (MCP config, etc.) are preserved.
+    * ``--purge``         — Tier 3: venv + chat data + documents + the embedded
+      Lemonade runtime + electron config + install logs / state files. Always
+      keeps ``~/.gaia/`` itself so other tools that store data there (MCP
+      config, etc.) are preserved.
 
 Opt-in extras (only valid alongside ``--purge``):
     * ``--purge-lemonade`` — best-effort Lemonade Server removal.
@@ -156,6 +157,7 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "venv",
         gaia / "chat",
         gaia / "documents",
+        gaia / "lemonade",
         gaia / "electron-config.json",
         gaia / "gaia.log",
         gaia / "electron-install-state.json",
@@ -274,8 +276,8 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "",
         "Choose a tier:",
         "  gaia uninstall --venv            Remove ~/.gaia/venv/ (Tier 2)",
-        "  gaia uninstall --purge           Remove venv + chat data + documents +",
-        "                                   electron config + install logs (Tier 3)",
+        "  gaia uninstall --purge           Remove venv + chat + documents +",
+        "                                   embedded Lemonade + config + logs (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
         "  --purge-lemonade                 Also uninstall Lemonade Server",
@@ -835,8 +837,8 @@ def register_subparser(
         "--purge",
         action="store_true",
         help=(
-            "Tier 3: remove venv + chat + documents + electron config + "
-            "install logs. Implies --venv."
+            "Tier 3: remove venv + chat + documents + embedded Lemonade + "
+            "electron config + install logs. Implies --venv."
         ),
     )
     parser.add_argument(

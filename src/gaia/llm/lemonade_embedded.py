@@ -385,7 +385,7 @@ def _flatten_single_root(unpacked: Path) -> Path:
 
 
 class EmbeddedLemonade:
-    """Manages GAIA's private Lemonade Server: install, start, stop, status.
+    """Manages GAIA's private Lemonade Server: install, start, stop, uninstall, status.
 
     Args:
         version: Lemonade version to install and run.
@@ -1051,6 +1051,38 @@ class EmbeddedLemonade:
             f"being asked to stop. Kill it with `gaia kill --port {port}`, then "
             f"delete {self.state_path}."
         )
+
+    def uninstall(self) -> bool:
+        """Remove the embedded Lemonade runtime and its private state.
+
+        The runtime owns the whole ``<GAIA_HOME>/lemonade`` tree, including
+        downloaded backends and credentials. Refuse to remove it while the
+        daemon is reachable (or alive but unresponsive), so callers cannot
+        leave a running process with deleted files beneath it.
+
+        Returns:
+            True when a runtime was removed, or False when none existed.
+
+        Raises:
+            EmbeddedLemonadeError: The daemon is still running or the runtime
+                could not be removed.
+        """
+        status = self.status()
+        if status.running or status.unresponsive_pid:
+            raise EmbeddedLemonadeError(
+                "Cannot uninstall embedded Lemonade while it is running. "
+                "Run `gaia lemonade embedded stop` first."
+            )
+        if not self.root.exists():
+            return False
+        try:
+            shutil.rmtree(self.root)
+        except OSError as e:
+            raise EmbeddedLemonadeError(
+                f"Could not remove embedded Lemonade from {self.root}: {e}. "
+                "Check that its files are writable, then retry."
+            ) from e
+        return True
 
     @staticmethod
     def _kill_tree(pid: int) -> None:

@@ -412,6 +412,30 @@ class TestStatus:
         assert manager.stop() is False
 
 
+class TestUninstall:
+    """Removing the private runtime must be complete and process-safe."""
+
+    def test_uninstall_removes_the_runtime_tree(self, manager):
+        manager.root.mkdir(parents=True)
+        (manager.root / "state.json").write_text("{}", encoding="utf-8")
+        (manager.root / "cache").mkdir()
+        (manager.root / "cache" / "backend.bin").write_bytes(b"backend")
+
+        assert manager.uninstall() is True
+        assert not manager.root.exists()
+        assert manager.uninstall() is False
+
+    def test_uninstall_refuses_a_running_instance(self, manager, monkeypatch):
+        manager._write_state(
+            {"pid": 4321, "port": 13305, "api_key": "k", "version": manager.version}
+        )
+        monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: {"ok": True})
+
+        with pytest.raises(EmbeddedLemonadeError, match="embedded Lemonade.*running"):
+            manager.uninstall()
+        assert manager.state_path.exists()
+
+
 class TestCredentials:
     """The API key must not leak into scrollback, history or CI logs."""
 

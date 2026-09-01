@@ -2580,6 +2580,9 @@ Examples:
     embedded_subparsers.add_parser(
         "status", help="Show whether the private instance is installed and running"
     )
+    embedded_subparsers.add_parser(
+        "uninstall", help="Remove the private instance and downloaded backends"
+    )
     embedded_install_parser = embedded_subparsers.add_parser(
         "install", help="Download and unpack the embeddable artifact"
     )
@@ -7173,7 +7176,7 @@ def handle_lemonade_command(args):
 
 
 def handle_lemonade_embedded_command(args):
-    """Handle ``gaia lemonade embedded {start,stop,status,install,install-backend}``.
+    """Handle ``gaia lemonade embedded`` lifecycle actions.
 
     Args:
         args: Parsed arguments for the embedded subcommand.
@@ -7208,6 +7211,11 @@ def handle_lemonade_embedded_command(args):
                 print("Embedded Lemonade is not running")
         elif action == "status":
             _print_embedded_status(manager)
+        elif action == "uninstall":
+            if manager.uninstall():
+                print("✅ Embedded Lemonade uninstalled")
+            else:
+                print("Embedded Lemonade is not installed")
         elif action == "install":
             path = manager.install(force=getattr(args, "force", False))
             print(f"✅ Embedded Lemonade {manager.version} installed at {path}")
