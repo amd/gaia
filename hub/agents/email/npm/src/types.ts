@@ -557,13 +557,17 @@ export interface EmailPreScanResponse {
  * Response of `GET /v1/email/briefing` (api_routes.py: EmailBriefingResponse,
  * #1608). The latest scheduled daily inbox briefing — the same `email_pre_scan`
  * envelope as `prescan`, produced by the sidecar's daily timer without a prompt,
- * plus a `generated_at` stamp. `404` until the first scheduled run has happened.
+ * plus age/staleness metadata. `404` until the first scheduled run has happened.
  */
 export interface EmailBriefingResponse {
   /** Echoes the contract version. */
   schema_version: string;
   /** UTC ISO-8601 timestamp of the scheduled run that produced this briefing. */
   generated_at: string;
+  /** Seconds since generated_at when this response was read. */
+  cache_age_seconds: number;
+  /** True when generated_at is at least 24 hours old; the briefing is labeled, not regenerated. */
+  stale: boolean;
   /** The pre-scan envelope the scheduled run produced. */
   briefing: EmailPreScanResult;
 }

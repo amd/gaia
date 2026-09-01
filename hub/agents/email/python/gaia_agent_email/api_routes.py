@@ -2323,6 +2323,17 @@ class EmailBriefingResponse(_Strict):
     generated_at: str = Field(
         ..., description="UTC ISO-8601 timestamp of the scheduled run."
     )
+    cache_age_seconds: float = Field(
+        ...,
+        description="Seconds since generated_at; measured when this response was read.",
+    )
+    stale: bool = Field(
+        ...,
+        description=(
+            "True when the briefing is at least 24 hours old; stale briefings "
+            "are labeled, not regenerated or refused."
+        ),
+    )
     briefing: EmailPreScanResult = Field(
         ..., description="The email_pre_scan envelope the scheduled run produced."
     )
@@ -2355,7 +2366,9 @@ async def get_briefing() -> EmailBriefingResponse:
     surface any host reads it from. 404 until a scheduled run has happened.
     """
     from gaia_agent_email.briefing import (
+        BRIEFING_STALE_AFTER_SECONDS,
         BriefingUnavailableError,
+        briefing_age_seconds,
         load_latest_briefing,
     )
 
@@ -2373,11 +2386,14 @@ async def get_briefing() -> EmailBriefingResponse:
             ),
         )
     try:
+        cache_age_seconds = briefing_age_seconds(record.get("generated_at"))
         return EmailBriefingResponse(
             generated_at=record["generated_at"],
+            cache_age_seconds=cache_age_seconds,
+            stale=cache_age_seconds >= BRIEFING_STALE_AFTER_SECONDS,
             briefing=EmailPreScanResult.model_validate(record["briefing"]),
         )
-    except (KeyError, ValueError) as e:
+    except (BriefingUnavailableError, KeyError, ValueError) as e:
         raise HTTPException(
             status_code=500,
             detail=(

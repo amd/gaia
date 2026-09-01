@@ -194,7 +194,9 @@ def persist_briefing(record: Dict[str, Any], path: Optional[Path] = None) -> Pat
     return dest
 
 
-def briefing_age_seconds(generated_at: str, *, now: Optional[datetime] = None) -> float:
+def briefing_age_seconds(
+    generated_at: Optional[str], *, now: Optional[datetime] = None
+) -> float:
     """Return the non-negative age of a persisted UTC briefing timestamp."""
     try:
         parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
@@ -470,6 +472,7 @@ class BriefingScheduler:
 
 
 __all__ = [
+    "BRIEFING_STALE_AFTER_SECONDS",
     "BriefingConfigError",
     "BriefingScheduleConfig",
     "BriefingScheduler",
@@ -477,6 +480,7 @@ __all__ = [
     "ENV_ENABLED",
     "ENV_MAX_MESSAGES",
     "ENV_TIME",
+    "briefing_age_seconds",
     "briefing_path",
     "load_latest_briefing",
     "persist_briefing",
