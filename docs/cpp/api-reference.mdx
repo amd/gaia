@@ -185,6 +185,8 @@ std::thread t2([&] { agent.processQuery("query 2"); });  // race condition
 
 Similarly, do not call `connectMcpServer()` or `disconnectMcpServer()` while `processQuery()` is running.
 
+The same rule covers the skill-set API: `loadSkillSet()` and `setSkillLoader()` mutate agent state and must be serialized by the caller. They are setup-time calls in practice. A lock inside `loadSkillSet()` would not make them safe — the `SkillLoader` may call back into the agent to register tools or rebuild the prompt, and the agent's config mutex is not recursive. Reading `activeSkillSet()` or `skillSetLoaded()` from another thread **is** safe; both return by value under the lock.
+
 ---
 
 ## Security Model

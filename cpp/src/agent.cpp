@@ -250,44 +250,50 @@ std::vector<std::string> Agent::skillSetLoaded() const {
     return skillSetLoaded_;
 }
 
+namespace {
+
+/// True when the option carries something other than whitespace — sets.py
+/// treats a blank --skill-set as unset rather than as a set named "".
+bool hasText(const std::optional<std::string>& value) {
+    return value.has_value() &&
+           value->find_first_not_of(" \t\r\n\f\v") != std::string::npos;
+}
+
+}  // namespace
+
+std::optional<std::string> Agent::requestedSkillSet(
+    const std::optional<std::string>& requested) const {
+    if (requested.has_value()) return requested;
+    std::lock_guard<std::mutex> lock(configMutex_);
+    if (config_.skillSet.empty()) return std::nullopt;
+    return config_.skillSet;
+}
+
 SkillSetResolution Agent::resolveSkillSet(
     const std::optional<std::string>& requested) const {
-    std::optional<std::string> explicitChoice = requested;
-    if (!explicitChoice.has_value()) {
-        std::lock_guard<std::mutex> lock(configMutex_);
-        if (!config_.skillSet.empty()) explicitChoice = config_.skillSet;
-    }
+    const std::optional<std::string> explicitChoice = requestedSkillSet(requested);
     // Only consult the hook when nothing explicit was asked for — an explicit
     // request must never be second-guessed by agent state.
-    const bool haveExplicit =
-        explicitChoice.has_value() &&
-        explicitChoice->find_first_not_of(" \t\r\n\f\v") != std::string::npos;
     const std::optional<std::string> selected =
-        haveExplicit ? std::nullopt : selectSkillSet();
+        hasText(explicitChoice) ? std::nullopt : selectSkillSet();
     return skillSets().resolve(explicitChoice, selected);
 }
 
 std::vector<std::string> Agent::loadSkillSet(
     const std::optional<std::string>& requested) {
     const SkillSets& declarations = skillSets();
-
-    std::optional<std::string> explicitChoice = requested;
-    if (!explicitChoice.has_value()) {
-        std::lock_guard<std::mutex> lock(configMutex_);
-        if (!config_.skillSet.empty()) explicitChoice = config_.skillSet;
-    }
+    const std::optional<std::string> explicitChoice = requestedSkillSet(requested);
 
     if (!declarations) {
         // Never drop an explicit request on the floor — resolve() throws with
         // the actionable "this agent declares no skill_sets" message.
-        if (explicitChoice.has_value() &&
-            explicitChoice->find_first_not_of(" \t\r\n\f\v") != std::string::npos) {
-            declarations.resolve(explicitChoice);
-        }
+        if (hasText(explicitChoice)) declarations.resolve(explicitChoice);
         return {};
     }
 
-    const SkillSetResolution resolution = resolveSkillSet(requested);
+    // Pass the resolved choice, not `requested` — otherwise resolveSkillSet()
+    // reads config_.skillSet a second time.
+    const SkillSetResolution resolution = resolveSkillSet(explicitChoice);
 
     if (skillLoader_ == nullptr) {
         // A previous set is still registered in a loader that has since been

@@ -225,6 +225,14 @@ public:
     /// returns {} after warning. Treat activeSkillSet() as "which set was
     /// chosen", not as proof the skills are present.
     ///
+    /// **Not thread-safe.** Like connectMcpServer() and setHistory(), this
+    /// mutates agent state the caller must serialize: do not call it
+    /// concurrently with itself, with setSkillLoader(), or while
+    /// processQuery() is running. A lock here would not help — the loader may
+    /// call back into the agent (registering tools, rebuilding the prompt),
+    /// and configMutex_ is not recursive. Reading activeSkillSet() /
+    /// skillSetLoaded() from another thread is safe.
+    ///
     /// @throws SkillSetError on an undeclared set name — never a silent
     ///         fallback to the default — or when a set is already loaded and
     ///         the loader that registered it has since been detached.
@@ -239,6 +247,9 @@ public:
 
     /// Install the loader that actually registers skills (P3.3 / #2800).
     /// Not owned; must outlive the agent. Passing nullptr detaches it.
+    ///
+    /// **Not thread-safe** — setup-time call, serialized with loadSkillSet()
+    /// by the caller. See loadSkillSet().
     void setSkillLoader(SkillLoader* loader) { skillLoader_ = loader; }
 
     // ---- Dynamic reconfiguration ----
@@ -336,6 +347,11 @@ private:
     /// Attempt to reconnect to a previously registered MCP server using its stored config.
     bool reconnectMcpServer(const std::string& name);
 
+    /// The explicit skill-set choice: `requested`, else `AgentConfig::skillSet`.
+    /// One place, so a caller cannot read the config field twice and disagree.
+    std::optional<std::string> requestedSkillSet(
+        const std::optional<std::string>& requested) const;
+
     /// Report a declared `version:` pin against the version actually on disk.
     /// GAIA cannot enforce pins until versioned installs land (#2467), so it
     /// says so loudly rather than accepting the pin in silence (#2864).
@@ -382,6 +398,11 @@ private:
     // The set currently active, and exactly which skills it brought in. The
     // second is what makes a switch retire only its own skills: anything loaded
     // outside a set is absent from it and therefore never unloaded.
+    //
+    // Written only by loadSkillSet(), which the caller serializes (see its
+    // docs). The two writes take configMutex_ so the accessors can be read from
+    // any thread; the writer's own reads are unlocked because it is the only
+    // writer. skillLoader_ is mutation-side only and needs no lock.
     std::optional<std::string> activeSkillSet_;
     std::vector<std::string> skillSetLoaded_;
     SkillLoader* skillLoader_ = nullptr;
