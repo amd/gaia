@@ -69,10 +69,7 @@ class OAuthTestAgent(Agent):
         # this hook is the canonical place to bind any extra runtime state.
         pass
 
-    @tool(
-        name="list_recent_subjects",
-        description="List the 5 newest Gmail subjects for the connected account.",
-    )
+    @tool()
     def list_recent_subjects(self) -> dict:
         """
         Fetch the 5 newest Gmail subjects for the connected account.

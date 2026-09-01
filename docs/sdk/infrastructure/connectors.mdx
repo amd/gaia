@@ -254,8 +254,9 @@ class GmailAgent(Agent):
     def _register_tools(self):
         self._register("list_recent_subjects", self._list_recent_subjects)
 
-    @tool(description="List the 5 newest Gmail subjects")
+    @tool()
     def _list_recent_subjects(self) -> list[str]:
+        """List the 5 newest Gmail subjects."""
         token = get_access_token_sync(
             provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],

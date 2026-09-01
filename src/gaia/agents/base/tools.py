@@ -40,6 +40,7 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
+
     Returns:
         The original function or decorator, unchanged
     """
