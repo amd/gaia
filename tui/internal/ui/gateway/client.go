@@ -1,10 +1,14 @@
 // Package gateway is the TUI screen for connecting GAIA to the AMD LLM
 // gateway through Lemonade's cloud offload (Lemonade >= 11.8).
 //
-// The screen talks to Lemonade directly rather than through the daemon: the
-// API token is the whole point of the screen, and a direct call is one fewer
-// process it passes through. Lemonade holds the token in memory only and never
-// writes it to disk — see docs/guides/llm-gateway.mdx.
+// This file talks to Lemonade directly rather than through the daemon: the API
+// token is the whole point of the screen, and a direct call is one fewer
+// process it passes through. Lemonade holds what it is given in memory only,
+// so it forgets the token on restart.
+//
+// Persisting across that restart is a separate step in persist.go, which does
+// go through the daemon — the OS credential store is reachable only from
+// Python. See docs/guides/llm-gateway.mdx.
 package gateway
 
 import (

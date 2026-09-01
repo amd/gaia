@@ -2914,7 +2914,8 @@ Examples:
     )
     gateway_auth_parser = gateway_subparsers.add_parser(
         "auth",
-        help="Give Lemonade a gateway token for this session (never stored on disk)",
+        help="Give Lemonade a gateway token (remembered in the OS credential "
+        "store by default; use --no-remember for session-only)",
     )
     gateway_auth_parser.add_argument(
         "--token",

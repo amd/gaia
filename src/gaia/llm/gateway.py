@@ -619,8 +619,9 @@ class GatewayManager:
         """Hand a token to Lemonade for this session.
 
         Lemonade keeps it in process memory and never writes it to disk, so it
-        is gone on restart. Set ``LEMONADE_AMD_API_KEY`` in Lemonade's
-        environment for one that persists.
+        is gone on restart. Surviving that is a separate step, and this method
+        is not it: callers use ``remember_token`` for the OS credential store,
+        or ``LEMONADE_AMD_API_KEY`` in Lemonade's own environment.
         """
         if not api_key or not api_key.strip():
             raise GatewayError(
