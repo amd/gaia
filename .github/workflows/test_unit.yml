@@ -119,7 +119,7 @@ jobs:
           echo "=== Running CLI Tool-Confirmation Integration Tests ==="
           echo "The subprocess probe exercises the real confirmation gate, including dynamic agents."
           echo ""
-          pytest tests/integration/test_cli_tool_confirmation.py -v --tb=short
+          pytest tests/integration/test_cli_tool_confirmation.py -v --tb=short --timeout=300
 
       - name: Upload coverage to Codecov
         if: always()

@@ -1745,7 +1745,15 @@ Do NOT wrap conversational replies in JSON.
         if self.SKILL_MANIFEST:
             path = Path(self.SKILL_MANIFEST)
             if not path.is_absolute():
-                module_file = inspect.getfile(type(self))
+                try:
+                    module_file = inspect.getfile(type(self))
+                except (OSError, TypeError) as exc:
+                    raise _skill_validation_error(
+                        f"Agent {type(self).__name__} sets relative "
+                        f"SKILL_MANIFEST={self.SKILL_MANIFEST!r}, but its source "
+                        "file is unavailable. Use an absolute path or define "
+                        "the agent in a source-backed module."
+                    ) from exc
                 path = (Path(module_file).resolve().parent / path).resolve()
             if not path.is_file():
                 raise _skill_validation_error(
