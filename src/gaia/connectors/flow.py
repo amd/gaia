@@ -436,8 +436,8 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     return web.Response(text=_SUCCESS_HTML, content_type="text/html")
 
 
-async def _commit_grants(flow: _PendingFlow) -> None:
-    """Write the per-agent grants requested at ``start_authorization`` time.
+async def _commit_grants(flow: _PendingFlow, granted_scopes: Iterable[str]) -> None:
+    """Write per-agent grants limited to the scopes the token exchange granted.
 
     Called only after the connection is persisted. Each grant is written
     through the same ledger the CLI/SDK/Settings panel use, so it is
@@ -456,9 +456,13 @@ async def _commit_grants(flow: _PendingFlow) -> None:
     # and keeps flow.py's module-load dependency graph unchanged.
     from gaia.connectors.grants import grant_agent
 
+    granted_scope_set = set(granted_scopes)
     for agent_id, agent_scopes in flow.grant_agents.items():
+        effective_scopes = [
+            scope for scope in agent_scopes if scope in granted_scope_set
+        ]
         try:
-            grant_agent(flow.provider_id, agent_id, list(agent_scopes))
+            grant_agent(flow.provider_id, agent_id, effective_scopes)
         except Exception as e:
             raise GrantAfterConnectError(
                 flow.provider_id,
@@ -467,7 +471,7 @@ async def _commit_grants(flow: _PendingFlow) -> None:
                     f"{e}. The connection was saved; grant the agent manually "
                     f"from Settings → Connectors, or via `gaia connectors "
                     f"grants grant {flow.provider_id} {agent_id} --scopes "
-                    f"{' '.join(agent_scopes)}`"
+                    f"{' '.join(effective_scopes)}`"
                 ),
             ) from e
         await emit(
@@ -475,14 +479,14 @@ async def _commit_grants(flow: _PendingFlow) -> None:
             {
                 "connector_id": flow.provider_id,
                 "agent_id": agent_id,
-                "scopes": list(agent_scopes),
+                "scopes": effective_scopes,
             },
         )
         logger.info(
             "flow: granted connector_id=%s agent_id=%s scopes=%d on connect",
             flow.provider_id,
             agent_id,
-            len(agent_scopes),
+            len(effective_scopes),
         )
 
 
@@ -574,7 +578,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     # email agent access without a follow-up CLI grant. Fail loudly — a
     # connection that persisted but whose grant could not be written is the
     # exact silent half-success the connect flow must not produce.
-    await _commit_grants(flow)
+    await _commit_grants(flow, granted_scopes)
 
     # Google's token endpoint does not return a ``connected_at`` field
     # (RFC 6749 has no such concept) — record the local wall-clock at
