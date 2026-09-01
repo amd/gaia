@@ -99,6 +99,7 @@ class TestListCalendarEventsAttendees:
         out = list_calendar_events_impl(cal, time_min=None, time_max=None)
         (event,) = out["events"]
         assert event["attendees"] == []
+        assert event["organizer_self"] is True
 
     def test_event_with_real_attendees_reports_them(self):
         cal = _FakeCalendar(
@@ -170,6 +171,26 @@ class TestDetectCalendarConflictsAttendees:
         assert out["has_conflict"] is True
         (conflict,) = out["conflicts"]
         assert conflict["attendees"] == []
+
+    def test_conflicting_event_surfaces_external_organizer(self):
+        cal = _FakeCalendar(
+            [
+                {
+                    "id": "evt1",
+                    "summary": "Vendor meeting",
+                    "start": {"dateTime": "2026-08-06T09:00:00Z"},
+                    "end": {"dateTime": "2026-08-06T10:00:00Z"},
+                    "organizer": {"email": "vendor@example.com", "self": False},
+                }
+            ]
+        )
+        out = detect_calendar_conflicts_impl(
+            cal,
+            start_iso="2026-08-06T09:30:00Z",
+            end_iso="2026-08-06T10:30:00Z",
+        )
+
+        assert out["conflicts"][0]["organizer_self"] is False
 
     def test_conflicting_event_with_real_attendees_reports_them(self):
         cal = _FakeCalendar(

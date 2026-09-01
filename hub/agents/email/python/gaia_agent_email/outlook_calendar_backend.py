@@ -19,7 +19,8 @@ interchangeably, without a single tool change.
 Translation summary (Graph -> Google shape):
 
 - ``event`` -> ``{id, summary(=subject), start, end, location(=location.
-  displayName), organizer:{email}, htmlLink(=webLink)}``.
+  displayName), organizer:{email, self}, htmlLink(=webLink)}``; Graph's
+  ``isOrganizer`` is carried as the provider-neutral ``organizer.self``.
 - Graph ``start``/``end`` are ``dateTimeTimeZone`` objects
   (``{dateTime, timeZone}``). Google uses ``{dateTime}`` for timed events and
   ``{date}`` for all-day. ``isAllDay==true`` -> ``{date: <YYYY-MM-DD>}``; else
@@ -119,14 +120,17 @@ def graph_event_to_google(event: Dict[str, Any]) -> Dict[str, Any]:
     ``events.get`` / ``events.list`` item shape.
 
     Only the fields the email agent's calendar tools read are reconstructed
-    (``id``/``summary``/``start``/``end``/``location``/``organizer.email``);
-    ``htmlLink`` is carried for informational parity with Google.
+    (``id``/``summary``/``start``/``end``/``location``/``organizer.email`` /
+    ``organizer.self``); ``htmlLink`` is carried for informational parity with
+    Google.
     """
     all_day = bool(event.get("isAllDay"))
     organizer_addr = ((event.get("organizer") or {}).get("emailAddress") or {}).get(
         "address"
     ) or ""
-    organizer = {"email": organizer_addr} if organizer_addr else {}
+    organizer: Dict[str, Any] = {"email": organizer_addr} if organizer_addr else {}
+    if "isOrganizer" in event:
+        organizer["self"] = event["isOrganizer"]
     location = (event.get("location") or {}).get("displayName") or None
     return {
         "id": event.get("id"),

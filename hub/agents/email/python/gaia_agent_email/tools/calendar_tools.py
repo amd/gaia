@@ -708,12 +708,14 @@ def detect_calendar_conflicts_impl(
             if intervals_overlap(candidate_start, candidate_end, ev_start, ev_end):
                 start_obj = ev.get("start") or {}
                 end_obj = ev.get("end") or {}
+                organizer_data = ev.get("organizer") or {}
                 conflicts.append(
                     {
                         "id": ev.get("id"),
                         "summary": ev.get("summary", ""),
                         "start": start_obj.get("dateTime") or start_obj.get("date"),
                         "end": end_obj.get("dateTime") or end_obj.get("date"),
+                        "organizer_self": organizer_data.get("self"),
                         "attendees": _extract_attendees(ev),
                     }
                 )
@@ -929,7 +931,8 @@ def list_calendar_events_impl(
         data = cal.list_events(time_min=time_min, time_max=time_max)
         events = []
         for e in data.get("items", []):
-            organizer = (e.get("organizer") or {}).get("email")
+            organizer_data = e.get("organizer") or {}
+            organizer = organizer_data.get("email")
             events.append(
                 {
                     "id": e.get("id"),
@@ -940,6 +943,7 @@ def list_calendar_events_impl(
                     or (e.get("end") or {}).get("date"),
                     "location": e.get("location"),
                     "organizer": organizer,
+                    "organizer_self": organizer_data.get("self"),
                     "missing_organizer": organizer is None,
                     # Real attendees only, [] when the calendar has none
                     # beyond the organizer (#2766) — never inferred from the
@@ -1128,7 +1132,11 @@ class CalendarToolsMixin:
             ``attendees`` list; an empty list means say so, not guess. The
             ``organizer`` is who created the event, not evidence that anyone
             was sent or received an invite — never describe the organizer as
-            having "sent an invite"."""
+            having "sent an invite". ``organizer_self`` is the provider's
+            explicit boolean: ``false`` means the user is not the organizer
+            and may be reported as having received an invite for that event;
+            ``true`` means the user organized it, and ``null`` means the
+            provider did not supply the signal. Never infer this field."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
@@ -1283,12 +1291,14 @@ class CalendarToolsMixin:
             bounding the proposed meeting. Returns an envelope whose
             ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
             overlapping events, each with ``id``/``summary``/``start``/
-            ``end``/``attendees``). Overlap is half-open: a meeting ending
+            ``end``/``organizer_self``/``attendees``). Overlap is half-open: a meeting ending
             exactly when another begins does NOT conflict. If the calendar
             can't be read, this surfaces the error rather than reporting a
             reassuring "no conflicts". Never state an attendee for a
             conflicting event unless that event's own ``attendees`` list
-            actually names them.
+            actually names them. Only ``organizer_self=false`` from this
+            result grounds a received-invite claim; it does not prove that an
+            email was sent or that the user confirmed the invitation.
             """
             try:
                 return _envelope_ok(
