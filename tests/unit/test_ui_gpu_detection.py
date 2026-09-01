@@ -23,6 +23,8 @@ from gaia.llm.lemonade_manager import gpu_display_info, system_info_has_gpu
 from gaia.ui.routers import onboarding as onboarding_mod
 from gaia.ui.server import create_app
 
+pytestmark = pytest.mark.allow_network
+
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
 
@@ -222,6 +224,16 @@ def test_system_status_no_npu_on_macos(stub_lemonade):
     assert "npu" not in body["detected_devices"]
 
 
+def test_system_status_reports_health_query_failure(stub_lemonade):
+    """A failed health/catalog probe must not masquerade as a confirmed outage."""
+    stub_lemonade({})
+
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["lemonade_running"] is False
+    assert body["lemonade_error"] == "Lemonade health query failed"
+
+
 # ── onboarding preflight probe ───────────────────────────────────────────
 
 
@@ -270,3 +282,37 @@ async def test_onboarding_probe_npu_absent_is_false_not_unknown(stub_lemonade):
     result = await onboarding_mod._probe_lemonade_devices()
 
     assert result["npu_detected"] is False
+
+
+@pytest.mark.asyncio
+async def test_onboarding_probe_reports_query_failure(monkeypatch):
+    class _FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            raise RuntimeError("connection refused")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FailingClient())
+
+    result = await onboarding_mod._probe_lemonade_devices()
+
+    assert result["lemonade_running"] is False
+    assert result["npu_detected"] is None
+    assert result["lemonade_error"] == "Lemonade system-info query failed"
+
+
+@pytest.mark.asyncio
+async def test_onboarding_probe_reports_non_200_query(stub_lemonade):
+    stub_lemonade({})
+
+    result = await onboarding_mod._probe_lemonade_devices()
+
+    assert result["lemonade_running"] is False
+    assert result["npu_detected"] is None
+    assert result["lemonade_error"] == "Lemonade system-info query failed"

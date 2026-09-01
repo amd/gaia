@@ -9,6 +9,8 @@ from gaia.hub import compatibility
 from gaia.ui.routers import onboarding as onboarding_mod
 from gaia.ui.server import create_app
 
+pytestmark = pytest.mark.allow_network
+
 
 @pytest.fixture
 def marker(tmp_path, monkeypatch):
@@ -125,6 +127,7 @@ def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
             "npu_detected": None,
             "gpu_name": None,
             "gpu_vram_gb": None,
+            "lemonade_error": "Lemonade system-info query failed",
         }
 
     monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _probe)
@@ -134,8 +137,9 @@ def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
     body = client.get("/api/onboarding/preflight").json()
     assert body["npu_detected"] is None
     assert body["lemonade_running"] is False
-    # Unprobed NPU falls back to the conservative "cannot verify" message.
-    assert any("cannot verify NPU" in w for w in body["warnings"])
+    assert body["lemonade_error"] == "Lemonade system-info query failed"
+    assert any("could not query Lemonade" in w for w in body["warnings"])
+    assert not any("driver is installed" in w for w in body["warnings"])
 
 
 # ── status / complete ──────────────────────────────────────────────────────

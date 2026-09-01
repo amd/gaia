@@ -658,8 +658,11 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
                             break
+                else:
+                    status.lemonade_error = "Lemonade health query failed"
     except Exception:
         status.lemonade_running = False
+        status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
     try:
