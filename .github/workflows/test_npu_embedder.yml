@@ -5,6 +5,16 @@
 # Ryzen AI hardware. The test (tests/test_npu_flm_embedder_hw.py) SKIPS unless
 # the live Lemonade Server advertises the FLM model, so on a runner without the
 # FLM/NPU backend this job is a clean no-op rather than a false failure.
+#
+# Runs on the AMD Ryzen Dev Lab pool, which registers a runner per job and
+# destroys it afterwards. `devlab-dispatch` is what routes it there; that pool
+# does not answer to `strix-halo` alone, because the word describes the silicon
+# rather than naming a fleet, and more than one fleet is Strix Halo.
+#
+# `Windows` is required, not tidy: the pool is mixed and most of its Halos are
+# Linux, while the step below is PowerShell. Every Windows host in the pool also
+# carries the NPU driver and XRT, so this reaches the same hardware the test
+# expects -- and where it does not, the test skips by design rather than failing.
 name: Test NPU FLM Embedder
 
 on:
@@ -40,7 +50,7 @@ permissions:
 jobs:
   test-npu-embedder:
     name: Test NPU FLM Embedder
-    runs-on: [self-hosted, strix-halo]
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
