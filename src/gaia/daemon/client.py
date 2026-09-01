@@ -48,6 +48,13 @@ _REQUIRED_AGENTS_MINOR = 1
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
 
+_UPGRADE_CORE_GUIDANCE = (
+    "Upgrade the installed GAIA core so it matches this app: "
+    "`pip install --upgrade amd-gaia`, or re-run the installer from "
+    "https://amd-gaia.ai. The version comes from the installed core, so "
+    "`gaia daemon restart` brings the same one back."
+)
+
 
 def _major(version: str) -> int:
     try:
@@ -64,7 +71,7 @@ def _check_version(inst: DaemonInstance) -> None:
         raise DaemonVersionError(
             f"the running daemon speaks host API v{inst.api_version} but this client "
             f"speaks v{DAEMON_API_VERSION}. An app update replaced the client while the "
-            "old daemon kept running. Restart it with `gaia daemon restart`, then retry."
+            f"old daemon kept running. {_UPGRADE_CORE_GUIDANCE}"
         )
 
 
@@ -169,7 +176,7 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         raise DaemonVersionError(
             f"the running daemon (host API v{inst.api_version}) predates the "
             "sidecar control plane + relay (needs v1.1+) — it would 404 every "
-            "agents route. Run `gaia daemon restart`, then retry."
+            f"agents route. {_UPGRADE_CORE_GUIDANCE}"
         )
 
 
