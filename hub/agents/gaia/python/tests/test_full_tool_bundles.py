@@ -35,7 +35,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 10 CORE leaves 16).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 12 CORE leaves 14).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -103,6 +103,12 @@ def test_escape_hatch_is_registered_and_core(flagship_registry):
     """Without load_tools in the registry a semantic miss is unrecoverable."""
     assert "load_tools" in FULL_CORE_TOOLS
     assert "load_tools" in flagship_registry
+
+
+def test_skill_discovery_loader_is_registered_and_core(flagship_registry):
+    """A shortlist must be able to call the tool its prompt advertises."""
+    assert "load_skill" in FULL_CORE_TOOLS
+    assert "load_skill" in flagship_registry
 
 
 def test_bundle_menu_renders_for_the_flagship():
