@@ -51,7 +51,8 @@ _ENSURE_TIMEOUT = (5.0, 900.0)
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
     "`pip install --upgrade amd-gaia`, or re-run the installer from "
-    "https://amd-gaia.ai. The version comes from the installed core, so "
+    "https://amd-gaia.ai. If you already upgraded, restart the daemon to pick "
+    "it up; otherwise the version comes from the installed core, so "
     "`gaia daemon restart` brings the same one back."
 )
 

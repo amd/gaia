@@ -29,6 +29,7 @@ def test_daemon_version_errors_guide_users_to_upgrade_the_installed_core(
         check(_instance(api_version))
 
     message = str(exc_info.value)
+    assert f"v{api_version}" in message
     assert "pip install --upgrade amd-gaia" in message
     assert "https://amd-gaia.ai" in message
     assert "gaia daemon restart` brings the same one back" in message
