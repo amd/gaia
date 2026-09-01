@@ -25,8 +25,9 @@ Translation summary (Graph -> Google shape):
   ``{date}`` for all-day. ``isAllDay==true`` -> ``{date: <YYYY-MM-DD>}``; else
   ``{dateTime: <graph dateTime>}`` (the tools read the value verbatim for
   display, so the wall-clock string passes through unchanged).
-- A list response is wrapped as ``{"items": [...]}`` so the calendar tool's
-  ``data.get("items", [])`` reads it exactly as a Google response.
+- A list response is wrapped as ``{"items": [...]}`` (plus a provider-neutral
+  ``nextPageToken`` when Graph returns ``@odata.nextLink``) so the calendar
+  tool reads it exactly as a Google response and can report truncation.
 
 Calendar verbs (Google -> Graph):
 
@@ -264,8 +265,9 @@ class LiveOutlookCalendarBackend:
             data = self._get("/me/events", params=params)
         items = [graph_event_to_google(e) for e in data.get("value", [])]
         # Wrap in the Google ``items`` envelope so the calendar tool reads it
-        # exactly as a Google list response.
-        return {"items": items}
+        # exactly as a Google list response. Preserve Graph's continuation
+        # link under the provider-neutral name consumed by calendar_tools.
+        return {"items": items, "nextPageToken": data.get("@odata.nextLink")}
 
     def get_event(  # pylint: disable=unused-argument
         self, *, calendar_id: str = "primary", event_id: str
