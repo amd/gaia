@@ -295,6 +295,22 @@ python -m pytest tests/ -xvs        # All tests, verbose
 python -m pytest tests/ --hybrid    # Cloud + local testing
 ```
 
+The packaged email-agent tests are hermetic and must not invoke an interactive
+OS keychain. Run them with the null keyring backend (the email test package's
+`conftest.py` and CI workflow apply this setting automatically):
+
+```bash
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+  python -m pytest hub/agents/email/python/tests/
+```
+
+On PowerShell, set the equivalent environment variable first:
+
+```powershell
+$env:PYTHON_KEYRING_BACKEND = "keyring.backends.null.Keyring"
+python -m pytest hub/agents/email/python/tests/
+```
+
 Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.

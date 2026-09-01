@@ -22,6 +22,13 @@ import pytest
 # under CI's multi-root pytest invocation (test_email_agent.yml).
 
 
+def pytest_configure(config):
+    """Keep email-agent tests from invoking an interactive OS keychain."""
+
+    del config
+    os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+
+
 @pytest.fixture(autouse=True)
 def _contain_the_skill_set_env_var():
     """Undo any ``GAIA_EMAIL_SKILL_SET`` a test leaves behind in ``os.environ``.
