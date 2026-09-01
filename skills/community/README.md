@@ -5,9 +5,9 @@ This directory is the contribution entry point for community-authored skills. A
 [publishing guide](https://amd-gaia.ai/docs/guides/hub-publishing) and the
 [skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).
 
-`skills/starter/` next door is the AMD starter pack — worked examples to copy,
-**not** a place to submit. Community submissions live here, one directory per
-skill.
+[`hub/skills/`](../../hub/skills/) is the AMD starter pack — worked examples to
+copy, **not** a place to submit. Community submissions live here, one directory
+per skill.
 
 ## How to contribute
 

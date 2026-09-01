@@ -214,7 +214,7 @@ def test_findings_reach_the_private_channel(workflow):
 
 
 def test_the_community_submissions_directory_exists():
-    """Contributors need somewhere to PR into, alongside skills/starter/."""
+    """Contributors need somewhere to PR into, alongside the hub/skills/ pack."""
     readme = REPO_ROOT / "skills" / "community" / "README.md"
     assert readme.is_file(), (
         "skills/community/README.md is the contribution entry point referenced "

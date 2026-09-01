@@ -85,12 +85,12 @@ class TestConstruction:
         assert AGENT_NAMESPACED_ID == "installed:email"
 
     def test_required_connectors_well_formed(self):
-        # Two providers are declared: Google (Gmail #962 + Calendar) and
-        # Microsoft (Outlook.com mailbox #1275 + calendar #1276). They coexist —
-        # the active mail/calendar backend is chosen by ``config.mail_provider``
-        # / ``config.calendar_provider``.
+        # Three providers are declared: Google (Gmail #962 + Calendar),
+        # personal Microsoft (Outlook.com mailbox #1275 + calendar #1276), and
+        # work Microsoft 365 (#2629). They coexist — the active mail/calendar
+        # backend is chosen by ``config.mail_provider`` / ``config.calendar_provider``.
         reqs = {c.connector_id: c for c in EmailTriageAgent.REQUIRED_CONNECTORS}
-        assert set(reqs) == {"google", "microsoft"}
+        assert set(reqs) == {"google", "microsoft", "microsoft_work"}
 
         google = reqs["google"]
         # Tuple form (frozen dataclass normalizes).
@@ -102,6 +102,12 @@ class TestConstruction:
         # requirement bundles Gmail + Calendar in ALL_SCOPES.
         assert microsoft.scopes == OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
         assert microsoft.reason  # non-empty
+
+        microsoft_work = reqs["microsoft_work"]
+        # Same Graph mail/calendar scopes as the personal connector — only the
+        # OAuth tenant/authority differs (#2628), not the permission set.
+        assert microsoft_work.scopes == OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
+        assert microsoft_work.reason  # non-empty
 
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
@@ -167,6 +173,10 @@ class TestToolRegistry:
         # user's reply (the opposite direction from check_followups);
         # pre-existing gap, this file never got it when it landed.
         "list_waiting_on_you",
+        # Suspicious-mail detection (#2900) — phishing/spam-flagged view
+        # over the same classifier pre_scan_inbox already runs, scoped so a
+        # "anything suspicious?" question doesn't dump the full triage card.
+        "check_suspicious_mail",
         # Organize
         "archive_message",
         "mark_read",

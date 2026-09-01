@@ -190,11 +190,14 @@ gaia init [OPTIONS]
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
+| `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
 | `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
 | `--verbose` | flag | false | Enable verbose output |
 | `--remote` | flag | false | Use remote Lemonade Server (skip local install/start, download models via API). Auto-detected when `LEMONADE_BASE_URL` is set to a non-localhost URL. |
+| `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
+| `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download, no side effects. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 
 **Available Profiles:**
 
@@ -214,6 +217,15 @@ canonical choices list):
 | `email` | Gemma-4-E4B-it-GGUF | Gmail/Outlook triage with local inference | ~3 GB |
 | `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
+
+<Note>
+`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
+agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
+`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
+checkout, `uv pip install -e hub/agents/gaia/python`. See the
+[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
+and current release status.
+</Note>
 
 <Note>
 The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile —
@@ -489,15 +501,19 @@ Manage an *installed* agent: set per-agent configuration, verify it loads, and i
 
 ```bash
 gaia agent configure <id> [--model NAME] [--set KEY=VALUE ...] [--replace] [--show]
-gaia agent health <id>
-gaia agent status [<id>]
+gaia agent health <id> [--json]
+gaia agent status [<id>] [--json]
 ```
 
 **`configure`** writes per-agent settings (e.g. a preferred model). `--set` values are JSON-decoded when possible (`--set temperature=0.2` stores a number, `--set verbose=true` a boolean), otherwise kept as strings. Settings merge into the existing config by default; pass `--replace` to overwrite it wholesale, or `--show` to print the current config without changing it.
 
-**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`, and exits non-zero for `error` / `not_installed` so scripts can gate on it.
+**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`.
 
 **`status`** aggregates installed version, health, config summary, and source for one agent — or every discovered agent when `<id>` is omitted.
+
+**Exit codes:** with an explicit `<id>`, both commands exit `1` when that agent's health is `error` or `not_installed`, `0` otherwise — so scripts can gate on a single agent without parsing table output. The all-agents form (`gaia agent status` with no `<id>`) always exits `0`; an absent agent shows up as a row, not a failure of the listing itself.
+
+**`--json`** emits machine-readable output instead of the table/text form, with log lines routed to stderr so stdout stays pure JSON for `| jq`. `health --json` prints one object (`HealthStatus.to_dict()`); `status --json` prints one object for a single `<id>`, or a JSON **list** of objects for the all-agents form.
 
 | Option | Applies to | Description |
 |--------|------------|-------------|
@@ -506,6 +522,7 @@ gaia agent status [<id>]
 | `--set KEY=VALUE` | `configure` | Set an arbitrary setting (repeatable) |
 | `--replace` | `configure` | Replace the whole config instead of merging |
 | `--show` | `configure` | Print the current config and exit |
+| `--json` | `health`, `status` | Emit machine-readable JSON instead of text |
 
 **Examples:**
 
@@ -517,6 +534,16 @@ gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
 ```bash Check health and status
 gaia agent health chat
 gaia agent status            # every discovered agent
+```
+
+```bash Gate a script on a single agent
+# Exit code alone is enough to gate on: 0 if installed, 1 if not.
+gaia agent status chat || echo "chat is not installed"
+
+# Or inspect the JSON. Passing the value with --arg keeps this working in
+# Windows PowerShell 5.1, which strips embedded double quotes from arguments
+# to native commands.
+gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 ```
 </CodeGroup>
 

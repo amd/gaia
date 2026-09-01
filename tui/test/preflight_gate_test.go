@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -700,10 +701,17 @@ func TestAnAbandonedGatesReportCannotGreenLightAnotherAgent(t *testing.T) {
 // A subprocess agent has no daemon relay, so the gate has nothing to probe and
 // must not invent four failures over a launch that works.
 func TestASubprocessAgentIsNotGated(t *testing.T) {
+	// The test binary itself is the one executable path guaranteed to resolve
+	// on every OS — /bin/echo does not exist on Windows, and the client never
+	// spawns it here anyway.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
 	d := newRootDriver(t, readyGateTransport(), 80, 24)
 	d.send(hub.LaunchAgentMsg{Agent: catalog.Agent{
 		ID: "bash", Name: "Bash", Status: catalog.StatusInstalled,
-		Transport: catalog.TransportSubprocess, BinaryPath: "/bin/echo",
+		Transport: catalog.TransportSubprocess, BinaryPath: self,
 	}})
 	if got := d.view(); got != "chat" {
 		t.Fatalf("a subprocess launch landed on %q, want chat\n%s", got, d.screen())

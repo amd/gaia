@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,11 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+)
+
+var (
+	_ ToolPermissionResponder = (*SubprocessClient)(nil)
+	_ PermissionBypasser      = (*SubprocessClient)(nil)
 )
 
 // closeGrace bounds how long Close() waits for an in-flight turn's reader to
@@ -72,6 +78,9 @@ type SubprocessClient struct {
 	path  string
 	args  []string
 	debug bool
+	// canonical selects the event dialect read off the pipe: the frozen legacy
+	// vocabulary (false) or the canonical one (true).
+	canonical bool
 
 	mu      sync.Mutex
 	proc    *procHandle
@@ -96,6 +105,19 @@ func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClie
 		args:  args,
 		debug: debug,
 	}
+}
+
+// NewCanonicalSubprocessClient is NewSubprocessClient for an agent that speaks
+// the CANONICAL event vocabulary over the pipe rather than the frozen legacy one.
+//
+// Same transport, different dialect. Canonical events carry the tool narration
+// and result previews the activity log renders; the legacy vocabulary has
+// nowhere to put them, so an agent moved onto this transport and parsed as
+// legacy would silently lose its progress reporting.
+func NewCanonicalSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
+	c := NewSubprocessClient(path, args, debug)
+	c.canonical = true
+	return c
 }
 
 // turnState is everything one turn needs, captured under a single lock so it can
@@ -171,8 +193,25 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		return nil, err
 	}
 
-	if _, err := fmt.Fprintln(st.stdin, query); err != nil {
-		return nil, fmt.Errorf("failed to write to agent stdin: %w", err)
+	// JSON-wrapped, never raw: the agent reads stdin a LINE at a time, so a
+	// query written verbatim is split at every newline and each fragment
+	// becomes its own turn. A five-line paste asked five questions, and the
+	// agent answered the first one insisting it was all it had been sent.
+	line, err := json.Marshal(map[string]string{queryKey: query})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode query: %w", err)
+	}
+	if _, err := fmt.Fprintf(st.stdin, "%s\n", line); err != nil {
+		// The child is dead or its stdin is gone (the common case: agent
+		// construction failed — Lemonade down — it printed its error and
+		// exited, and the reader returned at that terminal event without
+		// resetting). Keeping the state marks the corpse as "started" and
+		// every later Send would fail exactly like this one, telling the
+		// user to retry the one thing that can never work.
+		s.resetDeadChild(st.proc)
+		close(st.turnDone)
+		return nil, fmt.Errorf(
+			"failed to write to the agent (it will be restarted on your next message): %w", err)
 	}
 
 	ch := make(chan interface{}, 32)
@@ -198,8 +237,11 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		// and reads nothing.
 		defer func() {
 			if ctx.Err() != nil {
-				st.proc.reap()
-				s.discard(st.proc)
+				// resetDeadChild, not a hand-rolled subset: kill() is
+				// idempotent on the already-killed child, and one shared
+				// sequence means a future reset change cannot miss the
+				// cancellation path.
+				s.resetDeadChild(st.proc)
 			}
 		}()
 
@@ -224,7 +266,13 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				continue
 			}
 
-			evt, perr := event.ParseEvent(line)
+			var evt interface{}
+			var perr error
+			if s.canonical {
+				evt = event.ParseCanonicalEvent(line)
+			} else {
+				evt, perr = event.ParseEvent(line)
+			}
 			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.
@@ -250,13 +298,22 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				return
 			}
 
-			// Turn boundary — stop reading after terminal events.
+			// Turn boundary — stop reading after terminal events. Both dialects
+			// are listed because the check runs before we know which one this
+			// agent speaks: a canonical agent never sends AnswerEvent, so a
+			// legacy-only check reads past the end of the turn and blocks until
+			// something kills the child (a one-shot `run --query` sat for its
+			// whole timeout before being reaped).
 			switch evt.(type) {
 			case event.AnswerEvent:
 				return
 			case event.AgentErrorEvent:
 				return
 			case event.DoneEvent:
+				return
+			case event.CanonicalFinalEvent:
+				return
+			case event.CanonicalErrorEvent:
 				return
 			}
 		}
@@ -273,6 +330,10 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				Type:    "agent_error",
 				Content: fmt.Sprintf("agent stdout read error: %v", err),
 			})
+			// A scanner error (e.g. a line over the 1MB cap) is permanent on
+			// this scanner — without a reset, every later turn re-emits this
+			// same error without ever reading again.
+			s.resetDeadChild(st.proc)
 			return
 		}
 
@@ -282,7 +343,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		s.discard(st.proc)
 		if state != nil && !state.Success() {
 			stderrContent := st.stderr.String()
-			msg := fmt.Sprintf("agent process exited with code %d", state.ExitCode())
+			msg := describeAgentExit(state.ExitCode())
 			if stderrContent != "" {
 				msg += "\n" + stderrContent
 			}
@@ -294,6 +355,139 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	}()
 
 	return ch, nil
+}
+
+// windowsTerminated is what Windows reports for a force-terminated process:
+// 0xFFFFFFFF, which Go's ExitCode() hands back as this decimal.
+const windowsTerminated = 4294967295
+
+// describeAgentExit turns a raw exit status into a line a user can act on.
+//
+// The raw form was "agent process exited with code 4294967295" — observed after
+// killing the agent mid-turn. That number is 0xFFFFFFFF, it is not a code the
+// agent chose, and to a reader it looks like memory corruption rather than "it
+// was killed".
+//
+// Both branches end with what actually happens next. The transport respawns the
+// child on the following Send, so recovery needs no action — and a user staring
+// at an error box has no way to know that unless it says so.
+func describeAgentExit(code int) string {
+	if code == windowsTerminated || code == -1 {
+		return "The agent process was stopped. Your next message will start it again."
+	}
+	return fmt.Sprintf(
+		"The agent process exited unexpectedly (code %d). "+
+			"Your next message will start it again.", code)
+}
+
+// controlKey marks a stdin line as a control message rather than a query. Must
+// match gaia_agent.stdio.CONTROL_KEY — the agent only treats a line as control
+// if it parses as a JSON object carrying exactly this key, so a question that
+// merely looks like JSON is still a question.
+const controlKey = "gaia_control"
+
+// queryKey wraps a user's question so its newlines survive the trip. Must match
+// gaia_agent.stdio.QUERY_KEY. The agent still accepts a bare line as a query, so
+// an older child paired with this build keeps working — it just cannot carry a
+// multi-line question.
+const queryKey = "gaia_query"
+
+// writeControl sends one control message to the child's stdin.
+//
+// Safe to call DURING a turn, which is the entire point: a permission decision
+// is worth nothing after the prompt it answers has expired. stdin and stdout
+// are independent directions of the pipe, and the agent reads stdin on its own
+// thread, so this does not contend with the turn's reader.
+//
+// A control message for a child that was never started is an error, not a
+// silent no-op: it means the caller thinks it is talking to an agent that does
+// not exist, and swallowing that produces a UI that looks like it worked.
+//
+// IMPORTANT for anything built on this channel later: it is fire-and-forget
+// ONLY. Nothing reads stdout except the goroutine Send spawns below, and that
+// goroutine exists only for the duration of one turn — between turns nobody is
+// scanning the pipe at all. A control message answered by writing a reply
+// event (rather than resolving state already parked in-process, the way
+// RespondToolPermission/SetBypassPermissions do) would sit unread in the OS
+// pipe buffer until some LATER, unrelated Send() call started scanning again —
+// at which point it would be misread as the first event of THAT turn. This is
+// why live model switching (`/model`, gaia_agent.stdio.run_model_command) does
+// NOT use this channel despite looking like a natural fit: it needs an actual
+// response (the switched-to model, or why the switch was refused), so it rides
+// the ordinary query channel (Send) like a real turn instead, guaranteeing a
+// reader is actually listening when the answer comes back.
+func (s *SubprocessClient) writeControl(fields map[string]interface{}) error {
+	s.mu.Lock()
+	stdin, started := s.stdin, s.started
+	s.mu.Unlock()
+
+	if !started || stdin == nil {
+		return fmt.Errorf("the agent process is not running, so it cannot be told %q", fields[controlKey])
+	}
+	line, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("could not encode the %q control message: %w", fields[controlKey], err)
+	}
+	if _, err := fmt.Fprintf(stdin, "%s\n", line); err != nil {
+		return fmt.Errorf("could not reach the agent to send %q: %w", fields[controlKey], err)
+	}
+	return nil
+}
+
+// RespondToolPermission delivers the user's yes/no/always decision to the
+// agent thread parked on the prompt.
+func (s *SubprocessClient) RespondToolPermission(confirmID string, decision PermissionDecision) error {
+	fields := map[string]interface{}{
+		controlKey: "tool_decision",
+		"decision": string(decision),
+	}
+	if confirmID != "" {
+		fields["confirm_id"] = confirmID
+	}
+	return s.writeControl(fields)
+}
+
+// SetBypassPermissions turns unattended approval on or off for the session.
+func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
+	return s.writeControl(map[string]interface{}{
+		controlKey: "bypass",
+		"enabled":  enabled,
+	})
+}
+
+// BypassAtLaunch reports whether the child was spawned with bypass already on,
+// so the UI can show the warning from the very first frame rather than only
+// after a toggle.
+func (s *SubprocessClient) BypassAtLaunch() bool {
+	for _, a := range s.args {
+		if a == "--bypass-permissions" {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaudeAtLaunch reports whether the child was spawned with --use-claude, so
+// the UI's "claude" chip is driven by what actually reached the child's argv
+// rather than by a second bool that could disagree with it.
+func (s *SubprocessClient) ClaudeAtLaunch() bool {
+	for _, a := range s.args {
+		if a == UseClaudeFlag {
+			return true
+		}
+	}
+	return false
+}
+
+// resetDeadChild kills, reaps, and discards a child the client can no longer
+// talk to. One helper, because the sequence is easy to get subtly wrong: a
+// missed discard leaves a corpse marked "started" and every later Send fails
+// against it. Closing the turn's done channel stays at the call sites — only
+// the pre-reader failure path owns an unclosed one.
+func (s *SubprocessClient) resetDeadChild(proc *procHandle) {
+	proc.kill()
+	proc.reap()
+	s.discard(proc)
 }
 
 // discard clears the client's process state, but only if it still refers to

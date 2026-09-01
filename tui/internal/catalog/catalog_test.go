@@ -328,9 +328,22 @@ func TestEmailUsesTheDaemonTransport(t *testing.T) {
 		t.Errorf("a daemon-transport agent must carry no binary path, got %q", email.BinaryPath)
 	}
 
-	// Every other seeded agent still uses the subprocess transport.
+	// The invariant is per-transport, not per-agent: a daemon-transport agent is
+	// an HTTP sidecar reached through the relay, so it must carry no binary path
+	// the TUI would try to spawn. Asserting "everything except email is
+	// subprocess" would need editing for every new sidecar — the opposite of a
+	// guard.
+	// gaia is deliberately absent: it moved onto the subprocess transport, so
+	// the TUI spawns it directly with no daemon, port or lease in the path.
+	daemonAgents := map[string]bool{"email": true}
 	for _, a := range c.All() {
-		if a.ID == "email" {
+		if daemonAgents[a.ID] {
+			if a.Transport != TransportDaemon {
+				t.Errorf("agent %q transport = %v, want daemon (it is an HTTP sidecar)", a.ID, a.Transport)
+			}
+			if a.BinaryPath != "" {
+				t.Errorf("daemon-transport agent %q carries binary path %q", a.ID, a.BinaryPath)
+			}
 			continue
 		}
 		if a.Transport != TransportSubprocess {

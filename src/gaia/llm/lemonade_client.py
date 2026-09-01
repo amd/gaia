@@ -192,6 +192,18 @@ _TRUNCATE_THRESHOLD_RATIO = 30000 / NPU_CTX_SIZE  # chars per ctx token
 _TRUNCATE_TARGET_FRACTION = 2 / 3  # 20000 / 30000
 
 
+def budget_for_ctx(ctx_size: int) -> Tuple[int, int]:
+    """(threshold, target) char budget for a model with *ctx_size* tokens.
+
+    The ratio is the NPU profile's tuned 30000/20000 for a 32768 window (#2620),
+    scaled — so a bigger context earns a proportionally bigger allowance instead
+    of a newly invented number.
+    """
+    threshold = round(ctx_size * _TRUNCATE_THRESHOLD_RATIO)
+    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
+    return threshold, target
+
+
 def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     """(threshold, target) char budget for large tool-result truncation.
 
@@ -201,12 +213,14 @@ def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     the bigger budget would reopen the #1030 context-overflow class if the
     caller turns out to actually be running on NPU — only an explicit
     non-NPU device earns the larger allowance.
+
+    This is the LOCAL profile. A remote model has its own, much larger window and
+    must not be squeezed into local hardware's budget — see
+    ``Agent._truncation_budget``.
     """
     normalized = (device or "").strip().lower()
     ctx = NPU_CTX_SIZE if not normalized or normalized == "npu" else GPU_CTX_SIZE
-    threshold = round(ctx * _TRUNCATE_THRESHOLD_RATIO)
-    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
-    return threshold, target
+    return budget_for_ctx(ctx)
 
 
 # =========================================================================
@@ -518,6 +532,19 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
         if mr.model_id == model_id:
             return mr.tool_calling
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def _tool_call_deltas(delta: Any) -> Optional[List[Dict[str, Any]]]:
+    """Plain-dict form of one streamed frame's ``tool_calls``, or ``None``.
+
+    Only a real sequence is unpacked — the OpenAI SDK hands back pydantic models
+    here, and a test double's auto-created attribute would otherwise reach the
+    accumulator as a fragment it cannot read.
+    """
+    raw = getattr(delta, "tool_calls", None)
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    return [tc.model_dump() if hasattr(tc, "model_dump") else dict(tc) for tc in raw]
 
 
 def _validate_profile_model_registry() -> None:
@@ -1998,6 +2025,11 @@ class LemonadeClient:
                                     getattr(choice.delta, "reasoning_content", None)
                                     or None
                                 ),
+                                # Native tool_calls arrive as fragments (name in
+                                # the first frame, arguments split across the
+                                # rest). Dropping them here is what made a
+                                # tool-calling turn unstreamable.
+                                "tool_calls": _tool_call_deltas(choice.delta),
                             },
                             "finish_reason": choice.finish_reason,
                         }

@@ -336,7 +336,7 @@ def test_nothing_connected_asks_which_mailbox_first(connectors):
     assert len(asked) == 1
     assert "Which one should I connect?" in asked[0]
     values = [o["value"] for o in agent.console.asked[0]["options"]]
-    assert values == ["google", "microsoft", "no"]
+    assert values == ["google", "microsoft", "microsoft_work", "no"]
     assert out["data"]["declined"] is True
 
 

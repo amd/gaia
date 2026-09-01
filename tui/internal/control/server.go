@@ -16,9 +16,29 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 )
+
+// realTerminalSize reports the OS-level size of the physical viewport stdout
+// is attached to — the actual bound a resize could overflow. ok is false when
+// stdout is not a terminal (headless runs: tests, CI), in which case there is
+// no viewport to overflow and cols/rows must not be trusted. Swappable for
+// tests.
+//
+// This is deliberately NOT s.state.Size(): that field also records every
+// synthetic WindowSizeMsg this same handler injects, so using it as the
+// boundary made the check a one-way ratchet — one legitimate shrink request
+// permanently lowered the ceiling until a real terminal resize happened to
+// come along and refresh it.
+var realTerminalSize = func() (cols, rows int, ok bool) {
+	c, r, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 0, 0, false
+	}
+	return c, r, true
+}
 
 // Sender is the subset of *tea.Program the control server needs. Program.Send
 // is safe to call from another goroutine — that is the whole injection
@@ -89,7 +109,7 @@ func Debugf(debug bool) func(format string, args ...any) {
 		return func(string, ...any) {}
 	}
 	return func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, "[control] "+format+"\n", args...)
+		logf("[control] "+format, args...)
 	}
 }
 
@@ -177,10 +197,16 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 	// Whoever registers last owns the file. Say so when that displaces a live
 	// registration: the older TUI keeps running but becomes undiscoverable.
 	if prev, rerr := ReadInfo(); rerr == nil && prev != nil && prev.PID != s.pid && daemon.PIDAlive(prev.PID) {
-		fmt.Fprintf(os.Stderr,
+		takeover := fmt.Sprintf(
 			"control: taking over %s, which was registered to pid %d and that pid is still "+
 				"in use. If it is another TUI it can no longer be found by a client — quit it, "+
-				"or run only one TUI with --control at a time.\n", path, prev.PID)
+				"or run only one TUI with --control at a time.", path, prev.PID)
+		// Printed before p.Run() takes the alt screen, so it is safe on stderr —
+		// but the alt screen then wipes it, and this is the one warning that
+		// explains why a driver is talking to the wrong session. Mirror it into
+		// the log so it outlives the frame that erases it.
+		fmt.Fprintln(os.Stderr, takeover)
+		logf("%s", takeover)
 	}
 	if err := WriteInfo(info); err != nil {
 		listener.Close()
@@ -192,7 +218,7 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 		if err != nil && err != http.ErrServerClosed {
 			// The TUI keeps running, but nothing can drive it any more — say so
 			// rather than leaving the caller waiting on a dead socket.
-			fmt.Fprintf(os.Stderr, "control API stopped serving: %v — restart the TUI to re-enable it\n", err)
+			logf("control API stopped serving: %v — restart the TUI to re-enable it", err)
 		}
 	}()
 
@@ -257,7 +283,7 @@ func (s *Server) WatchTermination(sigs <-chan os.Signal, quit func()) {
 	}
 	s.debugf("received %v — removing %s before exiting", sig, s.discoveryPath)
 	if err := s.Stop(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		logf("%v", err)
 	}
 	if quit != nil {
 		quit()
@@ -298,7 +324,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		// The response is already committed; nothing actionable remains but to
 		// leave a trace for whoever reads the log.
-		fmt.Fprintf(os.Stderr, "[control] failed to encode response: %v\n", err)
+		logf("[control] failed to encode response: %v", err)
 	}
 }
 
@@ -727,6 +753,27 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 			Code:    "bad_size",
 			Message: fmt.Sprintf("%dx%d is out of range", req.Cols, req.Rows),
 			Hint:    "cols must be 20-500 and rows 5-200",
+		})
+		return
+	}
+	// Never lay out WIDER or TALLER than the terminal currently is. A synthetic
+	// WindowSizeMsg only tells the model a size; it cannot make the real
+	// terminal bigger. Asking for 200x55 on a 120x42 terminal makes the model
+	// emit 200-column lines that the terminal hard-wraps, which shreds the
+	// visible frame (blank screen, duplicated status line, lost scrollback)
+	// while /screen still reports the clean logical frame — so the damage is
+	// invisible to the very API you would test with.
+	// Only when a physical viewport exists: headless runs (tests, CI) have no
+	// terminal to overflow, and must stay free to lay out any size they like.
+	if curCols, curRows, ok := realTerminalSize(); ok &&
+		(req.Cols > curCols || req.Rows > curRows) {
+		writeErr(w, http.StatusConflict, apiError{
+			Code: "resize_exceeds_terminal",
+			Message: fmt.Sprintf(
+				"asked for %dx%d but the terminal is %dx%d; enlarging past it would corrupt the visible screen",
+				req.Cols, req.Rows, curCols, curRows),
+			Hint: "resize the real terminal window first, or request a size within " +
+				fmt.Sprintf("%dx%d", curCols, curRows),
 		})
 		return
 	}

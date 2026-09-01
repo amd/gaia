@@ -165,6 +165,9 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "needs_you",
         "needs_you_total",
         "bulk",
+        # #2900: the phishing/spam-flagged subset of actionable.
+        "suspicious",
+        "suspicious_total",
     }
     assert any(i["message_id"] == "m1" for i in briefing["suggested_archives"])
     assert record["generated_at"]  # stamped for the pull surface

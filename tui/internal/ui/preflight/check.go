@@ -829,6 +829,15 @@ var connectScopes = map[string][]string{
 		"https://graph.microsoft.com/Mail.Send",
 		"https://graph.microsoft.com/Calendars.ReadWrite",
 	},
+	"microsoft_work": {
+		// catalog/microsoft.py default_scopes (work tenant — same Graph app registration shape)
+		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES — identical to personal Outlook;
+		// only the connector id (token/grant/keyring slot) differs.
+		"https://graph.microsoft.com/Mail.ReadWrite",
+		"https://graph.microsoft.com/Mail.Send",
+		"https://graph.microsoft.com/Calendars.ReadWrite",
+	},
 }
 
 // sendScopes is the per-provider scope `can_send` is really asking about. It
@@ -836,8 +845,9 @@ var connectScopes = map[string][]string{
 // carries enough to tell: a sign-in that never requested the scope needs a new
 // sign-in, while a sign-in that has it but was not handed to the agent does not.
 var sendScopes = map[string]string{
-	"google":    "https://www.googleapis.com/auth/gmail.send",
-	"microsoft": "https://graph.microsoft.com/Mail.Send",
+	"google":         "https://www.googleapis.com/auth/gmail.send",
+	"microsoft":      "https://graph.microsoft.com/Mail.Send",
+	"microsoft_work": "https://graph.microsoft.com/Mail.Send",
 }
 
 // connectCommand is the one command that fixes every mailbox state: it
@@ -971,7 +981,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	// route an Outlook user into a Google sign-in.
 	row.Provider = ""
 	row.Remedy = Remedy{
-		Action:  "Connect Gmail or Outlook — press f to choose. For Outlook, swap `google` for `microsoft` below.",
+		Action:  "Connect Gmail, Outlook, or Microsoft 365 — press f to choose. For Outlook swap `google` for `microsoft` below, or `microsoft_work` for a work account.",
 		Command: connectCommand("google"),
 		Where:   "https://amd-gaia.ai/docs/guides/email",
 	}
@@ -1344,6 +1354,8 @@ func providerName(provider string) string {
 		return "Gmail"
 	case "microsoft":
 		return "Outlook"
+	case "microsoft_work":
+		return "Microsoft 365"
 	default:
 		return provider
 	}
