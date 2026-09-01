@@ -1516,7 +1516,7 @@ Do NOT wrap conversational replies in JSON.
         candidates: List[Path] = []
         try:
             module_dir = Path(inspect.getfile(type(self))).resolve().parent
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             module_dir = None
         if module_dir is not None:
@@ -1758,7 +1758,7 @@ Do NOT wrap conversational replies in JSON.
 
         try:
             module_file = inspect.getfile(type(self))
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             return None
         module_dir = Path(module_file).resolve().parent
