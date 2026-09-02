@@ -1577,10 +1577,14 @@ async function installBackend(opts = {}) {
     );
 
     if (initResult.code !== 0) {
-      // gaia init failure is non-fatal (user can retry later), but we still
-      // log it and treat the rest of the install as successful.
-      log(
-        `Warning: gaia init exited with code ${initResult.code}. Continuing anyway.`
+      throw new InstallError(
+        `Failed to initialize Lemonade Server and download models (gaia init exit ${initResult.code}).`,
+        {
+          stage: STAGES.GAIA_INIT,
+          code: initResult.code,
+          suggestion:
+            "Check the install log for details, verify your network and available disk space, then click Retry.",
+        }
       );
     }
     report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
