@@ -7,8 +7,6 @@ capture pulls UNTRUSTED content in â€” a pasted body enters the system prompt â€
 so anything that grants executable reach must wait for `gaia skill promote`.
 """
 
-import pytest
-
 from gaia.agents.base.tool_grants import grant_scope
 
 
@@ -92,8 +90,6 @@ class TestCaptureLandsAtomically:
 
     def test_a_lock_failure_leaves_nothing_behind(self, tmp_path, monkeypatch):
         import shutil as shutil_mod
-
-        from gaia.skills import capture as cap
 
         boom = tmp_path / "skills" / "victim"
 
