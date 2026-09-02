@@ -218,9 +218,9 @@ class GmailBackend(Protocol):
         NOTE: ``get_messages_batch`` (#2643 lever 2 — fetch many messages in
         one round-trip) is intentionally NOT part of this Protocol. It is a
         duck-typed, opt-in capability some backends provide (``LiveGmailBackend``,
-        ``FakeGmailBackend``) — declaring it here would force EVERY backend
-        (including ``LiveOutlookBackend``, which doesn't implement it) to grow
-        it just to keep satisfying ``isinstance(x, GmailBackend)``, which
+        ``LiveOutlookBackend``, ``FakeGmailBackend``) — declaring it here would
+        force EVERY backend to grow it just to keep satisfying
+        ``isinstance(x, GmailBackend)``, which
         several tests rely on. Callers detect it via
         ``getattr(gmail, "get_messages_batch", None)`` and fall back to a
         per-id ``get_message`` loop when it's absent — see

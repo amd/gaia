@@ -69,17 +69,17 @@ def _item(request_id: str, message: dict, *, status: int = 200) -> dict:
 
 def test_empty_and_single_fetch_keep_existing_request_paths():
     backend, recorder = _backend(
-        lambda _: httpx.Response(200, json=_graph_message("m1"))
+        lambda _: httpx.Response(200, json=_graph_message("m/1"))
     )
 
     assert backend.get_messages_batch([]) == {}
     assert recorder.requests == []
 
-    result = backend.get_messages_batch(["m1"], format="metadata")
+    result = backend.get_messages_batch(["m/1"], format="metadata")
 
-    assert result["m1"]["id"] == "m1"
+    assert result["m/1"]["id"] == "m/1"
     assert len(recorder.requests) == 1
-    assert recorder.requests[0].url.path.endswith("/me/messages/m1")
+    assert recorder.requests[0].url.raw_path.startswith(b"/v1.0/me/messages/m%2F1?")
     assert recorder.requests[0].url.params["$select"] == _MESSAGE_SELECT_METADATA
 
 

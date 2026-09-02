@@ -9,6 +9,9 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Outlook triage now fetches message details through Microsoft Graph batches
+  (#3104).** Outlook scans split requests at Graph's 20-subrequest limit while
+  preserving per-message response validation.
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,

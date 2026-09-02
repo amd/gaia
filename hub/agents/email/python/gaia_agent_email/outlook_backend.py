@@ -104,13 +104,14 @@ _MESSAGE_SELECT = (
 # ``bodyPreview`` (Gmail's ``snippet`` equivalent) stays, since the category
 # heuristic and meeting-request detector both read that.
 #
-# Graph accepts at most 20 requests in one JSON ``$batch`` envelope.
-_BATCH_MAX_SUBREQUESTS = 20
 _MESSAGE_SELECT_METADATA = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,sentDateTime,isRead,isDraft,flag,categories,"
     "bodyPreview,parentFolderId"
 )
+
+# Graph accepts at most 20 requests in one JSON ``$batch`` envelope.
+_BATCH_MAX_SUBREQUESTS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +498,10 @@ class LiveOutlookBackend:
 
     def get_message(self, message_id: str, *, format: str = "full") -> Dict[str, Any]:
         select = _MESSAGE_SELECT_METADATA if format == "metadata" else _MESSAGE_SELECT
-        data = self._get(f"/me/messages/{message_id}", params={"$select": select})
+        data = self._get(
+            f"/me/messages/{quote(message_id, safe='')}",
+            params={"$select": select},
+        )
         return graph_message_to_gmail(data, include_body=(format != "metadata"))
 
     def get_messages_batch(
