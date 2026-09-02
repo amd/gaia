@@ -56,6 +56,13 @@ def test_background_test_mode_does_not_start_threads(mock_home, monkeypatch):
 def test_background_missing_dependency_fails_and_removes_pid(mock_home, monkeypatch):
     """A missing optional dependency must not look like a running adapter."""
     real_import = builtins.__import__
+    pid_path = mock_home / ".gaia" / "telegram.pid"
+    removed_paths = []
+    real_remove = telegram.os.remove
+
+    def record_remove(path):
+        removed_paths.append(path)
+        return real_remove(path)
 
     def fail_telegram_ext(name, *args, **kwargs):
         if name == "telegram.ext":
@@ -63,9 +70,11 @@ def test_background_missing_dependency_fails_and_removes_pid(mock_home, monkeypa
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fail_telegram_ext)
+    monkeypatch.setattr(telegram.os, "remove", record_remove)
 
     with pytest.raises(
-        RuntimeError, match="python-telegram-bot is required for Telegram support"
+        RuntimeError,
+        match=r'python-telegram-bot is required for Telegram support.*gaia\[telegram\]',
     ):
         telegram.run_telegram(
             token="fake-token-missing-dependency",
@@ -73,4 +82,30 @@ def test_background_missing_dependency_fails_and_removes_pid(mock_home, monkeypa
             background=True,
         )
 
-    assert not (mock_home / ".gaia" / "telegram.pid").exists()
+    assert len(removed_paths) == 1
+    assert os.path.normpath(removed_paths[0]) == os.path.normpath(str(pid_path))
+    assert not pid_path.exists()
+
+
+def test_cli_reports_missing_dependency_without_traceback(monkeypatch, capsys):
+    """The CLI turns the adapter's actionable error into a clean exit."""
+    from gaia import cli
+
+    def fail_start(**_kwargs):
+        raise RuntimeError(
+            'python-telegram-bot is required for Telegram support. '
+            'Install it with: pip install "gaia[telegram]"'
+        )
+
+    monkeypatch.setattr(telegram, "run_telegram", fail_start)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gaia", "telegram", "start", "--token", "fake-token", "--background"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 1
+    assert "pip install" in capsys.readouterr().err

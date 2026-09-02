@@ -229,22 +229,23 @@ class TelegramAdapter:
                 MessageHandler,
                 filters,
             )
-        except ImportError as e:  # pragma: no cover - dependency missing
+        except ImportError as e:
             if background:
                 # The PID file is created before importing the optional
                 # dependency so supervisors can discover a real background
                 # process. Do not leave a false-positive PID behind when the
                 # process cannot start.
-                if pid_path:
-                    try:
-                        os.remove(pid_path)
-                    except OSError as cleanup_error:
-                        log.warning(
-                            "Failed to remove Telegram PID file after startup failure: %s",
-                            cleanup_error,
-                        )
+                try:
+                    os.remove(pid_path)
+                except OSError as cleanup_error:
+                    log.warning(
+                        "Failed to remove Telegram PID file after startup failure: %s",
+                        cleanup_error,
+                    )
             raise RuntimeError(
-                "python-telegram-bot is required for Telegram support"
+                "python-telegram-bot is required for Telegram support. "
+                'Install it with: pip install "gaia[telegram]" '
+                "(see https://amd-gaia.ai/docs/guides/telegram-adapter)"
             ) from e
 
         app = ApplicationBuilder().token(token).build()

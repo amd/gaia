@@ -3254,11 +3254,15 @@ def main():
                     )
                     sys.exit(2)
 
-            run_telegram(
-                token=args.token,
-                allowed_users=allowed,
-                background=getattr(args, "background", False),
-            )
+            try:
+                run_telegram(
+                    token=args.token,
+                    allowed_users=allowed,
+                    background=getattr(args, "background", False),
+                )
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(1)
             return
 
         if action == "stop":
