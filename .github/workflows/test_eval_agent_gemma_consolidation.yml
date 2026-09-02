@@ -125,6 +125,10 @@
 name: Agent Eval — Gemma-4-E4B consolidation
 
 on:
+  # TEMPORARY, devlab/dispatch-conversion only: lets the conversion commit run this
+  # workflow. Not for merge.
+  push:
+    branches: [ devlab/dispatch-conversion ]
   workflow_dispatch:
     inputs:
       enforce:
@@ -272,7 +276,11 @@ jobs:
     # hardware. Serialisation still comes from the concurrency group, not either
     # label. Same `Windows` guard as the sibling evals: the pool also matches a
     # Linux box (xsj-aimlab-stxp-04) and every step here is PowerShell.
-    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1, not left to the runner default (pwsh

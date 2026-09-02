@@ -128,6 +128,10 @@
 name: Email Agent Eval (offline, report mode)
 
 on:
+  # TEMPORARY, devlab/dispatch-conversion only: lets the conversion commit run this
+  # workflow. Not for merge.
+  push:
+    branches: [ devlab/dispatch-conversion ]
   # Weekly — Mondays 07:17 UTC. Was nightly; moved to weekly because the run now
   # includes the judge-scored voice-drafting eval, which spends Claude tokens.
   # (The release itself re-runs the full suite as a hard gate — see
@@ -275,7 +279,11 @@ jobs:
     # runner must have Windows AND the stx/stx-test label.
     # The event_name guard keeps the pull_request dereference off schedule /
     # workflow_dispatch / workflow_call runs, where that context is absent.
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # THE SERIAL SLOT. Same group name as email_scorecard_refresh.yml and
     # test_eval_agent_gemma_consolidation.yml — `lemonade-eval`, exactly — so at
     # most one eval touches the single Lemonade backend at a time (CLAUDE.md: at

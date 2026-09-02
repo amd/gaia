@@ -101,6 +101,10 @@
 name: Email Agent Eval — scorecard refresh
 
 on:
+  # TEMPORARY, devlab/dispatch-conversion only: lets the conversion commit run this
+  # workflow. Not for merge.
+  push:
+    branches: [ devlab/dispatch-conversion ]
   workflow_dispatch:
     inputs:
       limit:
@@ -184,7 +188,11 @@ jobs:
     # steps + LemonadeServer.exe) — landing on Linux dies instantly with
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
-    runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # Budget derivation (#2094) — measured against run 29433392568 (limit 60,
     # killed at the old flat 90-min job timeout mid action-item judge eval).
     # Judge-step ceilings are profile-independent: their corpora are fixed

@@ -6,7 +6,7 @@ name: Test RAG
 on:
   workflow_call:
   push:
-    branches: [ main ]
+    branches: [main, "devlab/dispatch-conversion" ]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
@@ -78,10 +78,11 @@ jobs:
 
   test-rag-integration:
     name: RAG Integration Tests
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 60

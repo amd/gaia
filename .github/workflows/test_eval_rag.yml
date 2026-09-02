@@ -20,6 +20,10 @@ name: Eval RAG Quality
 # invocation that diffs instead of running an eval, the 90-min budget -- is
 # still #1315's to rebuild. Do not read this edit as "the gate works now".
 on:
+  # TEMPORARY, devlab/dispatch-conversion only: lets the conversion commit run this
+  # workflow. Not for merge.
+  push:
+    branches: [ devlab/dispatch-conversion ]
   workflow_dispatch:
 
 # Both jobs only check out code and run the eval — no writes to the repo,
@@ -49,7 +53,11 @@ jobs:
   run-eval:
     name: Run RAG Quality Eval
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         shell: powershell

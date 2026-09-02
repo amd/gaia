@@ -9,7 +9,7 @@ name: Agent SDK Tests (Windows)
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "devlab/dispatch-conversion" ]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
@@ -43,10 +43,11 @@ permissions:
 jobs:
   test-agent-sdk-windows:
     name: Test Agent SDK on Windows (Lemonade Integration)
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7

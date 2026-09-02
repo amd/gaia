@@ -87,6 +87,10 @@
 name: Claude Weekly Doc Walkthrough
 
 on:
+  # TEMPORARY, devlab/dispatch-conversion only: lets the conversion commit run this
+  # workflow. Not for merge.
+  push:
+    branches: [ devlab/dispatch-conversion ]
   schedule:
     # 12:00 UTC every Monday. This one stays WEEKLY on purpose while its two static
     # siblings went nightly: it drives a real Lemonade instance on the self-hosted
@@ -180,10 +184,11 @@ jobs:
     # self-hosted-runner workflows and stay actionlint-clean (a literal label isn't
     # in actionlint's default known-labels list; an expression sidesteps that
     # static check the same way test_api.yml / test_lemonade_server.yml do).
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ 'stx' }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     strategy:
       fail-fast: false
       max-parallel: 1

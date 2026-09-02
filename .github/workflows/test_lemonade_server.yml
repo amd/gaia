@@ -6,7 +6,7 @@ name: Lemonade Server Smoke Test
 on:
   workflow_call:
   push:
-    branches: [ main ]
+    branches: [main, "devlab/dispatch-conversion" ]
     paths:
       - 'src/gaia/version.py'
       - 'src/gaia/llm/**'
@@ -52,10 +52,11 @@ concurrency:
 jobs:
   test-lemonade-server:
     name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+    # Converted to the AMD Ryzen Dev Lab pool: a runner is registered for this
+    # job alone and destroyed after it. 'devlab-dispatch' is what routes it
+    # there; 'strix-halo' narrows to the silicon. The static 'stx' / 'stx-test'
+    # / 'lemonade-eval' labels named machines this pool does not carry.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
