@@ -845,7 +845,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         if not base_url:
             print("   Prerequisites:")
             print(
-                "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
+                "     1. Models downloaded  : gaia init  (first time only, ~25 GB)"
             )
             print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
             print()
@@ -2928,8 +2928,12 @@ Examples:
     init_parser.add_argument(
         "--profile",
         "-p",
-        default="chat",
+        # Literal, not an import: gaia.installer.init_command costs ~3s to
+        # import and build_parser() runs on every `gaia` invocation. Pinned to
+        # init_command.DEFAULT_INIT_PROFILE by a test so it cannot drift.
+        default="gaia",
         choices=[
+            "gaia",
             "minimal",
             "sd",
             "chat",
@@ -2940,7 +2944,9 @@ Examples:
             "npu",
             "all",
         ],
-        help="Profile to initialize: minimal, sd (image gen), chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
+        help="Profile to initialize: gaia (the flagship agent), minimal, sd (image gen), "
+        "chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), "
+        "all (default: gaia)",
     )
     init_parser.add_argument(
         "--minimal",

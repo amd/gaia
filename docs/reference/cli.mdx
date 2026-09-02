@@ -186,7 +186,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, email, npu, all) |
+| `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -207,10 +207,10 @@ canonical choices list):
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
+| `gaia` **(default)** | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) — chat, documents, data, web, memory | ~4 GB |
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
-| `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support (the flagship's base class, without the flagship itself) | ~4 GB |
 | `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
@@ -219,17 +219,21 @@ canonical choices list):
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
-agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
-`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
-checkout, `uv pip install -e hub/agents/gaia/python`. See the
-[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
-and current release status.
+A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
+embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
+**not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
+fetches and verifies both binaries with no Python required.
+</Note>
+
+<Note>
+`gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
+device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
+their FLM equivalents — the default never switches your backend for you.
 </Note>
 
 <Note>
 The `talk` agent relies on the `chat` profile — there is no dedicated `talk`
-profile. Run `gaia init --profile chat` (or `all`) to prepare its dependencies.
+profile. The default `gaia` profile is a superset, so a bare `gaia init` covers it.
 </Note>
 
 <Note>
@@ -247,16 +251,12 @@ gaia init
 gaia init --minimal
 ```
 
-```bash Code Development
-gaia init --profile code
-```
-
 ```bash Vision Pipeline (Lightweight)
 gaia init --profile vlm
 ```
 
 ```bash Non-Interactive CI/CD
-gaia init --profile chat --yes
+gaia init --yes
 ```
 
 ```bash Remote Lemonade Server
