@@ -33,6 +33,13 @@ requirements:
   # The binary is statically linked with CGO_ENABLED=0 and holds no model. The
   # floor is the terminal client alone — the agent a user opens declares its own.
   min_memory_gb: 1
+  # The RAW binary ships for all six. The native installers
+  # (installer/tui/**) cover only four: they bundle the flagship gaia-agent
+  # sidecar, which publishes no win-arm64 or linux-arm64 build, and an installer
+  # that set up the hub with no agent behind it would be worse than none.
+  # release_components.yml publishes those under the *-setup / *-pkg / *-deb /
+  # *-rpm platform keys so they never displace the raw binary a hub install
+  # expects to download.
   platforms: [win-x64, win-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64]
 
 interfaces:

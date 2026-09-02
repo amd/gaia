@@ -6,6 +6,30 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **An unexpected sidecar failure now comes back as JSON you can read, not a
+  bare "Internal Server Error".** A `500` from an error the sidecar didn't
+  anticipate used to arrive as plain text with nothing to act on. It now carries
+  `{"detail": "Internal server error", "error_id": "<12 hex>"}`, and that
+  `error_id` appears in the sidecar's own log next to the request that caused it
+  — so a user reporting a failure can hand you the id and you can find the
+  matching traceback. Known failures are unchanged: a missing mailbox
+  connection, an expired token, or a bad request keep the statuses and messages
+  they had. **If your code reads `HttpError.bodyText` (or matches on the error
+  message) looking for the literal string `Internal Server Error`, switch it to
+  parsing the JSON** (#3000).
+
+- **A request with no `Host` header is now rejected instead of served.** The
+  sidecar's DNS-rebinding check used to skip itself when the header was absent.
+  No normal client is affected — this package, the Python client, and curl all
+  send `Host` — but a request that left it out used to get a `200` and now gets
+  a `400`.
+- **Searching a connected Outlook mailbox with Gmail-style operators
+  (`from:`, `subject:`, `is:unread`, `newer_than:`) now returns results
+  instead of nothing.** Those operators used to be sent to Microsoft Graph
+  as literal search text; they are now translated to the matching Graph
+  query so `search({ query: "is:unread" })` and similar calls behave the
+  way they do for Gmail (#2996).
+
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the
   contract document didn't say so. It now declares the requirement (and marks

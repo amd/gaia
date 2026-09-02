@@ -108,10 +108,14 @@
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl. Default https://hub.amd-gaia.ai.
 #     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
-#                              workers.dev URL: the free-plan managed WAF on the
-#                              proxied hub.amd-gaia.ai custom domain blocks large
-#                              binary uploads, but not GET downloads. Unset →
-#                              falls back to GAIA_HUB_BASE_URL (uploads 403).
+#                              workers.dev URL: the managed WAF fronting the
+#                              hub.amd-gaia.ai custom domain 403s large binary
+#                              uploads, so POST /publish goes through the
+#                              workers.dev origin instead — same Worker + R2
+#                              bucket, just the door that isn't WAF-blocked
+#                              (GET downloads stay on hub.amd-gaia.ai). REQUIRED —
+#                              the release fails loudly if it is unset (no silent
+#                              fallback).
 #   npm trusted publisher for @amd-gaia/gaia registered against THIS workflow
 #   file name: release_agent_gaia.yml (repo amd/gaia). The OIDC subject is tied
 #   to the exact filename — RENAMING THIS FILE BREAKS THE npm PUBLISH.
@@ -774,6 +778,19 @@ jobs:
             exit 1
           fi
 
+      - name: Assert hub publish URL present
+        shell: bash
+        # Variable goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing.
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Download sidecar artifacts
         uses: actions/download-artifact@v8
         with:
@@ -925,7 +942,7 @@ jobs:
           # Fail here instead, where the error says to bump the version. Drop
           # this flag if the lock is ever switched to --summary-out.
           python "${PACKAGING}/publish_to_r2.py" \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --strict-immutable \
             "${doc_args[@]}" \

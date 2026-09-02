@@ -5,7 +5,7 @@
   "projectTitle": "GAIA",
   "description": "AMD's open-source framework for building AI agents in Python and C++ that run entirely on local hardware, with AMD NPU and GPU acceleration on Ryzen AI processors.",
   "folders": ["docs"],
-  "excludeFolders": ["tests", "scripts", "workshop", "docs/spec"],
+  "excludeFolders": ["tests", "scripts", "docs/spec"],
   "excludeFiles": ["CHANGELOG.md"],
   "rules": [
     "GAIA has two frameworks: Python (src/gaia/) and C++ (cpp/). Most documentation covers the Python SDK.",

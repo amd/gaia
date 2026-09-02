@@ -16,8 +16,11 @@ Test coverage includes:
 """
 
 import logging
+import time
 
+import httpx
 import pytest
+import respx
 
 # Test imports
 try:
@@ -383,13 +386,121 @@ class TestApiUnitValidation:
     # Endpoint Tests
     # -------------------------------------------------------------------------
 
-    def test_health_endpoint_returns_ok(self):
-        """Test that /health endpoint returns status ok."""
+    @respx.mock
+    def test_health_endpoint_returns_component_status(self, monkeypatch):
+        """Test that /health reports API, loaded LLM, and RAG status."""
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
+        respx.get("http://lemonade.test/api/v1/health").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "all_models_loaded": [
+                        {
+                            "model_name": "Gemma-4-E4B-it-GGUF",
+                            "type": "llm",
+                        }
+                    ],
+                },
+            )
+        )
+
+        response = self.client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "ok",
+            "service": "gaia-api",
+            "components": {
+                "api": {"status": "ready"},
+                "llm": {
+                    "status": "ready",
+                    "backend": "lemonade",
+                    "model": "Gemma-4-E4B-it-GGUF",
+                    "url": "http://lemonade.test/api/v1",
+                },
+                "rag": {"status": "not_configured"},
+            },
+        }
+
+    @respx.mock
+    def test_health_endpoint_degrades_when_no_llm_is_loaded(self, monkeypatch):
+        """A running Lemonade catalog without a loaded LLM is not ready."""
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test/api/v1")
+        respx.get("http://lemonade.test/api/v1/health").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "model_loaded": None,
+                    "all_models_loaded": [
+                        {
+                            "model_name": "embeddinggemma-300m-GGUF",
+                            "type": "embedding",
+                        }
+                    ],
+                },
+            )
+        )
+
         response = self.client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ok"
-        assert data["service"] == "gaia-api"
+        assert data["status"] == "degraded"
+        assert data["components"]["api"]["status"] == "ready"
+        assert data["components"]["llm"]["status"] == "unavailable"
+        assert data["components"]["llm"]["model"] is None
+
+    @respx.mock
+    def test_health_endpoint_degrades_when_lemonade_is_unreachable(self, monkeypatch):
+        """Connection failures stay bounded and report an unavailable LLM."""
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
+        respx.get("http://lemonade.test/api/v1/health").mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+
+        started = time.monotonic()
+        response = self.client.get("/health")
+        elapsed = time.monotonic() - started
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert response.json()["components"]["llm"]["status"] == "unavailable"
+        assert elapsed < 0.5
+
+    @respx.mock
+    def test_health_endpoint_configures_bounded_lemonade_timeout(self, monkeypatch):
+        """Lemonade health requests use the configured 350 ms timeout."""
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
+
+        def timeout(request):
+            assert request.extensions["timeout"] == {
+                "connect": 0.35,
+                "read": 0.35,
+                "write": 0.35,
+                "pool": 0.35,
+            }
+            raise httpx.ConnectTimeout("request timed out", request=request)
+
+        respx.get("http://lemonade.test/api/v1/health").mock(side_effect=timeout)
+
+        response = self.client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert response.json()["components"]["llm"]["status"] == "unavailable"
+
+    @respx.mock
+    def test_health_endpoint_reports_lemonade_errors(self, monkeypatch):
+        """An unhealthy Lemonade response is distinct from unavailability."""
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
+        respx.get("http://lemonade.test/api/v1/health").mock(
+            return_value=httpx.Response(503, json={"status": "error"})
+        )
+
+        response = self.client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert response.json()["components"]["llm"]["status"] == "error"
 
     def test_models_endpoint_advertises_the_flagship(self):
         """/v1/models lists the flagship agent in OpenAI-compatible shape.
@@ -566,13 +677,20 @@ class TestChatCompletionsNonStreaming:
 class TestHealthEndpoint:
     """Test health check endpoint"""
 
-    def test_health_check_returns_ok(self, api_server, api_client):
-        """Test that /health endpoint returns status ok"""
+    def test_health_check_returns_components(self, api_server, api_client):
+        """Test that /health returns the component-level contract."""
         response = api_client.get(f"{api_server}/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ok"
+        assert data["status"] in ("ok", "degraded")
         assert data["service"] == "gaia-api"
+        assert data["components"]["api"] == {"status": "ready"}
+        assert data["components"]["llm"]["status"] in (
+            "ready",
+            "unavailable",
+            "error",
+        )
+        assert data["components"]["rag"] == {"status": "not_configured"}
 
 
 # =============================================================================

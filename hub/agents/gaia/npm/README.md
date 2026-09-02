@@ -9,7 +9,10 @@ npx @amd-gaia/gaia
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
 you into the terminal UI. No Python to install, no repo to clone, no build step.
-Everything runs locally on your machine; nothing you type or index leaves it.
+Everything runs locally on your machine; nothing you type or index leaves it. The
+terminal UI's `--use-claude` flag, which would send a conversation to the
+Anthropic API, is refused for the agent this package installs — see
+[`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
 exact same binary a full GAIA install runs as `gaia tui`, not a separate build. So
@@ -75,14 +78,19 @@ npx @amd-gaia/gaia -- --debug
 
 Common options:
 
-| Flag                  | Meaning                                                       |
-| --------------------- | ------------------------------------------------------------- |
-| `--base-url <url>`    | Override the download base URL from `binaries.lock.json`       |
-| `--cache-dir <dir>`   | Where to cache the terminal UI binary                          |
-| `--sidecar-dir <dir>` | Where to install the agent sidecar (default `~/.gaia/agents/gaia`) |
-| `--platform <key>`    | Fetch for another platform (`fetch` only)                      |
-| `--force`             | Re-download even when a verified binary is already cached      |
-| `--port <n>`          | Sidecar bind port for `serve` (default `8141`)                 |
+| Flag                  | Meaning                                                       | Accepted by |
+| --------------------- | ------------------------------------------------------------- | ----------- |
+| `--base-url <url>`    | Override the download base URL from `binaries.lock.json`. Must be `https:` | `run`, `fetch`, `serve` |
+| `--allow-insecure-base-url` | Permit a non-`https` `--base-url` (a trusted local mirror) | `run`, `fetch`, `serve` |
+| `--sidecar-dir <dir>` | Where to install the agent sidecar (default `~/.gaia/agents/gaia`) | `run`, `fetch`, `serve` |
+| `--cache-dir <dir>`   | Where to cache the terminal UI binary                          | `run`, `fetch` |
+| `--force`             | Re-download even when a verified binary is already cached      | `run`, `fetch`, `serve` |
+| `--platform <key>`    | Fetch for another platform                                     | `fetch` |
+| `--component <name>`  | Fetch only `sidecar` or `tui`                                  | `fetch` |
+| `--port <n>`          | Sidecar bind port (default `8141`)                             | `serve` |
+
+A flag a command does not read is **refused**, not ignored — `gaia run --port
+9000` exits 2 rather than silently coming up on the default port.
 
 Set `DEBUG=gaia` for download, spawn, and sidecar output on stderr. Diagnostics
 never touch stdout, which the terminal UI owns.
@@ -92,12 +100,20 @@ never touch stdout, which the terminal UI owns.
 | What            | Path                                     |
 | --------------- | ---------------------------------------- |
 | Agent sidecar   | `~/.gaia/agents/gaia/gaia-agent[.exe]`   |
+| Install record  | `~/.gaia/agents/gaia/.installed`         |
 | Terminal UI     | `~/.gaia/npm-cache/gaia-<version>/gaia-tui[.exe]` |
 
 The sidecar goes into the GAIA daemon's own cache directory on purpose: the daemon
 is what spawns and supervises it, and it does its own SHA-256 check on the way. By
 putting an already-verified binary there we save a second download rather than
 racing one.
+
+The `.installed` record next to it is what the daemon and the terminal UI read to
+know the agent is installed — without it the UI would run the sidecar as its own
+stdio child instead of letting the daemon supervise it. It is rewritten even when
+the binary was already cached, so an install left by an earlier version repairs
+itself the next time you run. A `--platform` fetch stages a binary for a
+*different* machine, so it deliberately leaves no record.
 
 The terminal UI is installed as `gaia-tui`, **never** as `gaia` — a file named
 `gaia` in a cache directory would shadow the `gaia` shim npm puts on your `PATH`.
@@ -125,6 +141,12 @@ curl http://127.0.0.1:8141/health
 
 It waits for `GET /health`, checks the contract version, and tears the whole
 process tree down on Ctrl+C. See [`SPEC.md`](./SPEC.md) for the endpoints.
+
+The sidecar normally requires a per-session bearer token on `/v1/gaia/*`, but
+neither `serve` nor `startSidecar` mints one, so both leave it in dev mode — the
+token check off, `Host`/`Origin` still enforced. This agent has shell and file
+tools, so before you expose it to anything, supply a token of your own: see
+[`SPEC.md` §5.4](./SPEC.md#54-caller-authentication).
 
 ## Programmatic use
 

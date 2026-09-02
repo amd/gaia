@@ -162,12 +162,14 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 		},
 		{
 			// …but a machine that has ONLY the job still gets it, rather than being
-			// told nothing is installed when the plist is plainly there.
+			// told nothing is installed when the plist is plainly there. The label
+			// is spelled out rather than built from macDaemonLabel so that a wrong
+			// constant fails here instead of agreeing with itself.
 			name: "macOS falls back to launchd when nothing else is there",
 			probe: fakeHostFor("darwin", []string{"launchctl"},
 				[]string{macDaemonPlist}, nil),
-			wantStart:   "sudo launchctl kickstart system/com.lemonade.server",
-			wantRestart: "sudo launchctl kickstart -k system/com.lemonade.server",
+			wantStart:   "sudo launchctl kickstart system/ai.lemonadeserver.server",
+			wantRestart: "sudo launchctl kickstart -k system/ai.lemonadeserver.server",
 			wantHint:    "Applications folder",
 		},
 		{

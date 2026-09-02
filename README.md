@@ -1,6 +1,6 @@
 # <img src="https://raw.githubusercontent.com/amd/gaia/main/src/gaia/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> GAIA: AI Agent Framework for AMD Ryzen AI
 
-[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
+[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli_linux.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![PyPI](https://img.shields.io/pypi/v/amd-gaia)](https://pypi.org/project/amd-gaia/)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
@@ -25,6 +25,8 @@
 [![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/amd/gaia/releases/latest)
 
 See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
+
+> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
 
 ---
 

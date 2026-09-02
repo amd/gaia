@@ -71,8 +71,8 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if opts.UseClaude {
 			return nil, fmt.Errorf(
 				"agent %q runs over the daemon transport, which cannot switch inference "+
-					"backends — --use-claude only works for subprocess agents. Drop the "+
-					"flag, or pick a subprocess agent (`gaia tui list` shows transports)",
+					"backends — --use-claude only works for an agent the TUI spawns itself. "+
+					"Drop the flag, or run the flagship (`gaia tui`), which is one",
 				agent.ID)
 		}
 		return NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: opts.Logf}), SSEOptions{

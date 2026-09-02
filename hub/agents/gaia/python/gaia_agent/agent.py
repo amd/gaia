@@ -42,7 +42,6 @@ unchanged.
 
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +49,11 @@ from typing import ClassVar, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
+from gaia.agents.base.skill_discovery import (
+    DISCOVERY_THRESHOLD_ENV,
+    SkillDiscovery,
+    discovery_env_override,
+)
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
     SkillLoader,
@@ -57,8 +61,10 @@ from gaia.agents.base.skill_loader import (
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -153,6 +159,31 @@ class GaiaAgentConfig(ChatAgentConfig):
     dynamic_skills: bool = True
     dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
 
+    # Per-turn semantic tool selection. On by default for this agent
+    # specifically: breadth is its whole point, and breadth is what makes the
+    # un-trimmed native ``tools=`` payload cost ~10.2K tiktoken tokens on every
+    # LLM call of a 2-5 call ReAct turn — 60% of the fixed prefill a 4B model
+    # re-reads each step. ChatAgent keeps dynamic_tools=False; no other profile
+    # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
+    dynamic_tools: bool = True
+
+    # 10 CORE (FULL_CORE_TOOLS) + 16 dynamic slots. The inherited 14 was sized
+    # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
+    # bundle, so the flagship would truncate a cohesion group mid-pull instead
+    # of loading it. Swept offline against nine representative queries: 22 cut
+    # the web bundle in half on a research question, 26 lands every matched
+    # bundle whole, and 30 buys nothing further. Costs ~4.2K tiktoken tokens of
+    # tools= against 10.5K for the whole registry.
+    dynamic_tools_max: int = 26
+
+    # Proactive skill discovery: match each turn against skills that are
+    # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
+    # to know a skill's name. On for this agent specifically — it is the one
+    # that ships a skill library and meets users who have never read it.
+    # Overridable via GAIA_SKILL_DISCOVERY.
+    skill_discovery: bool = True
+    skill_discovery_threshold: Optional[float] = None
+
     # Image generation stays off: it pulls a second resident model, and evicting
     # the chat model to draw a picture is not a trade a document agent should
     # make silently.
@@ -190,7 +221,25 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
+        if config is not None and kwargs:
+            raise TypeError(
+                "GaiaAgent takes either a ready GaiaAgentConfig or the config "
+                f"fields as keyword arguments, not both. Got config= plus "
+                f"{sorted(kwargs)}; those keywords would be silently dropped. "
+                "Set them on the config object, or drop the config= argument."
+            )
         super().__init__(config=config or GaiaAgentConfig(**kwargs))
+
+    def close(self) -> None:
+        """Release this agent's watchers, HTTP session and SQLite handles now.
+
+        ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
+        whose tool registry holds bound methods only runs when the cyclic
+        collector gets to it — far too late for a sidecar that builds an agent
+        per one-shot request. Every step is individually guarded and idempotent,
+        so the later ``__del__`` is harmless.
+        """
+        self.__del__()
 
     def _register_tools(self) -> None:
         """ChatAgent's profile tools, plus runtime access to the skill library.
@@ -213,6 +262,7 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         access at construction time — only the first real turn does.
         """
         self.skill_loader = self._maybe_build_skill_loader()
+        self._skill_discovery = self._maybe_build_skill_discovery()
         self.register_skill_library_tools()
         # Same scope as allowed_paths, for the same reason that field rejects
         # cwd: the daemon launches this sidecar with cwd = the package
@@ -224,6 +274,40 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
+
+    def _maybe_build_skill_discovery(self) -> Optional[SkillDiscovery]:
+        """Construct the proactive discoverer, or ``None`` when switched off.
+
+        Built here rather than lazily so ``_discover_skills_for_turn`` never
+        races the first turn, and so a misconfigured threshold fails at startup
+        instead of mid-conversation.
+        """
+        override = discovery_env_override()
+        enabled = (
+            override if override is not None else bool(self.config.skill_discovery)
+        )
+        if not enabled:
+            return None
+        return SkillDiscovery(
+            self.skill_manager,
+            threshold=self._resolve_discovery_threshold(),
+            # Lambda, not the mapping: tool registration is still running when
+            # this is built, so a snapshot taken here would be empty and every
+            # skill would look like it had unmet requirements.
+            tools_fn=lambda: self._tools_registry,
+        )
+
+    def _resolve_discovery_threshold(self) -> Optional[float]:
+        """Threshold override: env wins over config; a malformed value fails loudly."""
+        raw = os.environ.get(DISCOVERY_THRESHOLD_ENV)
+        if raw is None:
+            return getattr(self.config, "skill_discovery_threshold", None)
+        try:
+            return float(raw)
+        except ValueError as e:
+            raise ValueError(
+                f"{DISCOVERY_THRESHOLD_ENV} must be a float, got {raw!r}"
+            ) from e
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""

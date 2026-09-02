@@ -149,6 +149,7 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "discovery_rules_tail",
             "rag_query_rules",
             "data_file_rules",
+            "load_tools_menu",
         ),
         capabilities=frozenset({"filesystem", "scratchpad", "browser"}),
         tool_groups=(

@@ -414,7 +414,8 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 
 - **Every `/v1/email/*` call needs the session token** (#1706). `sidecar.client`
   carries it automatically; a client you construct yourself must pass `authToken`
-  (from `sidecar.authToken`) or every call is **401**. Non-loopback `Host` → 400,
+  (from `sidecar.authToken`) or every call is **401**. Absent or non-loopback
+  `Host` → 400,
   non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
   `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,

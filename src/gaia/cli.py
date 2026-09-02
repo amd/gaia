@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -491,6 +492,18 @@ def resolve_effective_device(
     return effective_device
 
 
+def _gaia_cli_client_params(kwargs: dict) -> dict:
+    """Keep only the kwargs that ``GaiaCliClient.__init__`` accepts.
+
+    ``async_main`` receives every parsed CLI flag in ``kwargs``, including global
+    ones like ``--ui``. Passing those straight through crashes the constructor
+    with ``TypeError: ... unexpected keyword argument``. Deriving the accepted
+    names from the signature keeps this correct if the signature ever changes.
+    """
+    accepted = set(inspect.signature(GaiaCliClient.__init__).parameters) - {"self"}
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
@@ -528,32 +541,9 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
-        # Filter out parameters that are not accepted by GaiaCliClient
-        # GaiaCliClient only accepts: model, max_tokens, show_stats, logging_level
-        audio_params = {
-            "whisper_model_size",
-            "audio_device_index",
-            "silence_threshold",
-            "no_tts",
-        }
-        llm_provider_params = {
-            "use_claude",
-            "use_chatgpt",
-            "claude_model",
-            "base_url",
-        }
-        cli_params = {
-            "action",
-            "message",
-            "stats",
-            "assistant_name",
-            "stream",
-            "no_lemonade_check",
-            "list_tools",
-        }
-        excluded_params = cli_params | audio_params | llm_provider_params
-        client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
-        client = GaiaCliClient(**client_params)
+        # Pass only what GaiaCliClient accepts; unrelated CLI flags (e.g. --ui)
+        # would otherwise reach the constructor and crash it with a TypeError.
+        client = GaiaCliClient(**_gaia_cli_client_params(kwargs))
 
     if action == "prompt":
         if not kwargs.get("message"):
@@ -2553,6 +2543,57 @@ Examples:
     )
     mcp_test_client_parser.add_argument("name", help="Name of the MCP server to test")
 
+    # Lemonade command (embedded server lifecycle)
+    lemonade_parser = subparsers.add_parser(
+        "lemonade", help="Manage the Lemonade Server GAIA runs against"
+    )
+    lemonade_subparsers = lemonade_parser.add_subparsers(
+        dest="lemonade_action", help="Lemonade action to perform"
+    )
+    embedded_parser = lemonade_subparsers.add_parser(
+        "embedded",
+        help="Manage GAIA's private, self-contained Lemonade instance",
+    )
+    embedded_subparsers = embedded_parser.add_subparsers(
+        dest="embedded_action", help="Embedded Lemonade action to perform"
+    )
+    embedded_start_parser = embedded_subparsers.add_parser(
+        "start", help="Start the private Lemonade instance (downloads it if missing)"
+    )
+    embedded_start_parser.add_argument(
+        "--port",
+        type=int,
+        help="Port to bind (default: a free port chosen at start)",
+    )
+    embedded_start_parser.add_argument(
+        "--no-install",
+        action="store_true",
+        help="Fail instead of downloading when the artifact is missing",
+    )
+    embedded_start_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=60.0,
+        help="Seconds to wait for the server to become healthy (default: 60)",
+    )
+    embedded_subparsers.add_parser("stop", help="Stop the private Lemonade instance")
+    embedded_subparsers.add_parser(
+        "status", help="Show whether the private instance is installed and running"
+    )
+    embedded_install_parser = embedded_subparsers.add_parser(
+        "install", help="Download and unpack the embeddable artifact"
+    )
+    embedded_install_parser.add_argument(
+        "--force", action="store_true", help="Reinstall even if already unpacked"
+    )
+    embedded_backend_parser = embedded_subparsers.add_parser(
+        "install-backend",
+        help="Download an inference backend into the private cache",
+    )
+    embedded_backend_parser.add_argument(
+        "spec", help="Backend spec, e.g. llamacpp:vulkan (recipe:backend)"
+    )
+
     # Daemon command (headless custody daemon lifecycle)
     daemon_parser = subparsers.add_parser(
         "daemon",
@@ -4185,6 +4226,10 @@ Let me know your answer!
     # Handle MCP command
     if args.action == "mcp":
         handle_mcp_command(args)
+        return
+
+    if args.action == "lemonade":
+        handle_lemonade_command(args)
         return
 
     if args.action == "daemon":
@@ -6431,8 +6476,8 @@ def _check_daemon_deps():
     """Fail loud if the daemon's runtime deps (extras-only) are missing.
 
     ``gaia daemon`` is a base console command but the daemon process needs
-    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[ui]``/``[api]``/
-    ``[dev]`` extras. On a base install the spawned daemon would die on
+    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[api]`` and ``[ui]``
+    extras. On a base install the spawned daemon would die on
     ``ModuleNotFoundError`` and surface a cryptic "process exited early"; name
     the real cause and the fix instead.
     """
@@ -6451,8 +6496,8 @@ def _check_daemon_deps():
         print(
             "❌ `gaia daemon` needs packages not in the base install: "
             + ", ".join(missing)
-            + '.\n   Install the daemon extras:  pip install "amd-gaia[ui]"'
-            "  (or [api]/[dev])."
+            + '.\n   Install the daemon extras:  pip install "amd-gaia[api]"'
+            "  (or [ui], which adds the Agent UI's RAG stack on top)."
         )
         sys.exit(1)
 
@@ -7112,6 +7157,114 @@ def handle_mcp_command(args):
         print(f"❌ Unknown MCP action: {args.mcp_action}")
 
 
+def handle_lemonade_command(args):
+    """Handle ``gaia lemonade ...``.
+
+    Args:
+        args: Parsed arguments for the lemonade command.
+    """
+    if getattr(args, "lemonade_action", None) != "embedded":
+        print(
+            "❌ No Lemonade action specified. Use 'gaia lemonade --help' to see "
+            "available actions."
+        )
+        sys.exit(1)
+    handle_lemonade_embedded_command(args)
+
+
+def handle_lemonade_embedded_command(args):
+    """Handle ``gaia lemonade embedded {start,stop,status,install,install-backend}``.
+
+    Args:
+        args: Parsed arguments for the embedded subcommand.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    action = getattr(args, "embedded_action", None)
+    if action is None:
+        print(
+            "❌ No embedded action specified. Use 'gaia lemonade embedded --help' "
+            "to see available actions."
+        )
+        sys.exit(1)
+
+    manager = EmbeddedLemonade()
+    try:
+        if action == "start":
+            status = manager.start(
+                port=getattr(args, "port", None),
+                timeout=getattr(args, "timeout", 60.0),
+                install_if_missing=not getattr(args, "no_install", False),
+            )
+            print(f"✅ Embedded Lemonade {status.version} running on {status.base_url}")
+            print(f"   pid {status.pid}   logs: {manager.log_path}")
+            print("")
+            print("   The instance is private. Load its URL and API key with:")
+            print(f"   {manager.env_load_command()}")
+        elif action == "stop":
+            if manager.stop():
+                print("✅ Embedded Lemonade stopped")
+            else:
+                print("Embedded Lemonade is not running")
+        elif action == "status":
+            _print_embedded_status(manager)
+        elif action == "install":
+            path = manager.install(force=getattr(args, "force", False))
+            print(f"✅ Embedded Lemonade {manager.version} installed at {path}")
+        elif action == "install-backend":
+            print(f"Installing backend {args.spec} (this can take several minutes)...")
+            manager.install_backend(args.spec)
+            print(f"✅ Backend {args.spec} installed into {manager.cache_dir / 'bin'}")
+        else:
+            print(f"❌ Unknown embedded action: {action}")
+    except EmbeddedLemonadeError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    except OSError as e:
+        # Spawning the daemon or opening its log can fail on a noexec mount or
+        # a read-only home; say so instead of dumping a traceback.
+        print(
+            f"❌ Could not run embedded Lemonade from {manager.dist_dir}: {e}. "
+            f"Check that the directory is writable and the daemon is "
+            f"executable, then retry."
+        )
+        sys.exit(1)
+
+
+def _print_embedded_status(manager):
+    """Print a human-readable snapshot of the embedded instance.
+
+    Args:
+        manager: An ``EmbeddedLemonade`` to query.
+    """
+    status = manager.status()
+    print(f"Version:   {status.version}")
+    print(f"Installed: {'yes' if status.installed else 'no'} ({manager.dist_dir})")
+    if status.running:
+        print(f"Running:   yes on {status.base_url} (pid {status.pid})")
+    elif status.unresponsive_pid:
+        print(
+            f"Running:   process {status.unresponsive_pid} is up on port "
+            f"{status.port} but not answering"
+        )
+        print(
+            f"           check {manager.log_path}, then `gaia lemonade "
+            f"embedded stop`"
+        )
+    else:
+        print("Running:   no")
+        if status.installed:
+            print("           start it with `gaia lemonade embedded start`")
+        else:
+            print("           install it with `gaia lemonade embedded install`")
+    backends_dir = manager.cache_dir / "bin"
+    if backends_dir.is_dir():
+        installed = sorted(p.name for p in backends_dir.iterdir())
+        print(f"Backends:  {', '.join(installed) if installed else 'none'}")
+    else:
+        print("Backends:  none")
+
+
 # Kept in sync with gaia.mcp.mcp_bridge.AUTH_TOKEN_ENV_VAR by
 # tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
 # `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
@@ -7734,9 +7887,6 @@ def handle_mcp_serve(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🤖 GAIA Agent UI MCP Server")
             print("=" * 60)
@@ -7747,11 +7897,11 @@ def handle_mcp_serve(args):
                     mcp._tool_manager._tools
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
-            except Exception:
-                pass
+            except AttributeError:
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
@@ -7783,9 +7933,6 @@ def handle_mcp_tui(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
@@ -7797,10 +7944,10 @@ def handle_mcp_tui(args):
                 )  # pylint: disable=protected-access
                 print(f"   Tools   : {tool_count} registered")
             except AttributeError:
-                log.debug("FastMCP tool registry layout changed; skipping tool count")
+                log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ TUI control MCP server stopped")

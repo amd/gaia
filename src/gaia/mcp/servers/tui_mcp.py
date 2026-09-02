@@ -4,9 +4,13 @@
 """MCP server that drives the GAIA terminal UI through its local control API.
 
 Lets an MCP client (Claude Code, the eval harness, a script) read what the TUI
-is currently showing, send keystrokes and text to it, wait for the screen to
-reach a given state, and drive high-level flows like launching an agent from
-the hub.
+is currently showing, send keystrokes and text to it, and wait for the screen to
+reach a given state.
+
+The TUI boots straight into one agent -- splash, readiness gate, chat -- so
+there is nothing to browse and no agent to pick. The tools here are the generic
+drive-any-screen set; a launch is `gaia tui` itself, and a different agent is
+`gaia tui chat --agent <id>`.
 
 The TUI must be started with its control server enabled (``gaia tui --control``).
 That server binds loopback on an ephemeral port and advertises itself in
@@ -32,7 +36,7 @@ import requests
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
 logger = get_logger(__name__)
 
@@ -60,13 +64,6 @@ WAIT_TIMEOUT_SLACK = 5.0
 
 #: How much screen text an error detail carries before it is truncated.
 SCREEN_TRUNCATE = 2000
-
-#: Tab presses allowed when the build reports no ``hub_tab_index`` and the wrap
-#: back to the starting tab therefore cannot be detected.
-MAX_TAB_PROBES = 4
-
-#: Runaway guard for the tab cycle; the wrap-detection is what normally ends it.
-MAX_HUB_TABS = 32
 
 #: Server-side limits (``tui/internal/control/server.go``). Enforced here too so
 #: an out-of-range argument gets a useful message instead of a bare 400.
@@ -461,31 +458,37 @@ def _summarize(status: Dict[str, Any]) -> str:
             "are refused. Start a fresh one with: gaia tui --control"
         )
 
+    overlay = state.get("overlay")
+
+    if view == "splash":
+        # One render while the readiness gate starts behind it. Nothing here
+        # takes input, so a caller that lands on it should wait, not press.
+        return "starting up — the readiness gate opens on its own, no key needed"
+
+    if view == "preflight":
+        parts = ["readiness gate"]
+        agent = state.get("agent")
+        if agent:
+            parts.append(f"for {agent!r}")
+        blocker = state.get("blocker")
+        if blocker:
+            # The row key, not the rendered remedy: the wording is allowed to
+            # change, the key is not.
+            parts.append(f"blocked on {blocker!r} — read the screen for the fix")
+        else:
+            parts.append("nothing is refusing the launch yet")
+        if overlay:
+            parts.append(f"overlay {overlay!r}")
+        return ", ".join(parts)
+
     if view == "chat":
         agent = state.get("agent") or "?"
         summary = f"chat with {agent!r}"
         if state.get("streaming"):
             summary += ", streaming"
-        if state.get("can_return_to_hub") is False:
-            summary += " (standalone session — esc quits, there is no hub)"
-        return summary
-
-    if view == "hub":
-        parts = ["hub view"]
-        tab = state.get("hub_tab")
-        if tab:
-            parts.append(f"tab {tab!r}")
-        visible = state.get("visible_agent_ids") or []
-        parts.append(f"{len(visible)} agents visible")
-        selected = state.get("selected_agent_id")
-        if selected:
-            parts.append(f"selected {selected!r}")
-        if state.get("filtering"):
-            parts.append("search filter active")
-        overlay = state.get("overlay")
         if overlay:
-            parts.append(f"overlay {overlay!r}")
-        return ", ".join(parts)
+            summary += f", overlay {overlay!r}"
+        return summary
 
     return (
         "TUI is running but does not report its view state "
@@ -520,107 +523,6 @@ def _normalize_keys(keys: Any) -> Tuple[List[str], Optional[str]]:
     if not out:
         return [], "No keys given — pass at least one key name, e.g. ['enter']."
     return out, None
-
-
-#: Phrases the hub uses when it refuses to launch something. Matched only on a
-#: line that also names the agent.
-_REFUSAL_PHRASES = (
-    "not installed",
-    "coming soon",
-    "not available",
-    "unavailable",
-    "failed",
-)
-
-#: Verb forms for the fallback scan, where no agent name anchors the match. The
-#: hub's tab bar reads "Installed (1)  Available (9)  Coming Soon (3)", so a bare
-#: "coming soon" would quote the tab bar back as if it were an explanation.
-_REFUSAL_SENTENCES = (
-    "is not installed",
-    "is coming soon",
-    "is not available",
-    "is unavailable",
-    "failed to",
-)
-
-
-def _hub_status_line(screen: str, agent_id: str) -> str:
-    """Pull the hub's own explanation out of a rendered screen, or ``""``.
-
-    Never guesses: the last line of a hub screen is the keybinding footer, and
-    quoting that back as "the hub says" would be an invented explanation.
-    """
-    lines = [ln.strip() for ln in (screen or "").splitlines() if ln.strip()]
-    lowered_id = agent_id.lower()
-    for ln in reversed(lines):
-        low = ln.lower()
-        if lowered_id in low and any(p in low for p in _REFUSAL_PHRASES):
-            return ln
-    for ln in reversed(lines):
-        if any(p in ln.lower() for p in _REFUSAL_SENTENCES):
-            return ln
-    return ""
-
-
-_FOOTER_SEP_RE = re.compile(r"\s{2,}|\s*[·|•]\s*")
-
-
-def _parse_footer_bindings(screen: str) -> Dict[str, str]:
-    """Parse the hub footer into key→action.
-
-    Two shapes are accepted, because the product emits the second one and only
-    the fixtures ever emitted the first:
-
-    * ``Enter=launch  /=search`` — explicit ``=``
-    * ``enter run · i install · d remove`` — key, space, action (what the Go
-      hub actually renders; see ``ui/hub/model.go``)
-
-    Requiring ``=`` made every real footer parse to nothing, so the install and
-    uninstall tools always reported the hub as unavailable.
-
-    Returns the bindings of the last line advertising at least two of them, or
-    ``{}`` when the screen has no recognizable footer.
-    """
-    for line in reversed([ln for ln in (screen or "").splitlines() if ln.strip()]):
-        bindings: Dict[str, str] = {}
-        for token in _FOOTER_SEP_RE.split(line.strip()):
-            token = token.strip()
-            if not token:
-                continue
-            if "=" in token:
-                key, _, action = token.partition("=")
-            else:
-                # "i install" -> ("i", "install"); "tab category" -> ("tab",
-                # "category"). A lone word is a label, not a binding.
-                key, _, action = token.partition(" ")
-            key, action = key.strip(), action.strip()
-            if key and action:
-                bindings[key] = action
-        if len(bindings) >= 2:
-            return bindings
-    return {}
-
-
-_UNINSTALL_ACTION_RE = re.compile(r"uninstall|delete|remove", re.IGNORECASE)
-_INSTALL_ACTION_RE = re.compile(r"(?<!un)install", re.IGNORECASE)
-
-
-def _find_binding(bindings: Dict[str, str], kind: str) -> Optional[str]:
-    """Return the key bound to install/uninstall, or ``None`` if the hub offers none."""
-    pattern = _UNINSTALL_ACTION_RE if kind == "uninstall" else _INSTALL_ACTION_RE
-    for key, action in bindings.items():
-        if pattern.search(action):
-            return key
-    return None
-
-
-def _format_bindings(bindings: Dict[str, str]) -> str:
-    if not bindings:
-        return "none (no footer bindings were visible on screen)"
-    return "  ".join(f"{k}={v}" for k, v in bindings.items())
-
-
-# ── Tool implementations (plain functions — importable without ``mcp``) ──
 
 
 def _status() -> Dict[str, Any]:
@@ -793,450 +695,6 @@ def _resize(cols: int, rows: int) -> Dict[str, Any]:
     return _request(info, "post", "/resize", json={"cols": cols, "rows": rows})
 
 
-def _press(info: Dict[str, Any], key: str) -> Dict[str, Any]:
-    """Send one navigation key and require the TUI to have redrawn for it.
-
-    ``settled: false`` means the model was still busy, so the status read that
-    follows would describe the screen *before* the key — and every navigation
-    step here is a decision made from that status. Acting on it is the race the
-    whole state-driven design exists to avoid, so stop instead.
-    """
-    result = _request(info, "post", "/keys", json={"keys": [key], "delay_ms": 0})
-    if _is_error(result):
-        return result
-    if result.get("settled") is False:
-        return _err(
-            f"The TUI did not finish handling {key!r} in time (settled=false), so "
-            f"its reported state is not current and navigating on it would act on "
-            f"a stale screen. The key is queued and may still land — read "
-            f"tui_screen before retrying."
-        )
-    return result
-
-
-def _leave_chat(
-    info: Dict[str, Any], status: Dict[str, Any]
-) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    """Return to the hub if a chat is open, so hub-only reads are of the hub.
-
-    Returns ``(status, None)`` with a re-read status, or ``({}, error)``.
-    """
-    if _view_of(status) != "chat":
-        return status, None
-
-    # Whether esc goes back or quits is the model's to answer, not ours to guess:
-    # in a standalone `gaia chat --subprocess` session esc IS quit, so pressing it
-    # would kill the very session we were asked to drive.
-    can_return = _state_of(status).get("can_return_to_hub")
-    if can_return is False:
-        return {}, _err(
-            "This is a standalone chat session, not a chat opened from the hub — "
-            "esc there quits the TUI instead of returning to a hub, so there is no "
-            "hub to navigate. Drive this session directly with tui_send_text and "
-            "tui_send_keys, and read it with tui_screen."
-        )
-    if can_return is None:
-        return {}, _err(
-            "The running TUI does not report can_return_to_hub, so whether esc "
-            "returns to the hub or quits the program cannot be known — and "
-            "guessing wrong ends the session. Drive it directly with "
-            f"tui_send_keys, or run a current build: {START_HINT}"
-        )
-
-    # Esc cancels an in-flight response. Throwing away the user's running turn to
-    # satisfy a navigation step is not this tool's call to make.
-    if _state_of(status).get("streaming"):
-        return {}, _err(
-            "The chat is streaming a response right now, and leaving it would "
-            "cancel that turn. Wait for it to finish (tui_wait_for) or cancel it "
-            "deliberately with tui_send_keys(['esc'])."
-        )
-
-    pressed = _press(info, "esc")
-    if _is_error(pressed):
-        return {}, pressed
-    waited = _wait(info, state={"view": "hub"}, timeout_ms=5000)
-    if _is_error(waited):
-        # A standalone `gaia chat --control` session has no hub to go back to —
-        # there esc quits, so the control server dies with it.
-        if waited.get("unreachable"):
-            return {}, _err(
-                "The TUI exited when leaving the chat: a standalone chat session "
-                "quits on esc instead of returning to a hub. Agent navigation by "
-                f"id needs the hub TUI — {START_HINT}"
-            )
-        return {}, _err(
-            f"Could not return to the hub from the chat view: {waited['detail']}"
-        )
-    status = _request(info, "get", "/status")
-    if _is_error(status):
-        return {}, status
-    return status, None
-
-
-def _navigate_to_agent(
-    info: Dict[str, Any], agent_id: str
-) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Put the hub's selection on *agent_id*.
-
-    Returns ``(status, None)`` with the status read after the last move, or
-    ``(None, error)``. Every step is driven off the TUI's reported state rather
-    than a blind key-count, so it either converges or says why it could not.
-    """
-    status = _request(info, "get", "/status")
-    if _is_error(status):
-        return None, status
-
-    if _view_of(status) == "unknown":
-        return None, _err(
-            "The running GAIA TUI does not report its view state, so high-level "
-            "navigation is unavailable in this build. Drive it manually with "
-            "tui_send_keys and read the result with tui_screen."
-        )
-
-    status, leave_error = _leave_chat(info, status)
-    if leave_error:
-        return None, leave_error
-
-    # An overlay eats the next keypress (any key dismisses help; the confirm
-    # dialog answers it), so navigating under one moves nothing and misreports
-    # why. Say what is in the way instead of pressing into it.
-    overlay = str(_state_of(status).get("overlay") or "")
-    if overlay:
-        return None, _err(
-            f"The hub is covered by the {overlay!r} overlay, which would swallow "
-            f"the navigation keys. Dismiss it first with tui_send_keys(['esc']), "
-            f"then retry."
-        )
-
-    if _state_of(status).get("filtering"):
-        pressed = _press(info, "esc")
-        if _is_error(pressed):
-            return None, pressed
-        status = _request(info, "get", "/status")
-        if _is_error(status):
-            return None, status
-
-    # Cycle tabs until the agent is among the visible ids. ``POST /keys`` applies
-    # the key before it answers, so the status read after each press is current.
-    seen: List[str] = []
-    found = False
-    first_tab_index = _state_of(status).get("hub_tab_index")
-    # The wrap back to the first tab is the real bound — the cap only stops a
-    # build that reports no tab index, so adding a hub tab cannot silently make
-    # the last one unreachable.
-    for _ in range(MAX_TAB_PROBES if first_tab_index is None else MAX_HUB_TABS):
-        state = _state_of(status)
-        visible = list(state.get("visible_agent_ids") or [])
-        if agent_id in visible:
-            found = True
-            break
-        tab = state.get("hub_tab") or "?"
-        seen.append(f"{tab}: {', '.join(visible) if visible else '(empty)'}")
-        pressed = _press(info, "tab")
-        if _is_error(pressed):
-            return None, pressed
-        status = _request(info, "get", "/status")
-        if _is_error(status):
-            return None, status
-        if first_tab_index is not None:
-            if _state_of(status).get("hub_tab_index") == first_tab_index:
-                break
-
-    if not found:
-        return None, _err(
-            f"Agent {agent_id!r} is not in any hub tab. Agents seen per tab — "
-            + " | ".join(seen)
-        )
-
-    # Move the selection onto the agent. The hub list does not wrap and keeps its
-    # cursor across a tab switch, so the direction has to be computed — pressing
-    # "down" alone never reaches a row above the cursor.
-    visible = list(_state_of(status).get("visible_agent_ids") or [])
-    selected = _state_of(status).get("selected_agent_id") or ""
-    if selected not in visible:
-        return None, _err(
-            f"The hub does not report which row is selected (it says "
-            f"{selected!r}), so the selection cannot be moved onto {agent_id!r}. "
-            f"Move it yourself with tui_send_keys(['down']) and read tui_screen."
-        )
-
-    delta = visible.index(agent_id) - visible.index(selected)
-    key = "down" if delta > 0 else "up"
-    for _ in range(abs(delta)):
-        pressed = _press(info, key)
-        if _is_error(pressed):
-            return None, pressed
-        status = _request(info, "get", "/status")
-        if _is_error(status):
-            return None, status
-
-    if _state_of(status).get("selected_agent_id") == agent_id:
-        return status, None
-
-    return None, _err(
-        f"Could not move the hub selection onto {agent_id!r} — after "
-        f"{abs(delta)} {key!r} presses the selection is "
-        f"{_state_of(status).get('selected_agent_id')!r}. The visible agents are: "
-        f"{', '.join(visible) if visible else '(none)'}."
-    )
-
-
-def _with_screen(info: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach the current plain screen to a success result.
-
-    A failed read reports itself in ``screen_error`` rather than passing an empty
-    string off as the screen — the caller would read that as a blank TUI.
-    """
-    screen_result = _request(info, "get", "/screen", params={"format": "plain"})
-    if _is_error(screen_result):
-        result["screen"] = ""
-        result["screen_error"] = screen_result["detail"]
-    else:
-        result["screen"] = screen_result.get("screen", "")
-    return result
-
-
-def _launch_agent(agent_id: str, timeout_ms: int = 20000) -> Dict[str, Any]:
-    if not agent_id:
-        return _err("No agent_id given — pass the agent to launch, e.g. 'email'.")
-
-    info, error = _discovered()
-    if error:
-        return error
-
-    # Already there: re-launching would close the chat and throw the conversation
-    # away to arrive back where we started.
-    opening = _request(info, "get", "/status")
-    if _is_error(opening):
-        return opening
-    if _view_of(opening) == "chat" and _state_of(opening).get("agent") == agent_id:
-        result = {"launched": True, "already_open": True, "agent": agent_id}
-        return _with_screen(info, result)
-
-    _, nav_error = _navigate_to_agent(info, agent_id)
-    if nav_error:
-        return nav_error
-
-    pressed = _press(info, "enter")
-    if _is_error(pressed):
-        return pressed
-
-    waited = _wait(
-        info, state={"view": "chat", "agent": agent_id}, timeout_ms=timeout_ms
-    )
-    if _is_error(waited):
-        # Only a genuine wait timeout means "the TUI refused"; a transport error
-        # is its own failure and must not be reported as a hub refusal.
-        status = _request(info, "get", "/status") if waited.get("timed_out") else {}
-        if not _is_error(status) and _view_of(status) == "hub":
-            screen_result = _request(info, "get", "/screen", params={"format": "plain"})
-            screen = (
-                screen_result.get("screen", "")
-                if not _is_error(screen_result)
-                else waited.get("screen", "")
-            )
-            line = _hub_status_line(screen, agent_id)
-            detail = f"The TUI stayed on the hub instead of launching {agent_id!r}."
-            if line:
-                detail += f" The hub says: {line!r}"
-            result = _err(detail)
-            result["screen"] = _truncate(screen)
-            return result
-        return waited
-
-    return _with_screen(info, {"launched": True, "agent": agent_id})
-
-
-def _hub_capability(
-    info: Dict[str, Any], kind: str, status: Optional[Dict[str, Any]] = None
-) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """Find the hub's install/uninstall key, or explain that it has none.
-
-    The key is read off the rendered footer rather than guessed, so this stays
-    correct as the hub's bindings change (and fails loudly when they are absent).
-    """
-    # An overlay replaces the whole screen, footer included — reading it there
-    # would report "no such keybinding" for a hub that has one.
-    overlay = str(_state_of(status or {}).get("overlay") or "")
-    if overlay:
-        return None, _err(
-            f"The hub is covered by the {overlay!r} overlay, so its keybindings are "
-            f"not readable. Dismiss it first with tui_send_keys(['esc'])."
-        )
-
-    screen_result = _request(info, "get", "/screen", params={"format": "plain"})
-    if _is_error(screen_result):
-        return None, screen_result
-    bindings = _parse_footer_bindings(screen_result.get("screen", ""))
-    key = _find_binding(bindings, kind)
-    if not key:
-        verb = "Uninstall" if kind == "uninstall" else "Install"
-        return None, _err(
-            f"{verb} from the TUI hub is not yet available — the hub screen has no "
-            f"{kind} keybinding in this build. Bindings currently offered: "
-            f"{_format_bindings(bindings)}."
-        )
-    return key, None
-
-
-_YES_RE = re.compile(r"\bYes\b")
-_NO_RE = re.compile(r"\bNo\b")
-
-
-def _confirm_marker(screen: str) -> str:
-    """Marker text for an open confirmation dialog, or ``""`` if none is showing.
-
-    Word-bounded on purpose: a substring test would read an agent named ``Notion``
-    as a "No" button and send a stray ``y`` into whatever is actually focused.
-    """
-    screen = screen or ""
-    if 'Uninstall "' in screen:
-        return 'Uninstall "'
-    if _YES_RE.search(screen) and _NO_RE.search(screen):
-        return "Yes"
-    return ""
-
-
-def _hub_action(agent_id: str, kind: str) -> Dict[str, Any]:
-    if not agent_id:
-        return _err(f"No agent_id given — pass the agent to {kind}.")
-
-    info, error = _discovered()
-    if error:
-        return error
-
-    status = _request(info, "get", "/status")
-    if _is_error(status):
-        return status
-    if _view_of(status) == "unknown":
-        return _err(
-            "The running GAIA TUI does not report its view state, so high-level "
-            "navigation is unavailable in this build. Drive it manually with "
-            "tui_send_keys and read the result with tui_screen."
-        )
-
-    # The capability is read off the hub's footer, so a chat must be closed
-    # first — otherwise the chat's status bar is mistaken for "no binding".
-    status, leave_error = _leave_chat(info, status)
-    if leave_error:
-        return leave_error
-
-    key, cap_error = _hub_capability(info, kind, status)
-    if cap_error or not key:
-        return cap_error or _err(f"The hub offers no {kind} keybinding in this build.")
-
-    _, nav_error = _navigate_to_agent(info, agent_id)
-    if nav_error:
-        return nav_error
-
-    # Snapshot what the hub looked like before the key, so "did anything happen?"
-    # is answerable afterwards without assuming which way the row should move.
-    before = _request(info, "get", "/screen", params={"format": "plain"})
-    if _is_error(before):
-        return before
-    before_screen = before.get("screen", "")
-
-    pressed = _press(info, key)
-    if _is_error(pressed):
-        return pressed
-
-    screen_result = _request(info, "get", "/screen", params={"format": "plain"})
-    if _is_error(screen_result):
-        return screen_result
-    screen = screen_result.get("screen", "")
-
-    # A reported overlay is authoritative; the screen text is the fallback for a
-    # build whose state does not carry one.
-    status = _request(info, "get", "/status")
-    if _is_error(status):
-        return status
-    overlay = str(_state_of(status).get("overlay") or "")
-    marker = _confirm_marker(screen)
-
-    confirmed_dialog = bool(overlay or marker)
-    if confirmed_dialog:
-        pressed = _press(info, "y")
-        if _is_error(pressed):
-            return pressed
-        if overlay:
-            waited = _wait(info, state={"overlay": ""}, timeout_ms=15000)
-        else:
-            waited = _wait(info, absent=marker, timeout_ms=15000)
-        if _is_error(waited):
-            return waited
-        screen_result = _request(info, "get", "/screen", params={"format": "plain"})
-        if _is_error(screen_result):
-            return screen_result
-        screen = screen_result.get("screen", "")
-
-    verify_error = _verify_hub_action(info, agent_id, kind, screen, before_screen)
-    if verify_error:
-        return verify_error
-
-    done_key = "uninstalled" if kind == "uninstall" else "installed"
-    return {
-        done_key: True,
-        "agent": agent_id,
-        "confirmed": confirmed_dialog,
-        "screen": screen,
-    }
-
-
-def _verify_hub_action(
-    info: Dict[str, Any], agent_id: str, kind: str, screen: str, before_screen: str
-) -> Optional[Dict[str, Any]]:
-    """Confirm the hub actually did it. Returns an error dict, or None if it did.
-
-    Pressing a key and seeing a dialog close is not evidence: the hub ignores its
-    uninstall key unless the agent is installed, so reporting "uninstalled" for a
-    row still sitting on screen is exactly the quiet wrong answer the
-    No-Silent-Fallbacks rule forbids.
-    """
-    status = _request(info, "get", "/status")
-    if _is_error(status):
-        return status
-    visible = list(_state_of(status).get("visible_agent_ids") or [])
-
-    if kind == "uninstall":
-        if agent_id not in visible:
-            return None
-        detail = (
-            f"The hub still lists {agent_id!r} on the "
-            f"{_state_of(status).get('hub_tab') or 'current'} tab after the "
-            f"uninstall key, so nothing was removed — the hub only uninstalls an "
-            f"agent that is currently installed."
-        )
-    else:
-        # An install promotes the agent to another tab, so it may legitimately
-        # vanish from this one. The only claim that holds either way is that
-        # SOMETHING changed; an unchanged screen means the key was ignored.
-        if screen != before_screen:
-            return None
-        detail = (
-            f"The hub ignored the install key for {agent_id!r} — the screen is "
-            f"unchanged, so nothing was installed."
-        )
-
-    line = _hub_status_line(screen, agent_id)
-    if line:
-        detail += f" The hub says: {line!r}"
-    result = _err(detail)
-    result["screen"] = _truncate(screen)
-    return result
-
-
-def _uninstall_agent(agent_id: str) -> Dict[str, Any]:
-    return _hub_action(agent_id, "uninstall")
-
-
-def _install_agent(agent_id: str) -> Dict[str, Any]:
-    return _hub_action(agent_id, "install")
-
-
-# ── MCP server ───────────────────────────────────────────────────────
-
-
 def route_logging_to_stderr() -> None:
     """Move stdout log handlers to stderr — required before stdio transport.
 
@@ -1250,13 +708,13 @@ def route_logging_to_stderr() -> None:
             handler.setStream(sys.stderr)
 
 
-def create_tui_mcp() -> "FastMCP":
+def create_tui_mcp() -> "MCPServer":
     """Create the MCP server exposing the GAIA TUI control tools."""
     # Imported lazily so the helpers above stay importable without the optional
     # ``mcp`` dependency, which the unit-test job does not install (issue #1750).
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
-    mcp = FastMCP(name="GAIA TUI")
+    mcp = MCPServer(name="GAIA TUI")
 
     @mcp.tool()
     def tui_status() -> Dict[str, Any]:
@@ -1264,8 +722,8 @@ def create_tui_mcp() -> "FastMCP":
 
         Start here: it verifies the TUI's control server is reachable and returns
         the terminal size, the frame sequence number, and a ``summary`` line such
-        as "hub view, tab 'Installed', 5 agents visible, selected 'bash'" or
-        "chat with 'email', streaming".
+        as "readiness gate for 'gaia', blocked on 'lemonade'" or
+        "chat with 'gaia', streaming".
 
         ``running: false`` means the TUI answers reads but is not consuming
         input — every keystroke would be refused. The summary leads with that
@@ -1361,59 +819,6 @@ def create_tui_mcp() -> "FastMCP":
         """
         return _resize(cols, rows)
 
-    @mcp.tool()
-    def tui_launch_agent(agent_id: str, timeout_ms: int = 20000) -> Dict[str, Any]:
-        """Open an agent's chat from the GAIA TUI hub, by id.
-
-        Handles the whole navigation: leaves any open chat, clears an active
-        search filter, cycles hub tabs until the agent is visible, moves the
-        selection onto it, presses enter, and waits for the chat view to appear.
-        Each step is verified against the TUI's reported state.
-
-        Returns ``{"launched": true, "agent": ..., "screen": ...}``. If that chat
-        is already open it returns ``already_open: true`` without touching the
-        keyboard, so an open conversation is never thrown away.
-
-        It refuses rather than press a key when doing so would destroy something:
-        while the chat is streaming a response, or while a help/confirm overlay
-        is covering the hub. If the agent cannot be launched (not installed,
-        coming soon), the error quotes the hub's own status line.
-
-        Args:
-            agent_id: The hub's agent id, e.g. "email" or "bash".
-            timeout_ms: How long to wait for the chat view (default 20000).
-        """
-        return _launch_agent(agent_id, timeout_ms)
-
-    @mcp.tool()
-    def tui_uninstall_agent(agent_id: str) -> Dict[str, Any]:
-        """Uninstall an agent from the GAIA TUI hub.
-
-        Navigates to the agent, presses the hub's uninstall key, and confirms the
-        dialog if one appears. The key is read off the hub footer rather than
-        guessed — if this build's hub has no uninstall binding, the tool says so
-        instead of pressing something arbitrary.
-
-        The outcome is verified, not assumed: the hub ignores its uninstall key
-        for an agent that is not installed, and that comes back as an error
-        rather than a cheerful ``uninstalled: true``.
-        """
-        return _uninstall_agent(agent_id)
-
-    @mcp.tool()
-    def tui_install_agent(agent_id: str) -> Dict[str, Any]:
-        """Install an agent from the GAIA TUI hub.
-
-        Navigates to the agent, presses the hub's install key, and confirms the
-        dialog if one appears. The key is read off the hub footer rather than
-        guessed.
-
-        Note: the hub has no install binding today, so this reports that it is
-        not yet available and lists the bindings the hub does offer. Installing
-        an agent still goes through `gaia agent install` on the CLI.
-        """
-        return _install_agent(agent_id)
-
     return mcp
 
 
@@ -1444,14 +849,17 @@ def main():
         print("Starting GAIA TUI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
         print("\n🚀 GAIA TUI MCP Server")
         print(f"   Control file: {_display_path()}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
-        tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
-        print(f"   Tools: {tool_count} registered\n")
-        mcp.run(transport="streamable-http")
+        try:
+            tool_count = len(
+                mcp._tool_manager._tools
+            )  # pylint: disable=protected-access
+            print(f"   Tools: {tool_count} registered\n")
+        except AttributeError:
+            logger.debug("MCPServer tool registry layout changed; skipping tool count")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

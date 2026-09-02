@@ -11,7 +11,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
-import logging
+import functools
 import os
 import signal
 import tempfile
@@ -19,9 +19,10 @@ import threading
 from typing import Dict, Optional, Set
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.logger import get_logger
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # Simple per-user session store: user_id -> AgentSDK
 _USER_SESSIONS: Dict[int, AgentSDK] = {}
@@ -43,6 +44,29 @@ def get_or_create_session(user_id: int) -> AgentSDK:
         return sdk
 
 
+UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+
+def require_allowed(handler):
+    """Enforce the allowlist on a Telegram update handler.
+
+    Every handler needs its own check: command updates are routed to their
+    ``CommandHandler`` and never reach the ``~filters.COMMAND`` message handler.
+    """
+
+    @functools.wraps(handler)
+    async def guarded(self, update, context):
+        user = update.effective_user
+        if not self._allowed(user.id):
+            log.warning("Refused Telegram message from unauthorized user %s", user.id)
+            await update.message.reply_text(UNAUTHORIZED_REPLY)
+            return None
+        return await handler(self, update, context)
+
+    guarded.__gaia_allowlist_guarded__ = True
+    return guarded
+
+
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
         self.token = token
@@ -54,19 +78,15 @@ class TelegramAdapter:
             return True
         return user_id in self.allowed_users
 
+    @require_allowed
     async def _handle_start(self, update, context):
         await update.message.reply_text(
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
 
+    @require_allowed
     async def _handle_message(self, update, context):
         user = update.effective_user
-        if not self._allowed(user.id):
-            await update.message.reply_text(
-                "Sorry — you're not authorized to use this bot."
-            )
-            return
-
         text = update.message.text or ""
 
         # If the user sent media, note it and download to tmp for later ingestion
@@ -136,13 +156,16 @@ class TelegramAdapter:
 
         # Consume queue and edit message
         accumulated = ""
+        last_edited = None
         try:
             while True:
                 text_chunk, done = await queue.get()
                 accumulated = text_chunk
                 # Edit the reply with the latest accumulated text (Telegram rate limits apply)
                 try:
-                    await reply.edit_text(accumulated)
+                    if accumulated != last_edited:
+                        await reply.edit_text(accumulated)
+                        last_edited = accumulated
                 except Exception as e:
                     # Ignore transient edit failures (rate limits) where possible,
                     # but log for observability. Classify common telegram errors if available.
@@ -237,6 +260,10 @@ class TelegramAdapter:
                 os.makedirs(pid_dir, exist_ok=True)
                 pid_path = os.path.join(pid_dir, "telegram.pid")
 
+            if os.getenv("GAIA_TEST_MODE"):
+                log.info("GAIA_TEST_MODE set: skipping background services")
+                return
+
             # Simple health server
             def _health_server(stop_event: threading.Event):
                 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -266,11 +293,6 @@ class TelegramAdapter:
                 target=_health_server, args=(stop_event,), daemon=True
             )
             hs_thread.start()
-
-            # If GAIA_TEST_MODE is set, avoid running the real polling loop
-            if os.getenv("GAIA_TEST_MODE"):
-                log.info("GAIA_TEST_MODE set: skipping actual polling start")
-                return
 
             def _run_polling():
                 try:

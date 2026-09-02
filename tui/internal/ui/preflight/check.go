@@ -123,7 +123,7 @@ func blankRows(cfg Config) []Row {
 	rows := []Row{
 		{Key: KeyDaemon, Label: "Background service"},
 		{Key: KeySidecar, Label: cfg.AgentName + " agent"},
-		{Key: KeyLemonade, Label: "Local AI"},
+		{Key: KeyLemonade, Label: lemonadeRowLabel},
 		{Key: KeyModel, Label: "AI model"},
 	}
 	for _, extra := range cfg.Extras {

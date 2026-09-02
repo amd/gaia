@@ -8,104 +8,47 @@ import (
 	"testing"
 )
 
-// The hub must never offer an action the backend cannot honour. Nothing the
-// Agent Hub does not publish may ship as installed: `gaia-bash` did, and on a
-// machine that never built it the row connected and then failed on the first
-// message with `exec: "gaia-bash": executable file not found in $PATH`.
-func TestNoSeedAgentShipsAsInstalled(t *testing.T) {
+// The flagship is what the TUI boots into, so it has to be launchable straight
+// out of the seed list.
+//
+// It used to ship StatusComingSoon with "not published on the Agent Hub yet",
+// which was already stale — gaia v0.1.1 IS published. With no daemon running
+// the live catalog could not load, the seed stood, and a new user was shown
+// "Available (1): Email" and no flagship at all.
+func TestTheFlagshipShipsLaunchable(t *testing.T) {
+	gaia := NewCatalog().Get(FlagshipID)
+	if gaia == nil {
+		t.Fatalf("the seed catalog no longer has a %q entry", FlagshipID)
+	}
+	if !gaia.Status.IsLaunchable() {
+		t.Errorf("the flagship ships as %s; it is what the TUI opens into", gaia.Status)
+	}
+	if gaia.Transport != TransportSubprocess {
+		t.Errorf("flagship transport = %v, want subprocess — the TUI spawns it itself", gaia.Transport)
+	}
+	if gaia.BinaryPath == "" {
+		t.Error("the flagship names no binary, so nothing can be spawned or checked for")
+	}
+	if !gaia.CanonicalEvents {
+		t.Error("the flagship is parsed as legacy events, which silently drops tool narration")
+	}
+}
+
+// One agent on the launch path, and one reachable by id. Anything else in the
+// seed list is a row nothing can start.
+func TestTheSeedListIsTheTwoAgentsWeShip(t *testing.T) {
+	var ids []string
 	for _, a := range NewCatalog().All() {
-		if a.Status.IsLaunchable() {
-			t.Errorf("seed agent %q ships as %s; no unpublished agent may be launchable out of the box",
-				a.ID, a.Status)
+		ids = append(ids, a.ID)
+	}
+	want := map[string]bool{FlagshipID: true, "email": true}
+	if len(ids) != len(want) {
+		t.Fatalf("seed ids = %v, want exactly %v", ids, want)
+	}
+	for _, id := range ids {
+		if !want[id] {
+			t.Errorf("seed catalog still carries %q, which nothing ships", id)
 		}
-	}
-}
-
-// gaia-bash is not a published hub agent, so it belongs under Coming Soon with
-// a reason — not under Installed, and not under Available either.
-func TestBashIsComingSoonAndUnlaunchable(t *testing.T) {
-	bash := NewCatalog().Get("bash")
-	if bash == nil {
-		t.Fatal("the seed catalog no longer has a bash entry")
-	}
-	if bash.Status != StatusComingSoon {
-		t.Errorf("bash status = %s, want coming soon", bash.Status)
-	}
-	if bash.Installable() {
-		t.Error("bash is offered as installable; the daemon has no spec for it")
-	}
-	if bash.NotOfferedReason == "" {
-		t.Error("bash is not offered and says nothing about why")
-	}
-}
-
-// Only an agent the daemon can actually fetch AND start may sit under
-// Available. Email is the one published sidecar today; every other seed has to
-// wait for a hub row to promote it.
-func TestOnlyPublishedSidecarsAreOfferedBeforeTheHubLoads(t *testing.T) {
-	c := NewCatalog()
-	var offered []string
-	for _, a := range c.All() {
-		if a.Status == StatusAvailable {
-			offered = append(offered, a.ID)
-		}
-	}
-	if len(offered) != 1 || offered[0] != "email" {
-		t.Errorf("agents offered before the hub loads = %v, want [email]", offered)
-	}
-}
-
-// A hub row the daemon supervises is what promotes an entry out of Coming Soon.
-// Without this the seed change would make the hub permanently unable to offer
-// anything new.
-func TestHubCatalogPromotesASupervisedAgent(t *testing.T) {
-	c := NewCatalog()
-	c.ApplyHubCatalog(&HubCatalog{Agents: []HubEntry{{
-		ID: "chat", LatestVersion: "1.2.3", Supervised: true, SecurityTier: TierVerified,
-	}}})
-
-	got := c.Get("chat")
-	if got.Status != StatusAvailable {
-		t.Fatalf("a supervised hub row left chat as %s, want available", got.Status)
-	}
-	if !got.Installable() {
-		t.Error("a supervised, uninstalled hub row is not installable")
-	}
-	if got.NotOfferedReason != "" {
-		t.Errorf("promoted entry still carries a not-offered reason: %q", got.NotOfferedReason)
-	}
-}
-
-// Removing an entry the hub does not publish must put it back under Coming
-// Soon. Sending it to Available would offer an install the daemon cannot serve.
-func TestRemoveDoesNotPromoteAnUnpublishedAgent(t *testing.T) {
-	c := NewCatalog()
-	c.SetStatus("bash", StatusActive) // as if it had been launched
-	c.Remove("bash")
-
-	got := c.Get("bash")
-	if got.Status != StatusComingSoon {
-		t.Errorf("after Remove, bash is %s, want coming soon", got.Status)
-	}
-	if got.NotOfferedReason == "" {
-		t.Error("after Remove, bash is not offered and says nothing about why")
-	}
-	if got.BinaryPath != "" {
-		t.Errorf("after Remove, BinaryPath = %q, want empty", got.BinaryPath)
-	}
-}
-
-// A hub agent the daemon CAN start goes back to Available, so it can be
-// reinstalled from the same screen it was removed on.
-func TestRemovePutsASupervisedHubAgentBackToAvailable(t *testing.T) {
-	c := NewCatalog()
-	c.ApplyHubCatalog(&HubCatalog{Agents: []HubEntry{{
-		ID: "email", LatestVersion: "1.0.0", Supervised: true, Installed: true, InstalledVersion: "1.0.0",
-	}}})
-	c.Remove("email")
-
-	if got := c.Get("email"); got.Status != StatusAvailable {
-		t.Errorf("after Remove, a supervised hub agent is %s, want available", got.Status)
 	}
 }
 
@@ -116,16 +59,52 @@ func TestSetMockBinaryMakesTheSubprocessAgentLaunchable(t *testing.T) {
 	c := NewCatalog()
 	c.SetMockBinary("/tmp/mock-agent")
 
-	bash := c.Get("bash")
-	if !bash.Status.IsLaunchable() {
-		t.Errorf("with --mock, bash is %s, want launchable", bash.Status)
+	gaia := c.Get(FlagshipID)
+	if !gaia.Status.IsLaunchable() {
+		t.Errorf("with --mock, the flagship is %s, want launchable", gaia.Status)
 	}
-	if bash.BinaryPath != "/tmp/mock-agent" {
-		t.Errorf("bash binary = %q, want the mock", bash.BinaryPath)
+	if gaia.BinaryPath != "/tmp/mock-agent" {
+		t.Errorf("flagship binary = %q, want the mock", gaia.BinaryPath)
 	}
-	// An entry with no binary of its own has nothing for a mock to stand in for.
-	if chat := c.Get("chat"); chat.Status.IsLaunchable() {
-		t.Errorf("--mock made %q launchable; it declares no binary", chat.ID)
+	// All three describe how to invoke ONE binary, so a mock replaces them as a
+	// unit — inheriting the real agent's --dev would hand the mock an argument
+	// it never declared.
+	if len(gaia.DevArgs) != 0 || len(gaia.BinaryArgs) != 0 {
+		t.Errorf("--mock left the real agent's args behind: %v %v", gaia.BinaryArgs, gaia.DevArgs)
+	}
+}
+
+// The diagnostic a user actually reads when a binary IS there but unverified.
+// "not found" would send them chasing a download that already happened, so the
+// wording is the fix, not an implementation detail — pin it.
+func TestResolveExecutableNamesAnUnverifiedInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)        // os.UserHomeDir on POSIX
+	t.Setenv("USERPROFILE", home) // ... and on Windows
+	dir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A name no real machine has on PATH, so exec.LookPath cannot pre-empt the
+	// install-root lookup this is about.
+	const name = "gaia-agent-unverified-fixture"
+	file := name
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ResolveExecutable(name, "gaia")
+	if err == nil {
+		t.Fatal("an unverified binary in the install root resolved successfully")
+	}
+	// Naming the file is what separates "finish the install" from "go download it".
+	for _, want := range []string{"gaia hub install", SentinelName, file} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q:\n%s", want, err)
+		}
 	}
 }
 
@@ -133,14 +112,20 @@ func TestSetMockBinaryMakesTheSubprocessAgentLaunchable(t *testing.T) {
 // process can exec it". A name that resolves nowhere must fail here — before a
 // caller can report a connection.
 func TestResolveExecutableRefusesAMissingBinary(t *testing.T) {
-	_, err := ResolveExecutable("gaia-definitely-not-installed", "bash")
+	_, err := ResolveExecutable("gaia-definitely-not-installed", FlagshipID)
 	if err == nil {
 		t.Fatal("a binary that is nowhere on this machine resolved successfully")
 	}
-	for _, want := range []string{"PATH", "cpp/build", "gaia tui list"} {
+	// GAIA ships one agent, so "build it from source" and "browse what the hub
+	// publishes" were both the wrong next step. The installer is what puts the
+	// binary there, and it is the only thing this may name.
+	for _, want := range []string{"PATH", "cpp/build", "installer", InstallerURL} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not tell the user about %q:\n%s", want, err)
 		}
+	}
+	if strings.Contains(err.Error(), "gaia tui list") {
+		t.Errorf("the error still points at a hub browser that no longer exists:\n%s", err)
 	}
 }
 
@@ -155,7 +140,7 @@ func TestResolveExecutableFindsARealBinary(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	got, err := ResolveExecutable(path, "bash")
+	got, err := ResolveExecutable(path, FlagshipID)
 	if err != nil {
 		t.Fatalf("an executable file did not resolve: %v", err)
 	}
@@ -174,7 +159,7 @@ func TestResolveExecutableRefusesANonExecutableFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := ResolveExecutable(path, "bash"); err == nil {
+	if _, err := ResolveExecutable(path, FlagshipID); err == nil {
 		t.Fatal("a non-executable file resolved successfully")
 	}
 }

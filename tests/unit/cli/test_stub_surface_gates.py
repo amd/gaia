@@ -55,6 +55,18 @@ class TestApiStatus:
         check_status("myhost", 9999)
         get.assert_called_once_with("http://myhost:9999/health", timeout=5)
 
+    def test_degraded_server_still_reports_running(self, mocker, capsys):
+        mocker.patch(
+            "requests.get",
+            return_value=_health_response(
+                payload={"status": "degraded", "service": "gaia-api"}
+            ),
+        )
+        check_status("localhost", 8080)
+        out = capsys.readouterr().out
+        assert "✅ GAIA API server is running" in out
+        assert "Health: degraded" in out
+
     def test_unreachable_server_exits_nonzero(self, mocker, capsys):
         mocker.patch(
             "requests.get", side_effect=requests.exceptions.ConnectionError("refused")

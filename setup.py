@@ -77,6 +77,8 @@ setup(
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.governance",
+        "gaia.factory",
+        "gaia.factory.harvest",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
@@ -117,7 +119,9 @@ setup(
         ],
     },
     install_requires=[
-        "openai",
+        # Staged by #382 for the Lemonade Realtime transcription work in #372.
+        # OpenAI 1.58.0 is the first release with Realtime API support.
+        "openai>=1.58.0",
         "pydantic>=2.9.2",
         "transformers",
         "accelerate",
@@ -162,6 +166,10 @@ setup(
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
+            # The daemon's sidecar registry imports psutil at module scope and
+            # _check_daemon_deps refuses to start without it — declare it rather
+            # than rely on accelerate pulling it in transitively.
+            "psutil>=5.9.0",
         ],
         "ui": [
             "fastapi>=0.115.0",
@@ -201,13 +209,10 @@ setup(
             "torchaudio",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
-            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
-            # mcp.server.mcpserver), breaking every FastMCP-based server
-            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
-            # servers/tui_mcp.py). Lift the cap only in a change that
-            # ports them.
-            "mcp>=1.1.0,<2.0",
+            # Supports mcp 2.x: its public MCPServer API replaced
+            # mcp.server.fastmcp (FastMCP). Keep the upper bound below the next
+            # incompatible major release.
+            "mcp>=2.0.0,<3.0",
             "starlette",
             "uvicorn",
         ],
@@ -273,6 +278,9 @@ setup(
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
+            # WebSocket transport for the Lemonade Realtime transcription work
+            # tracked in #372; #382 stages the packaging dependency first.
+            "websockets",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",

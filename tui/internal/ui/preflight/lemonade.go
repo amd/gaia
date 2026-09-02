@@ -42,6 +42,14 @@ var legacyBinaries = []string{"lemonade-server", "lemonade-server-dev"}
 // named a binary meant that binary.
 const serverPathEnv = "LEMONADE_SERVER_PATH"
 
+// lemonadeRowLabel names the local model server on the checklist.
+//
+// "Local AI" said what it does and not what it IS, so every remedy under it —
+// and every doc, log line and support answer — talked about Lemonade while the
+// row the user was looking at never used the word. Naming it is what makes the
+// row searchable.
+const lemonadeRowLabel = "Lemonade"
+
 // lemonadeDocs is where the run instructions for every platform live.
 const lemonadeDocs = "https://lemonade-server.ai/docs/guide/"
 
@@ -117,9 +125,12 @@ var macAppBundles = []string{
 // macDaemonPlist is the file whose presence proves it is installed. The daemon is
 // a SYSTEM job (RunAtLoad, no KeepAlive), so it does not come back on its own
 // after it exits, and only launchctl can restart it.
+//
+// The label tracks the pinned Lemonade: upstream renamed it from
+// com.lemonade.server after 11.5.0, so the old one matches nothing on 11.8.1.
 const (
-	macDaemonLabel = "com.lemonade.server"
-	macDaemonPlist = "/Library/LaunchDaemons/com.lemonade.server.plist"
+	macDaemonLabel = "ai.lemonadeserver.server"
+	macDaemonPlist = "/Library/LaunchDaemons/ai.lemonadeserver.server.plist"
 )
 
 // macDaemonBinaries are where the installer puts lemond. Probed by PATH-free
@@ -300,7 +311,7 @@ func unitPath(p hostProbe) string {
 //     /Applications/lemonade-app.app on that machine produced only
 //     `/usr/local/bin/lemonade-tray` — no server. It brings up the tray UI; it is
 //     not, on its own, a verified way to get the port listening.
-//   - `launchctl kickstart system/com.lemonade.server` looks canonical (the
+//   - `launchctl kickstart system/<macDaemonLabel>` looks canonical (the
 //     plist is installed, ProgramArguments is [/usr/local/bin/lemond]) but on
 //     that machine the job reports `state = not running` while a lemond outside
 //     launchd serves the port — and driving a system-domain job needs sudo, so

@@ -13,21 +13,6 @@ import (
 	"strings"
 )
 
-// Section represents a tab/section in the hub UI.
-type Section string
-
-const (
-	SectionDashboard  Section = "Dashboard"
-	SectionInstalled  Section = "Installed"
-	SectionAvailable  Section = "Available"
-	SectionComingSoon Section = "Coming Soon"
-)
-
-// AllSections returns the tab order for the hub.
-func AllSections() []Section {
-	return []Section{SectionInstalled, SectionAvailable, SectionComingSoon}
-}
-
 // Catalog manages the agent registry.
 type Catalog struct {
 	agents   []Agent
@@ -121,7 +106,30 @@ func findInstalledBinary(agentID, name string) string {
 	return findInstalledBinaryIn(InstallRoot(), agentID, name)
 }
 
+// findInstalledBinaryIn returns the agent's binary under the install root, but
+// only when an .installed sentinel proves the directory is a completed install.
+//
+// Without that gate the file's NAME is the only evidence of what it is, and the
+// name is not unique: `gaia-agent` is both the stdio child this looks for and
+// the frozen REST sidecar other installers stage into this same directory.
+// Spawning the wrong one feeds uvicorn's startup log to a JSON line scanner
+// (#3062). A directory with no sentinel is a leftover or an in-progress
+// install, which is how LocalInstalls already treats it.
 func findInstalledBinaryIn(root, agentID, name string) string {
+	if root == "" || agentID == "" {
+		return ""
+	}
+	if record, err := readSentinel(filepath.Join(root, agentID, SentinelName)); err != nil || record == nil {
+		return ""
+	}
+	return installDirBinaryIn(root, agentID, name)
+}
+
+// installDirBinaryIn finds the binary by name alone, with no sentinel check.
+// Only two callers may use it: findInstalledBinaryIn once the sentinel has
+// verified the install, and ResolveExecutable's diagnostic, which needs to tell
+// "nothing is there" apart from "something is there but unverified".
+func installDirBinaryIn(root, agentID, name string) string {
 	if root == "" || agentID == "" {
 		return ""
 	}
@@ -182,6 +190,104 @@ func findBinaryInRepo(name string) string {
 // found. Callers match on it to tell "cannot start" from "started and failed".
 var ErrNoExecutable = errors.New("no runnable binary")
 
+// InstallerURL is where a user gets the GAIA installer, which ships the agent
+// binaries alongside the TUI.
+const InstallerURL = "https://amd-gaia.ai/#install"
+
+// AgentDocsURL is the flagship agent's guide.
+const AgentDocsURL = "https://amd-gaia.ai/docs/guides/gaia"
+
+// Lookup is where an agent binary was found, or everywhere it was looked for.
+//
+// It exists because the three outcomes need three different things said about
+// them, and a caller that only has an error string has to parse prose to tell
+// them apart: nothing anywhere (re-run the installer), a file under the install
+// root with no sentinel (finish the install), and a resolved path (run it).
+type Lookup struct {
+	// Path is the executable to run. Empty when there is nothing to run.
+	Path string
+	// Unverified is a file under the install root with no .installed sentinel:
+	// it is there, but nothing proves WHAT it is — `gaia-agent` is both the
+	// stdio child this looks for and the frozen REST sidecar other installers
+	// stage into the same directory (#3062). Never offered as Path.
+	Unverified string
+	// Looked is every place searched, in order, so a failure can say where.
+	Looked []string
+	// PresenceOnly is true when the only thing established about Path is that a
+	// file is sitting there — see presenceOnly. A caller must report "found",
+	// never "ready".
+	PresenceOnly bool
+}
+
+// Found reports whether there is something to exec.
+func (l Lookup) Found() bool { return l.Path != "" }
+
+// Find locates an agent binary: PATH, then the hub install root, then the
+// in-repo build output.
+func Find(nameOrPath, agentID string) Lookup {
+	if nameOrPath == "" {
+		return Lookup{}
+	}
+	// An explicit path is taken at its word — it is not searched for.
+	if isPath(nameOrPath) {
+		l := Lookup{Looked: []string{nameOrPath}}
+		if isExecutableFile(nameOrPath) {
+			l.Path = nameOrPath
+			if abs, err := filepath.Abs(nameOrPath); err == nil {
+				l.Path = abs
+			}
+			l.PresenceOnly = presenceOnly(l.Path)
+		}
+		return l
+	}
+
+	installDir := InstallRoot()
+	if installDir == "" {
+		installDir = filepath.Join("~", ".gaia", "agents", agentID)
+	} else {
+		installDir = filepath.Join(installDir, agentID)
+	}
+	l := Lookup{Looked: []string{"your PATH", installDir, repoBuildDir}}
+
+	for _, candidate := range executableNames(nameOrPath) {
+		if p, err := exec.LookPath(candidate); err == nil {
+			// LookPath honours PATHEXT, so anything it returns is runnable.
+			l.Path = p
+			return l
+		}
+	}
+	for _, find := range []func() string{
+		func() string { return findInstalledBinary(agentID, nameOrPath) },
+		func() string { return findBinaryInRepo(nameOrPath) },
+	} {
+		if p := find(); p != "" {
+			l.Path = p
+			l.PresenceOnly = presenceOnly(p)
+			return l
+		}
+	}
+	// Nothing runnable — but a file may still be sitting in the install
+	// directory with no sentinel to say what it is. "Not found" would send the
+	// user hunting for a missing download when the answer is "finish the
+	// install"; naming the file is the difference.
+	l.Unverified = installDirBinaryIn(InstallRoot(), agentID, nameOrPath)
+	return l
+}
+
+// repoBuildDir is the only in-repo location findBinaryInRepo searches. Named
+// here so a failure message and the search itself cannot disagree.
+const repoBuildDir = "./cpp/build/"
+
+// isPath reports whether s names a location rather than a program to look up.
+//
+// BOTH separators, on every OS: Windows accepts forward slashes everywhere, and
+// testing only os.PathSeparator there sent "C:/tools/gaia-agent" down the
+// search-by-name branch — which then reported it as missing from PATH and named
+// three places it had never looked for it.
+func isPath(s string) bool {
+	return strings.ContainsAny(s, `/\`) || strings.HasPrefix(s, ".")
+}
+
 // ResolveExecutable turns an agent's BinaryPath into a path this process can
 // actually exec, or fails saying where it looked. Discovery leaves an
 // unresolved NAME in place, so checking BinaryPath != "" let a launch report
@@ -190,43 +296,41 @@ func ResolveExecutable(nameOrPath, agentID string) (string, error) {
 	if nameOrPath == "" {
 		return "", fmt.Errorf("%w: the catalog entry names no binary", ErrNoExecutable)
 	}
-	if strings.ContainsRune(nameOrPath, os.PathSeparator) || strings.HasPrefix(nameOrPath, ".") {
-		if isExecutableFile(nameOrPath) {
-			if abs, err := filepath.Abs(nameOrPath); err == nil {
-				return abs, nil
-			}
-			return nameOrPath, nil
-		}
+	l := Find(nameOrPath, agentID)
+	if l.Found() {
+		return l.Path, nil
+	}
+	if isPath(nameOrPath) {
 		return "", fmt.Errorf("%w: %s is not an executable file", ErrNoExecutable, nameOrPath)
 	}
-	for _, candidate := range executableNames(nameOrPath) {
-		if p, err := exec.LookPath(candidate); err == nil {
-			return p, nil
-		}
+	if l.Unverified != "" {
+		return "", fmt.Errorf(
+			"%w: reinstall %s with `gaia hub install %s` — %s exists but the install "+
+				"is unverified (no %s), so it is not safe to run",
+			ErrNoExecutable, agentID, agentID, l.Unverified, SentinelName)
 	}
-	if p := findInstalledBinary(agentID, nameOrPath); p != "" {
-		return p, nil
-	}
-	if p := findBinaryInRepo(nameOrPath); p != "" {
-		return p, nil
-	}
-	where := InstallRoot()
-	if where == "" {
-		where = "~/.gaia/agents"
-	} else {
-		where = filepath.Join(where, agentID)
-	}
-	// Action first: this text is also shown in the hub's one-row status bar,
-	// where an 80-column terminal truncates whatever comes after ~70 characters.
-	return "", fmt.Errorf(
-		"%w: build %s from source, or run an agent the Agent Hub publishes (`gaia tui list`) "+
-			"— it is not on PATH, not in %s, and not in cpp/build",
-		ErrNoExecutable, nameOrPath, where)
+	return "", errors.New(MissingBinaryMessage(nameOrPath, l))
+}
+
+// MissingBinaryMessage is what a user is told when an agent's program is not on
+// the machine. It is the same text on the readiness screen and on stderr from a
+// one-shot, so the two can never say different things about the same state.
+//
+// It names the installer, not a build-from-source step: GAIA ships one agent
+// and the installer is what puts it there. A TUI that offered to download it
+// instead would be fetching ~90 MB over an unverified path.
+func MissingBinaryMessage(binary string, l Lookup) string {
+	return fmt.Sprintf(
+		"%s is the program that does the thinking, and it is not on this machine. "+
+			"Nothing runs without it.\nLooked in:  %s\n"+
+			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-tui\n"+
+			"            %s\nlook:       %s",
+		binary, strings.Join(l.Looked, ", "), binary, InstallerURL, AgentDocsURL)
 }
 
 // isExecutableFile reports whether path is a regular file this process could
 // exec. On Windows the mode bits carry no exec information, so existence is the
-// only usable test there.
+// only usable test there — see Lookup.PresenceOnly for what that costs.
 func isExecutableFile(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -238,9 +342,28 @@ func isExecutableFile(path string) bool {
 	return info.Mode().Perm()&0o111 != 0
 }
 
+// presenceOnly reports whether all that was established about path is that a
+// file is sitting there.
+//
+// On Windows the mode bits carry no exec information, so isExecutableFile
+// accepts any regular file. A PATHEXT extension is at least the same evidence a
+// Unix exec bit gives — the OS will try to run it — so only an extensionless
+// match is a bare existence check. Neither platform proves the binary was built
+// for this architecture; only starting it does.
+func presenceOnly(path string) bool {
+	if runtime.GOOS != "windows" || path == "" {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".exe", ".com", ".bat", ".cmd":
+		return false
+	}
+	return true
+}
+
 // SetMockBinary points every subprocess agent at a mock binary and marks those
-// agents installed: --mock IS the claim that a runnable binary exists, and no
-// seed ships installed for it to attach to otherwise. Daemon agents are skipped.
+// agents installed: --mock IS the claim that a runnable binary exists.
+// Daemon agents are skipped.
 func (c *Catalog) SetMockBinary(binaryPath string) {
 	for i := range c.agents {
 		// A binary path in the entry is what makes it a subprocess agent at all;
@@ -249,53 +372,15 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 			continue
 		}
 		c.agents[i].BinaryPath = binaryPath
-		// All three describe how to invoke ONE binary, so they are replaced as
+		// All four describe how to talk to ONE binary, so they are replaced as
 		// a unit — a mock inheriting the real agent's --dev would be handed an
-		// argument it never declared.
+		// argument it never declared, and one inheriting CanonicalEvents has
+		// every line it writes rejected as "unsupported event".
 		c.agents[i].BinaryArgs = nil
 		c.agents[i].DevArgs = nil
-		if !c.agents[i].Status.IsLaunchable() {
-			c.agents[i].Status = StatusInstalled
-			c.agents[i].NotOfferedReason = ""
-		}
+		c.agents[i].CanonicalEvents = false
+		c.agents[i].Status = StatusInstalled
 	}
-}
-
-// BySection returns agents filtered by their install status section.
-func (c *Catalog) BySection(section Section) []Agent {
-	var result []Agent
-	for _, a := range c.agents {
-		switch section {
-		case SectionInstalled:
-			if a.Status == StatusInstalled || a.Status == StatusActive || a.Status == StatusIdle {
-				result = append(result, a)
-			}
-		case SectionAvailable:
-			if a.Status == StatusAvailable {
-				result = append(result, a)
-			}
-		case SectionComingSoon:
-			if a.Status == StatusComingSoon {
-				result = append(result, a)
-			}
-		}
-	}
-	return result
-}
-
-// DashboardStats returns counts for the hub dashboard.
-func (c *Catalog) DashboardStats() (installed, active, idle int) {
-	for _, a := range c.agents {
-		switch a.Status {
-		case StatusInstalled:
-			installed++
-		case StatusActive:
-			active++
-		case StatusIdle:
-			idle++
-		}
-	}
-	return
 }
 
 // SetStatus updates an agent's status.
@@ -331,7 +416,7 @@ func (c *Catalog) warn(format string, args ...any) {
 
 // LocalInstalls reads the ~/.gaia/agents/*/.installed sentinels — the local
 // record of what is installed. It needs no daemon and no network, which is what
-// makes `gaia tui list --installed` answerable offline.
+// makes `gaia tui status` answerable without a network.
 //
 // The second return is warnings: every one of them makes an installed agent
 // silently disappear, which looks identical to "never installed", so callers
@@ -421,14 +506,17 @@ func (c *Catalog) applyInstalledRecord(id, version string) {
 	}
 	a := &c.agents[idx]
 	a.FromHub = true
+	// A sentinel under the install root means the daemon installed it as an
+	// HTTP sidecar it supervises, so there is no binary for the TUI to spawn --
+	// same invariant upsertHubEntry applies. Seeded entries reach here with
+	// whatever transport the seed guessed, and a seeded subprocess agent that
+	// kept it would be spawned over stdio and fed a frozen REST binary.
+	a.Transport = TransportDaemon
 	a.InstalledVersion = version
 	if version != "" {
 		a.Version = version
 	}
-	if !a.Status.IsLaunchable() {
-		a.Status = StatusInstalled
-	}
-	a.NotOfferedReason = ""
+	a.Status = StatusInstalled
 }
 
 // readSentinel returns (nil, nil) when there is simply no sentinel, and an
@@ -448,268 +536,16 @@ func readSentinel(path string) (*InstalledRecord, error) {
 	return &record, nil
 }
 
-// ApplyHubCatalog merges a GET /daemon/v1/catalog response into the catalog.
-//
-// Hub rows are authoritative for everything the daemon can manage: version,
-// download size, security tier, publisher, and installed state. Seed entries the
-// hub does not offer are demoted from "Available" to "Coming Soon" with a
-// reason — an agent the daemon cannot fetch or start must never sit under a tab
-// that promises it can be installed. That is the dead end the design bar
-// forbids, and it is why the daemon reports `unsupervised_filtered` instead of
-// silently hiding ids.
-func (c *Catalog) ApplyHubCatalog(hub *HubCatalog) {
-	if hub == nil {
-		return
-	}
-	unsupervised := make(map[string]bool, len(hub.UnsupervisedFiltered))
-	for _, id := range hub.UnsupervisedFiltered {
-		unsupervised[id] = true
-	}
-
-	seen := make(map[string]bool, len(hub.Agents))
-	for _, entry := range hub.Agents {
-		if entry.ID == "" {
-			continue
-		}
-		seen[entry.ID] = true
-		c.upsertHubEntry(entry)
-	}
-
-	for i := range c.agents {
-		a := &c.agents[i]
-		if seen[a.ID] || a.FromHub {
-			continue
-		}
-		// "Published, but nothing here can run it" is a fact the seed's blanket
-		// "not published yet" does not have; everything else keeps its own.
-		if a.Status == StatusComingSoon {
-			if unsupervised[a.ID] {
-				a.NotOfferedReason = "no way to run it yet"
-			}
-			continue
-		}
-		if a.Status != StatusAvailable {
-			continue
-		}
-		// Listed as Available by the seed catalog but absent from the hub: it
-		// cannot be installed, so say so instead of offering it.
-		a.Status = StatusComingSoon
-		switch {
-		case unsupervised[a.ID]:
-			a.NotOfferedReason = "no way to run it yet"
-		case hub.Offline:
-			// The list is a cache, so "not published" would be a claim this
-			// data cannot support.
-			a.NotOfferedReason = "not in the cached agent list"
-		default:
-			a.NotOfferedReason = "not on the Agent Hub yet"
-		}
-	}
-
-	sort.SliceStable(c.agents, func(i, j int) bool { return c.agents[i].ID < c.agents[j].ID })
-}
-
-func (c *Catalog) upsertHubEntry(entry HubEntry) {
-	idx := -1
-	for i := range c.agents {
-		if c.agents[i].ID == entry.ID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		c.agents = append(c.agents, Agent{
-			ID:        entry.ID,
-			Name:      entry.ID,
-			Icon:      "📦",
-			Category:  "general",
-			Transport: TransportDaemon,
-		})
-		idx = len(c.agents) - 1
-	}
-
-	a := &c.agents[idx]
-	a.FromHub = true
-	// Everything the daemon serves from the hub is an HTTP sidecar it
-	// supervises; there is no binary for the TUI to spawn.
-	a.Transport = TransportDaemon
-	if entry.Name != "" {
-		a.Name = entry.Name
-	}
-	if entry.Description != "" {
-		a.Description = entry.Description
-	}
-	if entry.Category != "" {
-		a.Category = entry.Category
-	}
-	if entry.Icon != "" {
-		a.Icon = entry.Icon
-	}
-	if len(entry.Tags) > 0 {
-		a.Tags = entry.Tags
-	}
-	a.Author = entry.Author
-	a.SecurityTier = entry.SecurityTier
-	a.Permissions = entry.Permissions
-	a.DownloadSizeBytes = entry.DownloadSizeBytes
-	a.LatestVersion = entry.LatestVersion
-	a.InstalledVersion = entry.InstalledVersion
-	a.UpdateAvailable = entry.UpdateAvailable
-	a.Supervised = entry.Supervised
-	a.NotOfferedReason = ""
-
-	switch {
-	case entry.Installed:
-		a.Version = entry.InstalledVersion
-		// Never clobber a live session: an agent the user is chatting with is
-		// Active, and Active is also "installed".
-		if !a.Status.IsLaunchable() {
-			a.Status = StatusInstalled
-		}
-	case !entry.Supervised:
-		a.Version = entry.LatestVersion
-		a.Status = StatusComingSoon
-		a.NotOfferedReason = "no way to run it yet"
-	default:
-		a.Version = entry.LatestVersion
-		a.Status = StatusAvailable
-	}
-}
-
-// MarkInstalled records a completed hub install locally so the row flips
-// without waiting for the next catalog fetch.
-func (c *Catalog) MarkInstalled(id, version string) {
-	for i := range c.agents {
-		if c.agents[i].ID != id {
-			continue
-		}
-		c.agents[i].Status = StatusInstalled
-		if version != "" {
-			c.agents[i].InstalledVersion = version
-			c.agents[i].Version = version
-		} else if c.agents[i].LatestVersion != "" {
-			c.agents[i].InstalledVersion = c.agents[i].LatestVersion
-			c.agents[i].Version = c.agents[i].LatestVersion
-		}
-		c.agents[i].UpdateAvailable = false
-		return
-	}
-}
-
-// Remove puts an agent back to its pre-install state. That is NOT
-// unconditionally Available: an entry the hub does not offer, or one the daemon
-// cannot start, lands back under Coming Soon rather than advertising an install
-// the backend cannot honour.
-func (c *Catalog) Remove(id string) {
-	for i := range c.agents {
-		if c.agents[i].ID != id {
-			continue
-		}
-		a := &c.agents[i]
-		a.BinaryPath = ""
-		a.BinaryArgs = nil
-		a.DevArgs = nil
-		a.InstalledVersion = ""
-		a.UpdateAvailable = false
-		if a.LatestVersion != "" {
-			a.Version = a.LatestVersion
-		}
-		switch {
-		case a.FromHub && a.Supervised:
-			a.Status = StatusAvailable
-			a.NotOfferedReason = ""
-		case a.FromHub:
-			// Published, but this GAIA build has no way to run it.
-			a.Status = StatusComingSoon
-			a.NotOfferedReason = "no way to run it yet"
-		default:
-			a.Status = StatusComingSoon
-			if a.NotOfferedReason == "" {
-				a.NotOfferedReason = NotPublishedReason
-			}
-		}
-		return
-	}
-}
-
-// IncrementVotes bumps the vote count for a coming-soon agent.
-func (c *Catalog) IncrementVotes(id string) {
-	for i := range c.agents {
-		if c.agents[i].ID == id {
-			c.agents[i].Votes++
-			return
-		}
-	}
-}
-
-// DecrementVotes takes back an optimistic increment whose vote never landed.
-// Nothing queues a failed vote, so leaving the count up would show the user a
-// vote that was never recorded anywhere.
-func (c *Catalog) DecrementVotes(id string) {
-	for i := range c.agents {
-		if c.agents[i].ID == id {
-			if c.agents[i].Votes > 0 {
-				c.agents[i].Votes--
-			}
-			return
-		}
-	}
-}
-
-// SetVotes replaces the local count with the server's authoritative one.
-func (c *Catalog) SetVotes(id string, votes int) {
-	for i := range c.agents {
-		if c.agents[i].ID == id {
-			c.agents[i].Votes = votes
-			return
-		}
-	}
-}
-
-// NotPublishedReason is why a seed entry sits under Coming Soon: the Agent Hub
-// does not publish it, so the daemon has no spec to fetch or start it with.
-//
-// The hub must never offer an action the backend cannot honour, so every seed
-// starts here — except `email`, the one published sidecar, which ships as
-// Available. A hub row the daemon reports as supervised promotes the rest
-// (upsertHubEntry).
-const NotPublishedReason = "not published on the Agent Hub yet"
+// FlagshipID is the agent the TUI boots into. GAIA ships one.
+const FlagshipID = "gaia"
 
 func seedAgents() []Agent {
 	return []Agent{
-		// A local C++ binary, never published to the hub and absent unless
-		// built from source. Seeding it "installed" put a row in front of every
-		// user that connected and then failed on the first message.
-		{
-			ID: "bash", Name: "Bash", Description: "Shell command execution and automation",
-			Category: "DevOps", Tags: []string{"shell", "bash", "terminal", "cli"},
-			Icon: "🖥️", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-			BinaryPath:       "gaia-bash", BinaryArgs: []string{"--json-events", "--model", "Gemma-4-E4B-it-GGUF"},
-		},
-
-		// --- Not published yet (Python agents — no sidecar spec) ---
-		{
-			ID: "chat", Name: "Chat", Description: "General conversation and Q&A",
-			Category: "Conversation", Tags: []string{"chat", "general", "qa"},
-			Icon: "💬", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "doc", Name: "Doc", Description: "Document analysis with RAG",
-			Category: "Documents", Tags: []string{"documents", "rag", "pdf", "search"},
-			Icon: "📄", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "file", Name: "File", Description: "File system navigation and operations",
-			Category: "Productivity", Tags: []string{"files", "filesystem", "io"},
-			Icon: "📁", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
 		{
 			// The email agent is an HTTP sidecar the daemon supervises, not a
 			// binary the TUI can spawn — it is reached through the daemon relay.
+			// Not on the launch path: `gaia-tui chat --agent email` is how it is
+			// reached, and it keeps the daemon readiness gate.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
 			Category: "Productivity", Tags: []string{"email", "gmail", "calendar", "communication"},
 			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
@@ -724,21 +560,13 @@ func seedAgents() []Agent {
 		//
 		// CanonicalEvents because it writes the canonical vocabulary, the only
 		// one with somewhere to put tool narration and result previews.
-		//
-		// Seeded ComingSoon on purpose: it is not on the Agent Hub yet, and the
-		// seed list is the pre-hub-load fallback, so shipping it Available would
-		// offer an install that cannot be fetched — the same row-that-fails bug
-		// gaia-bash caused. A hub row promotes it once it publishes; `run`
-		// resolves on catalog presence rather than status, so local development
-		// works without over-claiming to users.
 		{
-			ID: "gaia", Name: "GAIA", Description: "Chat, documents, data, and web research — with memory and skills",
+			ID: FlagshipID, Name: "GAIA", Description: "Chat, documents, data, and web research — with memory and skills",
 			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
-			Icon: "✨", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-			Transport:        TransportSubprocess,
-			BinaryPath:       "gaia-agent",
-			CanonicalEvents:  true,
+			Icon: "✨", Version: "0.1.0", Status: StatusInstalled,
+			Transport:       TransportSubprocess,
+			BinaryPath:      "gaia-agent",
+			CanonicalEvents: true,
 			// `gaia-tui --dev` also puts the child at DEBUG in
 			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
 			// while the agent kept logging errors only — and the log is where the

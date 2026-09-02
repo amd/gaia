@@ -14,6 +14,10 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      # Tested here, but outside src/: the PE-resource gate and the installer
+      # filename table.
+      - 'util/check_pe_resources.py'
+      - 'installer/tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
@@ -23,6 +27,10 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      # Tested here, but outside src/: the PE-resource gate and the installer
+      # filename table.
+      - 'util/check_pe_resources.py'
+      - 'installer/tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'

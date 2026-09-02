@@ -67,10 +67,11 @@ jobs:
   # Deterministic layer — maintained security rules, native SARIF.
   # ---------------------------------------------------------------------------
   # ---------------------------------------------------------------------------
-  # Cost guard for the nightly cadence. The Claude layer below is 3 lenses x 30
-  # turns + synthesis; running that unconditionally every night would burn the
-  # shared subscription pool re-reading an unchanged tree. Mirrors the
-  # skip-if-empty preflight in claude-weekly-audit.yml.
+  # Cost guard for the nightly cadence. The Claude layer below is 3 lenses x 45
+  # turns + synthesis (~$4-6 of subscription-equivalent usage per lens at the
+  # ceiling); running that unconditionally every night would burn the shared
+  # subscription pool re-reading an unchanged tree. Mirrors the skip-if-empty
+  # preflight in claude-weekly-audit.yml.
   #
   # semgrep is deliberately NOT gated on this — it is cheap, deterministic, and
   # its rulesets update independently of this repo, so it still has something to
@@ -84,10 +85,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.scope.outputs.skip }}
+      lenses: ${{ steps.lenses.outputs.lenses }}
+      lens_count: ${{ steps.lenses.outputs.lens_count }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # Single source of truth for the lens list: the audit matrix and the synthesis
+      # completeness check both read it, so adding a lens can't leave the check
+      # counting the old number and silently re-open the empty-SARIF hole.
+      - name: Resolve the lens list
+        id: lenses
+        run: |
+          set -euo pipefail
+          lenses='["sink-taint","authz","suppression-review"]'
+          {
+            echo "lenses=$lenses"
+            echo "lens_count=$(printf '%s' "$lenses" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          } >> "$GITHUB_OUTPUT"
+          echo "Lenses: $lenses"
       - name: Skip the Claude layer on a night with no commits
         id: scope
         env:
@@ -148,7 +164,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        lens: [sink-taint, authz, suppression-review]
+        lens: ${{ fromJSON(needs.preflight.outputs.lenses) }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -177,15 +193,16 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
+        uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # On `schedule`, github.actor is whoever last touched the default branch — always
-          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
           # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
-          allowed_bots: "github-merge-queue"
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are one lens of GAIA's proactive SECURITY audit. YOUR LENS: ${{ matrix.lens }}.
             Find real, exploitable security weaknesses.
@@ -261,8 +278,14 @@ jobs:
             validated two lines down, guarded elsewhere). If you cannot quote concrete evidence you
             have not verified it — omit it.
 
-            ## Output — write `findings-${{ matrix.lens }}.json` at the repo root
-            `{"findings": []}` if nothing. Each finding:
+            ## Output — this file IS the deliverable
+            Write a JSON file at the repo root named exactly `findings-${{ matrix.lens }}.json`.
+            You have no Write tool, so create it with Bash (a `cat > … <<'JSON'` heredoc).
+            Write `{"findings": []}` if you find nothing — an empty file is a valid, useful
+            result. An investigation that ends without this file is a FAILED run: it is
+            indistinguishable from the lens never having started, and the synthesis step
+            rejects the whole audit. Write it even if you are mid-investigation and out of
+            budget. Each finding:
             ```json
             {"findings": [{
               "path": "src/gaia/....py",
@@ -279,10 +302,26 @@ jobs:
             }]}
             ```
             `dedup_key` is `security:<path>:<symbol>` — a stable symbol, NEVER a line number.
-            Also print each finding's full detail to STDOUT prefixed "SECURITY FINDING:" (the run
-            log is access-controlled; this is the private detail channel).
+            AFTER the file exists, also print each finding's full detail to STDOUT prefixed
+            "SECURITY FINDING:" (the run log is access-controlled; this is a secondary detail
+            channel). STDOUT is never a substitute for the file — only the file is collected.
+
+            ## Budget
+            You have --max-turns 45 and share one rate-limited subscription pool with the
+            sibling lenses (run back-to-back), the nightly code audit, and the interactive
+            PR-review jobs. The worklist is long and you are told not to sample, so pace
+            yourself: STOP investigating at ~5 turns remaining and spend them writing the
+            findings file. Reaching the turn ceiling mid-investigation discards everything
+            you found. Partial findings written to the file beat perfect findings lost.
+
+            Subagent turns count against that ceiling too, and coordinating them is what
+            actually exhausts it — a lens that fans out to check the same gate across many
+            call sites burns its budget on orchestration and writes nothing. Delegate only
+            for a genuinely wide, parallelizable investigation, never to verify or
+            double-check your own findings, and prefer one subagent over several. Spend
+            turns reading code, not coordinating.
           claude_args: |
-            --max-turns 30
+            --max-turns 45
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
@@ -323,7 +362,7 @@ jobs:
           path: audit-findings
       - name: Convert findings to SARIF
         env:
-          EXPECTED_LENSES: "3"  # keep in sync with the audit job's matrix.lens
+          EXPECTED_LENSES: ${{ needs.preflight.outputs.lens_count }}
         run: |
           set -euo pipefail
           # Flatten the per-lens artifact subdirs into one glob for the converter.

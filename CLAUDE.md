@@ -533,7 +533,6 @@ gaia/
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── scripts/            # Build, install, and launch scripts
 ├── docs/               # Documentation (MDX format)
-├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
 
