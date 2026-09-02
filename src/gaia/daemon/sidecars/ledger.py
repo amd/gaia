@@ -114,10 +114,10 @@ def _probe_health(port: int) -> Optional[dict]:
 
 
 def _pid_alive(pid: int) -> bool:
-    """True when *pid* refers to a live process."""
-    import psutil
+    """True when *pid* refers to a live process — zombies excluded."""
+    from gaia.daemon.instance import pid_alive
 
-    return psutil.pid_exists(pid)
+    return pid_alive(pid)
 
 
 def _pid_cmdline(pid: int) -> Optional[str]:

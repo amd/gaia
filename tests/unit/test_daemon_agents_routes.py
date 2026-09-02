@@ -794,6 +794,50 @@ def test_reap_stale_dead_leader_live_child_group_kills_pid_as_pgid(
     assert ledger.read_entries() == []
 
 
+def test_reap_stale_zombie_leader_group_kills_pid_as_pgid(daemon_home, monkeypatch):
+    # The recorded leader pid exited but the OS hasn't reaped it yet (zombie):
+    # psutil.pid_exists is True for a zombie, but it can never have been reused
+    # (the slot is held precisely until reap) — so this must take the DEAD
+    # leader path (group-kill), not the live-pid path (#3300).
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="toy-a",
+        pid=4246,
+        port=51005,
+        mode="user",
+        argv=["/path/to/toy-a-agent", "--port", "51005"],
+        started_at=1.0,
+    )
+
+    import psutil
+
+    class _Zombie:
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+        def cmdline(self):
+            return []
+
+    killed = []
+    group_killed = []
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: pid == 4246)
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Zombie())
+    monkeypatch.setattr(
+        ledger,
+        "_probe_health",
+        lambda port: {"service": "gaia-agent-toy-a"} if port == 51005 else None,
+    )
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    result = ledger.reap_stale(_reap_specs())
+    assert result == [4246]
+    assert group_killed == [4246]
+    assert killed == []  # never the live-pid path for a zombie leader
+    assert ledger.read_entries() == []
+
+
 # ===========================================================================
 # sidecars/routes.py — build_agents_router() HTTP mapping
 # ===========================================================================
