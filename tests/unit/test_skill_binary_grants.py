@@ -1267,26 +1267,14 @@ def test_a_free_form_subcommand_still_takes_leading_flags():
 # away. Everything else keeps the old path.
 
 
-def _captured_shell_tool(host):
+def _registered_shell_tool(host):
     """The registered run_shell_command closure bound to *host*."""
-    import gaia.agents.base.tools as tools_module
+    from gaia.agents.base.tools import get_tool_metadata
 
-    captured = {}
-    original = tools_module.tool
-
-    def spy(**kwargs):
-        def decorate(fn):
-            captured[kwargs.get("name")] = fn
-            return original(**kwargs)(fn)
-
-        return decorate
-
-    tools_module.tool = spy
-    try:
-        host.register_shell_tools()
-    finally:
-        tools_module.tool = original
-    return captured["run_shell_command"]
+    host.register_shell_tools()
+    entry = get_tool_metadata("run_shell_command")
+    assert entry is not None, "register_shell_tools did not register run_shell_command"
+    return entry["function"]
 
 
 def _run_capturing_subprocess(host, command):
@@ -1305,7 +1293,7 @@ def _run_capturing_subprocess(host, command):
 
     shell_module.subprocess.run = fake_run
     try:
-        _captured_shell_tool(host)(command=command)
+        _registered_shell_tool(host)(command=command)
     finally:
         shell_module.subprocess.run = real_run
     return seen
