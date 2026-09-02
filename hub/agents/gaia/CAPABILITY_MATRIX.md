@@ -26,7 +26,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **68** (CORE 10 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **68** (CORE 11 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
@@ -61,7 +61,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - MCP tools: **0** (see MCP Scope Decision)
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
-  - `quality`: enforce=False, acceptance_enforce=None
+  - `quality`: enforce=True, acceptance_enforce=None
 - Judged scenario categories (`eval/scenarios/gaia_*`): **13**
   - `gaia_code`
   - `gaia_core`
@@ -85,5 +85,5 @@ The flagship is the host loop that CONSUMES MCP servers (the manifest declares c
 
 ## Eval Enforcement Status & Follow-up Plan
 
-No judged eval suite is wired yet — the deterministic tier (this matrix, the binary-gate pins, the package's contract tests) and the committed SSE sequence pins under eval_baselines/query_sequences/ are the current coverage. Follow-up: the gaia eval corpus (eval/scenarios/gaia_* categories driven by `gaia eval agent --agent-type gaia`) lands with its gate-threshold manifests under tests/fixtures/gaia/, at which point this matrix derives per-suite enforce flags exactly as the email agent's does.
+Coverage is two tiers. The deterministic tier (this matrix, the binary-gate pins, the package's contract tests, and the committed SSE sequence pins under eval_baselines/query_sequences/) runs on every commit. The judged tier is the gaia eval corpus (eval/scenarios/gaia_*, driven by `gaia eval agent --agent-type gaia`) with its gate-threshold manifests under tests/fixtures/gaia/; the categories and their enforce flags are derived above rather than asserted here. Follow-up: the committed scorecard is a HARNESS-VALIDATION measured on claude-haiku-4-5 because the dev machine cannot run Lemonade. The Gemma-4-E4B product baseline is minted by the first gaia_scorecard_refresh.yml dispatch on the self-hosted runner, which also executes the scenarios that need the embedder and are skipped until then.
 

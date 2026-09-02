@@ -133,17 +133,23 @@ MCP_SCOPE_DECISION = {
     ),
 }
 
-# What happens next for the (currently empty) eval-suite surface. State that is
-# derivable from fixtures is derived and rendered next to this prose, never
-# duplicated inside it.
+# What happens next for the eval-suite surface. State that is derivable from
+# fixtures (the categories, the per-suite enforce flags) is derived and rendered
+# next to this prose, never duplicated inside it — so this string must not
+# restate a count or a flag that the table above already shows.
 EVAL_FOLLOWUP_PLAN = (
-    "No judged eval suite is wired yet — the deterministic tier (this matrix, "
-    "the binary-gate pins, the package's contract tests) and the committed SSE "
-    "sequence pins under eval_baselines/query_sequences/ are the current "
-    "coverage. Follow-up: the gaia eval corpus (eval/scenarios/gaia_* "
-    "categories driven by `gaia eval agent --agent-type gaia`) lands with its "
-    "gate-threshold manifests under tests/fixtures/gaia/, at which point this "
-    "matrix derives per-suite enforce flags exactly as the email agent's does."
+    "Coverage is two tiers. The deterministic tier (this matrix, the "
+    "binary-gate pins, the package's contract tests, and the committed SSE "
+    "sequence pins under eval_baselines/query_sequences/) runs on every "
+    "commit. The judged tier is the gaia eval corpus (eval/scenarios/gaia_*, "
+    "driven by `gaia eval agent --agent-type gaia`) with its gate-threshold "
+    "manifests under tests/fixtures/gaia/; the categories and their enforce "
+    "flags are derived above rather than asserted here. Follow-up: the "
+    "committed scorecard is a HARNESS-VALIDATION measured on claude-haiku-4-5 "
+    "because the dev machine cannot run Lemonade. The Gemma-4-E4B product "
+    "baseline is minted by the first gaia_scorecard_refresh.yml dispatch on "
+    "the self-hosted runner, which also executes the scenarios that need the "
+    "embedder and are skipped until then."
 )
 
 

@@ -219,7 +219,7 @@ at it directly; the fetcher will not be talked into it.
 - Guide: <https://amd-gaia.ai/docs/guides/gaia>
 - Technical reference: [`SPEC.md`](./SPEC.md)
 - Eval scorecard: [`SCORECARD.md`](./SCORECARD.md) — the agent's measured
-  judged-scenario pass rate across the 12-category eval corpus, with the exact
+  judged-scenario pass rate across the 13-category eval corpus, with the exact
   recipe to reproduce it
 - Changes: [`CHANGELOG.md`](./CHANGELOG.md)
 - Issues: <https://github.com/amd/gaia/issues>

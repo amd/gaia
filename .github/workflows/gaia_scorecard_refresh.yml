@@ -83,13 +83,13 @@ permissions:
 env:
   SCORECARD: hub/agents/gaia/npm/SCORECARD.md
   MANIFEST: hub/agents/gaia/python/gaia-agent.yaml
-  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks' }}
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
   EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
   MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   CTX_SIZE: ${{ inputs.ctx_size || '65536' }}
   REBASELINE: ${{ inputs.rebaseline }}
   REBASELINE_REASON: ${{ inputs.rebaseline_reason || '' }}
-  # FULL = the default 12-category list untouched; only FULL may commit
+  # FULL = the default 13-category list untouched; only FULL may commit
   # (a category subset would silently downgrade the published sample basis).
   IS_FULL: ${{ (inputs.categories || '') == '' }}
   BACKEND_URL: http://127.0.0.1:4200

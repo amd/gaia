@@ -420,7 +420,7 @@ def test_full_request_succeeds_for_public_host(monkeypatch):
 
 class TestLoopbackAllowlist:
     """GAIA_WEB_ALLOWED_HOSTS is an opt-in test affordance: default-off, and it
-    only permits loopback/private for a host the operator explicitly named."""
+    only permits loopback for a host the operator explicitly named."""
 
     def test_default_blocks_loopback(self, monkeypatch):
         import pytest
@@ -445,3 +445,37 @@ class TestLoopbackAllowlist:
         monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
         with pytest.raises(ValueError, match="private/reserved"):
             client._assert_ip_allowed("10.0.0.1", "evil.internal")
+
+    def test_allowlisted_name_resolving_off_loopback_still_blocked(
+        self, monkeypatch
+    ):
+        """The allowlist keys on the *name*; the address still has to be
+        loopback. A DNS rebind that points an allowlisted name at RFC1918 is
+        the whole reason the connect-time pin exists."""
+        import pytest
+
+        from gaia.web import client
+
+        monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "fixtures.local")
+        with pytest.raises(ValueError, match="private/reserved"):
+            client._assert_ip_allowed("10.0.0.1", "fixtures.local")
+
+    def test_allowlisted_name_cannot_reach_cloud_metadata(self, monkeypatch):
+        """169.254.169.254 is ``is_private``, so an ``is_private`` carve-out
+        would hand the metadata endpoint to any allowlisted name."""
+        import pytest
+
+        from gaia.web import client
+
+        monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "fixtures.local")
+        with pytest.raises(ValueError, match="private/reserved"):
+            client._assert_ip_allowed("169.254.169.254", "fixtures.local")
+
+    def test_allowlisted_name_unparseable_address_still_raises(self, monkeypatch):
+        import pytest
+
+        from gaia.web import client
+
+        monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "fixtures.local")
+        with pytest.raises(ValueError, match="unparseable"):
+            client._assert_ip_allowed("not-an-ip", "fixtures.local")

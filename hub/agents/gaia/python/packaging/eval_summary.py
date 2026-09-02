@@ -4,13 +4,18 @@
 """Republish the gaia-agent eval's gate verdicts as a GitHub job summary.
 
 Adapted nearly verbatim from ``hub/agents/email/python/packaging/eval_summary.py``
-— one reporter shape across agents. The gate manifests under
-``tests/fixtures/gaia/`` ship ``enforce: false``, so a BREACHED BAR exits 0 and
-produces a green step with no annotation -- the number only exists inside
-``eval-out/*.json``, which nobody opens. That is not coverage. This reporter
-reads the gate reports the eval already writes and republishes every verdict
-into ``$GITHUB_STEP_SUMMARY``, raising a ``::warning::`` per breach, so an
-advisory result still lands in front of a reviewer.
+— one reporter shape across agents. A gate manifest under ``tests/fixtures/gaia/``
+that ships ``enforce: false`` lets a BREACHED BAR exit 0 and produce a green step
+with no annotation -- the number only exists inside ``eval-out/*.json``, which
+nobody opens. That is not coverage. This reporter reads the gate reports the eval
+already writes and republishes every verdict into ``$GITHUB_STEP_SUMMARY``,
+raising a ``::warning::`` per breach, so an advisory result still lands in front
+of a reviewer.
+
+The enforce posture is read off the gates at render time (``_footer``), never
+hardcoded: the manifests differ from each other and change over time, and a
+summary that calls a gate advisory *after* it failed the build is worse than no
+footer at all.
 
 It is a REPORTER, not a gate: it always exits 0. Blocking stays where it belongs
 -- ``should_fail`` (= ``enforce`` and not passed), owned by the manifests and
@@ -161,13 +166,41 @@ def render(gates: dict[str, dict], unreadable: list[str]) -> tuple[str, list[str
             f"GAIA agent eval - unreadable gate report {item}" for item in unreadable
         ]
 
-    lines += [
+    lines += [_footer(gates)]
+    return "\n".join(lines), warnings
+
+
+def _footer(gates: dict[str, dict]) -> str:
+    """Describe the enforce posture from the gates themselves.
+
+    Hardcoding "all report-only" is how the summary ends up telling a reader a
+    gate that just failed the build was advisory.
+    """
+    intro = (
         "Bars and the on/off switch live in "
         "`tests/fixtures/gaia/*_gate_thresholds.json`. "
-        "All of them currently ship `enforce: false`, so a breach is reported, not "
-        "blocking; flip a manifest's `enforce` to `true` to make that gate block.",
-    ]
-    return "\n".join(lines), warnings
+    )
+    blocking = sorted(
+        GATE_LABELS.get(k, k) for k, g in gates.items() if g.get("enforce")
+    )
+    advisory = sorted(
+        GATE_LABELS.get(k, k) for k, g in gates.items() if not g.get("enforce")
+    )
+    if not gates:
+        return intro + "No gate reported its enforce state in this run."
+    if not blocking:
+        return intro + (
+            "Every gate here ships `enforce: false`, so a breach is reported, not "
+            "blocking; flip a manifest's `enforce` to `true` to make that gate block."
+        )
+    parts = [intro, "**Blocking** (`enforce: true`): " + ", ".join(blocking) + "."]
+    if advisory:
+        parts.append(" Report-only: " + ", ".join(advisory) + ".")
+    parts.append(
+        " A breach on a blocking gate fails the build; a breach on a report-only "
+        "gate does not."
+    )
+    return "".join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:

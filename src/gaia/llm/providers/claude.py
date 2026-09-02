@@ -218,14 +218,19 @@ class ClaudeProvider(LLMClient):
             return name
         return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
 
-    def _restore_tool_name(self, api_name: str) -> str:
-        return getattr(self, "_tool_name_map", {}).get(api_name, api_name)
+    def _to_anthropic_tools(
+        self, tools: Optional[List[dict]]
+    ) -> tuple[Optional[List[dict]], Dict[str, str]]:
+        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape.
 
-    def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
-        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
-        self._tool_name_map: dict = {}
+        Returns the converted tools *and* the restore map. The map belongs to
+        the call, not the provider: one instance can serve two requests with
+        different tool sets, and a map on ``self`` lets the second overwrite the
+        first's names mid-flight.
+        """
+        name_map: Dict[str, str] = {}
         if not tools:
-            return None
+            return None, name_map
         converted = []
         for tool in tools:
             fn = tool.get("function") if tool.get("type") == "function" else None
@@ -248,17 +253,17 @@ class ClaudeProvider(LLMClient):
             # restore map sends the model's builtin call to the skill's tool.
             # A skill shadowing a registry name is an expected case
             # (skills/loader.py), so this is reachable, not theoretical.
-            if api_name in self._tool_name_map:
-                clash = self._tool_name_map[api_name]
+            if api_name in name_map:
+                clash = name_map[api_name]
                 raise ValueError(
                     f"Tool names {clash!r} and {original!r} both map to "
                     f"{api_name!r} for the Anthropic API — the model's call "
                     "could not be routed back unambiguously. Rename one."
                 )
-            self._tool_name_map[api_name] = original
+            name_map[api_name] = original
             entry["name"] = api_name
             converted.append(entry)
-        return converted
+        return converted, name_map
 
     def _split_system(self, messages: List[dict]) -> tuple:
         """Hoist role=system entries out of the array into the ``system`` param."""
@@ -285,7 +290,7 @@ class ClaudeProvider(LLMClient):
         messages: List[dict],
         tools: Optional[List[dict]],
         kwargs: dict,
-    ) -> dict:
+    ) -> tuple[dict, Dict[str, str]]:
         system, cleaned = self._split_system(messages)
         if not cleaned:
             raise ValueError(
@@ -304,12 +309,12 @@ class ClaudeProvider(LLMClient):
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
         params["max_tokens"] = max(int(params.get("max_tokens") or 0), _MIN_MAX_TOKENS)
-        anthropic_tools = self._to_anthropic_tools(tools)
+        anthropic_tools, name_map = self._to_anthropic_tools(tools)
         if anthropic_tools:
             params["tools"] = _cache_last_tool(anthropic_tools)
         if system:
             params["system"] = _cached_system(system)
-        return params
+        return params, name_map
 
     # ── error translation ───────────────────────────────────────────────
 
@@ -368,10 +373,12 @@ class ClaudeProvider(LLMClient):
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         self._last_usage = None
-        params = self._build_params(self._resolve_model(model), messages, tools, kwargs)
+        params, name_map = self._build_params(
+            self._resolve_model(model), messages, tools, kwargs
+        )
 
         if stream:
-            return self._stream_chat(params)
+            return self._stream_chat(params, name_map)
 
         start = time.monotonic()
         try:
@@ -379,9 +386,11 @@ class ClaudeProvider(LLMClient):
         except Exception as exc:  # translated to actionable errors below
             self._raise_actionable(exc)
             raise  # unreachable — _raise_actionable always raises
-        return self._parse_response(response, time.monotonic() - start)
+        return self._parse_response(response, time.monotonic() - start, name_map)
 
-    def _parse_response(self, response, elapsed: float) -> str:
+    def _parse_response(
+        self, response, elapsed: float, name_map: Dict[str, str]
+    ) -> str:
         text_parts: List[str] = []
         tool_calls: List[dict] = []
         for block in response.content:
@@ -393,7 +402,7 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": self._restore_tool_name(block.name),
+                            "name": name_map.get(block.name, block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
@@ -419,7 +428,7 @@ class ClaudeProvider(LLMClient):
             )
         return "".join(text_parts)
 
-    def _stream_chat(self, params: dict) -> Iterator[str]:
+    def _stream_chat(self, params: dict, name_map: Dict[str, str]) -> Iterator[str]:
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -445,7 +454,7 @@ class ClaudeProvider(LLMClient):
                             "id": block.id,
                             "type": "function",
                             "function": {
-                                "name": self._restore_tool_name(block.name),
+                                "name": name_map.get(block.name, block.name),
                                 "arguments": "",
                             },
                         }
