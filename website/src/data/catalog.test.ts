@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   categoryLabel,
+  installCta,
   installMethods,
   isAgent,
   isNpmSidecar,
@@ -103,9 +104,11 @@ describe('installMethods', () => {
   });
 
   it('offers a platform download plus the global CLI for a non-agent with an npm package', () => {
-    const methods = installMethods(entry({ id: 'agent-ui', type: 'app', npm_package: '@amd-gaia/agent-ui' }));
+    const methods = installMethods(entry({ id: 'gaia-ui', type: 'app', npm_package: 'gaia-ui' }));
     expect(methods.map((m) => m.key)).toEqual(['download', 'npm']);
-    expect(methods[1].command).toBe('npm install -g @amd-gaia/agent-ui');
+    expect(methods[1].command).toBe('npm install -g gaia-ui');
+    // A component/app is never installed INTO the GAIA app.
+    expect(methods.some((m) => m.key === 'gaia')).toBe(false);
   });
 });
 
@@ -135,6 +138,33 @@ describe('isNpmSidecar — the packaging text matches the commands', () => {
       expect(isNpmSidecar(entry({ type }))).toBe(false);
     },
   );
+});
+
+// The buttons under the install command have to offer the same paths the
+// command does — a component/app that ships an npm CLI got an "Open in GAIA"
+// primary its own card had just ruled out (#3231).
+describe('installCta — the buttons match the commands', () => {
+  it('keeps GAIA first and npm second for an npm agent', () => {
+    expect(installCta(entry({ type: 'agent', npm_package: '@amd-gaia/agent-email' }))).toBe('gaia+npm');
+  });
+
+  it.each(['app', 'component'] as const)(
+    'drops the GAIA deep link for a %s with an npm package',
+    (type) => {
+      expect(installCta(entry({ type, npm_package: 'gaia-ui' }))).toBe('npm');
+    },
+  );
+
+  it.each(['agent', 'app', 'component', 'skill', undefined] as const)(
+    'offers GAIA alone when a %s has no npm package',
+    (type) => {
+      expect(installCta(entry({ type }))).toBe('gaia');
+    },
+  );
+
+  it('keeps a skill on the GAIA installer alone — its card shows no npm command', () => {
+    expect(installCta(entry({ type: 'skill', npm_package: 'gaia-skill' }))).toBe('gaia');
+  });
 });
 
 describe('display labels', () => {

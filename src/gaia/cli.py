@@ -3254,11 +3254,15 @@ def main():
                     )
                     sys.exit(2)
 
-            run_telegram(
-                token=args.token,
-                allowed_users=allowed,
-                background=getattr(args, "background", False),
-            )
+            try:
+                run_telegram(
+                    token=args.token,
+                    allowed_users=allowed,
+                    background=getattr(args, "background", False),
+                )
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(1)
             return
 
         if action == "stop":
@@ -4918,8 +4922,12 @@ def handle_api_command(args):
     elif args.subcommand == "stop":
         print(f"🛑 Stopping API server on port {args.port}...")
         try:
-            kill_process_by_port(args.port)
-            print("✅ API server stopped")
+            result = kill_process_by_port(args.port)
+            if result.get("success"):
+                print("✅ API server stopped")
+            else:
+                print(f"❌ {result.get('message', 'API server was not running')}")
+                sys.exit(1)
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)
