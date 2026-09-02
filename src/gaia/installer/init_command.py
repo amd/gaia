@@ -1601,9 +1601,7 @@ class InitCommand:
                 f"The '{self.profile}' profile requires {device_label} hardware "
                 f"(Ryzen AI 300/400/Max series with XDNA2)."
             )
-            self._print_error(
-                "Run 'gaia init' for GPU-based setup instead."
-            )
+            self._print_error("Run 'gaia init' for GPU-based setup instead.")
             return False
         except ConnectionError as e:
             self._print_error(f"Cannot reach Lemonade Server to detect hardware: {e}")

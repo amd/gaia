@@ -117,9 +117,7 @@ class TestBareInitTargetsTheFlagship:
         monkeypatch.setattr(
             "gaia.installer.init_command.importlib.util.find_spec", lambda _n: None
         )
-        monkeypatch.setattr(
-            "gaia.hub.installer.read_sentinel", lambda _id: object()
-        )
+        monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: object())
         assert InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID) is True
 
     def test_absent_everywhere_reports_missing(self, monkeypatch):
