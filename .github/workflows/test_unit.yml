@@ -22,7 +22,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/**'
