@@ -794,11 +794,42 @@ def test_reap_stale_dead_leader_live_child_group_kills_pid_as_pgid(
     assert ledger.read_entries() == []
 
 
-def test_reap_stale_zombie_leader_group_kills_pid_as_pgid(daemon_home, monkeypatch):
-    # The recorded leader pid exited but the OS hasn't reaped it yet (zombie):
-    # psutil.pid_exists is True for a zombie, but it can never have been reused
-    # (the slot is held precisely until reap) — so this must take the DEAD
-    # leader path (group-kill), not the live-pid path (#3300).
+def _fake_pid_status(monkeypatch, status):
+    """Make every pid exist with process status *status* (real `_pid_alive`)."""
+    import psutil
+
+    class _FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def status(self):
+            return status
+
+        def cmdline(self):
+            return []  # a zombie's cmdline reads empty on Linux
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProcess)
+
+
+def test_pid_alive_excludes_zombies(monkeypatch):
+    # A zombie has exited and is only waiting to be reaped — not alive.
+    import psutil
+
+    from gaia.daemon.sidecars import ledger
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    assert ledger._pid_alive(4321) is False
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_RUNNING)
+    assert ledger._pid_alive(4321) is True
+
+
+def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
+    # An unreaped leader has already exited, so its re-parented child is what
+    # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
+    import psutil
+
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
@@ -810,19 +841,10 @@ def test_reap_stale_zombie_leader_group_kills_pid_as_pgid(daemon_home, monkeypat
         started_at=1.0,
     )
 
-    import psutil
-
-    class _Zombie:
-        def status(self):
-            return psutil.STATUS_ZOMBIE
-
-        def cmdline(self):
-            return []
-
     killed = []
     group_killed = []
-    monkeypatch.setattr(psutil, "pid_exists", lambda pid: pid == 4246)
-    monkeypatch.setattr(psutil, "Process", lambda pid: _Zombie())
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    monkeypatch.setattr(ledger.os, "name", "posix")
     monkeypatch.setattr(
         ledger,
         "_probe_health",
@@ -834,7 +856,7 @@ def test_reap_stale_zombie_leader_group_kills_pid_as_pgid(daemon_home, monkeypat
     result = ledger.reap_stale(_reap_specs())
     assert result == [4246]
     assert group_killed == [4246]
-    assert killed == []  # never the live-pid path for a zombie leader
+    assert killed == []
     assert ledger.read_entries() == []
 
 
