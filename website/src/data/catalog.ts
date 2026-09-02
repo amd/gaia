@@ -549,6 +549,27 @@ export function installMethods(agent: Agent): InstallMethod[] {
   return methods;
 }
 
+/** Which buttons the detail card's install CTA row shows. */
+export type InstallCta = "gaia" | "gaia+npm" | "npm";
+
+/**
+ * The install buttons for an entry, read off the methods the card already
+ * shows — so a button can never offer a path the command above it did not.
+ *
+ * `gaia://hub/install/<id>` installs INTO the GAIA app, which only the agent
+ * and skill lanes do. A component/app is a per-platform download, so when it
+ * ships an npm CLI that npm page is its only real CTA (#3231).
+ *
+ * A download-only entry keeps the GAIA link it has always had — the deep link
+ * for a component is a separate, pre-existing question.
+ */
+export function installCta(agent: Agent): InstallCta {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  const gaia = keys.has("gaia") || keys.has("skill");
+  if (keys.has("npm")) return gaia ? "gaia+npm" : "npm";
+  return "gaia";
+}
+
 // Describe only what the hub actually enforces — there is no publisher-signing
 // scheme and no Python sandbox, so neither may be implied here.
 const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
