@@ -171,6 +171,9 @@ def _ready(cols=120, rows=40):
     assert resized.get("status") != "error", resized
     waited = tui_mcp._wait_for(contains="GAIA", timeout_ms=20000)
     assert waited.get("matched") is True, waited
+    view = tui_mcp._status()["state"]["view"]
+    state_wait = tui_mcp._wait_for(state={"view": view}, timeout_ms=20000)
+    assert state_wait.get("matched") is True, state_wait
 
 
 def _settled_view():

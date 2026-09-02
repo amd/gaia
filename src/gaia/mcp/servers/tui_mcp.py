@@ -811,8 +811,10 @@ def create_tui_mcp() -> "MCPServer":
         Args:
             contains: Text that must appear on screen.
             absent: Text that must have disappeared from the screen.
-            state: State fields that must match, e.g. {"view": "chat"} or
-                {"blocker": "lemonade"}.
+            state: State fields that must match — supported keys are view, agent,
+                overlay, blocker (strings) and streaming (bool), e.g.
+                {"view": "chat"} or {"streaming": False}. Other keys are
+                rejected by the control server.
             timeout_ms: How long to wait before giving up (default 30000).
         """
         return _wait_for(
