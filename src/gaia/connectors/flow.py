@@ -733,6 +733,9 @@ async def poll_device_flow(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # An SDK caller can reach poll_ without going through start_, and these
+    # scopes are what save_connection records.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)
