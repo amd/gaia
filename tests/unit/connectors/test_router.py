@@ -100,7 +100,7 @@ class TestGrants:
     def test_put_grant_then_get_grants(self, ui_api_client):
         resp = ui_api_client.put(
             "/api/connectors/google/grants/builtin:chat",
-            json={"scopes": ["gmail.readonly"]},
+            json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 200
@@ -111,7 +111,7 @@ class TestGrants:
     def test_delete_grant(self, ui_api_client):
         ui_api_client.put(
             "/api/connectors/google/grants/builtin:chat",
-            json={"scopes": ["gmail.readonly"]},
+            json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
             headers=UI_HEADER,
         )
         resp = ui_api_client.delete(
@@ -132,7 +132,7 @@ class TestAuthorizeFlow:
 
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
-            json={"scopes": ["gmail.readonly"]},
+            json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
@@ -187,7 +187,7 @@ class TestExceptionMapping:
         _registry.clear()
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
-            json={"scopes": ["gmail.readonly"]},
+            json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 503

@@ -383,15 +383,19 @@ class ScopeNotAllowedError(ConnectorsError):
     identity but not scope values.
     """
 
-    def __init__(self, agent_id: str, connector_id: str, scopes: list[str]):
+    def __init__(self, agent_id: str | None, connector_id: str, scopes: list[str]):
         self.agent_id = agent_id
         self.connector_id = connector_id
         self.scopes = list(scopes)
+        subject = (
+            f"Agent {agent_id!r} declares"
+            if agent_id is not None
+            else "Authorization request contains"
+        )
         super().__init__(
-            f"Agent {agent_id!r} declares scope(s) {', '.join(self.scopes)} for "
+            f"{subject} scope(s) {', '.join(self.scopes)} for "
             f"connector {connector_id!r} that are outside its available_scopes "
-            "catalog entry. This is a catalog/agent mismatch — file a bug "
-            "rather than widening the request."
+            "catalog entry. File a bug rather than widening the request."
         )
 
 
