@@ -2,16 +2,16 @@
 schema_version: 1
 agent:
   name: GAIA (flagship agent)
-  version: 0.1.0
+  version: 0.1.1
 recipe:
   dataset:
     reference: eval/scenarios/
-    description: 'Judged multi-turn scenario corpus for the flagship gaia agent (12
+    description: 'Judged multi-turn scenario corpus for the flagship gaia agent (13
       gaia_* categories: core conversation/memory tiers through adversarial, RAG,
       files, data, web, shell gate, skill lifecycle + all 12 skills, honesty floor,
-      tool selection, code index); deterministic fixtures under tests/fixtures/gaia/,
+      tool selection, code index, skill capture); deterministic fixtures under tests/fixtures/gaia/,
       planted-fact ground truth per eval/scenarios/GAIA_FIXTURE_VALUES.md'
-    size: 99
+    size: 103
   methodology: 'gaia eval agent --agent-type gaia: each scenario is driven against
     the Agent UI backend (REST/SSE) by the eval driver and scored by the Claude judge
     on planted-fact ground truth + success criteria. Aggregate = judged_pass_rate
@@ -88,8 +88,8 @@ inherited_from: null
 | Field | Value |
 |-------|-------|
 | Dataset | [eval/scenarios/](eval/scenarios/) |
-| Description | Judged multi-turn scenario corpus for the flagship gaia agent (12 gaia_* categories: core conversation/memory tiers through adversarial, RAG, files, data, web, shell gate, skill lifecycle + all 12 skills, honesty floor, tool selection, code index); deterministic fixtures under tests/fixtures/gaia/, planted-fact ground truth per eval/scenarios/GAIA_FIXTURE_VALUES.md |
-| Dataset size | 99 labeled examples |
+| Description | Judged multi-turn scenario corpus for the flagship gaia agent (13 gaia_* categories: core conversation/memory tiers through adversarial, RAG, files, data, web, shell gate, skill lifecycle + all 12 skills, honesty floor, tool selection, code index, skill capture); deterministic fixtures under tests/fixtures/gaia/, planted-fact ground truth per eval/scenarios/GAIA_FIXTURE_VALUES.md |
+| Dataset size | 103 labeled examples |
 | Test cases run | 11 |
 | Methodology | gaia eval agent --agent-type gaia: each scenario is driven against the Agent UI backend (REST/SSE) by the eval driver and scored by the Claude judge on planted-fact ground truth + success criteria. Aggregate = judged_pass_rate over judged scenarios (PASS/FAIL/BLOCKED_BY_ARCHITECTURE; infra failures are excluded from the rate and fail the run's integrity gate instead). Reported secondaries (weight 0): the judge's 0-10 avg_score normalized to [0,1], and per-category pass rates. Thresholds/enforcement: tests/fixtures/gaia/quality_gate_thresholds.json |
 
@@ -134,7 +134,8 @@ python -m gaia.ui.server --port 4200 --host 127.0.0.1
 # Step 2: run every gaia category serially (never in parallel)
 for c in gaia_core gaia_memory gaia_rag gaia_files gaia_data gaia_web \
          gaia_shell gaia_skills_lifecycle gaia_skills_tasks \
-         gaia_honesty gaia_tool_selection gaia_code; do
+         gaia_skills_capture gaia_honesty gaia_tool_selection \
+         gaia_code; do
   gaia eval agent --agent-type gaia --category $c \
     --backend http://127.0.0.1:4200 --budget 5.00 --exclude-tag live
 done

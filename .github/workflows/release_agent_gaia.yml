@@ -367,9 +367,9 @@ jobs:
         run: |
           set -euo pipefail
           # The bar and the enforce switch live in the committed manifest.
-          # aggregate.value = judged_pass_rate x 100, so scale the bar. With
-          # enforce:false (the current state, pending the first runner
-          # baseline) the gate runs presence+regression only.
+          # aggregate.value = judged_pass_rate x 100, so scale the bar. The
+          # quality manifest currently ships enforce:true, so the bar is
+          # applied; under enforce:false the gate runs presence+regression only.
           MANIFEST="tests/fixtures/gaia/quality_gate_thresholds.json"
           ENFORCE="$(python -c "import json;print(json.load(open('${MANIFEST}')).get('enforce',False))")"
           if [ "${ENFORCE}" = "True" ]; then
@@ -397,16 +397,19 @@ jobs:
 
   # ── Stage 1c: judged gaia eval (release gate, self-hosted) ─────────
   # A bounded subset of the judged suite (the cheap categories — the full
-  # 12-category run is the weekly/dispatch profile; a release must not hold
+  # 13-category run is the weekly/dispatch profile; a release must not hold
   # the serial Lemonade slot for a day). Report mode end-to-end: it only
   # hard-blocks when a manifest under tests/fixtures/gaia/ sets enforce:true.
   # What always blocks: zero judged scenarios / unmeasured scenarios / a
   # missing judge credential (the callee's integrity gates).
+  # gaia_skills_capture is in the subset despite the cost rule: capture is the
+  # one release surface that lands third-party content on a user's disk, so it
+  # does not ship on weekly-only coverage.
   gaia-eval:
     name: Gaia eval subset (release gate)
     uses: ./.github/workflows/test_gaia_agent_eval.yml
     with:
-      categories: 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty'
+      categories: 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_skills_capture'
     secrets: inherit
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────

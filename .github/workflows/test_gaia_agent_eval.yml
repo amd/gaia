@@ -5,7 +5,7 @@
 # (full), and as a release/weekly gate via workflow_call.
 #
 # Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
-# (eval/scenarios/gaia_*, 12 categories, ~99 scenarios) against the Agent UI
+# (eval/scenarios/gaia_*, 13 categories, ~99 scenarios) against the Agent UI
 # backend + a real Lemonade Server, scored by the Claude judge on planted-fact
 # ground truth (fixtures under tests/fixtures/gaia/ — every external surface is
 # canned: fake gh shim, local web/RSS pages, fixture skill hub; nothing live).
@@ -97,7 +97,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - 'installer/scripts/ensure-lemonade-running.ps1'
-  # Manual trigger — the FULL run (all 12 categories, all tiers). This is also
+  # Manual trigger — the FULL run (all 13 categories, all tiers). This is also
   # how the first Gemma baselines get captured on the runner.
   workflow_dispatch:
     inputs:
@@ -163,7 +163,7 @@ permissions:
 env:
   # `inputs.*` (not github.event.inputs.*) so values propagate for BOTH
   # workflow_dispatch AND workflow_call.
-  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks' }}
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
   # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.

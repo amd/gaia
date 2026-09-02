@@ -50,7 +50,7 @@ jobs:
     uses: ./.github/workflows/test_email_agent_eval.yml
     secrets: inherit
 
-  # The FULL judged gaia suite (all 12 categories — the workflow_call default).
+  # The FULL judged gaia suite (all 13 categories — the workflow_call default).
   # Queues behind the email suite on the callee-owned `lemonade-eval` slot;
   # the callee's own timeout budget covers the multi-hour run.
   gaia-eval:

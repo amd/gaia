@@ -22,7 +22,8 @@ cpp/third_party/sqlite/sqlite3.h -diff
 # same insertion point.
 hub/agents/email/python/CHANGELOG.md merge=union
 
-# gaia eval fixtures: the POSIX gh shim needs an LF shebang everywhere, and the
-# fixture-hub zips' sha256s are pinned in their manifests — keep both byte-exact.
+# gaia eval fixtures: the POSIX gh shim needs an LF shebang everywhere, or the
+# scenarios that shell out to it fail on a CRLF checkout. (No rule for the
+# fixture-hub zips — they are built and signed per run into _prepared/, which
+# .gitignore excludes, so none is ever tracked.)
 tests/fixtures/gaia/fake_gh/gh eol=lf
-tests/fixtures/gaia/fixture_hub/**/*.zip binary
