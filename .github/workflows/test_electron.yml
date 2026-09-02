@@ -223,23 +223,10 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
-      - name: Place hoisted production modules next to the app
+      - name: Point the app node_modules at the workspace root
         run: |
-          python3 - <<'PY'
-          import json
-          import shutil
-          from pathlib import Path
-
-          app = Path("${{ matrix.app.path }}")
-          dest_root = app / "node_modules"
-          dest_root.mkdir(parents=True, exist_ok=True)
-          deps = json.loads((app / "package.json").read_text()).get("dependencies", {})
-          for name in deps:
-              src = Path("node_modules") / name
-              dest = dest_root / name
-              if src.exists() and not dest.exists():
-                  shutil.copytree(src, dest, symlinks=True)
-          PY
+          rm -rf "${{ matrix.app.path }}/node_modules"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "${{ matrix.app.path }}/node_modules"
 
       - name: Check for high-severity vulnerabilities
         run: |
@@ -359,23 +346,10 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
-      - name: Place hoisted production modules next to the app
+      - name: Point the app node_modules at the workspace root
         run: |
-          python3 - <<'PY'
-          import json
-          import shutil
-          from pathlib import Path
-
-          app = Path("${{ matrix.app.path }}")
-          dest_root = app / "node_modules"
-          dest_root.mkdir(parents=True, exist_ok=True)
-          deps = json.loads((app / "package.json").read_text()).get("dependencies", {})
-          for name in deps:
-              src = Path("node_modules") / name
-              dest = dest_root / name
-              if src.exists() and not dest.exists():
-                  shutil.copytree(src, dest, symlinks=True)
-          PY
+          rm -rf "${{ matrix.app.path }}/node_modules"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "${{ matrix.app.path }}/node_modules"
 
       - name: Install xvfb for headless display
         run: |
