@@ -60,7 +60,9 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.email_tools import MAIL_SCOPES, EmailToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -208,11 +210,23 @@ class GaiaAgentConfig(ChatAgentConfig):
 # Base agent first, tool mixins after — the repo's MRO convention for every
 # hub agent. Neither mixin overrides anything today; this order keeps a future
 # mixin method from silently winning over ChatAgent's.
-class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
+class GaiaAgent(
+    ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin, EmailToolsMixin
+):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
+
+    # Declared, not acquired: the user consents once via `gaia connectors`, and
+    # nothing here reaches a mailbox until an email tool is actually called.
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
+        ConnectorRequirement(
+            connector_id="microsoft",
+            scopes=list(MAIL_SCOPES),
+            reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        ),
+    ]
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
     # removing one deletes it, so both are gated the way file mutation is.
@@ -246,8 +260,8 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
 
         Skill-library tools go first: ChatAgent's registration ends with
         ``_snapshot_tools()``, and anything registered after that snapshot is
-        absent from this instance's registry. Code-index tools join them for the
-        same reason.
+        absent from this instance's registry. Code-index and email tools join
+        them for the same reason.
 
         Semantic code search is what makes this agent usable ON a codebase
         rather than merely in one: grep finds a string, this finds the function
@@ -271,6 +285,7 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
         self._init_code_index_state(repo_path=allowed[0])
         self.register_code_index_tools()
+        self.register_email_tools()
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────

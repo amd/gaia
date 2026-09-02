@@ -395,6 +395,19 @@ FULL_BUNDLES = [
         members=frozenset({"set_loop_state", "request_user_input"}),
         description="Control the autonomous loop and ask the user questions.",
     ),
+    ToolBundle(
+        name="email",
+        members=frozenset(
+            {
+                "check_mailbox_access",
+                "list_inbox",
+                "search_email",
+                "read_email",
+                "list_mail_folders",
+            }
+        ),
+        description="Read a connected mailbox: list, search, and read messages.",
+    ),
 ]
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
@@ -434,6 +447,11 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "search_skill_hub",
         "install_skill",
         "remove_skill",
+        "check_mailbox_access",
+        "list_inbox",
+        "search_email",
+        "read_email",
+        "list_mail_folders",
     }
 )
 
