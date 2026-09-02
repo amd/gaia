@@ -223,6 +223,21 @@ def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     return budget_for_ctx(ctx)
 
 
+def _split_backend_spec(spec: str) -> Tuple[str, str]:
+    """Split a ``recipe:backend`` spec into its two parts.
+
+    ``/install`` and ``/uninstall`` take the halves as separate fields and
+    reject a combined one with 400 "Both 'recipe' and 'backend' are required".
+    """
+    recipe, _, backend = (spec or "").partition(":")
+    if not recipe or not backend:
+        raise ValueError(
+            f"Invalid backend spec {spec!r}: expected 'recipe:backend' "
+            "(e.g. 'flm:npu', 'llamacpp:vulkan')"
+        )
+    return recipe, backend
+
+
 # =========================================================================
 # Request Configuration Defaults
 # =========================================================================
@@ -2534,6 +2549,7 @@ class LemonadeClient:
             Dict containing installation status
 
         Raises:
+            ValueError: If *spec* is not in ``recipe:backend`` form
             LemonadeClientError: If the installation fails
 
         Examples:
@@ -2542,7 +2558,8 @@ class LemonadeClient:
             client.install_backend("llamacpp:rocm", force=True)
         """
         self.log.info(f"Installing backend: {spec}")
-        request_data: Dict[str, Any] = {"spec": spec}
+        recipe, backend = _split_backend_spec(spec)
+        request_data: Dict[str, Any] = {"recipe": recipe, "backend": backend}
         if force:
             request_data["force"] = True
         url = f"{self.base_url}/install"
@@ -2564,10 +2581,12 @@ class LemonadeClient:
             Dict containing uninstall status
 
         Raises:
+            ValueError: If *spec* is not in ``recipe:backend`` form
             LemonadeClientError: If the uninstall fails
         """
         self.log.info(f"Uninstalling backend: {spec}")
-        request_data: Dict[str, Any] = {"spec": spec}
+        recipe, backend = _split_backend_spec(spec)
+        request_data: Dict[str, Any] = {"recipe": recipe, "backend": backend}
         url = f"{self.base_url}/uninstall"
         try:
             response = self._send_request("post", url, request_data, timeout=timeout)

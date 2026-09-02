@@ -31,8 +31,19 @@
     Start the server only (skip pull/load). Use when the caller registers/loads
     its own models afterwards (e.g. a custom user-model via LemonadeClient).
 
+.PARAMETER Backend
+    Lemonade backend to install before pulling, in recipe:backend form (e.g.
+    "flm:npu"). Required for backends whose models are contributed at runtime
+    rather than shipped in the built-in catalog: FLM models are enumerated by
+    shelling out to the `flm` CLI, so with no FLM backend installed the catalog
+    holds no *-FLM name and every pull 400s with "no built-in model ...".
+
 .EXAMPLE
     .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
+
+.EXAMPLE
+    # NPU/FLM: without -Backend the FLM half of the catalog is empty.
+    .\installer\scripts\start-lemonade.ps1 -ModelName "gemma4-it-e2b-FLM" -Backend "flm:npu"
 
 .EXAMPLE
     # Start the server robustly, then let the caller register a custom embedder:
@@ -62,7 +73,10 @@ param(
     [switch]$ClearCache,
 
     [Parameter(Mandatory=$false)]
-    [switch]$NoModel
+    [switch]$NoModel,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Backend = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -193,6 +207,49 @@ try {
     }
     Write-Host ""
 
+    # Install the requested backend before any pull. Mirrors what
+    # ``gaia init --profile npu`` does (InitCommand._install_backend): check
+    # recipe status via /system-info, install via /install only when needed.
+    if ($Backend) {
+        Write-Host "=== Installing Backend: $Backend ==="
+        $recipe, $backendKey = $Backend.Split(":", 2)
+        $sysinfo = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/system-info" -TimeoutSec 30
+        $backendInfo = $sysinfo.recipes.$recipe.backends.$backendKey
+        if (-not $backendInfo) {
+            throw "Lemonade does not know backend '$Backend' (recipes: $($sysinfo.recipes.PSObject.Properties.Name -join ', '))"
+        }
+        $state = $backendInfo.state
+        Write-Host "Reported state for ${recipe}:${backendKey}: $state"
+
+        if ($state -eq "unsupported") {
+            # Hardware genuinely can't run it -- say so here rather than letting
+            # the pull fail later with an opaque "model not registered".
+            throw "Backend '$Backend' is unsupported on this machine: $($backendInfo.message)"
+        }
+
+        if ($state -eq "installed") {
+            Write-Host "Already installed; skipping install"
+        } else {
+            # /install takes recipe + backend as separate fields; a combined
+            # "spec" is rejected with 400 "Both 'recipe' and 'backend' are required".
+            $installBody = @{ recipe = $recipe; backend = $backendKey } | ConvertTo-Json
+            $installResponse = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/install" `
+                -Method POST -ContentType "application/json" -Body $installBody -TimeoutSec 900
+            Write-Host "[OK] Backend installed: $($installResponse | ConvertTo-Json -Compress)"
+        }
+
+        # The backend contributes its models to the catalog only once it is
+        # live; re-read /system-info so a silent no-op install fails here rather
+        # than as a confusing pull error.
+        $sysinfo = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/system-info" -TimeoutSec 30
+        $state = $sysinfo.recipes.$recipe.backends.$backendKey.state
+        if ($state -ne "installed") {
+            throw "Backend '$Backend' still reports state '$state' after install (expected 'installed'); try '$($sysinfo.recipes.$recipe.backends.$backendKey.action)'"
+        }
+        Write-Host "[OK] Backend '$Backend' is installed"
+        Write-Host ""
+    }
+
     # Start-only mode: the caller registers/loads its own models (e.g. a custom
     # user-model via LemonadeClient), so skip the built-in pull/load path.
     if ($NoModel) {
@@ -215,9 +272,13 @@ try {
     # installs.
     Write-Host "=== Pulling Primary Model: $ModelName ==="
     $pullOutput = & $lemonadeCli pull $ModelName 2>&1
-    Write-Host "Pull exit code: $LASTEXITCODE"
+    $pullExit = $LASTEXITCODE
+    Write-Host "Pull exit code: $pullExit"
     if ($pullOutput) {
         $pullOutput | ForEach-Object { Write-Host "  $_" }
+    }
+    if ($pullExit -ne 0) {
+        throw "Pull of primary model '$ModelName' failed (exit $pullExit)"
     }
     Write-Host ""
 
