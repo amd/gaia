@@ -12,8 +12,6 @@ import csv
 import importlib.util
 from pathlib import Path
 
-import pytest
-
 _MODULE_PATH = (
     Path(__file__).resolve().parents[3]
     / "hub"
