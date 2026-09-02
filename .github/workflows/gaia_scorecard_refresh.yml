@@ -401,6 +401,10 @@ jobs:
 
       - name: Commit the refreshed SCORECARD.md (full profile only)
         timeout-minutes: 10
+        # The push ref goes through the environment, not string interpolation:
+        # a branch name is attacker-controllable and reaches a shell here.
+        env:
+          PUSH_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           if ("${{ steps.pre.outputs.commit_allowed }}" -ne "true") {
             Write-Host "SUBSET RUN -- card NOT committed (a category subset is a smaller basis than the published card's full corpus). Restoring the committed SCORECARD.md."
@@ -421,5 +425,5 @@ jobs:
           }
           git commit -m "$commitMsg"
           if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
-          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+          git push origin "HEAD:$env:PUSH_REF"
           if ($LASTEXITCODE -ne 0) { throw "git push failed" }

@@ -695,9 +695,7 @@ class TestToolNameSanitization:
 
     def test_slash_name_is_sanitized_and_mapped(self, fake_anthropic):
         p = _provider(fake_anthropic)
-        converted, name_map = p._to_anthropic_tools(
-            self._tools("rss-digest/fetch_rss")
-        )
+        converted, name_map = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
         assert converted[0]["name"] == "rss-digest_fetch_rss"
         assert name_map["rss-digest_fetch_rss"] == "rss-digest/fetch_rss"
 
