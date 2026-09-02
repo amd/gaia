@@ -38,8 +38,10 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 
 `RAGToolsMixin` is a mixin, not a base class — it reads state off `self` that it
 never initializes itself. A class mixing it in must set all five attributes
-below before `_register_tools()` runs, or every tool call raises an
-`AttributeError` the moment it touches `self.rag`:
+below before `_register_tools()` runs, or every tool call hits an
+`AttributeError` internally the moment it touches `self.rag` — caught and
+turned into a "temporarily unavailable" fallback response rather than
+surfacing to the caller (see below):
 
 | Attribute | Type | Notes |
 |---|---|---|
