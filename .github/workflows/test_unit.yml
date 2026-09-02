@@ -21,6 +21,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
+      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
+      # blocks, so a docs-only change can still break the guard.
+      - 'docs/guides/custom-agent.mdx'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -34,6 +37,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
+      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
+      # blocks, so a docs-only change can still break the guard.
+      - 'docs/guides/custom-agent.mdx'
   merge_group:
   workflow_dispatch:
 
@@ -87,8 +93,14 @@ jobs:
           # (the security-audit scorer); it lives in the [dev] extra, not [api].
           # responses is required by tests/unit/test_lemonade_error_classification.py
           # — same story as cvss: declared in [dev], and this job installs [api].
+          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py:
+          # it execs the custom-agent guide's own RAG example, which constructs a
+          # real RAGSDK — RAGSDK._check_dependencies() raises ImportError without
+          # them. They live only in the [rag]/[ui] extras, which this job (like the
+          # RAG dependencies above) does not install.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
+                                  faiss-cpu pypdf
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
