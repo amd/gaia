@@ -265,6 +265,20 @@ class TestTranslatorNarration:
         assert result["data"]["summary"] == "18 skills"
         assert result["preview"] == "18 skills · 21ms"
 
+    def test_tool_result_preserves_truncation_marker(self):
+        translator = _tr()
+        translator.translate({"type": "tool_start", "tool": "archive_message_batch"})
+        translator.translate({"type": "tool_args", "args": {}})
+        (result,) = translator.translate(
+            {
+                "type": "tool_result",
+                "summary": '{"succeeded":["message-1"],"failed":[{"error":"already archived"',
+                "success": True,
+                "summary_truncated": True,
+            }
+        )
+        assert result["data"]["summary_truncated"] is True
+
     def test_render_map_result_still_gets_a_preview(self):
         """``data`` is the card payload for a render tool; preview comes from the source."""
         translator = CanonicalTranslator(

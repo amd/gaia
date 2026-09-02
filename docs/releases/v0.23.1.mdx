@@ -1,0 +1,58 @@
+---
+title: "v0.23.1"
+description: "The flagship GAIA agent is installable from the terminal hub — v0.23.0's daemon could not run it. Thirteen per-task agents are also removed, their capability now reached through the flagship's skills."
+---
+
+# GAIA v0.23.1 Release Notes
+
+GAIA v0.23.1 is a patch release on top of v0.23.0. It makes the flagship GAIA agent actually installable. The agent has been published on the Agent Hub since 0.1.1, and the website tells you to download the terminal hub and run it — but v0.23.0's background service had no entry for the flagship agent, so `gaia install gaia` answered HTTP 404 and `gaia list` hid it entirely. The code that fixes this landed right after v0.23.0 shipped and had never been released.
+
+**Why upgrade:**
+- **The flagship agent installs and runs** — `gaia install gaia` now downloads the agent and starts its sidecar. On v0.23.0 it fails with `'gaia' is published on the Agent Hub but this GAIA build cannot run it as a sidecar`, which is the exact path the website's onboarding walks you down.
+
+---
+
+## Breaking Changes
+
+- **Thirteen per-task agents were removed** (PR [#2995](https://github.com/amd/gaia/pull/2995)) — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship as separate agents. Their capability is the flagship agent's tool surface driven by a `SKILL.md` in `hub/skills/`, so adding a capability now means writing a skill rather than shipping an agent.
+
+  **If you install or launch one of these by id, that will now fail.** Use the flagship (`gaia install gaia`) and load the matching skill instead. This lands in a patch release because it arrived on main before the flagship-installability fix could be cut on its own; the two ship together.
+
+---
+
+## Bug Fixes
+
+- **`gaia install gaia` failed for every user who followed the website** (PR [#2932](https://github.com/amd/gaia/pull/2932)) — the daemon decides which agents are installable from `builtin_specs()`, and v0.23.0's copy listed only `email`. The terminal hub relayed that as `Hidden: gaia — published, but this GAIA build has no way to run them yet`, so the agent the website leads with could not be installed at all. The flagship agent's sidecar spec is now in a released build.
+
+---
+
+## Full Changelog
+
+**24 commits** since v0.23.0:
+
+- `78bbc307` — feat(website): TUI-first redesign — download the terminal hub, lead with the flagship agent (#3030)
+- `6faec485` — ci(release): make the TUI binaries reproducible, drop the R2 probe (#3040)
+- `02691245` — fix(hub): strip R2 credentials, and diagnose why R2 refuses them (#3037)
+- `aae4a50c` — ci(hub): require component manifests to match the release tag again (#3036)
+- `8ca0f7d9` — fix(hub): give the website redeploy a repo to dispatch against (#3038)
+- `20e08190` — fix(hub): unblock large-artifact publishing, and version components independently (#3035)
+- `9ad1cee3` — ci(cloud): provision the dev install in Claude Code cloud sessions (#3033)
+- `0befe27c` — ci(linux): install Lemonade from the PPA, not deleted PyPI package (#3034)
+- `db170b8a` — fix(agent-gaia): make the flagship agent releasable — RAG in the binary, 0.1.1 on npm (#3031)
+- `85ba0923` — fix(hub): stop boto3's default checksums breaking every R2 upload (#3029)
+- `5f3e7bbf` — feat(hub): publish oversized artifacts direct to R2, bypassing the Worker body cap (#3025)
+- `b254708f` — ci(hub): one approval per component release, not two (#3018)
+- `a0ecb0f6` — ci(eval): pin the agent eval to Strix Halo, and record which box measured (#3017)
+- `672cd1c5` — fix(init): fail loudly when the Agent UI build can't produce a usable frontend (#2887)
+- `29a87fd8` — ci(eval): capture llama-server's error so the embedder failure is diagnosable (#3015)
+- `c8987ca6` — fix(email): declare the sidecar bearer gate in the OpenAPI contract (#3002)
+- `62e5611d` — fix(email): "0 messages" for mail that exists — unsupported newer_than: duration unit (#2981)
+- `74646827` — fix(cli): exit non-zero from `gaia agent status <id>`, add --json (#3001)
+- `9c89cb47` — ci(hub): deploy the Agent Hub Worker before publishing to it (#2991)
+- `47e6bc90` — fix(gaia): keep a loaded skill alive across turns; stop a control resize from wrecking the screen (#2932)
+- `9ed3c352` — test(telegram): isolate HOME so the pid test can't clobber a live adapter (#2895)
+- `225c6937` — test(init): stop init tests overwriting the real ~/.gaia/config.json (#2891)
+- `8ed5b783` — fix(release): emit release notes as short bullets, not prose (#2967)
+- `1beb714f` — release(agent-email): 0.6.0 (#2933)
+
+Full Changelog: [v0.23.0...v0.23.1](https://github.com/amd/gaia/compare/v0.23.0...v0.23.1)

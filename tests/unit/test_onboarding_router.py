@@ -42,6 +42,7 @@ def _stub_devices(**overrides):
 # ── preflight ────────────────────────────────────────────────────────────
 
 
+@pytest.mark.allow_network
 def test_preflight_full_tier_compatible(client, monkeypatch):
     monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
     monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
@@ -59,6 +60,7 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert not any("NPU" in w for w in body["warnings"])
 
 
+@pytest.mark.allow_network
 def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
     # No-NPU box with a capable GPU (the #2396 Radeon dGPU case): the Hardware
     # check must read as informational — no "agent" framing, no "install your
@@ -80,6 +82,7 @@ def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
     assert "optional" in joined.lower()
 
 
+@pytest.mark.allow_network
 def test_preflight_no_npu_no_gpu_still_warns_to_remediate(client, monkeypatch):
     # A box with neither NPU nor a detectable GPU keeps the remediation warning.
     monkeypatch.setattr(
@@ -96,6 +99,7 @@ def test_preflight_no_npu_no_gpu_still_warns_to_remediate(client, monkeypatch):
     assert not any("agent" in w.lower() for w in body["warnings"])
 
 
+@pytest.mark.allow_network
 def test_preflight_low_disk_is_blocker(client, monkeypatch):
     monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
     monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
@@ -106,6 +110,7 @@ def test_preflight_low_disk_is_blocker(client, monkeypatch):
     assert any("disk" in b.lower() for b in body["blockers"])
 
 
+@pytest.mark.allow_network
 def test_preflight_insufficient_ram_warns(client, monkeypatch):
     monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
     monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 4.0)
@@ -118,6 +123,7 @@ def test_preflight_insufficient_ram_warns(client, monkeypatch):
     assert body["compatible"] is True
 
 
+@pytest.mark.allow_network
 def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
     async def _probe():
         return {
@@ -134,13 +140,14 @@ def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
     body = client.get("/api/onboarding/preflight").json()
     assert body["npu_detected"] is None
     assert body["lemonade_running"] is False
-    # Unprobed NPU falls back to the conservative "cannot verify" message.
+    assert body["lemonade_error"] is None
     assert any("cannot verify NPU" in w for w in body["warnings"])
 
 
 # ── status / complete ──────────────────────────────────────────────────────
 
 
+@pytest.mark.allow_network
 def test_status_uninitialized(client, marker):
     assert not marker.exists()
     body = client.get("/api/onboarding/status").json()
@@ -148,6 +155,7 @@ def test_status_uninitialized(client, marker):
     assert body["skipped"] is False
 
 
+@pytest.mark.allow_network
 def test_complete_then_status(client, marker):
     resp = client.post(
         "/api/onboarding/complete",
@@ -162,6 +170,7 @@ def test_complete_then_status(client, marker):
     assert body["completed_at"] == "2026-07-17T00:00:00Z"
 
 
+@pytest.mark.allow_network
 def test_complete_skipped_records_skip(client, marker):
     client.post("/api/onboarding/complete", json={"skipped": True})
     body = client.get("/api/onboarding/status").json()
@@ -169,6 +178,7 @@ def test_complete_skipped_records_skip(client, marker):
     assert body["skipped"] is True
 
 
+@pytest.mark.allow_network
 def test_legacy_empty_marker_counts_as_initialized(client, marker):
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("", encoding="utf-8")

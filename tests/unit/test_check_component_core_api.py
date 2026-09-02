@@ -369,13 +369,25 @@ def test_real_components_declare_a_serviceable_minimum_core():
 
 
 def test_terminal_hub_minimum_is_not_a_release_that_predates_the_agents_api():
-    """The invariant that actually fails if someone lowers the manifest again."""
+    """The invariant that actually fails if someone lowers the manifest again.
+
+    Stated against the released table rather than ``LATEST_CORE_RELEASE``: once a
+    shipped core serves the floor (0.23.0 serves 1.1), "must name a future
+    release" stops being true while the real rule -- never name a release whose
+    daemon cannot serve the hub -- still holds.
+    """
     manifest = yaml.safe_load(TERMINAL_HUB_MANIFEST.read_text(encoding="utf-8"))
-    assert (
-        guard.parse_version(manifest["min_gaia_version"]) > guard.LATEST_CORE_RELEASE
-    ), (
-        "no published core release serves host API v1.1 yet, so the terminal hub's "
-        "minimum must name a future release"
+    declared = guard.parse_version(manifest["min_gaia_version"])
+    too_old = sorted(
+        version
+        for version, api in guard.RELEASED_DAEMON_API.items()
+        if not TUI_FLOOR.satisfied_by(guard.parse_api_version(api))
+    )
+    assert all(declared > version for version in too_old), (
+        f"terminal-hub declares min_gaia_version {manifest['min_gaia_version']}, which "
+        f"is not newer than "
+        f"{[guard.format_version(v) for v in too_old]} — releases whose daemon cannot "
+        f"serve host API {TUI_FLOOR}."
     )
 
 

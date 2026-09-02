@@ -184,6 +184,7 @@ def check_compatibility(
     install_dir: Optional[Path] = None,
     detected_npu: Optional[bool] = None,
     detected_gpu_vram_gb: Optional[float] = None,
+    npu_probe_error: Optional[str] = None,
     subject: str = "This agent",
 ) -> CompatibilityReport:
     """Check whether the current machine satisfies *requirements*.
@@ -204,6 +205,9 @@ def check_compatibility(
         detected_gpu_vram_gb: GPU VRAM (GB) reported by the caller's scan, used
             the same way for a ``gpu_vram_gb`` requirement. ``None`` keeps the
             "cannot verify" warning.
+        npu_probe_error: A caller-provided reason why NPU detection failed.
+            When present, the warning describes the failed query instead of
+            suggesting a driver remediation that has not been established.
         subject: What the warnings call the thing being checked. Defaults to
             ``"This agent"`` for the hub-install path; the onboarding preflight
             passes its own phrase (e.g. ``"The recommended model"``) so first-run
@@ -303,6 +307,11 @@ def check_compatibility(
                     "machine. It will fall back to GPU/CPU inference, which is "
                     "slower. Ensure your Ryzen AI NPU driver is installed."
                 )
+        elif npu_probe_error:
+            warnings.append(
+                "GAIA could not query Lemonade for NPU availability; the NPU "
+                f"result for {subject.lower()} is unknown."
+            )
         else:
             warnings.append(
                 f"{subject} requests an NPU. GAIA cannot verify NPU availability "

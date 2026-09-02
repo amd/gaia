@@ -269,14 +269,9 @@ class FakeTui:
     STATE_MATCHER_KEYS = {
         "view": str,
         "agent": str,
-        "can_return_to_hub": bool,
-        "hub_tab": str,
-        "selected_agent_id": str,
         "overlay": str,
+        "blocker": str,
         "streaming": bool,
-        "filtering": bool,
-        "hub_tab_index": (int, float),
-        "visible_contains": str,
     }
 
     def _reject_invalid(self, method, path, body):
@@ -686,6 +681,60 @@ def test_wait_for_match(live_tui):
     live_tui()
     out = tui_mcp._wait_for(contains="chat with")
     assert out["matched"] is True
+
+
+def test_wait_for_forwards_state_matcher(live_tui):
+    """State waits must reach the control server, not become an empty wait."""
+    live_tui(view="preflight", blocker="lemonade")
+
+    wrong_view = tui_mcp._wait_for(state={"view": "chat"}, timeout_ms=100)
+    assert wrong_view["status"] == "error"
+    assert wrong_view["timed_out"] is True
+
+    right_state = tui_mcp._wait_for(state={"view": "preflight", "blocker": "lemonade"})
+    assert right_state["matched"] is True
+
+
+def test_registered_wait_tool_forwards_state(monkeypatch):
+    """The public MCP wrapper must keep the state matcher it receives."""
+    import inspect
+    import sys
+    from types import SimpleNamespace
+
+    class FakeMCPServer:
+        def __init__(self, **_kwargs):
+            self.tools = {}
+
+        def tool(self):
+            def register(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+
+            return register
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mcp.server",
+        SimpleNamespace(MCPServer=FakeMCPServer),
+    )
+    server = tui_mcp.create_tui_mcp()
+    wrapper = server.tools["tui_wait_for"]
+    assert "state" in inspect.signature(wrapper).parameters
+
+    captured = {}
+
+    def fake_wait_for(**kwargs):
+        captured.update(kwargs)
+        return {"matched": True}
+
+    monkeypatch.setattr(tui_mcp, "_wait_for", fake_wait_for)
+    assert wrapper(state={"view": "chat"}, timeout_ms=123) == {"matched": True}
+    assert captured == {
+        "contains": "",
+        "absent": "",
+        "state": {"view": "chat"},
+        "timeout_ms": 123,
+    }
 
 
 def test_wait_for_timeout_returns_the_actual_screen(live_tui):

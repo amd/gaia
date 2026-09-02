@@ -236,10 +236,10 @@ export function SettingsModal() {
                                 <div className="status-grid">
                                     <StatusRow
                                         label="Lemonade Server"
-                                        value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'}
+                                        value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : status.lemonade_error ? 'Status unavailable' : 'Not Running'}
                                         ok={status.lemonade_running}
                                         hint={!status.lemonade_running
-                                            ? (status.initialized ? (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? 'Start Lemonade Server')) : 'Run: gaia init --profile chat')
+                                            ? (status.lemonade_error ? 'Could not query Lemonade Server; check it and retry.' : status.initialized ? (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? 'Start Lemonade Server')) : 'Run: gaia init --profile chat')
                                             : undefined}
                                     />
                                     <StatusRow

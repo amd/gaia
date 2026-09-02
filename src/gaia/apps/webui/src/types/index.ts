@@ -449,6 +449,8 @@ export interface DownloadProgress {
 
 export interface SystemStatus {
     lemonade_running: boolean;
+    /** Present when the Lemonade health/catalog query failed. */
+    lemonade_error?: string | null;
     /** How to start Lemonade on this host, resolved server-side. */
     start_instruction?: string | null;
     /** Shell command, or null on hosts started from a GUI (tray / app). */
@@ -508,6 +510,8 @@ export interface PreflightReport {
     gpu_name: string | null;
     gpu_vram_gb: number | null;
     lemonade_running: boolean;
+    /** Present when the Lemonade system-info query failed. */
+    lemonade_error?: string | null;
     tier: 'full' | 'standard' | 'light' | 'insufficient' | 'unknown' | string;
     recommended_profile: string;
     recommended_model: string;

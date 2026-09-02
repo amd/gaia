@@ -8,8 +8,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   categoryLabel,
+  installCta,
   installMethods,
   isAgent,
+  isNpmSidecar,
   isSkill,
   languageLabel,
   packageType,
@@ -99,6 +101,69 @@ describe('installMethods', () => {
     expect(methods[0].command).toBe('gaia agent install email');
     expect(methods[1].key).toBe('npm');
     expect(methods[1].command).toBe('npm i @amd-gaia/agent-email');
+  });
+
+  it('offers a platform download plus the global CLI for a non-agent with an npm package', () => {
+    const methods = installMethods(entry({ id: 'gaia-ui', type: 'app', npm_package: 'gaia-ui' }));
+    expect(methods.map((m) => m.key)).toEqual(['download', 'npm']);
+    expect(methods[1].command).toBe('npm install -g gaia-ui');
+    // A component/app is never installed INTO the GAIA app.
+    expect(methods.some((m) => m.key === 'gaia')).toBe(false);
+  });
+});
+
+// The packaging text has to describe the entry's own install path. An app or
+// component that ships an npm CLI was calling itself a "frozen sidecar" — an
+// agent-lane word its own install command never offers (#3298).
+describe('isNpmSidecar — the packaging text matches the commands', () => {
+  it('recognises the npm agent lane', () => {
+    expect(isNpmSidecar(entry({ type: 'agent', npm_package: '@amd-gaia/agent-email' }))).toBe(true);
+    expect(isNpmSidecar(entry({ type: undefined, npm_package: '@amd-gaia/agent-email' }))).toBe(true);
+  });
+
+  it.each(['app', 'component'] as const)(
+    'is false for a %s with an npm package — it installs as a global CLI',
+    (type) => {
+      expect(isNpmSidecar(entry({ type, npm_package: '@amd-gaia/agent-ui' }))).toBe(false);
+    },
+  );
+
+  it('is false for a skill with an npm package — its card shows no npm command', () => {
+    expect(isNpmSidecar(entry({ type: 'skill', npm_package: 'gaia-skill' }))).toBe(false);
+  });
+
+  it.each(['agent', 'app', 'component', 'skill', undefined] as const)(
+    'is false for a %s with no npm package',
+    (type) => {
+      expect(isNpmSidecar(entry({ type }))).toBe(false);
+    },
+  );
+});
+
+// The buttons under the install command have to offer the same paths the
+// command does — a component/app that ships an npm CLI got an "Open in GAIA"
+// primary its own card had just ruled out (#3231).
+describe('installCta — the buttons match the commands', () => {
+  it('keeps GAIA first and npm second for an npm agent', () => {
+    expect(installCta(entry({ type: 'agent', npm_package: '@amd-gaia/agent-email' }))).toBe('gaia+npm');
+  });
+
+  it.each(['app', 'component'] as const)(
+    'drops the GAIA deep link for a %s with an npm package',
+    (type) => {
+      expect(installCta(entry({ type, npm_package: 'gaia-ui' }))).toBe('npm');
+    },
+  );
+
+  it.each(['agent', 'app', 'component', 'skill', undefined] as const)(
+    'offers GAIA alone when a %s has no npm package',
+    (type) => {
+      expect(installCta(entry({ type }))).toBe('gaia');
+    },
+  );
+
+  it('keeps a skill on the GAIA installer alone — its card shows no npm command', () => {
+    expect(installCta(entry({ type: 'skill', npm_package: 'gaia-skill' }))).toBe('gaia');
   });
 });
 
