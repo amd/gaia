@@ -660,6 +660,72 @@ def _reap_specs():
     return {"toy-a": _TOY_A, "toy-b": _TOY_B}
 
 
+def _fake_pid_status(monkeypatch, status):
+    """Make every pid exist with process status *status* (real `_pid_alive`)."""
+    import psutil
+
+    class _FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def status(self):
+            return status
+
+        def cmdline(self):
+            return []  # a zombie's cmdline reads empty on Linux
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProcess)
+
+
+def test_pid_alive_excludes_zombies(monkeypatch):
+    # A zombie has exited and is only waiting to be reaped — not alive.
+    import psutil
+
+    from gaia.daemon.sidecars import ledger
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    assert ledger._pid_alive(4321) is False
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_RUNNING)
+    assert ledger._pid_alive(4321) is True
+
+
+def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
+    # An unreaped leader has already exited, so its re-parented child is what
+    # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
+    import psutil
+
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="toy-a",
+        pid=4246,
+        port=51005,
+        mode="user",
+        argv=["/path/to/toy-a-agent", "--port", "51005"],
+        started_at=1.0,
+    )
+
+    killed = []
+    group_killed = []
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    monkeypatch.setattr(ledger.os, "name", "posix")
+    monkeypatch.setattr(
+        ledger,
+        "_probe_health",
+        lambda port: {"service": "gaia-agent-toy-a"} if port == 51005 else None,
+    )
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    result = ledger.reap_stale(_reap_specs())
+    assert result == [4246]
+    assert group_killed == [4246]
+    assert killed == []
+    assert ledger.read_entries() == []
+
+
 def test_reap_stale_kills_live_pid_when_cmdline_gate_passes(daemon_home, monkeypatch):
     # Live pid + cmdline gate (recorded argv[0] AND --port both present) →
     # tree-kill. The port probe is irrelevant for a live pid's kill decision.
