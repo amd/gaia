@@ -101,6 +101,7 @@ def initialize_lemonade_for_agent(
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
+    device: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -118,6 +119,8 @@ def initialize_lemonade_for_agent(
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
                   When provided, takes priority over host/port.
+        device: Device target for context sizing and hardware validation. When omitted,
+                the persisted default device is used.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -155,7 +158,8 @@ def initialize_lemonade_for_agent(
     # Keyed on device, not agent, because the NPU's FLM build caps below the
     # GPU window and would fail to load at it.
     # Users on tight RAM can override with the ``GAIA_CTX_SIZE`` env var.
-    required_ctx = profile_ctx_size(_configured_device())
+    target_device = device or _configured_device()
+    required_ctx = profile_ctx_size(target_device)
 
     # Env-var override: lets users on lower-memory hardware dial back
     # (or, in advanced cases, push higher up to the model's 128K max).
@@ -187,6 +191,7 @@ def initialize_lemonade_for_agent(
                 min_context_size=required_ctx,
                 quiet=quiet,
                 base_url=base_url,
+                device=target_device,
             )
         else:
             success = LemonadeManager.ensure_ready(
@@ -194,6 +199,7 @@ def initialize_lemonade_for_agent(
                 quiet=quiet,
                 host=host,
                 port=port,
+                device=target_device,
             )
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
@@ -362,6 +368,10 @@ class GaiaCliClient:
                 ),
                 None,
             )
+            if model is None:
+                raise ValueError(
+                    f"Unknown device {device!r}: no model is registered for it."
+                )
 
         self.model = model or DEFAULT_MODEL_NAME
         self.max_tokens = max_tokens
@@ -545,6 +555,7 @@ async def async_main(action, **kwargs):
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
+            device=kwargs.get("device"),
         )
         if not success:
             sys.exit(1)
@@ -557,6 +568,9 @@ async def async_main(action, **kwargs):
     # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
     client = None
     if action in ["prompt", "stats"]:
+        if action == "prompt" and kwargs.get("device") is None:
+            # Keep direct prompts consistent with chat and `gaia init --profile`.
+            kwargs["device"] = _configured_device()
         # Pass only what GaiaCliClient accepts; unrelated CLI flags (e.g. --ui)
         # would otherwise reach the constructor and crash it with a TypeError.
         client = GaiaCliClient(**_gaia_cli_client_params(kwargs))
