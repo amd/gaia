@@ -101,8 +101,33 @@ jobs:
       - name: Build Electron app
         run: |
           npm ci
-          rm -rf "${{ matrix.app.path }}/node_modules"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "${{ matrix.app.path }}/node_modules"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          app_nm = Path("${{ matrix.app.path }}") / "node_modules"
+          root_nm = Path("node_modules")
+          app_nm.mkdir(parents=True, exist_ok=True)
+
+          def link_missing(src: Path, dest: Path) -> None:
+              if dest.exists() or dest.is_symlink():
+                  return
+              dest.symlink_to(src.resolve())
+
+          for item in root_nm.iterdir():
+              if item.name == ".bin" and item.is_dir():
+                  dest_bin = app_nm / ".bin"
+                  dest_bin.mkdir(exist_ok=True)
+                  for bin_item in item.iterdir():
+                      link_missing(bin_item, dest_bin / bin_item.name)
+                  continue
+              if item.name.startswith("@") and item.is_dir():
+                  scope = app_nm / item.name
+                  scope.mkdir(exist_ok=True)
+                  for sub in item.iterdir():
+                      link_missing(sub, scope / sub.name)
+                  continue
+              link_missing(item, app_nm / item.name)
+          PY
           npm run --workspace="${{ matrix.app.name }}" make
         shell: bash
 
