@@ -363,11 +363,16 @@ class TalkSDK:
             True if RAG was successfully enabled
         """
         try:
-            self.chat_sdk.enable_rag(documents=documents, **rag_kwargs)
-            self.log.info(
-                f"RAG enabled with {len(documents) if documents else 0} documents"
-            )
-            return True
+            enabled = bool(self.chat_sdk.enable_rag(documents=documents, **rag_kwargs))
+            if enabled:
+                self.log.info(
+                    f"RAG enabled with {len(documents) if documents else 0} documents"
+                )
+            else:
+                self.log.warning(
+                    "RAG enabled but one or more documents failed to index"
+                )
+            return enabled
         except ImportError:
             self.log.warning(
                 'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'
