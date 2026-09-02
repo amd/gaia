@@ -23,7 +23,7 @@
   "dependencies": {
     "@prisma/client": "^7.10.0",
     "prisma": "^7.10.0",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "overrides": {
     "tar": ">=7.5.8",
