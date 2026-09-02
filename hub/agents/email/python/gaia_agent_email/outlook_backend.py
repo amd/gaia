@@ -52,6 +52,7 @@ Token lifecycle, error hygiene, and the no-silent-fallback contract mirror
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timezone
 from typing import (
     Any,
@@ -61,6 +62,7 @@ from typing import (
     List,
     Optional,
 )
+from urllib.parse import quote
 
 import httpx
 from gaia_agent_email.outlook_query import translate_query
@@ -88,7 +90,8 @@ _LABEL_STARRED = "STARRED"
 _LABEL_SENT = "SENT"
 _LABEL_IMPORTANT = "IMPORTANT"
 
-# ``$select`` for ``get_message`` — pull exactly the fields the Gmail-shape
+# ``$select`` for ``get_message`` and Graph ``$batch`` fetches — pull exactly
+# the fields the Gmail-shape
 # translation needs (Graph returns a large default projection otherwise).
 _MESSAGE_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
@@ -99,10 +102,10 @@ _MESSAGE_SELECT = (
 # Metadata-only ``$select`` (#2643 lever 1) — identical to ``_MESSAGE_SELECT``
 # minus ``body``, the one heavy field a heuristic-only scan never reads.
 # ``bodyPreview`` (Gmail's ``snippet`` equivalent) stays, since the category
-# heuristic and meeting-request detector both read that. Batched fetches
-# (Gmail lever 2) are NOT implemented for Outlook in this change — Graph's
-# ``$batch`` is a materially different JSON wire protocol, left as a
-# follow-up; this backend still benefits from skipping the body field alone.
+# heuristic and meeting-request detector both read that.
+#
+# Graph accepts at most 20 requests in one JSON ``$batch`` envelope.
+_BATCH_MAX_SUBREQUESTS = 20
 _MESSAGE_SELECT_METADATA = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,sentDateTime,isRead,isDraft,flag,categories,"
@@ -496,6 +499,110 @@ class LiveOutlookBackend:
         select = _MESSAGE_SELECT_METADATA if format == "metadata" else _MESSAGE_SELECT
         data = self._get(f"/me/messages/{message_id}", params={"$select": select})
         return graph_message_to_gmail(data, include_body=(format != "metadata"))
+
+    def get_messages_batch(
+        self, message_ids: Iterable[str], *, format: str = "full"
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch multiple messages through Microsoft Graph's JSON batch API.
+
+        The email read tools discover this capability by duck typing. Keeping
+        the one-message path on ``get_message`` avoids paying batch framing
+        overhead for a single fetch, while larger requests are split at
+        Graph's 20-subrequest limit. Responses are correlated by their
+        response ``id`` rather than wire order, and every requested id must
+        resolve before returning so a partial batch can never look complete.
+        """
+        ids = list(message_ids)
+        if not ids:
+            return {}
+        if len(ids) == 1:
+            return {ids[0]: self.get_message(ids[0], format=format)}
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
+            chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
+            out.update(self._get_messages_batch(chunk, format=format))
+        return out
+
+    def _get_messages_batch(
+        self, ids: List[str], *, format: str
+    ) -> Dict[str, Dict[str, Any]]:
+        select = _MESSAGE_SELECT_METADATA if format == "metadata" else _MESSAGE_SELECT
+        requests = [
+            {
+                "id": str(index),
+                "method": "GET",
+                "url": f"/me/messages/{quote(message_id, safe='')}?"
+                f"$select={select}",
+            }
+            for index, message_id in enumerate(ids)
+        ]
+        response = self._client.post(
+            f"{GRAPH_API_BASE}/$batch",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"requests": requests},
+        )
+        if response.status_code != 200:
+            self._raise_http(response, "POST /$batch")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ConnectorsError(
+                f"Microsoft Graph batch response for {len(ids)} message(s) "
+                "was not valid JSON"
+            ) from exc
+
+        responses = data.get("responses") if isinstance(data, dict) else None
+        if not isinstance(responses, list):
+            raise ConnectorsError(
+                f"Microsoft Graph batch response for {len(ids)} message(s) "
+                "did not contain a responses list"
+            )
+
+        by_id: Dict[str, Dict[str, Any]] = {}
+        expected = {str(index): message_id for index, message_id in enumerate(ids)}
+        for item in responses:
+            if not isinstance(item, dict):
+                raise ConnectorsError(
+                    "Microsoft Graph batch response contained a non-object item"
+                )
+            request_id = str(item.get("id", ""))
+            message_id = expected.get(request_id)
+            if message_id is None:
+                raise ConnectorsError(
+                    f"Microsoft Graph batch response contained unknown request id "
+                    f"{request_id!r}"
+                )
+            if request_id in by_id:
+                raise ConnectorsError(
+                    f"Microsoft Graph batch response repeated request id "
+                    f"{request_id!r}"
+                )
+            status = item.get("status")
+            if status != 200:
+                detail = json.dumps(item.get("body"), ensure_ascii=False)[:300]
+                raise ConnectorsError(
+                    f"Microsoft Graph batch GET for message {message_id!r} "
+                    f"returned {status}: {detail}"
+                )
+            body = item.get("body")
+            if not isinstance(body, dict):
+                raise ConnectorsError(
+                    f"Microsoft Graph batch response for message {message_id!r} "
+                    "did not contain a message object"
+                )
+            by_id[request_id] = graph_message_to_gmail(
+                body, include_body=(format != "metadata")
+            )
+
+        missing = [request_id for request_id in expected if request_id not in by_id]
+        if missing:
+            missing_messages = [expected[request_id] for request_id in missing[:5]]
+            raise ConnectorsError(
+                f"Microsoft Graph batch response returned {len(by_id)} of "
+                f"{len(ids)} requested message(s); missing: {missing_messages}"
+            )
+        return {expected[request_id]: by_id[request_id] for request_id in expected}
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         # Graph has no thread-get; fetch every message in the conversation.

@@ -10,12 +10,10 @@ accidentally tries to decode a metadata-mode message's body gets nothing
 (matching what live Graph would actually return), never a stale/wrong
 "complete" body.
 
-Outlook does NOT get lever 2 (batched fetches) in this change — Microsoft
-Graph's ``$batch`` is a materially different (JSON, not MIME multipart) wire
-protocol and is left as a follow-up; ``get_messages_batch`` is a duck-typed
-capability (see ``gmail_backend.py``), so its absence here does not affect
-``isinstance(x, GmailBackend)`` or the read-tools scan loop, which falls back
-to a per-id ``get_message`` loop for any backend lacking it.
+Outlook's batched fetch path is covered separately in
+``test_outlook_batch_3104.py``. ``get_messages_batch`` remains a duck-typed
+capability (see ``gmail_backend.py``), so the read-tools scan loop continues
+to fall back to a per-id ``get_message`` loop for any backend lacking it.
 """
 
 from __future__ import annotations
