@@ -548,6 +548,7 @@ class _StubAgent:
     _bundled_skill_dirs = Agent._bundled_skill_dirs
     _resolve_skill_manifest = Agent._resolve_skill_manifest
     _note_skill_active = Agent._note_skill_active
+    _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
     get_skills_system_prompt = Agent.get_skills_system_prompt

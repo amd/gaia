@@ -253,14 +253,19 @@ A skill is loaded in three levels, mirroring the standard — long reference
 material costs nothing until it's actually needed:
 
 <Steps>
-<Step title="Metadata (always in context)">
-`name` + `description` of every discovered, in-scope skill are listed for the
-model. This is the only always-resident cost — a few tokens per skill.
+<Step title="Metadata (matched outside the prompt)">
+`name` + `description` of every installed skill are indexed **in Python, not in
+the system prompt**. Each turn is scored against that index before the request is
+sent, and only the winner is injected — so a library of thirty skills costs zero
+resident tokens instead of thirty descriptions on every turn. See
+[Proactive discovery](#proactive-discovery).
 </Step>
 <Step title="Body (on trigger)">
-When the model judges a skill relevant (its `description` matches the task) or
-the user invokes it explicitly, the `SKILL.md` Markdown body is injected and the
-skill's declared `tools` are registered into the agent's tool registry.
+When a skill is selected — by the pre-turn match, by the model calling
+`load_skill`, or by the user asking for it — the `SKILL.md` Markdown body is
+injected and the skill's declared `tools` are registered into the agent's tool
+registry. A loaded body does not stay resident forever: it collapses to a
+one-line menu entry on turns that no longer relate to it.
 </Step>
 <Step title="Resources (on demand)">
 Files the body references (scripts, reference docs, templates) load only when the
@@ -336,13 +341,53 @@ passed through install, so `load_skill` gates on *domain* (below), not on tier.
 
 ### Invocation
 
-Once a skill is in scope, it is triggered either by the **model** (description
-match — automatic) or **explicitly** by the user. `load_skill` in code is the
-shipped explicit path; a user-facing `/web-research` slash command follows the
-Agent UI panel and is not yet available. This matches Claude Code's dual-invocation model. The
-standard's `allowed-tools`/`disallowed-tools` keys are parsed but **not** used as
-a permission mechanism (see [Skill Format](/plans/skill-format#adopted-base-agent-skills-standard)) —
+Once a skill is in scope, it is triggered either **automatically** by the
+pre-turn description match below, or **explicitly** — by the model calling
+`load_skill`, or by the user naming it. A user-facing `/web-research` slash
+command follows the Agent UI panel and is not yet available. The standard's
+`allowed-tools`/`disallowed-tools` keys are parsed but **not** used as a
+permission mechanism (see [Skill Format](/plans/skill-format#adopted-base-agent-skills-standard)) —
 GAIA's permissions come from `metadata.gaia`.
+
+### Proactive discovery
+
+A user should never have to know a skill's name. Before each turn reaches the
+model, the agent scores the request against every installed skill's `description`
+and acts on the result:
+
+| Outcome | Condition | What happens |
+|---|---|---|
+| **Load** | one skill clears the confidence bar and beats the runner-up by a margin | it is loaded and the reply opens by saying so |
+| **Shortlist** | several plausible, none dominant | the names are offered to the model, which calls `load_skill` if one fits |
+| **Nothing** | no real match | the turn proceeds with no skill |
+
+A tie is reported as a tie — the agent never picks between close matches on the
+user's behalf.
+
+<Note>
+**Write the `description` for this.** It is the retrieval index, not a label. Name
+the nouns a user would actually say — the objects, formats, and services the
+skill works on — not just the verbs. `github-triage` gained "unread notification
+inbox" and that one phrase is what makes *"what's been going on in my github
+inbox?"* resolve automatically instead of landing in a shortlist.
+</Note>
+
+Matching runs **outside** the prompt: the index is built in Python from
+frontmatter the agent already holds, scoring is lexical (a normalized BM25 over
+name + description) and takes tens of microseconds, and only the selected skill's
+body is injected. The standing prompt cost of the whole feature is a ~96-token
+sourcing rule. Read-only `.claude/skills` imports are indexed for explicit loading
+but never proposed automatically — they are another host's marketplace, written
+for working *on* a repo rather than answering a user's question.
+
+If a matched skill **cannot** load — a missing CLI, an unbridged permission, a
+malformed manifest — the agent is told to say it cannot do the work and why.
+Answering from memory instead of a tool call is the failure this exists to
+prevent; a match that still permits a fabricated answer is not a fix.
+
+Tunables: `GAIA_SKILL_DISCOVERY` (`0` to disable) and `GAIA_SKILL_DISCOVERY_TAU`
+(confidence threshold). `util/skill_retrieval_bench.py` reports precision, recall,
+and latency against a labeled query set.
 
 ## Skill sets
 

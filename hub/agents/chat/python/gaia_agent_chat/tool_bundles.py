@@ -395,7 +395,7 @@ FULL_BUNDLES = [
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
 # ToolLoader as ``optional_tools`` so ``validate_registry`` tolerates exactly
-# these and still fails loudly on a typo or a deleted tool. Two structural
+# these and still fails loudly on a typo or a deleted tool. Three structural
 # reasons, not "it might be missing, who knows":
 #
 # 1. Environment-conditional registration -- ``search_documentation`` needs npx
@@ -404,12 +404,21 @@ FULL_BUNDLES = [
 #    registers it unconditionally for this profile.)
 # 2. Subclass-provided mixins -- the skill-library and code-index tools come
 #    from GaiaAgent, so a plain ChatAgent on prompt_profile="full" has none.
+# 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
+#    a degraded-but-running agent has a store and no memory tools. Selection
+#    already skips CORE names absent from the registry; without this, validation
+#    turned that survivable state into a hard ValueError on the first turn.
 #
 # The CI drift guard checks the other direction against the flagship registry,
 # where every one of these IS present, so a rename still fails the build.
 FULL_OPTIONAL_TOOLS = frozenset(
     {
         "search_documentation",
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "search_past_conversations",
         "index_codebase",
         "search_code_index",
         "get_index_status",
