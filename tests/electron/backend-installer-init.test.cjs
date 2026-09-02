@@ -31,8 +31,15 @@ const testHome = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-init-test-"));
 const homeSpy = jest.spyOn(os, "homedir").mockReturnValue(testHome);
 const installer = require("../../src/gaia/apps/webui/services/backend-installer.cjs");
 
-const fakePython = path.join(testHome, ".gaia", "venv", "Scripts", "python.exe");
-const fakeGaia = path.join(testHome, ".gaia", "venv", "Scripts", "gaia.exe");
+const isWindows = process.platform === "win32";
+const venvBin = path.join(
+  testHome,
+  ".gaia",
+  "venv",
+  isWindows ? "Scripts" : "bin"
+);
+const fakePython = path.join(venvBin, isWindows ? "python.exe" : "python");
+const fakeGaia = path.join(venvBin, isWindows ? "gaia.exe" : "gaia");
 
 beforeAll(() => {
   fs.mkdirSync(path.dirname(fakePython), { recursive: true });
@@ -103,5 +110,42 @@ describe("installBackend gaia init failures", () => {
       state: installer.STATES.READY,
       version: "0.0.0",
     });
+  });
+
+  test("retries gaia init after a failed ensureBackend attempt", async () => {
+    const options = { isPackaged: false, version: "0.0.0" };
+    const savedHttpsProxy = process.env.HTTPS_PROXY;
+    const savedHttpProxy = process.env.HTTP_PROXY;
+    process.env.HTTPS_PROXY = "://invalid-proxy";
+    process.env.HTTP_PROXY = "://invalid-proxy";
+
+    try {
+      await expect(installer.installBackend(options)).rejects.toMatchObject({
+        stage: installer.STAGES.GAIA_INIT,
+        code: 17,
+      });
+      installer.setState(installer.STATES.FAILED, {
+        stage: installer.STAGES.GAIA_INIT,
+      });
+
+      await expect(installer.ensureBackend(options)).rejects.toMatchObject({
+        stage: installer.STAGES.GAIA_INIT,
+        code: 17,
+      });
+
+      expect(
+        childProcess.spawn.mock.calls.filter(
+          ([command, args]) =>
+            command === fakeGaia &&
+            args[0] === "init" &&
+            args[1] === "--profile"
+        )
+      ).toHaveLength(2);
+    } finally {
+      if (savedHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = savedHttpsProxy;
+      if (savedHttpProxy === undefined) delete process.env.HTTP_PROXY;
+      else process.env.HTTP_PROXY = savedHttpProxy;
+    }
   });
 });

@@ -1765,10 +1765,17 @@ async function ensureBackend(opts = {}) {
     // Skip when expectedVersion is null (GAIA_LOCAL_WHEEL is set) — always
     // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
+    const retryingGaiaInit =
+      preChecks.previousState?.state === STATES.FAILED &&
+      preChecks.previousState.stage === STAGES.GAIA_INIT;
     const existingBin = findGaiaBin();
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
-      if (expectedVersion !== null && installedVersion === expectedVersion) {
+      if (
+        expectedVersion !== null &&
+        installedVersion === expectedVersion &&
+        !retryingGaiaInit
+      ) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
@@ -1781,9 +1788,13 @@ async function ensureBackend(opts = {}) {
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
         return existingBin;
       }
-      log(
-        `Version mismatch: expected=${expectedVersion} installed=${installedVersion || "unknown"} — upgrading`
-      );
+      if (retryingGaiaInit && installedVersion === expectedVersion) {
+        log("Retrying failed gaia init instead of taking the installed fast-path");
+      } else {
+        log(
+          `Version mismatch: expected=${expectedVersion} installed=${installedVersion || "unknown"} — upgrading`
+        );
+      }
     } else {
       log("GAIA backend not found — installing from scratch");
     }
