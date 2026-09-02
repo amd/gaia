@@ -23,9 +23,11 @@ import (
 // answer "not installed" for a launch that works. That is exactly why this
 // launch used to have NO gate at all.
 //
-// Three rows, each probed directly on this machine:
+// Three rows, each probed directly on this machine for a local session, plus
+// the Claude credential row when --use-claude is active:
 //
 //	GAIA agent  is the program on disk?      catalog.Find
+//	Claude      is the Anthropic credential set?  process environment
 //	Local AI    is the model server up?      one GET on loopback
 //	AI model    are the models downloaded?   gaia init --check
 //
@@ -49,6 +51,11 @@ var lemonadePorts = []string{"13305", "8000"}
 // machine. When it is set it is the ONLY thing probed: finding a local server
 // on 13305 would prove nothing about the one the agent will actually use.
 const lemonadeBaseURLEnv = "LEMONADE_BASE_URL"
+
+// claudeAPIKeyEnv is the credential the agent's Claude provider reads before
+// constructing its first client. The preflight only checks presence; it never
+// prints the value or makes a remote request that could validate a secret.
+const claudeAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 var (
 	errFixFailed = errors.New("the fix did not succeed")
@@ -76,9 +83,14 @@ func (l localRunner) Label() string { return "local" }
 func (l localRunner) Rows(cfg Config) []Row {
 	rows := []Row{
 		{Key: KeyBinary, Label: cfg.AgentName + " agent"},
-		{Key: KeyLemonade, Label: lemonadeRowLabel},
-		{Key: KeyModel, Label: "AI model"},
 	}
+	if l.opts.ClaudeMode {
+		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
+	}
+	rows = append(rows,
+		Row{Key: KeyLemonade, Label: lemonadeRowLabel},
+		Row{Key: KeyModel, Label: "AI model"},
+	)
 	for i := range rows {
 		rows[i].State = StatePending
 		rows[i].Line = "—"
@@ -86,18 +98,18 @@ func (l localRunner) Rows(cfg Config) []Row {
 	return rows
 }
 
-// Check walks the three rows in dependency order and STOPS at the first
+// Check walks the rows in dependency order and STOPS at the first
 // failure, the same way the daemon walk does: "the models are not downloaded"
 // is meaningless when the program that would use them is not on the machine.
 func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	cfg = cfg.withDefaults()
 	rep := Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: l.Rows(cfg)}
 
-	steps := []func(context.Context, Config) Row{
-		l.checkBinary,
-		l.checkLemonade,
-		l.checkModels,
+	steps := []func(context.Context, Config) Row{l.checkBinary}
+	if l.opts.ClaudeMode {
+		steps = append(steps, l.checkClaudeCredential)
 	}
+	steps = append(steps, l.checkLemonade, l.checkModels)
 	for _, step := range steps {
 		row := step(ctx, cfg)
 		setRow(&rep, row)
@@ -107,6 +119,29 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 		}
 	}
 	return rep
+}
+
+// --- 1.5. the Claude credential --------------------------------------------
+
+func (l localRunner) checkClaudeCredential(_ context.Context, _ Config) Row {
+	row := Row{Key: KeyClaudeCredential}
+	if strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != "" {
+		row.State = StateOK
+		row.Line = "set"
+		return row
+	}
+
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = "not set"
+	row.Detail = "Claude needs an Anthropic credential before the first message."
+	row.Remedy = Remedy{
+		Action: "Set " + claudeAPIKeyEnv + " in your shell, then press r to re-check.",
+		Where:  "https://docs.anthropic.com/en/api/getting-started",
+	}
+	// Keep the raw answer diagnostic but never include the value of the secret.
+	row.Raw = claudeAPIKeyEnv + " is not set"
+	return row
 }
 
 // --- 1. the agent's own program --------------------------------------------

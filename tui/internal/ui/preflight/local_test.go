@@ -217,6 +217,97 @@ func TestClaudeModeDoesNotLetADownLemonadeRefuseTheLaunch(t *testing.T) {
 	}
 }
 
+func TestClaudeCredentialIsRequiredBeforeTheFirstMessage(t *testing.T) {
+	t.Setenv(claudeAPIKeyEnv, "")
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateFailed {
+		t.Fatalf("missing Claude credential is %s, want failed", row.State.Word())
+	}
+	if row.Disposition != status.DispositionHalt {
+		t.Fatalf("disposition = %v, want halt", row.Disposition)
+	}
+	if row.Line != "not set" {
+		t.Errorf("line = %q, want not set", row.Line)
+	}
+	for _, text := range []string{claudeAPIKeyEnv, "first message", "press r"} {
+		if !strings.Contains(row.Detail+row.Remedy.Action+row.Raw, text) {
+			t.Errorf("missing %q from credential guidance: %+v", text, row)
+		}
+	}
+	if strings.Contains(row.Detail+row.Remedy.Action+row.Raw, "sk-ant-") {
+		t.Error("credential guidance must not suggest or expose a token value")
+	}
+}
+
+func TestClaudeCredentialPassesWithoutEchoingTheSecret(t *testing.T) {
+	const secret = "sk-ant-test-only"
+	t.Setenv(claudeAPIKeyEnv, secret)
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateOK {
+		t.Fatalf("set Claude credential is %s, want ok", row.State.Word())
+	}
+	if strings.Contains(row.Line+row.Detail+row.Remedy.Action+row.Raw, secret) {
+		t.Error("credential row echoed the secret")
+	}
+}
+
+func TestClaudeCredentialRowOnlyAppearsInClaudeMode(t *testing.T) {
+	localRows := localRunner{}.Rows(localCfg())
+	for _, row := range localRows {
+		if row.Key == KeyClaudeCredential {
+			t.Fatal("local mode unexpectedly added a Claude credential row")
+		}
+	}
+
+	claudeRows := localRunner{opts: LocalOptions{ClaudeMode: true}}.Rows(localCfg())
+	if len(claudeRows) != len(localRows)+1 {
+		t.Fatalf("Claude mode has %d rows, local mode has %d; want one extra row", len(claudeRows), len(localRows))
+	}
+	if claudeRows[1].Key != KeyClaudeCredential {
+		t.Fatalf("Claude row order = %q, want credential immediately after the binary", claudeRows[1].Key)
+	}
+}
+
+func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) {
+	isolateHome(t)
+	t.Setenv(claudeAPIKeyEnv, "")
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+	stubGaiaInit(t, func() (string, error) {
+		t.Error("the model row was probed even though the Claude credential is missing")
+		return "", errors.New("must not be called")
+	})
+
+	dir := t.TempDir()
+	name := "fixture-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := localRunner{opts: LocalOptions{Binary: path, ClaudeMode: true}}.
+		Check(context.Background(), localCfg())
+
+	blocker, ok := rep.Blocker()
+	if !ok || blocker.Key != KeyClaudeCredential {
+		t.Fatalf("blocker = %q, found=%v; want Claude credential", blocker.Key, ok)
+	}
+	if row, _ := rep.Find(KeyLemonade); row.State != StatePending {
+		t.Errorf("Lemonade row is %s, want pending behind credential failure", row.State.Word())
+	}
+	if row, _ := rep.Find(KeyModel); row.State != StatePending {
+		t.Errorf("model row is %s, want pending behind credential failure", row.State.Word())
+	}
+}
+
 // Exit 2 is what an installed gaia older than `--check` returns for
 // "unrecognized arguments". Reading it as "not ready" ran a full multi-minute
 // `gaia init` on EVERY launch.
@@ -314,12 +405,14 @@ func TestRowsMatchWhatCheckProduces(t *testing.T) {
 // silently proceeds instead of loudly halting — see Row.needsHalt.
 func TestEveryNonOKLocalRowDeclaresADisposition(t *testing.T) {
 	isolateHome(t)
+	t.Setenv(claudeAPIKeyEnv, "")
 	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
 	stubGaiaInit(t, func() (string, error) { return exitStub(t, 1), nil })
 
 	r := localRunner{opts: LocalOptions{Binary: "gaia-agent-absent-fixture"}}
 	rows := []Row{
 		r.checkBinary(context.Background(), localCfg()),
+		r.checkClaudeCredential(context.Background(), localCfg()),
 		r.checkLemonade(context.Background(), localCfg()),
 		r.checkModels(context.Background(), localCfg()),
 	}
