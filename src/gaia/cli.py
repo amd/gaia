@@ -338,22 +338,38 @@ class GaiaCliClient:
 
     def __init__(
         self,
-        model=DEFAULT_MODEL_NAME,
+        model=None,
         max_tokens=512,
         show_stats=False,
         logging_level="INFO",
+        device=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         # Set the logging level for this instance's logger
         self.log.setLevel(getattr(logging, logging_level))
 
-        self.model = model
+        # A device selector chooses the model that is built for that target.
+        # Keep an explicitly supplied model first in the precedence order so
+        # existing `--model` usage remains authoritative.
+        if model is None and device is not None:
+            from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+            model = next(
+                (
+                    config.model
+                    for config in DEFAULT_DEVICE_CONFIGS
+                    if config.device == device
+                ),
+                None,
+            )
+
+        self.model = model or DEFAULT_MODEL_NAME
         self.max_tokens = max_tokens
         self.cli_mode = True  # Set this to True for CLI mode
         self.show_stats = show_stats
 
         # Initialize LLM client for local inference
-        self.llm_client = create_client("lemonade", model=model)
+        self.llm_client = create_client("lemonade", model=self.model)
 
         self.log.debug("Gaia CLI client initialized.")
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
@@ -3193,8 +3209,8 @@ def main():
 
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
-    # An explicit `chat --device` requests a device-specific model, so it keeps
-    # precedence over the config default there.
+    # An explicit `chat --device` or `prompt --device` requests a
+    # device-specific model, so it keeps precedence over the config default.
     if (
         args.action in ("prompt", "chat", "llm")
         and getattr(args, "model", None) is None
@@ -3208,7 +3224,7 @@ def main():
             sys.exit(1)
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
-        if not (args.action == "chat" and getattr(args, "device", None)):
+        if not (args.action in ("chat", "prompt") and getattr(args, "device", None)):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved

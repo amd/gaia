@@ -301,6 +301,23 @@ class TestModelInjection:
         main()
         assert "model" not in captured["kwargs"]
 
+    def test_prompt_explicit_device_skips_config_default(self, monkeypatch, tmp_path):
+        # An explicit `prompt --device` selects a device-specific model and must
+        # take precedence over the config default (model stays unset here).
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+        GaiaConfig(default_model="Configured-GGUF").save()
+
+        captured = self._capture_run_cli(monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["gaia", "prompt", "hi", "--device", "npu"])
+        from gaia.cli import main
+
+        main()
+        assert "model" not in captured["kwargs"]
+
     def test_corrupt_config_fails_loudly_on_model_command(
         self, monkeypatch, tmp_path, capsys
     ):
