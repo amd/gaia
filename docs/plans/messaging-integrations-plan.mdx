@@ -240,7 +240,9 @@ restrictive by default.
 
 - **Allow-listing.** Adapters support allow-lists for guilds, channels, and
   users. An empty allow-list means "accept all" for Discord/Slack (guild-scoped)
-  but should default to "accept none" for Telegram (user-scoped, higher risk).
+  but "accept none" for Telegram (user-scoped, higher risk). **Shipped for
+  Telegram:** `--allowed-users` is mandatory and the adapter refuses to start
+  without one.
 
 - **Rate limiting.** Per-user, per-channel, and global rate limits. Defaults:
   10 RPM per user, 30 RPM per channel, 100 RPM global. See

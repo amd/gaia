@@ -1619,9 +1619,16 @@ def build_parser():
         "start", help="Start the Telegram adapter (polling)"
     )
     t_start.add_argument("--token", required=True, help="Telegram bot token")
+    # Not argparse-required: the adapter's own refusal explains *why* an
+    # allowlist is mandatory and how to build one, which "the following
+    # arguments are required" does not.
     t_start.add_argument(
         "--allowed-users",
-        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
+        help=(
+            "Comma-separated numeric Telegram user IDs allowed to interact "
+            "(required — a bot with no allowlist is reachable by every "
+            "Telegram user). Find your id via @userinfobot."
+        ),
     )
     t_start.add_argument(
         "--background",
@@ -3238,7 +3245,10 @@ def main():
         action = getattr(args, "telegram_action", None)
         if action == "start":
             try:
-                from gaia.messaging.telegram import run_telegram
+                from gaia.messaging.telegram import (
+                    TelegramAllowlistError,
+                    run_telegram,
+                )
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -3264,6 +3274,10 @@ def main():
                     allowed_users=allowed,
                     background=getattr(args, "background", False),
                 )
+            except TelegramAllowlistError as e:
+                # Show the remedy rather than a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
             except RuntimeError as e:
                 print(f"❌ {e}", file=sys.stderr)
                 sys.exit(1)
