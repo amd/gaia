@@ -20,6 +20,7 @@ import {
   formatBytes,
   platformLabel,
   npuLabel,
+  isNpmSidecar,
 } from '../../data/catalog';
 import { buildFileTree } from '../../data/fileTree';
 import { renderMarkdown } from '../../data/markdown';
@@ -32,7 +33,8 @@ export async function getStaticPaths() {
 const { id } = Astro.params;
 const agent = (await getAgent(id!))!;
 
-const isNpm = !!agent.npm_package;
+// The sidecar/native-binary wording belongs to the agent lane only — see isNpmSidecar.
+const isSidecar = isNpmSidecar(agent);
 const readmeHtml = renderMarkdown(agent.readme);
 // Optional docs — older index.json (served before the hub Worker adds a field) may
 // lack these; render a tab only when there's content.
@@ -108,7 +110,7 @@ const detailRows = [
     value: languageLabel(agent.language),
     // npm/binary agents ship a self-contained compiled binary — no Python
     // runtime on the host, so "Python" alone is misleading.
-    note: isNpm ? 'Ships as a native binary — no Python needed' : undefined,
+    note: isSidecar ? 'Ships as a native binary — no Python needed' : undefined,
   },
   ...(agent.tools_count > 0 ? [{ label: 'Tools', value: String(agent.tools_count) }] : []),
   ...(agent.npm_package ? [{ label: 'Package', value: agent.npm_package }] : []),
@@ -315,7 +317,7 @@ const requirementRows = [
           </SidebarCard>
         )}
 
-        {agent.playground_url && isNpm && (
+        {agent.playground_url && isSidecar && (
           <!-- Playground launcher: one command to fetch+run the sidecar, then a
                button that goes live once the local sidecar is reachable. -->
           <div data-playground data-playground-url={agent.playground_url}>

@@ -456,6 +456,19 @@ export function isSkill(agent: Agent): boolean {
 }
 
 /**
+ * True when an entry ships as an npm client + a frozen binary sidecar — the
+ * agent lane's npm packaging, which is what the "sidecar" wording describes.
+ *
+ * Read off installMethods() rather than `npm_package`, so the packaging text can
+ * never contradict the command beside it: an app/component with an npm_package
+ * installs as a global CLI, not a sidecar (#3298).
+ */
+export function isNpmSidecar(agent: Agent): boolean {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  return keys.has("gaia") && keys.has("npm");
+}
+
+/**
  * Install methods for an agent, derived from the MANIFEST — never from README
  * markup. We only ever show channels that actually work:
  *
