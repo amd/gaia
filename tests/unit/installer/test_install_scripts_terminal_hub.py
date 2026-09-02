@@ -337,30 +337,36 @@ def fake_hub(tmp_path):
         platforms=HUB_PLATFORMS,
         digest_overrides=None,
         omit_binaries=False,
+        also_prefixes=(),
     ):
+        # `also_prefixes` puts a SECOND program in the same lane. The real
+        # agents/gaia/ lane carries both the stdio child and the REST sidecar,
+        # so a fixture with only one cannot tell "installed the agent" from
+        # "installed the wrong agent" -- the failure this file has to catch.
         version_dir = root / "agents" / agent_id / HUB_VERSION
         version_dir.mkdir(parents=True, exist_ok=True)
         artifacts = []
-        for key in platforms:
-            blob = f"#!/bin/sh\necho {prefix} {HUB_VERSION} {key}\n".encode()
-            filename = f"{prefix}-{key}"
-            if omit_binaries:
-                # Published in the manifest, absent from the bucket: the
-                # transient-download-failure case, which must not be fatal.
-                (version_dir / filename).unlink(missing_ok=True)
-            else:
-                (version_dir / filename).write_bytes(blob)
-            artifacts.append(
-                {
-                    "filename": filename,
-                    "path": f"agents/{agent_id}/{HUB_VERSION}/{filename}",
-                    "size_bytes": len(blob),
-                    "sha256": (digest_overrides or {}).get(
-                        key, hashlib.sha256(blob).hexdigest()
-                    ),
-                    "content_type": "application/octet-stream",
-                }
-            )
+        for pfx in (prefix, *also_prefixes):
+            for key in platforms:
+                blob = f"#!/bin/sh\necho {pfx} {HUB_VERSION} {key}\n".encode()
+                filename = f"{pfx}-{key}"
+                if omit_binaries:
+                    # Published in the manifest, absent from the bucket: the
+                    # transient-download-failure case, which must not be fatal.
+                    (version_dir / filename).unlink(missing_ok=True)
+                else:
+                    (version_dir / filename).write_bytes(blob)
+                artifacts.append(
+                    {
+                        "filename": filename,
+                        "path": f"agents/{agent_id}/{HUB_VERSION}/{filename}",
+                        "size_bytes": len(blob),
+                        "sha256": (digest_overrides or {}).get(
+                            key, hashlib.sha256(blob).hexdigest()
+                        ),
+                        "content_type": "application/octet-stream",
+                    }
+                )
         manifest = {
             "id": agent_id,
             "latest_version": HUB_VERSION,
@@ -377,7 +383,7 @@ def fake_hub(tmp_path):
         )
 
     publish("terminal-hub", "gaia")
-    publish("gaia", "gaia-agent")
+    publish("gaia", "gaia-agent-stdio", also_prefixes=("gaia-agent",))
 
     handler = type(
         "Handler",
@@ -518,7 +524,7 @@ def test_a_verified_agent_installs_and_arms_the_banner(tmp_path, fake_hub):
 def test_an_unpublished_agent_platform_leaves_the_hub_installed(tmp_path, fake_hub):
     """No build for this machine is a warning, not a failed install."""
     base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", platforms=("aix-ppc64",))
+    publish("gaia", "gaia-agent-stdio", platforms=("aix-ppc64",))
 
     result, tui, agent = _run_bootstrap(tmp_path, base_url)
 
@@ -535,7 +541,7 @@ def test_a_failed_agent_download_leaves_the_hub_installed(tmp_path, fake_hub):
     """A network blip after uv, the package, the hub and PATH are all in place
     must not throw that away — the sidecar is the only thing missing."""
     base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", omit_binaries=True)
+    publish("gaia", "gaia-agent-stdio", omit_binaries=True)
 
     result, tui, agent = _run_bootstrap(tmp_path, base_url)
 
@@ -551,7 +557,11 @@ def test_a_failed_agent_download_leaves_the_hub_installed(tmp_path, fake_hub):
 def test_a_tampered_agent_aborts_and_writes_nothing(tmp_path, fake_hub):
     """Integrity is the one agent failure that is never downgraded."""
     base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", digest_overrides={k: "d" * 64 for k in HUB_PLATFORMS})
+    publish(
+        "gaia",
+        "gaia-agent-stdio",
+        digest_overrides={k: "d" * 64 for k in HUB_PLATFORMS},
+    )
 
     result, tui, agent = _run_bootstrap(tmp_path, base_url)
 
@@ -631,3 +641,48 @@ def test_add_to_path_does_not_write_a_file_an_unknown_shell_ignores(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert _rc_files(home) == []
     assert "Add these two directories to your PATH by hand" in result.stdout
+
+
+# ── the agent must be the STDIO build, not the REST sidecar ────────────────
+#
+# `agents/gaia/` publishes two programs whose artifact names differ by one word.
+# `gaia-agent-<platform>` is the REST sidecar the daemon supervises: it binds a
+# port and never reads stdin. Installed as `gaia-agent` it satisfies the hub's
+# readiness check and then feeds uvicorn's startup log to a JSON line scanner
+# (#3062) — a green gate followed by a broken chat, which is worse than an
+# honest "not installed".
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_the_agent_artifact_is_the_stdio_build(sh_text, ps1_text, script):
+    text = sh_text if script == "sh" else ps1_text
+    assert "gaia-agent-stdio" in text
+
+    # The bare sidecar name must never be what gets constructed. Prose may
+    # mention it to explain why; only executable lines are checked.
+    code = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#") and line.strip()
+    )
+    for wrong in ('"gaia-agent-${platform}"', '"gaia-agent-$lockPlatform.exe"'):
+        assert wrong not in code, f"install.{script} asks for the REST sidecar"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+def test_the_installed_agent_is_the_stdio_artifact(tmp_path, fake_hub):
+    """Both programs are published in the lane, so assert on the bytes.
+
+    Checking only that `gaia-agent` exists passes just as happily when the
+    sidecar was the thing downloaded.
+    """
+    base_url, _ = fake_hub
+    result, _tui, agent = _run_bootstrap(tmp_path, base_url)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Each fake artifact echoes its own prefix, so the first token names which
+    # of the two programs in the lane was downloaded. Substring-matching the
+    # stdio name alone would not do: the sidecar's name is a prefix of it.
+    body = agent.read_text(encoding="utf-8")
+    assert "echo gaia-agent-stdio " in body, f"installed the wrong artifact: {body!r}"

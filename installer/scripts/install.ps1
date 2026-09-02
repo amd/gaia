@@ -318,12 +318,18 @@ function Install-Tui {
     [void](Install-HubBinary -AgentId $TERMINAL_HUB_ID -Filename "gaia-$platform.exe" -DestName "gaia-tui.exe" -Label "terminal hub")
 }
 
-# The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
-# child process, so without this binary the flagship cannot run -- which is what
-# this one-liner left behind before: a UI with no agent under it.
+# The flagship agent's frozen STDIO build. The terminal hub spawns `gaia-agent`
+# as a child process, so without this binary the flagship cannot run -- which is
+# what this one-liner left behind before: a UI with no agent under it.
 #
 # Installed into $GAIA_BIN because that is the directory this installer owns and
 # has already put on PATH, so the hub's exec.LookPath finds gaia-agent there.
+#
+# STDIO, not the sidecar: `agents/gaia/` publishes two programs whose artifact
+# names differ by one word, and only one can be spawned. `gaia-agent-<platform>`
+# is the REST sidecar the daemon supervises -- it binds a port and never reads
+# stdin, so under this name it satisfies the hub's readiness check and then
+# feeds uvicorn's startup log to a JSON line scanner (#3062).
 #
 # Returns $true only when the agent binary is on disk. The caller uses that to
 # decide what to promise: the hub spawns gaia-agent as a child process, so
@@ -337,10 +343,10 @@ function Install-FlagshipAgent {
         Write-Warning "No flagship agent build for this architecture - skipping."
         return $false
     }
-    # The sidecar is published under win32-x64; the terminal hub uses win-x64.
+    # The agent lane is published under win32-x64; the terminal hub uses win-x64.
     $lockPlatform = $platform -replace '^win-', 'win32-'
 
-    $ok = Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-$lockPlatform.exe" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
+    $ok = Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Filename "gaia-agent-stdio-$lockPlatform.exe" -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
     return [bool]$ok
 }
 
