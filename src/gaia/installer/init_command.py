@@ -223,7 +223,7 @@ def check_setup_status(
     deleted or Lemonade is uninstalled without GAIA's knowledge.
 
     Args:
-        profile: Profile to check (minimal, chat, code, rag, all, ...)
+        profile: Profile to check (gaia, minimal, chat, rag, all, ...)
         skip_chat_model: Match run()'s --skip-chat-model filtering (Claude
             backend): only the profile's embedding model(s) are required.
         remote: Lemonade is expected on a remote machine (skip local-install
@@ -311,7 +311,7 @@ class InitCommand:
 
     def __init__(
         self,
-        profile: str = "chat",
+        profile: str = DEFAULT_INIT_PROFILE,
         skip_models: bool = False,
         skip_lemonade: bool = False,
         force_reinstall: bool = False,
@@ -2165,7 +2165,8 @@ class InitCommand:
         ``gaia chat`` resolves through that wheel (#1102), which no init
         profile installs (it isn't a pip extra -- #2240). Printing `gaia
         chat` as a ready next step when it isn't installed is a false
-        promise, so completion messaging checks first.
+        promise, so completion messaging checks first. Delegates to
+        ``_is_hub_agent_available``, so a hub install counts too.
         """
         return InitCommand._is_hub_agent_available("chat")
 
@@ -2246,7 +2247,30 @@ class InitCommand:
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
         # profile agents are not published in the "verified" tier.
-        result = hub_installer.install(agent_id, trusted=True)
+        try:
+            result = hub_installer.install(agent_id, trusted=True)
+        except (
+            hub_installer.UnsupportedPlatformError,
+            hub_installer.CompatibilityError,
+        ) as exc:
+            # "The hub has no build for THIS machine" is the same situation as
+            # "not published yet", and must not fail a run that already installed
+            # Lemonade and several GB of models. The flagship ships a native
+            # binary, so it is platform-gated: without this the DEFAULT profile
+            # exits non-zero on Intel Mac, Windows-on-ARM and ARM Linux —
+            # machines where `gaia init` works today.
+            #
+            # Deliberately narrow. Every OTHER InstallError still propagates
+            # into run()'s handler and exits non-zero (#2358): an install that
+            # was attempted and failed must stay loud.
+            self._print_warning(
+                f"'{agent_id}' has no Agent Hub build for this machine: {exc}"
+            )
+            self._print_warning(
+                f"Everything else is set up. Install it with "
+                f"`gaia hub install {agent_id}` once a build is available."
+            )
+            return
         self._print_success(f"Installed '{agent_id}' from the Agent Hub")
 
         # No AgentRegistry exists in this process to hot-register into (we
@@ -2273,6 +2297,12 @@ class InitCommand:
         chat_install_note = (
             "Chat agent not installed yet -- run: "
             f"{source_install_command('gaia-agent-chat')}"
+        )
+        # The flagship is a hub BINARY, so its missing-hint names the hub, not a
+        # pip command. Pointing at gaia-agent-chat here would answer a headline
+        # about the flagship with a different package's install line.
+        flagship_install_note = (
+            "GAIA agent not installed yet -- run: gaia hub install gaia"
         )
         # Scoped like run()'s has_hub_agent_check -- gating on the chat wheel
         # alone would mark sd/vlm/minimal permanently "incomplete", and would
@@ -2302,7 +2332,18 @@ class InitCommand:
                     "Then ask for an image — image generation runs through the "
                     "agent's SD tools"
                 )
-            elif self.profile in ("chat", "gaia"):
+            elif self.profile == "gaia":
+                self.console.print(
+                    "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
+                )
+                if not self._profile_agent_available():
+                    self.console.print(f"    [yellow]{flagship_install_note}[/yellow]")
+                if not chat_agent_available:
+                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
+            elif self.profile == "chat":
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            Start interactive chat with RAG"
                 )
@@ -2378,7 +2419,18 @@ class InitCommand:
                     "    gaia chat                    Then ask for an image — "
                     "image generation runs through the agent's SD tools"
                 )
-            elif self.profile in ("chat", "gaia"):
+            elif self.profile == "gaia":
+                self._print(
+                    "    gaia-tui                             # Start the GAIA agent (terminal UI)"
+                )
+                self._print(
+                    "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
+                )
+                if not self._profile_agent_available():
+                    self._print(f"    {flagship_install_note}")
+                if not chat_agent_available:
+                    self._print(f"    {chat_install_note}")
+            elif self.profile == "chat":
                 self._print(
                     "    gaia chat                            # Start interactive chat with RAG"
                 )

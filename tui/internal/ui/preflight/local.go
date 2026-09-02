@@ -323,13 +323,25 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	// stops at the FIRST failure, so whenever this row is the blocker the model
 	// row below it is pending and unfocusable. Withholding the key here left
 	// the commonest first-run failure with nothing to press.
-	row.Fix = FixRunSetup
-	// The shared remedy's Action describes starting Lemonade BY HAND, which is
-	// the right instruction where there is no `f` (the daemon runner). Here
-	// there is one, so say what it does first — otherwise the row explains the
-	// manual route while the key that automates it sits directly underneath.
-	row.Remedy.Action = "Press f and setup installs and starts it. Already have it? " +
-		row.Remedy.Action
+	//
+	// Two states are excluded because `gaia init` provably cannot fix them:
+	//
+	//   - a bad LEMONADE_SERVER_PATH: setup would inherit the same bad value,
+	//     so the key would fail every time while the step that DOES fix it
+	//     (unset the variable) sat below as the optional alternative;
+	//   - a non-loopback LEMONADE_BASE_URL: `gaia init` auto-detects remote
+	//     mode from it and then refuses to install or start anything. The
+	//     daemon runner already special-cases this (check.go); matching it here
+	//     is what keeps the two screens from diverging.
+	if resolveLemonade().BadOverride == "" && isLoopback(base) {
+		row.Fix = FixRunSetup
+		// The shared remedy's Action describes starting Lemonade BY HAND, which
+		// is right where there is no `f`. Here there is one, so say what it does
+		// first — otherwise the row explains the manual route while the key that
+		// automates it sits directly underneath.
+		row.Remedy.Action = "Press f and setup installs and starts it. Already have it? " +
+			row.Remedy.Action
+	}
 	return row
 }
 

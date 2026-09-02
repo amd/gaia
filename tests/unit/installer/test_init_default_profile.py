@@ -22,6 +22,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -239,3 +241,96 @@ def _child_env() -> dict:
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = f"{src}{os.pathsep}{existing}" if existing else src
     return env
+
+
+class TestUnsupportedPlatformDoesNotFailTheRun:
+    """The flagship ships a native BINARY, so the hub gates it per platform.
+
+    Before this, `gaia init` — now the default path — exited non-zero on every
+    host the hub has no flagship build for (Intel Mac, Windows-on-ARM, ARM
+    Linux), *after* installing Lemonade and several GB of models. Those are
+    machines where `gaia init` works today.
+    """
+
+    def _cmd(self):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            return InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
+
+    def _run_with_install_error(self, exc):
+        from gaia.hub import installer as hub_installer
+
+        cmd = self._cmd()
+        with (
+            patch.object(InitCommand, "_is_hub_agent_available", return_value=False),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=SimpleNamespace(
+                    agents=[{"id": FLAGSHIP_AGENT_ID, "latest_version": "0.1.1"}]
+                ),
+            ),
+            patch.object(hub_installer, "install", side_effect=exc),
+        ):
+            cmd._ensure_hub_agent_installed()
+
+    def test_no_build_for_this_platform_is_survivable(self):
+        from gaia.hub.installer import CompatibilityError
+
+        # Must not raise: the rest of the setup succeeded.
+        self._run_with_install_error(
+            CompatibilityError("Your platform (darwin-x64) is not supported")
+        )
+
+    def test_no_artifact_for_this_platform_is_survivable(self):
+        from gaia.hub.installer import UnsupportedPlatformError
+
+        self._run_with_install_error(
+            UnsupportedPlatformError("no artifact matches this platform ('win-arm64')")
+        )
+
+    def test_a_generic_install_failure_still_hard_fails(self):
+        """#2358's contract: an install that was ATTEMPTED and failed must stay
+        loud. Only "there is no build for this machine" is survivable."""
+        from gaia.hub.installer import InstallError
+
+        with pytest.raises(InstallError):
+            self._run_with_install_error(InstallError("network died mid-download"))
+
+    @pytest.mark.parametrize("exc_name", ["ChecksumError", "DiskSpaceError"])
+    def test_a_real_failure_still_propagates(self, exc_name):
+        """A corrupt download or a full disk is not 'this machine is
+        unsupported' — swallowing those is the silent fallback CLAUDE.md
+        forbids."""
+        import gaia.hub.installer as hub_installer
+
+        exc = getattr(hub_installer, exc_name)("boom")
+        with pytest.raises(type(exc)):
+            self._run_with_install_error(exc)
+
+
+class TestFlagshipCompletionMessage:
+    """A headline about the flagship must not be answered with a different
+    package's install line."""
+
+    def _completion(self, available):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
+        cmd._is_hub_agent_available = lambda _id: available
+        printed = []
+        cmd._print = lambda msg, end="\n": printed.append(msg)
+        with patch("gaia.installer.init_command.RICH_AVAILABLE", False):
+            cmd._print_completion()
+        return "\n".join(printed)
+
+    def test_missing_flagship_names_the_hub_not_the_chat_wheel(self):
+        out = self._completion(available=False)
+        assert "gaia hub install gaia" in out
+        assert "incomplete" in out
+
+    def test_quick_start_names_something_that_starts_the_flagship(self):
+        """`gaia chat` runs a different agent through a wheel this profile
+        never installs, so it cannot be the only next step offered."""
+        assert "gaia-tui" in self._completion(available=True)

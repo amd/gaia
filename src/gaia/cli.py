@@ -844,7 +844,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print()
         if not base_url:
             print("   Prerequisites:")
-            print("     1. Models downloaded  : gaia init  (first time only, ~25 GB)")
+            print("     1. Models downloaded  : gaia init  (first time only, ~4 GB)")
             print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
             print()
 

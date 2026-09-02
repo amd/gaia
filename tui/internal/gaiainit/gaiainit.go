@@ -91,7 +91,14 @@ func RunArgs(claudeMode bool) []string {
 	// --yes: nothing here can answer an interactive prompt. The child's stdin is
 	// not connected to the terminal, so a prompt gaia init tried to read would
 	// hang forever with no way to answer it.
-	args := []string{"init", "--profile", Profile, "--yes"}
+	//
+	// --skip-webui-build: this is the TERMINAL ui; it never loads the browser
+	// Agent UI. That build step only runs in a source checkout, and a failure in
+	// it makes `gaia init` exit non-zero AFTER Lemonade and every model already
+	// installed — so setup from this screen dead-ended on a component the screen
+	// does not use. Released installs skip the step anyway, so this changes
+	// nothing for them.
+	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build"}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}

@@ -2659,8 +2659,9 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = buf.getvalue()
         self.assertIn("GAIA initialization complete!", out)
-        # Same quick-start block as `chat` -- the flagship is a superset.
-        self.assertIn("gaia chat --index report.pdf", out)
+        # The flagship's own next step -- `gaia chat` runs a different agent
+        # through a wheel this profile never installs.
+        self.assertIn("gaia-tui", out)
 
     # -- AC6: chat/npu profile, chat agent unavailable -> no headline --
 
