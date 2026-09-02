@@ -10,6 +10,7 @@ import {
   categoryLabel,
   installMethods,
   isAgent,
+  isNpmSidecar,
   isSkill,
   languageLabel,
   packageType,
@@ -100,6 +101,40 @@ describe('installMethods', () => {
     expect(methods[1].key).toBe('npm');
     expect(methods[1].command).toBe('npm i @amd-gaia/agent-email');
   });
+
+  it('offers a platform download plus the global CLI for a non-agent with an npm package', () => {
+    const methods = installMethods(entry({ id: 'agent-ui', type: 'app', npm_package: '@amd-gaia/agent-ui' }));
+    expect(methods.map((m) => m.key)).toEqual(['download', 'npm']);
+    expect(methods[1].command).toBe('npm install -g @amd-gaia/agent-ui');
+  });
+});
+
+// The packaging text has to describe the entry's own install path. An app or
+// component that ships an npm CLI was calling itself a "frozen sidecar" — an
+// agent-lane word its own install command never offers (#3298).
+describe('isNpmSidecar — the packaging text matches the commands', () => {
+  it('recognises the npm agent lane', () => {
+    expect(isNpmSidecar(entry({ type: 'agent', npm_package: '@amd-gaia/agent-email' }))).toBe(true);
+    expect(isNpmSidecar(entry({ type: undefined, npm_package: '@amd-gaia/agent-email' }))).toBe(true);
+  });
+
+  it.each(['app', 'component'] as const)(
+    'is false for a %s with an npm package — it installs as a global CLI',
+    (type) => {
+      expect(isNpmSidecar(entry({ type, npm_package: '@amd-gaia/agent-ui' }))).toBe(false);
+    },
+  );
+
+  it('is false for a skill with an npm package — its card shows no npm command', () => {
+    expect(isNpmSidecar(entry({ type: 'skill', npm_package: 'gaia-skill' }))).toBe(false);
+  });
+
+  it.each(['agent', 'app', 'component', 'skill', undefined] as const)(
+    'is false for a %s with no npm package',
+    (type) => {
+      expect(isNpmSidecar(entry({ type }))).toBe(false);
+    },
+  );
 });
 
 describe('display labels', () => {
