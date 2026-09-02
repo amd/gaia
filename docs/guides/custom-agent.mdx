@@ -300,7 +300,7 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     `RAGToolsMixin` and `FileSearchToolsMixin` read state off the host agent —
     `self.rag`, `self.indexed_files`, `self.max_chunks`, `self.current_session`,
     `self.session_manager` — that nothing sets by default, so the agent must wire
-    it up itself (see [the RAG tools mixin contract](/docs/spec/rag-tools-mixin)
+    it up itself (see [the RAG tools mixin contract](/spec/rag-tools-mixin)
     for what each attribute is for). Pass `documents` pointing at wherever your
     documents actually live; the example never widens access beyond that.
 
@@ -325,15 +325,16 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
             "What does the documentation say about...?",
         ]
 
-        def __init__(self, documents: Optional[List[str]] = None):
+        def __init__(self, documents: Optional[List[str]] = None, **kwargs):
             # RAGToolsMixin reads this state off the host agent; set it here,
-            # before super().__init__() runs _register_tools().
+            # before super().__init__() runs _register_tools(). **kwargs
+            # forwards everything else Agent.__init__ accepts (model_id, etc).
             self.rag = RAGSDK(RAGConfig(allowed_paths=documents))
             self.indexed_files = set()
             self.max_chunks = 5
             self.current_session = None
             self.session_manager = None
-            super().__init__()
+            super().__init__(**kwargs)
 
         def _get_system_prompt(self) -> str:
             return (
@@ -375,11 +376,12 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
         AGENT_NAME = "Code Review Agent"
         AGENT_DESCRIPTION = "Reviews code and runs linters"
 
-        def __init__(self, documents: Optional[List[str]] = None):
+        def __init__(self, documents: Optional[List[str]] = None, **kwargs):
             # FileIOToolsMixin reads this state off the host agent; set it
-            # here, before super().__init__() runs _register_tools().
+            # here, before super().__init__() runs _register_tools(). **kwargs
+            # forwards everything else Agent.__init__ accepts (model_id, etc).
             self.path_validator = PathValidator(documents)
-            super().__init__()
+            super().__init__(**kwargs)
 
         def _get_system_prompt(self) -> str:
             return (
