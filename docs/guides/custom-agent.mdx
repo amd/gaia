@@ -297,12 +297,22 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
   </Accordion>
 
   <Accordion title="Research Agent — RAG + file search">
+    `RAGToolsMixin` and `FileSearchToolsMixin` read state off the host agent —
+    `self.rag`, `self.indexed_files`, `self.max_chunks`, `self.current_session`,
+    `self.session_manager` — that nothing sets by default, so the agent must wire
+    it up itself (see [the RAG tools mixin contract](/spec/rag-tools-mixin)
+    for what each attribute is for). Pass `documents` pointing at wherever your
+    documents actually live; the example never widens access beyond that.
+
     ```python
+    from typing import List, Optional
+
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
+    from gaia.rag.sdk import RAGConfig, RAGSDK
 
 
     class ResearchAgent(Agent, RAGToolsMixin, FileSearchToolsMixin):
@@ -314,6 +324,17 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
             "Find files related to...",
             "What does the documentation say about...?",
         ]
+
+        def __init__(self, documents: Optional[List[str]] = None, **kwargs):
+            # RAGToolsMixin reads this state off the host agent; set it here,
+            # before super().__init__() runs _register_tools(). **kwargs
+            # forwards everything else Agent.__init__ accepts (model_id, etc).
+            self.rag = RAGSDK(RAGConfig(allowed_paths=documents))
+            self.indexed_files = set()
+            self.max_chunks = 5
+            self.current_session = None
+            self.session_manager = None
+            super().__init__(**kwargs)
 
         def _get_system_prompt(self) -> str:
             return (
@@ -333,18 +354,34 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
   </Accordion>
 
   <Accordion title="Code Review Agent — shell + file I/O">
+    `FileIOToolsMixin` reads `self.path_validator` off the host agent, which
+    nothing sets by default, so the agent wires it up itself. Pass `documents`
+    pointing at wherever the code to review actually lives — an unset
+    `PathValidator` only allows the current directory, never widen it to a
+    filesystem root or the home directory.
+
     ```python
+    from typing import List, Optional
+
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.agents.tools.shell_tools import ShellToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+    from gaia.security import PathValidator
 
 
     class CodeReviewAgent(Agent, FileIOToolsMixin, ShellToolsMixin):
         AGENT_ID = "code-review-agent"
         AGENT_NAME = "Code Review Agent"
         AGENT_DESCRIPTION = "Reviews code and runs linters"
+
+        def __init__(self, documents: Optional[List[str]] = None, **kwargs):
+            # FileIOToolsMixin reads this state off the host agent; set it
+            # here, before super().__init__() runs _register_tools(). **kwargs
+            # forwards everything else Agent.__init__ accepts (model_id, etc).
+            self.path_validator = PathValidator(documents)
+            super().__init__(**kwargs)
 
         def _get_system_prompt(self) -> str:
             return (
@@ -363,6 +400,35 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     ```
   </Accordion>
 </AccordionGroup>
+
+### Why a custom RAG agent can't see the Document Library
+
+A custom agent's `documents` list only ever contains what the *caller* passes
+in — not the Agent UI's Document Library. If you index a folder of PDFs
+through the Library panel, then run a custom agent like `ResearchAgent`
+above with no `documents` argument, `query_documents` will honestly report
+`"No documents are currently indexed"` even though the Library shows them.
+That's expected, not a bug — here's why.
+
+The Agent UI passes each conversation only the documents explicitly attached
+to it (internally, the `rag_documents` list), never the whole Library. This
+is deliberate: earlier versions exposed every library document to every
+agent, which meant one session's documents could leak into an unrelated
+session's answers. If a session has no documents attached, `rag_documents`
+comes through empty — not the library — so you have to index what you want
+your custom agent to see.
+
+There's also no persistent, shared vector index an agent can just attach to.
+The Document Library is file metadata plus files on disk; it caches
+*extracted text* per file so re-indexing skips redundant parsing, but the
+FAISS index itself is built in memory, per agent instance, from whatever
+paths that instance was constructed with — nothing is written to or read
+from disk as a vector index, and nothing carries over between agents.
+
+The flow that works: call `index_document` or `index_directory` (both from
+`RAGToolsMixin`) once your agent is constructed, then query. That's the same
+index-then-query sequence the built-in agents use — there's no shortcut that
+skips indexing.
 
 ---
 
