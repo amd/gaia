@@ -435,7 +435,8 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string, success bool) {
 	switch {
 	case msg.TimedOut:
-		return "denied (30s timeout — no response)", false
+		return "denied (" + components.HumanTimeout(msg.Timeout) +
+			" timeout — no response)", false
 	case msg.Always:
 		return "approved — and '" + msg.AlwaysScope + "' will not ask again this session", true
 	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):

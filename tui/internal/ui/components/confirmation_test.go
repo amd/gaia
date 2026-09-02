@@ -251,9 +251,9 @@ func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
 	}
 }
 
-// A LIVE prompt offers all three outcomes and does not run a countdown under
-// the person reading it. This is the defect the whole change exists for: a
-// real question that silently answered itself after 30s.
+// A LIVE prompt offers all three outcomes and runs the long clock, not the
+// short one. This is the defect the whole change exists for: a real question
+// that silently answered itself after 30s.
 func TestLiveConfirmationOffersAlwaysAndABoundedClock(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command",
 		`Run 'run_shell_command' with command="pwd"?`, "").
@@ -280,8 +280,10 @@ func TestLiveConfirmationOffersAlwaysAndABoundedClock(t *testing.T) {
 	if !m.Deliverable() {
 		t.Error("a live prompt must be deliverable")
 	}
-	if !m.ExpiresUnanswered() {
-		t.Error("every prompt must be bounded — unbounded is a hang with no way out")
+	// Every prompt is bounded — unbounded is a hang with no way out — so the
+	// live one differs only in how long it waits.
+	if m.timeout() != DeliverableConfirmationTimeout {
+		t.Errorf("live clock = %v, want %v", m.timeout(), DeliverableConfirmationTimeout)
 	}
 }
 

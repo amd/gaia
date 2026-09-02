@@ -193,11 +193,6 @@ const DeliverableConfirmationTimeout = 10 * time.Minute
 // told apart from the one it was started for.
 type ConfirmationTimeoutMsg struct{ RunID string }
 
-// StartConfirmationTimeout schedules the auto-deny tick for one confirmation.
-func StartConfirmationTimeout(runID string) tea.Cmd {
-	return startConfirmationTimeoutIn(runID, ConfirmationTimeout)
-}
-
 func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
 	return tea.Tick(after, func(time.Time) tea.Msg {
 		return ConfirmationTimeoutMsg{RunID: runID}
@@ -244,6 +239,11 @@ type ConfirmationDecidedMsg struct {
 	// an explicit 'n'/Esc, so the caller can show the distinct warning the
 	// issue's acceptance criteria require.
 	TimedOut bool
+	// Timeout is the clock this prompt was actually running, so a caller
+	// naming it in its own copy cannot drift from the modal's. Deriving it
+	// from Deliverable instead is what let the transcript go on saying "30s"
+	// after a live prompt started waiting ten minutes.
+	Timeout time.Duration
 	// Deliverable is whether the transport this decision came from can
 	// actually carry it back to the agent. False means the modal recorded
 	// intent only.
@@ -318,14 +318,6 @@ func (m ConfirmationModel) Pending() bool       { return m.state == Confirmation
 // Deliverable reports whether answering this prompt actually reaches the agent.
 func (m ConfirmationModel) Deliverable() bool { return m.deliverable }
 
-// ExpiresUnanswered reports whether this confirmation auto-denies.
-//
-// Always true now. A deliverable prompt used to answer false — wait for the
-// human, however long — which is right until the human never sees the prompt,
-// and then the turn hangs with no way to end it but Esc. Both kinds expire;
-// they differ only in how long they wait (see TimeoutCmd).
-func (m ConfirmationModel) ExpiresUnanswered() bool { return true }
-
 // confirmationBorderCols is how many columns the rounded border itself adds
 // (1 left + 1 right) on top of the style's Width — which lipgloss treats as
 // the padded-content box, border excluded. Left uncorrected, a modal asked
@@ -384,12 +376,14 @@ func (m ConfirmationModel) allowAlways() bool {
 	return m.deliverable && m.alwaysScope != ""
 }
 
-// ResolveTimeout applies the auto-deny, but only if this confirmation can
-// expire at all, is still pending, and msg was started for THIS run — a stale
-// timer for an already-resolved or superseded confirmation must not fire a
-// second decision.
+// ResolveTimeout applies the auto-deny, but only if this confirmation is still
+// pending and msg was started for THIS run — a stale timer for an
+// already-resolved or superseded confirmation must not fire a second decision.
+//
+// Every confirmation expires; deliverability sets how long, not whether (see
+// TimeoutCmd). A prompt that waited forever was a turn with no way to end.
 func (m ConfirmationModel) ResolveTimeout(msg ConfirmationTimeoutMsg) (ConfirmationModel, tea.Cmd) {
-	if !m.ExpiresUnanswered() || m.state != ConfirmationPending || msg.RunID != m.runID {
+	if m.state != ConfirmationPending || msg.RunID != m.runID {
 		return m, nil
 	}
 	return m.decide(ConfirmationDenied, true)
@@ -410,6 +404,7 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 		Always:      always,
 		AlwaysScope: m.alwaysScope,
 		TimedOut:    timedOut,
+		Timeout:     m.timeout(),
 		Deliverable: m.deliverable,
 	}
 	return m, func() tea.Msg { return decided }
@@ -469,7 +464,7 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 		return confirmationNoStyle.Render("denied")
 	case ConfirmationTimedOut:
 		return confirmationWarnStyle.Render(WrapText(
-			"timed out after "+humanTimeout(m.timeout())+
+			"timed out after "+HumanTimeout(m.timeout())+
 				" with no response — denied, and the agent was told so", inner))
 	default:
 		return confirmationHintStyle.Render(WrapText(m.keyHint(), inner))
@@ -490,11 +485,15 @@ func (m ConfirmationModel) keyHint() string {
 		base = "y run once · a allow `" + m.alwaysScope +
 			"` this session · n/esc deny"
 	}
-	return base + " · auto-denies in " + humanTimeout(m.timeout()) + " if you do nothing"
+	return base + " · auto-denies in " + HumanTimeout(m.timeout()) + " if you do nothing"
 }
 
-// humanTimeout spells a duration the way a person would say it out loud.
-func humanTimeout(d time.Duration) string {
+// HumanTimeout spells a duration the way a person would say it out loud.
+//
+// Exported so the transcript line the chat package writes and the modal's own
+// copy come from one renderer fed by one clock — two hand-written spellings is
+// how the transcript kept saying "30s" for a ten-minute wait.
+func HumanTimeout(d time.Duration) string {
 	if d < time.Minute {
 		return strconv.Itoa(int(d.Seconds())) + "s"
 	}
