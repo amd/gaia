@@ -122,7 +122,7 @@ Each tool call is bounded so a hung tool (e.g. a stuck connector or network requ
 export GAIA_AGENT_TOOL_TIMEOUT=300
 ```
 
-Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
 ### Confirming dangerous tools
 
