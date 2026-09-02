@@ -406,9 +406,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v3 schema.  Existing databases at v1 or v2
-        are migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 via
-        the procedures table's CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v4 schema.  Existing databases at v1–v3 are
+        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 and
+        v3→v4 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -447,10 +447,11 @@ class MemoryStore:
     def _migrate_schema_locked(self):
         """Run schema migrations if needed. Must hold self._lock.
 
-        Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and a new
-        CREATE TABLE (v2->v3), both of which SQLite applies without rewriting
-        existing rows.  Each step is guarded so a partial prior migration
-        re-runs cleanly, and the steps chain (a v1 database is taken to v3).
+        Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and new
+        CREATE TABLEs (v2->v3, v3->v4), both of which SQLite applies without
+        rewriting existing rows.  Each step is guarded so a partial prior
+        migration re-runs cleanly, and the steps chain (a v1 database is taken
+        to v4).
         """
         cursor = self._conn.execute(
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
@@ -2939,8 +2940,8 @@ class MemoryStore:
         retained forever but never applies.
 
         ``limit=None`` lifts the ceiling. Hitting the ceiling is logged rather
-        than passed off as a complete result — a truncated read would silently
-        drop the oldest deltas from a resolved skill.
+        than passed off as a complete result: the order is oldest-first, so
+        truncation drops the *newest* deltas — the ones that win resolution.
         """
         clauses: List[str] = []
         params: List[Any] = []
@@ -3042,11 +3043,16 @@ class MemoryStore:
 
         This is what keeps repeated learning flat: a revised correction to the
         same section retires the previous one instead of stacking with it.
+
+        Already-retired rows are left alone and return ``False``: overwriting an
+        existing ``superseded_by`` would rewrite the lineage the audit trail is
+        for.
         """
         with self._lock:
             try:
                 rowcount = self._conn.execute(
-                    "UPDATE skill_deltas SET superseded_by = ? WHERE id = ?",
+                    "UPDATE skill_deltas SET superseded_by = ? "
+                    "WHERE id = ? AND superseded_by IS NULL",
                     (superseded_by, delta_id),
                 ).rowcount
                 self._conn.commit()
@@ -3055,17 +3061,40 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def archive_delta(self, delta_id: str) -> bool:
-        """Retire a delta without a replacement (``gaia skill revert``).
+    def archive_delta(
+        self,
+        delta_id: str,
+        base_name: str | None = None,
+        scope: str | None = None,
+    ) -> bool:
+        """Retire a delta without a replacement (``gaia skill deltas --revert``).
 
         Archive, never delete — the row stays inspectable. User-initiated
         *erasure* is a separate path and genuinely deletes; this is not it.
+
+        Pass *base_name* / *scope* to bind the id to the object the user named,
+        so an id belonging to another skill cannot be archived under it. Returns
+        ``False`` when nothing changed — an already-archived row included, so no
+        caller can print a receipt for a retirement that had already happened.
+
+        A superseded row is refused for the same reason: it already cannot
+        apply, and archiving it would only move it out of the views that list
+        it — so the receipt would point at nothing.
         """
+        clauses = ["id = ?", "status != 'archived'", "superseded_by IS NULL"]
+        params: List[Any] = [delta_id]
+        if base_name:
+            clauses.append("base_name = ?")
+            params.append(base_name)
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
         with self._lock:
             try:
                 rowcount = self._conn.execute(
-                    "UPDATE skill_deltas SET status = 'archived' WHERE id = ?",
-                    (delta_id,),
+                    "UPDATE skill_deltas SET status = 'archived' "
+                    f"WHERE {' AND '.join(clauses)}",
+                    params,
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0

@@ -134,7 +134,11 @@ def effective_skill_body(agent, skill) -> str:
         return base
 
     try:
-        from gaia.agents.base.skill_deltas import SkillDelta, resolve_skill_body
+        from gaia.agents.base.skill_deltas import (
+            STATUS_ACTIVE,
+            SkillDelta,
+            resolve_skill_body,
+        )
         from gaia.skills.sections import section_digest
 
         cache = getattr(agent, "_effective_skill_cache", None)
@@ -146,12 +150,13 @@ def effective_skill_body(agent, skill) -> str:
             return cache[key]
 
         store = agent._memory_store
-        # limit=None: a truncated read would drop the oldest deltas from the
-        # body the agent runs, with nothing to show it happened.
+        # limit=None: rows come back oldest-first, so a truncated read would
+        # drop the newest deltas — the ones that win — from the body the agent
+        # runs, with nothing to show it happened.
         rows = store.search_deltas(
             base_name=skill.name,
             scope=agent.learned_skill_scope(),
-            status="active",
+            status=STATUS_ACTIVE,
             limit=None,
         )
         resolved = resolve_skill_body(base, [SkillDelta.from_row(r) for r in rows])
@@ -2111,10 +2116,18 @@ Do NOT wrap conversational replies in JSON.
     def learned_skills_enabled(self) -> bool:
         """Whether the learned overlay participates in skill resolution.
 
-        ``False`` under ``--no-learned-skills``, with memory off, or in an
-        incognito session. Each of those must give a prompt byte-identical to a
-        build with no overlay at all.
+        ``False`` under ``--no-learned-skills`` or ``GAIA_NO_LEARNED_SKILLS``,
+        with memory off, or in an incognito session. Each of those must give a
+        prompt byte-identical to a build with no overlay at all.
+
+        The env var is what covers the agents a CLI flag cannot reach — the
+        flagship runs as a daemon sidecar and behind the UI server, and it is
+        the only agent that registers ``remember_skill_lesson``. Read at call
+        time, so it also holds for an agent constructed before it was set.
         """
+        raw = os.getenv("GAIA_NO_LEARNED_SKILLS")
+        if raw is not None and raw.strip().lower() in ("1", "true", "yes", "on"):
+            return False
         if not getattr(self, "_learned_skills_enabled", True):
             return False
         if getattr(self, "_memory_store", None) is None:

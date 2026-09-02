@@ -530,3 +530,266 @@ def test_pending_shows_staged_changes_the_default_view_hides(run, store, skill_b
     assert rc == 0
     assert delta_id in out
     assert "awaiting approval" in out
+
+
+# ----------------------------------------------------------------------
+# Consent-surface regressions
+#
+# Every test below reproduced a real defect before its fix. They are grouped
+# because they share one failure mode: the command printed a success receipt
+# for something it had not done, which is the one thing a consent surface may
+# never do.
+# ----------------------------------------------------------------------
+
+OTHER_SKILL = "someone-elses-skill"
+
+
+def _seed_foreign(store: MemoryStore, body: str) -> str:
+    """One active delta belonging to a DIFFERENT skill."""
+    delta_id = store.put_delta(
+        base_name=OTHER_SKILL,
+        scope=SCOPE,
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest(body, "procedure"),
+        payload={"body": NEW_PROCEDURE},
+        provenance=dict(TRUSTED),
+    )
+    assert store.approve_delta(delta_id) is True
+    return delta_id
+
+
+def test_revert_cannot_reach_another_skills_change(run, store, skill_body):
+    """`--revert <id>` must be bound to the skill the user named."""
+    foreign = _seed_foreign(store, skill_body)
+
+    rc, out, err = run("--revert", foreign)
+
+    assert rc == 2, "reverting another skill's id must fail, not succeed"
+    assert out == ""
+    assert "another skill" in err
+    assert _row(store, foreign)["status"] == "active", "the other skill was touched"
+
+
+def test_revert_cannot_reach_another_scopes_change(run, store, skill_body):
+    """--scope narrows --revert too, or one agent can undo another's learning."""
+    theirs = _seed(store, skill_body, scope=OTHER_SCOPE, approve=True)
+
+    rc, _, err = run("--scope", SCOPE, "--revert", theirs)
+
+    assert rc == 2
+    assert _row(store, theirs)["status"] == "active"
+    assert SCOPE in err
+
+
+def test_a_reverted_change_is_listed_by_archived(run, store, skill_body):
+    """ "Kept for inspection" has to mean some command actually lists it."""
+    delta_id = _seed(store, skill_body, approve=True)
+    rc, out, _ = run("--scope", SCOPE, "--revert", delta_id)
+    assert rc == 0
+    assert "--archived" in out, "the receipt must name where the row went"
+
+    rc, out, _ = run("--scope", SCOPE, "--archived")
+
+    assert rc == 0
+    assert delta_id in out
+    assert "archived" in out
+    # ...and it is gone from the view of what the agent runs.
+    assert delta_id not in run("--scope", SCOPE)[1]
+
+
+def test_reverting_twice_does_not_report_a_second_success(run, store, skill_body):
+    delta_id = _seed(store, skill_body, approve=True)
+    assert run("--scope", SCOPE, "--revert", delta_id)[0] == 0
+
+    rc, out, err = run("--scope", SCOPE, "--revert", delta_id)
+
+    assert rc == 2, "an already-reverted change must not report a fresh revert"
+    assert out == ""
+    assert "already be reverted" in err
+
+
+def test_two_actions_at_once_is_refused_not_silently_dropped(run, store, skill_body):
+    """`--approve X --revert Y` used to run the first and exit 0."""
+    staged = _seed(store, skill_body)
+    active = _seed(
+        store, skill_body, section="setup", payload={"body": "## Setup\n\nx"}
+    )
+    store.approve_delta(active)
+
+    with pytest.raises(SystemExit) as exc:
+        run("--scope", SCOPE, "--approve", staged, "--revert", active)
+
+    assert exc.value.code == 2
+    assert _row(store, staged)["status"] == "staged", "nothing may have happened"
+    assert _row(store, active)["status"] == "active"
+
+
+def test_pending_diff_shows_what_approving_would_actually_give(run, store, skill_body):
+    """The consent diff must include the deltas already live, not just the staged one."""
+    _seed(
+        store,
+        skill_body,
+        kind=KIND_REPLACE_SNIPPET,
+        section="setup",
+        payload={"old": "Authenticate once", "new": "Authenticate with a token"},
+        approve=True,
+    )
+    _seed(store, skill_body)  # staged replacement of `procedure`
+
+    rc, out, _ = run("--scope", SCOPE, "--pending", "--diff")
+
+    assert rc == 0
+    assert (
+        "Authenticate with a token" in out
+    ), "the live change is missing from the diff"
+    assert "Pull what landed on you" in out, "the staged change is missing"
+
+
+def test_a_reason_cannot_repaint_the_terminal(run, store, skill_body):
+    """The `why` line is model-authored and is read to make the approval call."""
+    delta_id = store.put_delta(
+        base_name=SKILL_NAME,
+        scope=SCOPE,
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest(skill_body, "procedure"),
+        payload={"body": NEW_PROCEDURE},
+        provenance={
+            "source": "user_instruction",
+            "reason": f"harmless{chr(27)}[2J{chr(27)}[H  APPROVED BY AMD",
+        },
+    )
+    assert store.approve_delta(delta_id) is True
+
+    rc, out, _ = run("--scope", SCOPE)
+
+    assert rc == 0
+    assert chr(27) not in out, "an escape sequence reached the terminal"
+    assert r"\x1b" in out, "the escape should be shown, not silently dropped"
+    assert "APPROVED BY AMD" in out, "the text itself must still be readable"
+
+
+def test_reset_is_confined_to_the_named_skill(run, store, skill_body):
+    foreign = _seed_foreign(store, skill_body)
+    mine = _seed(store, skill_body, approve=True)
+
+    rc, _, _ = run("--reset")
+
+    assert rc == 0
+    assert _row(store, mine)["status"] == "archived"
+    assert _row(store, foreign)["status"] == "active", "--reset crossed skills"
+
+
+def test_the_resolver_survives_a_corrupted_payload(store, skill_body):
+    """A hand-edited row must not take the skills block down with a traceback."""
+    from gaia.agents.base.skill_deltas import SkillDelta, resolve_skill_body
+
+    broken = SkillDelta(
+        id="d-broken",
+        base_name=SKILL_NAME,
+        scope=SCOPE,
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest(skill_body, "procedure"),
+        payload=["not", "an", "object"],
+        provenance=dict(TRUSTED),
+        status="active",
+    )
+
+    resolved = resolve_skill_body(skill_body, [broken])
+
+    assert resolved.body == skill_body, "the authored text must stand"
+    assert [n.outcome for n in resolved.notes] == ["malformed_payload"]
+
+
+def test_approving_a_delta_anchored_to_changed_text_is_refused(run, store, skill_body):
+    """A stale anchor resolves to "authored text kept" — approving is a no-op.
+
+    This is what actually goes wrong when the command resolves a different copy
+    of the skill than the agent runs, and it is detectable directly, without
+    guessing from which root each side loaded.
+    """
+    delta_id = _seed(store, skill_body, digest="sha256:not-the-current-section")
+
+    rc, out, err = run("--scope", SCOPE, "--approve", delta_id)
+
+    assert rc == 2
+    assert out == ""
+    assert "would change nothing" in err.replace("\n", " ").replace("  ", " ")
+    assert "procedure" in err
+    assert _row(store, delta_id)["status"] == "staged"
+
+
+def test_a_current_anchor_still_approves(run, store, skill_body):
+    """The stale-anchor gate must not block the ordinary case."""
+    delta_id = _seed(store, skill_body)
+
+    rc, _, err = run("--scope", SCOPE, "--approve", delta_id)
+
+    assert rc == 0, err
+    assert _row(store, delta_id)["status"] == "active"
+
+
+def test_an_inert_staged_delta_cannot_veto_drop_section(run, store, skill_body):
+    """A staged proposal is the model's; it must not block a human action."""
+    _seed(store, skill_body, digest="sha256:stale-and-never-approved")
+
+    rc, out, err = run("--scope", SCOPE, "--drop-section", "fork-this")
+
+    assert rc == 0, err
+    assert "Removed section" in out
+
+
+def test_the_pending_diff_shows_the_staged_text_winning(run, store, skill_body):
+    """Approving supersedes the active delta, so the preview must too."""
+    _seed(
+        store,
+        skill_body,
+        payload={"body": "## Procedure\n\nACTIVE-OLD"},
+        approve=True,
+    )
+    _seed(store, skill_body, payload={"body": "## Procedure\n\nSTAGED-WINS"})
+
+    rc, out, _ = run("--scope", SCOPE, "--pending", "--diff")
+
+    assert rc == 0
+    assert "STAGED-WINS" in out
+    assert "ACTIVE-OLD" not in out, "the delta approval would retire won the preview"
+
+
+def test_reverting_a_superseded_delta_is_refused(run, store, skill_body):
+    """--revert promises --archived lists it, and --archived hides superseded rows."""
+    old = _seed(store, skill_body, approve=True)
+    new = _seed(store, skill_body)
+    store.supersede_delta(old, new)
+
+    rc, out, err = run("--scope", SCOPE, "--revert", old)
+
+    assert rc == 2, "a row that already cannot apply must not report a fresh revert"
+    assert out == ""
+    assert _row(store, old)["status"] == "active"
+
+
+def test_the_cli_survives_a_corrupted_payload_on_every_path(run, store, skill_body):
+    """A hand-edited row must not hand the user a traceback."""
+    import json as _json
+    import sqlite3
+
+    delta_id = _seed(store, skill_body, approve=True)
+    conn = sqlite3.connect(store._db_path)
+    conn.execute(
+        "UPDATE skill_deltas SET payload = ? WHERE id = ?",
+        (_json.dumps(["not", "an", "object"]), delta_id),
+    )
+    conn.commit()
+    conn.close()
+
+    for argv in (
+        ("--scope", SCOPE),
+        ("--scope", SCOPE, "--diff"),
+        ("--scope", SCOPE, "--json"),
+    ):
+        rc, out, _ = run(*argv)
+        assert rc == 0, f"{argv} raised instead of reporting"
+        assert out, f"{argv} printed nothing"

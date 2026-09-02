@@ -12,13 +12,15 @@ Why the deltas are *substitutive*, not additive
 -----------------------------------------------
 The motivating case was a skill that did not fit: ``github-triage`` is written
 around a repository backlog, and the user wanted their own inbox. Closing that
-gap by hand grew the file 4,103 → 6,078 bytes — a 48% permanent prompt-tax on
-every turn, for a skill that was no better matched than before, just longer.
+gap by hand means appending the corrections under the text they contradict, so
+the skill grows on every turn, permanently, and still carries the procedure the
+user never runs beside the one they do.
 
-Appending learned prose reproduces that failure (measured: +36%). Replacing the
-section that does not fit does not (measured: −7%; −19% once a section the user
-never exercises is dropped). So the grammar here can **replace and remove**, and
-the only thing it can do additively is bounded by the budget below.
+``.perf/overlay_prefill.py`` measures both ways of closing that gap against the
+shipped skill: appending the same three lessons costs **+144 tok (+7.9%)**;
+replacing the sections they correct costs **−284 tok (−15.6%)**. So the grammar
+here can **replace and remove**, and the only thing it can do additively is
+bounded by the budget below.
 
 That also makes repeated learning safe. Corrections to the same section
 supersede one another instead of stacking, so N corrections cost what one costs:
@@ -230,6 +232,24 @@ def resolve_skill_body(
                 delta.kind,
             )
             continue
+        if not isinstance(delta.payload, dict):
+            # Only a hand-edited or corrupted row gets here; ``put_delta``
+            # always writes a dict. Skipping keeps the "never raises" contract
+            # true for the CLI, which reads this without a guard of its own.
+            notes.append(
+                ResolutionNote(
+                    delta.id,
+                    delta.anchor_section,
+                    "malformed_payload",
+                    f"payload is {type(delta.payload).__name__}, not an object; "
+                    "skipped",
+                )
+            )
+            logger.warning(
+                "[SkillDeltas] delta %s has a non-object payload — skipped",
+                delta.id,
+            )
+            continue
         if delta.anchor_section not in by_slug:
             notes.append(
                 ResolutionNote(
@@ -385,7 +405,14 @@ def validate_delta(
             "it arrived in."
         )
 
-    payload_size = sum(len(str(v)) for v in (delta.payload or {}).values())
+    if not isinstance(delta.payload, dict):
+        raise DeltaRefused(
+            f"delta payload is {type(delta.payload).__name__}, not an object. "
+            "Only a hand-edited or corrupted row reaches this; inspect it with "
+            "`gaia skill deltas <name> --json` and revert it."
+        )
+
+    payload_size = sum(len(str(v)) for v in delta.payload.values())
     if payload_size > MAX_PAYLOAD_CHARS:
         raise DeltaRefused(
             f"delta payload is {payload_size} chars, over the "
@@ -472,14 +499,18 @@ def supersession_key(delta: SkillDelta) -> tuple:
     Keyed on target, not content, so a *revised* correction to a section retires
     the earlier one instead of stacking with it. This is what keeps N
     corrections costing what one costs.
+
+    Tolerates a malformed payload rather than raising: a corrupted row must not
+    take down the command whose job is to show the user what to revert.
     """
     if delta.kind == KIND_REPLACE_SNIPPET:
+        payload = delta.payload if isinstance(delta.payload, dict) else {}
         return (
             delta.base_name,
             delta.scope,
             delta.anchor_section,
             delta.kind,
-            str((delta.payload or {}).get("old", "")),
+            str(payload.get("old", "")),
         )
     return (delta.base_name, delta.scope, delta.anchor_section, delta.kind)
 
@@ -493,7 +524,10 @@ def retire_staged_siblings(store: Any, delta: SkillDelta) -> List[str]:
     key = supersession_key(delta)
     retired: List[str] = []
     for row in store.search_deltas(
-        base_name=delta.base_name, scope=delta.scope, status=STATUS_STAGED
+        base_name=delta.base_name,
+        scope=delta.scope,
+        status=STATUS_STAGED,
+        limit=None,
     ):
         if row["id"] == delta.id:
             continue
@@ -545,7 +579,12 @@ def approve_delta(
     actives = [
         SkillDelta.from_row(r)
         for r in store.search_deltas(
-            base_name=candidate.base_name, scope=candidate.scope, status=STATUS_ACTIVE
+            base_name=candidate.base_name,
+            scope=candidate.scope,
+            status=STATUS_ACTIVE,
+            # limit=None: the ceiling is a property of the whole resolved skill,
+            # so a truncated read would validate against a body nobody runs.
+            limit=None,
         )
         if r["id"] != delta_id
     ]
