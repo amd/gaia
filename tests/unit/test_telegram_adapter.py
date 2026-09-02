@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -22,13 +22,14 @@ def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
 
     # Run in background mode so the function does not block; in CI the
     # python-telegram-bot runtime may not be available, so guard accordingly.
+    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
+    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
     adapter = run_telegram(
         token="fake-token-123", allowed_users={12345}, background=True
     )
     assert adapter.token == "fake-token-123"
     assert 12345 in adapter.allowed_users
-    # Application may be None if the telegram dependency is missing.
-    assert hasattr(adapter, "application")
+    assert adapter.application is not None
 
 
 @pytest.mark.asyncio

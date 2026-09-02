@@ -230,13 +230,19 @@ class TelegramAdapter:
                 filters,
             )
         except ImportError as e:  # pragma: no cover - dependency missing
-            # If running in background mode (tests or dry-run), allow import to be missing
             if background:
-                log.warning(
-                    "python-telegram-bot not installed; running in dry/background mode"
-                )
-                self.application = None
-                return
+                # The PID file is created before importing the optional
+                # dependency so supervisors can discover a real background
+                # process. Do not leave a false-positive PID behind when the
+                # process cannot start.
+                if pid_path:
+                    try:
+                        os.remove(pid_path)
+                    except OSError as cleanup_error:
+                        log.warning(
+                            "Failed to remove Telegram PID file after startup failure: %s",
+                            cleanup_error,
+                        )
             raise RuntimeError(
                 "python-telegram-bot is required for Telegram support"
             ) from e

@@ -1,8 +1,11 @@
+import builtins
 import os
 import sys
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -12,6 +15,8 @@ from gaia.messaging import telegram
 def test_background_writes_pid(mock_home, monkeypatch):
     # GAIA_TEST_MODE stops the adapter from starting a real polling loop.
     monkeypatch.setenv("GAIA_TEST_MODE", "1")
+    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
+    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
 
     # mock_home redirects "~" at a tmp dir, so the adapter's
     # expanduser("~/.gaia") pid file never overwrites a live adapter's real one.
@@ -46,3 +51,26 @@ def test_background_test_mode_does_not_start_threads(mock_home, monkeypatch):
     )
 
     assert adapter.application is not None
+
+
+def test_background_missing_dependency_fails_and_removes_pid(mock_home, monkeypatch):
+    """A missing optional dependency must not look like a running adapter."""
+    real_import = builtins.__import__
+
+    def fail_telegram_ext(name, *args, **kwargs):
+        if name == "telegram.ext":
+            raise ImportError("No module named telegram")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_telegram_ext)
+
+    with pytest.raises(
+        RuntimeError, match="python-telegram-bot is required for Telegram support"
+    ):
+        telegram.run_telegram(
+            token="fake-token-missing-dependency",
+            allowed_users=None,
+            background=True,
+        )
+
+    assert not (mock_home / ".gaia" / "telegram.pid").exists()
