@@ -101,6 +101,21 @@ jobs:
       - name: Build Electron app
         run: |
           npm ci
+          python3 - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          app = Path("${{ matrix.app.path }}")
+          dest_root = app / "node_modules"
+          dest_root.mkdir(parents=True, exist_ok=True)
+          deps = json.loads((app / "package.json").read_text()).get("dependencies", {})
+          for name in deps:
+              src = Path("node_modules") / name
+              dest = dest_root / name
+              if src.exists() and not dest.exists():
+                  shutil.copytree(src, dest, symlinks=True)
+          PY
           npm run --workspace="${{ matrix.app.name }}" make
         shell: bash
 
