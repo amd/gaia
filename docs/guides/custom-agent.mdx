@@ -401,6 +401,35 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
   </Accordion>
 </AccordionGroup>
 
+### Why a custom RAG agent can't see the Document Library
+
+A custom agent's `documents` list only ever contains what the *caller* passes
+in — not the Agent UI's Document Library. If you index a folder of PDFs
+through the Library panel, then run a custom agent like `ResearchAgent`
+above with no `documents` argument, `query_documents` will honestly report
+`"No documents are currently indexed"` even though the Library shows them.
+That's expected, not a bug — here's why.
+
+The Agent UI passes each conversation only the documents explicitly attached
+to it (internally, the `rag_documents` list), never the whole Library. This
+is deliberate: earlier versions exposed every library document to every
+agent, which meant one session's documents could leak into an unrelated
+session's answers. If a session has no documents attached, `rag_documents`
+comes through empty — not the library — so you have to index what you want
+your custom agent to see.
+
+There's also no persistent, shared vector index an agent can just attach to.
+The Document Library is file metadata plus files on disk; it caches
+*extracted text* per file so re-indexing skips redundant parsing, but the
+FAISS index itself is built in memory, per agent instance, from whatever
+paths that instance was constructed with — nothing is written to or read
+from disk as a vector index, and nothing carries over between agents.
+
+The flow that works: call `index_document` or `index_directory` (both from
+`RAGToolsMixin`) once your agent is constructed, then query. That's the same
+index-then-query sequence the built-in agents use — there's no shortcut that
+skips indexing.
+
 ---
 
 ## Troubleshooting
