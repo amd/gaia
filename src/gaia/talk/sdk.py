@@ -242,6 +242,14 @@ class TalkSDK:
 
             # Create voice processor that uses AgentSDK for responses
             async def voice_processor(text: str):
+                # Keep the documented voice command out of the conversation.
+                # The history belongs to TalkSDK's AgentSDK, not AudioClient's
+                # provider client, so handle it at this boundary.
+                if text.lower().strip().rstrip(".!?") == "restart":
+                    self.clear_history()
+                    print("Conversation history cleared.")
+                    return
+
                 # Call user callback if provided
                 if on_voice_input:
                     on_voice_input(text)
