@@ -446,9 +446,7 @@ class TestLoopbackAllowlist:
         with pytest.raises(ValueError, match="private/reserved"):
             client._assert_ip_allowed("10.0.0.1", "evil.internal")
 
-    def test_allowlisted_name_resolving_off_loopback_still_blocked(
-        self, monkeypatch
-    ):
+    def test_allowlisted_name_resolving_off_loopback_still_blocked(self, monkeypatch):
         """The allowlist keys on the *name*; the address still has to be
         loopback. A DNS rebind that points an allowlisted name at RFC1918 is
         the whole reason the connect-time pin exists."""
