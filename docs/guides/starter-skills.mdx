@@ -179,14 +179,14 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see
   [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
-- **Configure** —
+- **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
+  and it checks, installs, and signs in for you, showing you each command first —
+  see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
+  `gh` still owns its own auth; GAIA never sees the token. To do it by hand
+  instead, `gh auth login` then `gh auth status` works exactly as before.
 
-  ```bash
-  gh auth login       # gh owns its own auth — GAIA never sees the token
-  gh auth status
-  ```
-
-  If `gh` is not on PATH the skill refuses to load and names the install command.
+  If `gh` is not on PATH the skill refuses to load rather than answering from no
+  data — and the refusal now offers the setup rather than ending there.
   Reads run without a per-call approval prompt — loading the skill is the consent.
   The useful writes (`gh issue create|comment|edit`, `gh pr comment`,
   `gh label create|edit`) show you the exact command and wait for a yes, a no, or
@@ -238,9 +238,11 @@ gaia skill info gpu-restock-watch
 
 - **Permissions are declarations, and v1 only honors some of them.**
   `network:*` and `mcp:connect:<connector-id>` bridge to the connector model and
-  work today. `filesystem`, `shell`, `database`, `desktop`, and `env` need a
-  sandbox that has not shipped, so a skill declaring one is **refused at load**
-  rather than loaded unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
+  work today, and so does `shell:execute:<binary>` — that is the grant
+  `github-triage` uses. Everything else local — `filesystem`, `database`,
+  `desktop`, `env`, and a bare unscoped `shell:execute` — needs a sandbox that has
+  not shipped, so a skill declaring one is **refused at load** rather than loaded
+  unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).

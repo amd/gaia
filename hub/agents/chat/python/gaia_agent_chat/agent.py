@@ -42,6 +42,7 @@ from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navig
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     BrowserToolsMixin,
+    CliSetupToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -179,6 +180,7 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
@@ -449,9 +451,10 @@ class ChatAgent(
         # never register RAG tools and can't use this restore — never trigger
         # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
         # before evaluating it.
-        _uses_rag = "doc_rag" in get_profile_spec(
-            getattr(config, "prompt_profile", "full")
-        ).tool_groups
+        _uses_rag = (
+            "doc_rag"
+            in get_profile_spec(getattr(config, "prompt_profile", "full")).tool_groups
+        )
         if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
@@ -1293,11 +1296,16 @@ No documents are currently indexed.
         if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
+            # Registered on every profile, this one included: "can you install
+            # the GitHub CLI?" is a conversational question, and the answer has
+            # to be yes before any skill needing that CLI can even load.
+            self.register_cli_setup_tools()
             self._register_external_tools_conditional()
             return
 
         # All other profiles get at least shell tools
         self.register_shell_tools()
+        self.register_cli_setup_tools()
         self.register_memory_tools()  # Persistent memory tools
 
         for _group_name in spec.tool_groups:

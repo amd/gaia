@@ -85,7 +85,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **67 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **70 tools** — the 58 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -96,22 +96,55 @@ The default construction registers **67 tools** — the 55 of the Chat agent's `
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
 | Images | `analyze_image`, `answer_question_about_image` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
+| CLI setup | `check_cli_setup`, `install_cli`, `sign_in_cli` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused — a package manager is not on that allowlist and cannot be talked onto it. Installing the specific CLIs a skill needs goes through [its own tools](#setting-up-a-cli-a-skill-needs) instead.
 
 **Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
 
+### Setting up a CLI a skill needs
+
+Some skills run a command-line tool rather than calling an API — [`github-triage`](/guides/starter-skills#github-triage) needs the GitHub CLI, which owns its own login. When that tool is missing or logged out, the agent sets it up for you instead of handing you instructions and stopping.
+
+Ask for it in plain words — *"set up the GitHub CLI"* — and three tools do the work:
+
+| Tool | What it does |
+|---|---|
+| `check_cli_setup` | Reads the CLI's own status. Changes nothing and never prompts. |
+| `install_cli` | Installs it with your package manager, after you approve the exact command. |
+| `sign_in_cli` | Starts the browser sign-in, after you approve the exact command. |
+
+The check reports one of five states, and only one of them means "sign in":
+
+| State | What it means | What fixes it |
+|---|---|---|
+| `ready` | Installed, signed in, permissions present. | Nothing. |
+| `missing` | Not on `PATH`. | Install it. |
+| `unauthenticated` | Installed, no working credential. | Sign in. |
+| `insufficient_scopes` | Signed in, but the token lacks a permission the skill needs. | Sign in again — the flow re-requests it. |
+| `env_token` | Signed in from a `GH_TOKEN` / `GITHUB_TOKEN` environment variable. **This works.** | Nothing, unless you *want* a browser login — then clear the variable first, because `gh` refuses to store its own credential while it is set. |
+
+**You approve every install and every sign-in, one at a time.** Both are in the confirmation set below, and neither offers an "always" — there is no way to pre-authorize them, and loading a skill does not exempt them.
+
+**Signing in is a handoff, not automation.** GAIA starts `gh auth login --web`, shows you the one-time code and the device URL, and waits. You enter the code in your browser; the agent cannot type it for you. Afterwards it re-checks and confirms the permissions actually arrived, rather than trusting the exit code. GAIA requests exactly the scopes the skill's commands can reach — `repo` and `read:org` for GitHub — and never sees the token.
+
+If any step can't finish — no code appears, the code expires, the browser sign-in fails — it says so and gives you the command to run by hand. It never reports a setup that didn't happen.
+
+<Note>
+  **Linux has no automated install, on purpose.** The GitHub CLI is not in the stock Debian or Fedora repositories, and the real install adds GitHub's apt/dnf repository — a root-level trust decision that is yours, not an agent's. On Linux you get [cli.github.com](https://cli.github.com) instead. Windows uses `winget`, macOS uses `brew`.
+</Note>
+
 ### Tools that need your approval
 
-Six tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Eight tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`install_cli`** and **`sign_in_cli`** (they install software and sign you in to an account), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory, and `check_cli_setup` — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, all six are refused rather than prompted.** That
+  **Over the sidecar's `/query` stream, all eight are refused rather than prompted.** That
   surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
