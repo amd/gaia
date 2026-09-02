@@ -113,6 +113,7 @@ def _probe_health(port: int) -> Optional[dict]:
         return None
 
 
+# Counts an unreaped zombie as alive, unlike gaia.daemon.instance.pid_alive — #3300.
 def _pid_alive(pid: int) -> bool:
     """True when *pid* refers to a live process."""
     import psutil
