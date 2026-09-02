@@ -70,15 +70,18 @@ func (c *Catalog) DiscoverBinaries() {
 		}
 	}
 
-	// Sentinels are read AFTER the binary lookup: a binary install becomes a
-	// daemon transport only after its executable has had a chance to resolve.
-	// Applying them first would make the loop above skip that lookup.
+	// Resolve paths before applying installed metadata so a completed binary
+	// install can still provide its executable path for diagnostics.
 	c.LoadInstalledAgents()
 }
 
 // SentinelName is the file gaia.hub.installer writes into an agent's install
 // directory when the install completes. Its presence IS the installed state.
 const SentinelName = ".installed"
+
+// ArtifactKindBinary is the sentinel's artifact_kind for a frozen executable.
+// It mirrors installer.ARTIFACT_KIND_BINARY and identifies daemon sidecars.
+const ArtifactKindBinary = "binary"
 
 // InstallRoot is the directory the daemon installs hub agents into. It mirrors
 // gaia.hub.installer.default_install_root() exactly — a client that looked
@@ -512,7 +515,7 @@ func (c *Catalog) applyInstalledRecord(id, version, artifactKind string) {
 	// subprocess agent such as the flagship; its seed transport is authoritative
 	// because the install record proves installation, not how the TUI must talk
 	// to that id. Unknown ids retain the daemon default set above.
-	if artifactKind == "binary" {
+	if artifactKind == ArtifactKindBinary {
 		a.Transport = TransportDaemon
 	}
 	a.InstalledVersion = version
