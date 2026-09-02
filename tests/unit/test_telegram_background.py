@@ -74,7 +74,7 @@ def test_background_missing_dependency_fails_and_removes_pid(mock_home, monkeypa
 
     with pytest.raises(
         RuntimeError,
-        match=r'python-telegram-bot is required for Telegram support.*gaia\[telegram\]',
+        match=r"python-telegram-bot is required for Telegram support.*gaia\[telegram\]",
     ):
         telegram.run_telegram(
             token="fake-token-missing-dependency",
@@ -93,7 +93,7 @@ def test_cli_reports_missing_dependency_without_traceback(monkeypatch, capsys):
 
     def fail_start(**_kwargs):
         raise RuntimeError(
-            'python-telegram-bot is required for Telegram support. '
+            "python-telegram-bot is required for Telegram support. "
             'Install it with: pip install "gaia[telegram]"'
         )
 
