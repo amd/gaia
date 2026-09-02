@@ -520,53 +520,48 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
     check is exercised against the OS rather than a mocked process table.
     """
     import os
+    import signal
     import subprocess
-    import sys
-
-    import psutil
 
     if os.name == "nt":
-        pytest.skip("POSIX stand-in for the frozen sidecar binary")
+        pytest.skip("POSIX shebang stand-in for the frozen sidecar binary")
 
     _write_sentinel(install_root, "email", "0.5.0")
-    # Stands in for the sidecar: a live process whose argv names a file INSIDE
-    # the install dir, which is what psutil reports and what the guard matches.
-    # Python rather than `#!/bin/sh` + `sleep`: dash FORKS sleep, so killing the
-    # shell below would leave the child sleeping for two more minutes — one
-    # leaked process per test run, per CI matrix job (#3228).
+    # Stands in for the frozen sidecar: an executable INSIDE the install dir,
+    # so the running process's argv[0] is that file (what psutil reports for
+    # the real email-agent binary).
     stray = install_root / "email" / "email-agent"
-    stray.write_text("import time\n\ntime.sleep(120)\n", encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, str(stray)])
+    stray.write_text("#!/bin/sh\nsleep 120\n", encoding="utf-8")
+    stray.chmod(0o755)
+    # Own session, so the whole tree can be killed: /bin/sh forks `sleep`
+    # rather than exec'ing it, and killing only the shell orphans the child.
+    proc = subprocess.Popen([str(stray)], start_new_session=True)
     try:
-        # Until the child has exec'd it still carries pytest's argv, and the
-        # guard cannot see it — wait rather than race the first request.
-        deadline = time.time() + 10
-        while str(stray) not in (psutil.Process(proc.pid).cmdline() or []):
-            assert time.time() < deadline, "stray process never exec'd"
-            time.sleep(0.05)
-
         fetcher = _RecordingFetcher(_hub_files())
         _patch_hub(monkeypatch, fetcher)
         client = _client(_FakeRegistry())
 
         # The registry reports a clean stop, yet the mutation is still refused.
         r = client.delete("/daemon/v1/agents/email", headers=_auth())
-        assert r.status_code == 500, r.text
+        assert r.status_code == 500
         assert str(proc.pid) in r.json()["detail"]
         assert (install_root / "email" / ".installed").exists()
 
         r = _post_install(client)
-        assert r.status_code == 500, r.text
+        assert r.status_code == 500
         assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
     finally:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait(timeout=10)
 
-    # With the stray gone, the same uninstall succeeds. Carry the body into the
-    # message: a bare `assert 500 == 200` names neither the pid nor the guard
-    # that refused, which is what made the CI failure in #3228 undiagnosable.
+    # With the stray gone, the same uninstall succeeds. Carry the refusal
+    # detail into the message: a bare `500 == 200` names neither the pid that
+    # blocked it nor which guard fired.
     final = client.delete("/daemon/v1/agents/email", headers=_auth())
-    assert final.status_code == 200, final.text
+    assert final.status_code == 200, final.json().get("detail")
 
 
 def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(

@@ -23,8 +23,8 @@ const hasTabs = methods.length > 1;
 ---
 
 <div data-install-methods>
-  {/* The switcher only makes sense with 2+ methods. A single-method agent (e.g.
-      an npm-only sidecar) just shows its command — no lone, inert tab button. */}
+  {/* The switcher only makes sense with 2+ methods. A single-method entry (e.g.
+      a skill) just shows its command — no lone, inert tab button. */}
   {hasTabs && (
     <div
       role="tablist"
