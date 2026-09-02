@@ -238,16 +238,18 @@ func (r Row) Outcome() status.Outcome {
 }
 
 // Stable row keys. KeyDaemon/KeySidecar are the daemon runner's; KeyBinary is
-// the local runner's. KeyLemonade and KeyModel are asked by both, over
+// the local runner's. KeyClaudeCredential is asked by the local runner only in
+// Claude mode. KeyLemonade and KeyModel are asked by both, over
 // different probes. KeyMailbox is email-specific and arrives through
 // Config.Extras.
 const (
-	KeyDaemon   = "daemon"
-	KeySidecar  = "sidecar"
-	KeyBinary   = "binary"
-	KeyLemonade = "lemonade"
-	KeyModel    = "model"
-	KeyMailbox  = "mailbox"
+	KeyDaemon           = "daemon"
+	KeySidecar          = "sidecar"
+	KeyBinary           = "binary"
+	KeyClaudeCredential = "claude-credential"
+	KeyLemonade         = "lemonade"
+	KeyModel            = "model"
+	KeyMailbox          = "mailbox"
 )
 
 // Report is the whole readiness answer: one row per precondition, in dependency
