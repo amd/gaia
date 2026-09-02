@@ -121,6 +121,21 @@ class TelegramAdapter:
                 media_note = f"[file indexed: {update.message.document.file_name}]"
             else:
                 media_note = f"[file uploaded: {update.message.document.file_name} - index failed]"
+        elif any(
+            getattr(update.message, media_type, None)
+            for media_type in (
+                "video",
+                "voice",
+                "audio",
+                "sticker",
+                "animation",
+                "video_note",
+            )
+        ):
+            await update.message.reply_text(
+                "Unsupported media type — I can handle photos and documents."
+            )
+            return
 
         user_input = f"{text} {media_note}".strip()
 

@@ -372,3 +372,44 @@ async def test_document_ingest_success_is_included_in_session_input(
         str(tmp_path / "gaia_telegram_document-2")
     )
     assert sent_inputs == ["Review this [file indexed: report.pdf]"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "media_type", ["video", "voice", "audio", "sticker", "animation", "video_note"]
+)
+async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock()
+    media = {
+        "video": None,
+        "voice": None,
+        "audio": None,
+        "sticker": None,
+        "animation": None,
+        "video_note": None,
+    }
+    media[media_type] = SimpleNamespace(file_id=f"{media_type}-1")
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="",
+            photo=[],
+            document=None,
+            reply_text=reply_text,
+            **media,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda user_id: (_ for _ in ()).throw(
+            AssertionError("unsupported media should not create a session")
+        ),
+    )
+
+    await adapter._handle_message(update, None)
+
+    reply_text.assert_awaited_once_with(
+        "Unsupported media type — I can handle photos and documents."
+    )
