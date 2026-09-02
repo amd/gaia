@@ -22,6 +22,7 @@ the ``doc`` profile is ``tests/unit/test_chat_tool_bundles.py``.
 from __future__ import annotations
 
 import contextlib
+import json
 
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -163,6 +164,43 @@ def test_full_profile_is_wired_to_the_full_config():
     assert cfg.core is FULL_CORE_TOOLS
     assert cfg.bundles is FULL_BUNDLES
     assert cfg.optional is FULL_OPTIONAL_TOOLS
+
+
+def test_trimming_actually_saves_most_of_the_tool_payload():
+    """The point of the whole change, pinned so a regression is visible.
+
+    Measured on the real renderers with tiktoken (cl100k) as a tokenizer-agnostic
+    proxy — Gemma's own counts differ, but the ratio is what this guards. Uses
+    the offline skeleton: constructing a live GaiaAgent preloads a model.
+    """
+    tiktoken = pytest.importorskip("tiktoken")
+    from gaia.eval.tool_cost import build_full_agent_skeleton
+
+    enc = tiktoken.get_encoding("cl100k_base")
+    agent = build_full_agent_skeleton()
+    registry = agent._tools_registry
+
+    def cost(names):
+        schemas = json.dumps(agent._build_openai_tool_schemas(filter_to=names))
+        return len(enc.encode(schemas)) + len(
+            enc.encode(agent._format_tools_for_prompt(filter_to=names))
+        )
+
+    everything = cost(None)
+    core_only = cost(sorted(n for n in FULL_CORE_TOOLS if n in registry))
+    # A saturated session: CORE plus enough dynamic slots to reach the cap.
+    cap = GaiaAgentConfig().dynamic_tools_max
+    saturated_names = sorted(registry)[:cap]
+    saturated = cost(saturated_names)
+
+    assert core_only < everything * 0.30, (
+        f"CORE-only tool prompt is {core_only} tokens against {everything} for "
+        "the whole registry — the always-on set has grown too expensive."
+    )
+    assert saturated < everything * 0.55, (
+        f"a capped-out session costs {saturated} tokens against {everything} "
+        f"unfiltered (cap={cap}). Either the cap or CORE has drifted up."
+    )
 
 
 def test_cap_leaves_room_for_two_whole_bundles():
