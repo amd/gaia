@@ -1211,6 +1211,12 @@ class EmailTriageAgent(
         return super().get_memory_dynamic_context()
 
     def process_query(self, user_input: str, *args, **kwargs):
+        # EmailTriageAgent.__mro__ puts Agent before MemoryMixin, so
+        # Agent.process_query never delegates into MemoryMixin.process_query
+        # (unlike ChatAgent) — report here or the construction-time report is
+        # this session's only chance to warn about a UI console swapped in later.
+        self.report_memory_unavailable()
+
         # Zero the batch-organize counter per turn so a long-lived instance
         # can't carry a prior turn's count into the batch-confirm threshold.
         # Only the batch counter resets here; session preferences persist.

@@ -47,6 +47,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.memory_store import (
     EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
@@ -837,8 +838,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             f"then restart the agent. {restart_note}"
         )
 
-    def report_memory_unavailable(self, console=None) -> bool:
-        """Report a real startup failure once through the current UI console."""
+    def report_memory_unavailable(self) -> bool:
+        """Report a real startup failure once through the current UI console.
+
+        A ``SilentConsole`` renders ``print_warning`` as a no-op, so reporting
+        through one must not spend the one-shot flag — the UI's non-streaming
+        path builds agents with a ``SilentConsole`` (``_chat_helpers.py``), and
+        the same cached agent later serves streaming turns with a real one.
+        """
         if getattr(self, "_memory_unavailable_warning_reported", False):
             return False
         if getattr(self, "_memory_unavailable_reason", None) not in (
@@ -846,8 +853,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
         ):
             return False
-        target = console if console is not None else getattr(self, "console", None)
-        if target is None:
+        target = getattr(self, "console", None)
+        if target is None or isinstance(target, SilentConsole):
             return False
         message = self.memory_unavailable_message()
         if not message:
