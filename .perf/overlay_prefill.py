@@ -1,9 +1,8 @@
 """Offline measurement of the ADAPTIVE-SKILLS overlay's prompt cost (#2674).
 
-**Contacts no model.** Derived from ``.perf/offline_prefill.py`` in the
-prefill-cost worktree (``claudia/task-25e62f25``) and uses its stubbing
-verbatim, so the two measurements are comparable: the embedder is faked so
-memory v2 initialises, and every HTTP verb is armed to raise.
+**Contacts no model.** Derived from ``.perf/offline_prefill.py`` and uses its
+stubbing verbatim, so the two measurements are comparable: the embedder is
+faked so memory v2 initialises, and every HTTP verb is armed to raise.
 
 That script measures the agent's *fixed* prefill with no skill loaded. This one
 measures the thing it cannot see: what a loaded skill costs, and what the
@@ -20,8 +19,8 @@ pins its baseline with. Absolute Gemma counts differ; deltas and ratios do not.
 The memory store is redirected to a throwaway file: a measurement must never
 write learned deltas into the developer's real ``~/.gaia/memory.db``.
 
-Usage (from the worktree root):
-    PYTHONPATH="<wt>\\src;<wt>\\hub\\agents\\chat\\python;<wt>\\hub\\agents\\gaia\\python" \
+Usage (from the repository root):
+    PYTHONPATH="src;hub/agents/chat/python;hub/agents/gaia/python" \
         python .perf/overlay_prefill.py
 """
 
@@ -89,18 +88,16 @@ def main() -> None:
     from gaia.agents.base.memory import MemoryMixin
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    with patch.object(MemoryMixin, "_embed_text", _fake_embed), patch.object(
-        MemoryMixin, "_embed_texts_batch", _fake_embed_batch, create=True
-    ), patch.object(
-        MemoryMixin, "_get_embedder", lambda self: object()
-    ), patch.object(
-        LemonadeManager, "ensure_ready", staticmethod(lambda *a, **k: None)
-    ), patch.object(
-        requests, "post", _no_network
-    ), patch.object(
-        requests, "get", _no_network
-    ), patch.object(
-        requests.Session, "request", _no_network
+    with (
+        patch.object(MemoryMixin, "_embed_text", _fake_embed),
+        patch.object(MemoryMixin, "_embed_texts_batch", _fake_embed_batch, create=True),
+        patch.object(MemoryMixin, "_get_embedder", lambda self: object()),
+        patch.object(
+            LemonadeManager, "ensure_ready", staticmethod(lambda *a, **k: None)
+        ),
+        patch.object(requests, "post", _no_network),
+        patch.object(requests, "get", _no_network),
+        patch.object(requests.Session, "request", _no_network),
     ):
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
@@ -129,7 +126,7 @@ def main() -> None:
         print("ADAPTIVE-SKILLS OVERLAY COST (offline, no model contacted)")
         print("=" * 72)
         print(f"skill                  : {SKILL} v{skill.version}")
-        print(f"memory v2 initialised  : True")
+        print(f"memory store           : {type(agent._memory_store).__name__}")
         print(f"scope                  : {agent.learned_skill_scope()}")
         print()
 
@@ -184,10 +181,14 @@ def main() -> None:
 
         print("--- skill body, resolved ---")
         print(f"authored base          : {base_t:>7,} tok")
-        print(f"overlay ON (replace)   : {over_t:>7,} tok   {over_t - base_t:+,} "
-              f"({100 * (over_t - base_t) / base_t:+.1f}%)")
-        print(f"append-only (rejected) : {app_t:>7,} tok   {app_t - base_t:+,} "
-              f"({100 * (app_t - base_t) / base_t:+.1f}%)")
+        print(
+            f"overlay ON (replace)   : {over_t:>7,} tok   {over_t - base_t:+,} "
+            f"({100 * (over_t - base_t) / base_t:+.1f}%)"
+        )
+        print(
+            f"append-only (rejected) : {app_t:>7,} tok   {app_t - base_t:+,} "
+            f"({100 * (app_t - base_t) / base_t:+.1f}%)"
+        )
         print()
 
         print("--- skills prompt fragment (what actually ships) ---")
@@ -199,8 +200,10 @@ def main() -> None:
         print("--- FULL system prompt ---")
         asp, osp = tok(authored_sp), tok(overlay_sp)
         print(f"authored               : {asp:>7,} tok")
-        print(f"overlay ON             : {osp:>7,} tok   {osp - asp:+,} "
-              f"({100 * (osp - asp) / asp:+.2f}%)")
+        print(
+            f"overlay ON             : {osp:>7,} tok   {osp - asp:+,} "
+            f"({100 * (osp - asp) / asp:+.2f}%)"
+        )
         print()
 
         print("--- off-switch floor (--no-learned-skills) ---")
@@ -211,8 +214,7 @@ def main() -> None:
 
         print()
         print("=" * 72)
-        print(f"OVERLAY COST PER TURN: {of - af:+,} tok "
-              f"(budget asked by task-25e62f25: <= +500)")
+        print(f"OVERLAY COST PER TURN: {of - af:+,} tok (budget: <= +500)")
         print("Paid only on turns where this skill is active; an inactive loaded")
         print("skill collapses to a menu line and its overlay costs nothing.")
         print("=" * 72)

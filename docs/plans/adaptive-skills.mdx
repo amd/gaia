@@ -1375,7 +1375,7 @@ settled above. What remains:
 | Local envelope | `NPU_CTX_SIZE = 32768`, `GPU_CTX_SIZE = 65536`, `DEFAULT_MODEL_NAME` | `llm/lemonade_client.py:174`, `:173`, `:124` | **Exists** |
 | Tier-0 precedent | `email_preferences` table + `set_priority_sender` | `hub/agents/email/python/gaia_agent_email/tools/preference_tools.py:63`, `:355` | **Exists** — the tier-0 worked example |
 | Empirical gate precedent | `TrustLedger(min_samples=5, threshold=0.85)`, `record_outcome` | `hub/agents/email/python/gaia_agent_email/trust.py:336`, `:358` | **Exists** — promotion shape to reuse |
-| Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | `skills/manager.py:162`, `agent.py:1338`, `:1776` | **Shipped** — this row previously said "absent on `main`"; that is stale |
+| Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | `skills/manager.py`, `agents/base/agent.py` | **Shipped** — this row previously said "absent on `main`"; that is stale |
 | Lazy skill bodies | `SkillLoader.select` collapses an off-topic loaded skill to a menu line per turn | `agents/base/skill_loader.py:62`, `:119` | **Shipped** (#2848) — an overlay is therefore only resident when its skill is |
 | Section parsing | splits a `SKILL.md` body into named, digest-anchored sections | `skills/sections.py` | **Shipped in v1** — deterministic slugs, CRLF-normalized digests, lossless round-trip |
 | Eval isolation | `GAIA_MEMORY_DISABLED` handling in `src/gaia/eval/` | — | **NOT FOUND** — pre-existing gap |
