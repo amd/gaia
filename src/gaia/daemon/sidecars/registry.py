@@ -15,8 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
-import psutil
-
+from gaia.daemon.instance import pid_alive
 from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
@@ -389,7 +388,10 @@ class SidecarRegistry:
             return
         pid = manager.pid
         manager.shutdown()
-        if pid is not None and psutil.pid_exists(pid):
+        # pid_alive, not pid_exists: a killed sidecar the OS has not reaped yet is
+        # a zombie, and pid_exists calls that alive — a 500 for a process that is
+        # already gone.
+        if pid is not None and pid_alive(pid):
             raise StopFailedError(
                 f"agent '{agent_id}' sidecar pid {pid} survived the "
                 "tree-kill and is still alive. Inspect the process and "

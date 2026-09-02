@@ -96,12 +96,57 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Build Electron app
         run: |
-          cd ${{ matrix.app.path }}
-          npm ci --prefix .
-          npm run make
+          npm ci
+          python3 - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          app = Path("${{ matrix.app.path }}")
+          app_nm = app / "node_modules"
+          root_nm = Path("node_modules")
+          app_nm.mkdir(parents=True, exist_ok=True)
+          prod_deps = set(json.loads((app / "package.json").read_text()).get("dependencies", {}))
+
+          def replace_dir(src: Path, dest: Path) -> None:
+              if dest.is_symlink() or dest.is_file():
+                  dest.unlink()
+              elif dest.exists():
+                  shutil.rmtree(dest)
+              shutil.copytree(src, dest, symlinks=False)
+
+          def link_missing(src: Path, dest: Path) -> None:
+              if dest.exists() or dest.is_symlink():
+                  return
+              dest.symlink_to(src.resolve())
+
+          for name in prod_deps:
+              src = root_nm / name
+              if src.exists():
+                  replace_dir(src, app_nm / name)
+
+          for item in root_nm.iterdir():
+              if item.name == ".bin" and item.is_dir():
+                  dest_bin = app_nm / ".bin"
+                  dest_bin.mkdir(exist_ok=True)
+                  for bin_item in item.iterdir():
+                      link_missing(bin_item, dest_bin / bin_item.name)
+                  continue
+              if item.name.startswith("@") and item.is_dir():
+                  scope = app_nm / item.name
+                  scope.mkdir(exist_ok=True)
+                  for sub in item.iterdir():
+                      link_missing(sub, scope / sub.name)
+                  continue
+              if item.name in prod_deps:
+                  continue
+              link_missing(item, app_nm / item.name)
+          PY
+          npm run --workspace="${{ matrix.app.path }}" make
         shell: bash
 
       - name: Get platform info
