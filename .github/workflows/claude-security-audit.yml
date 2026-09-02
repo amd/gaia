@@ -193,7 +193,7 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
+        uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

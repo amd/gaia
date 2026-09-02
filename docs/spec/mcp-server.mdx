@@ -1,6 +1,6 @@
 ---
 title: "MCP Server"
-description: "Server implementation for Model Context Protocol with FastMCP and SSE streaming"
+description: "Server implementation for Model Context Protocol with MCPServer and SSE streaming"
 icon: "network-wired"
 ---
 
@@ -11,7 +11,7 @@ icon: "network-wired"
 <Note>
 **Component:** AgentMCPServer - Generic MCP Server for MCPAgent Subclasses
 **Module:** `gaia.mcp.agent_mcp_server`
-**Protocol:** Model Context Protocol (MCP) via FastMCP
+**Protocol:** Model Context Protocol (MCP) via MCPServer (mcp 2.x)
 **Transport:** Streamable HTTP (SSE)
 </Note>
 
@@ -19,7 +19,7 @@ icon: "network-wired"
 
 ## Overview
 
-AgentMCPServer is a generic wrapper that exposes any MCPAgent subclass as an MCP server using the MCP Python SDK (FastMCP). It dynamically registers tools from the agent and handles parameter mapping between MCP clients (like VSCode) and agent implementations.
+AgentMCPServer is a generic wrapper that exposes any MCPAgent subclass as an MCP server using the MCP Python SDK's `MCPServer` class. It dynamically registers tools from the agent and handles parameter mapping between MCP clients (like VSCode) and agent implementations.
 
 **Key Features:**
 - Generic wrapper for any MCPAgent
@@ -53,7 +53,7 @@ AgentMCPServer is a generic wrapper that exposes any MCPAgent subclass as an MCP
    - Log parameter transformations
 
 4. **Server Management**
-   - Start FastMCP server with streamable-http
+   - Start MCPServer with streamable-http
    - Configure host/port
    - Display startup banner
    - Handle graceful shutdown
@@ -115,7 +115,7 @@ class AgentMCPServer:
         pass
 
     def _register_agent_tools(self):
-        """Dynamically register agent tools with FastMCP."""
+        """Dynamically register agent tools with MCPServer."""
         pass
 
     def _print_startup_info(self):
@@ -135,9 +135,8 @@ class AgentMCPServer:
 
 **Configuration:**
 ```python
-# Set via mcp.settings
-self.mcp.settings.host = "localhost"
-self.mcp.settings.port = 8080
+# mcp 2.x takes host and port as run() arguments, not settings
+self.mcp.run(transport="streamable-http", host="localhost", port=8080)
 ```
 
 ---
@@ -148,7 +147,7 @@ self.mcp.settings.port = 8080
 
 ```python
 def _register_agent_tools(self):
-    """Dynamically register agent tools with FastMCP."""
+    """Dynamically register agent tools with MCPServer."""
 
     tools = self.agent.get_mcp_tool_definitions()
 
@@ -311,7 +310,7 @@ def test_tool_registration():
     )
 
     # Check tool was registered
-    # FastMCP stores tools in internal registry
+    # MCPServer stores tools in internal registry
     tools = server.agent.get_mcp_tool_definitions()
     assert len(tools) > 0
     assert tools[0]["name"] == "greet"
@@ -357,8 +356,8 @@ curl -X POST http://localhost:8081/mcp/tools/greet \
 ## Dependencies
 
 ```python
-# FastMCP (MCP Python SDK)
-from mcp.server.fastmcp import FastMCP
+# MCP Python SDK (mcp 2.x)
+from mcp.server import MCPServer
 
 # GAIA
 from gaia.agents.base.mcp_agent import MCPAgent

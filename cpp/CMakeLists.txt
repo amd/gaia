@@ -58,7 +58,24 @@ option(GAIA_BUILD_BENCHMARKS "Build performance benchmarks" OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
+#
+# Fetched as pinned release tarballs, NOT git clones. CI caches build/_deps
+# wholesale, so anything git leaves behind is copied to every C++ job.
+#
+# Cloning cost 510 MB, 413 MB of it .git that no build step ever reads. Shallow
+# does not fix it: CMake pairs --depth 1 with --no-single-branch so the tag
+# stays reachable, which re-fetches every branch, and a depth-1 clone of
+# nlohmann/json still weighed 188 MB -- 57 tags, each dragging in its own tree,
+# including 53 MB and 23 MB blobs reachable from no ref we use. The five
+# tarballs extract to 38 MB with no .git at all.
+#
+# URL_HASH pins each archive by content, so a changed upstream artifact fails
+# configure loudly instead of silently building something else.
 # ---------------------------------------------------------------------------
+# Extracted-file timestamps: without this, CMake 3.24+ warns on every URL fetch.
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
 include(FetchContent)
 
 # nlohmann/json (public dependency -- json types in the API)
@@ -67,8 +84,8 @@ if(NOT nlohmann_json_FOUND)
     message(STATUS "nlohmann_json not found -- fetching via FetchContent")
     FetchContent_Declare(
         json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG        v3.11.3
+        URL      https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz
+        URL_HASH SHA256=0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406
     )
     # Only populate the headers; do not create install rules for the fetched target
     set(JSON_Install OFF CACHE BOOL "" FORCE)
@@ -86,8 +103,8 @@ if(NOT httplib_FOUND)
     message(STATUS "cpp-httplib not found -- fetching via FetchContent")
     FetchContent_Declare(
         httplib
-        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-        GIT_TAG        v0.15.3
+        URL      https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.15.3.tar.gz
+        URL_HASH SHA256=2121bbf38871bb2aafb5f7f2b9b94705366170909f434428352187cb0216124e
     )
     FetchContent_MakeAvailable(httplib)
 endif()
@@ -114,8 +131,8 @@ if(NOT yaml-cpp_FOUND)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
     FetchContent_Declare(
         yaml-cpp
-        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-        GIT_TAG        0.8.0
+        URL      https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz
+        URL_HASH SHA256=fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16
     )
     FetchContent_MakeAvailable(yaml-cpp)
     set(CMAKE_POLICY_VERSION_MINIMUM ${_GAIA_SAVE_POLICY_MIN})
@@ -143,8 +160,8 @@ if(GAIA_BUILD_TUI)
         set(BUILD_SHARED_LIBS OFF)
         FetchContent_Declare(
             ftxui
-            GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
-            GIT_TAG        v6.1.9
+            URL      https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v6.1.9.tar.gz
+            URL_HASH SHA256=45819c1e54914783d4a1ca5633885035d74146778a1f74e1213cdb7b76340e71
         )
         FetchContent_MakeAvailable(ftxui)
         set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL})
@@ -218,8 +235,8 @@ if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
         message(STATUS "GTest not found -- fetching via FetchContent")
         FetchContent_Declare(
             googletest
-            GIT_REPOSITORY https://github.com/google/googletest.git
-            GIT_TAG        v1.14.0
+            URL      https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+            URL_HASH SHA256=8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7
         )
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(googletest)
@@ -254,6 +271,8 @@ add_library(gaia_core
     src/json_event_handler.cpp
     src/chunking.cpp
     src/skill.cpp
+    src/skill_yaml.cpp
+    src/skill_sets.cpp
     src/database.cpp
 )
 
@@ -451,6 +470,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_json_event_handler.cpp
         tests/test_chunking.cpp
         tests/test_skill.cpp
+        tests/test_skill_sets.cpp
         tests/test_database.cpp
     )
 
@@ -474,11 +494,13 @@ if(GAIA_BUILD_TESTS)
 
     target_compile_definitions(tests_mock PRIVATE
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-        # The SKILL.md conformance corpus is shared with the Python runtime and
-        # lives at the repo root. test_skill.cpp discovers the skills from the
-        # directory, so new corpora (e.g. openclaw_skills/) are picked up
-        # automatically instead of needing a hardcoded list here.
+        # The SKILL.md corpora are shared with the Python runtime and live at
+        # the repo root. test_skill.cpp discovers them from disk: skills/ must
+        # conform, <vendor>_skills/ are third-party inputs that need not.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
+        # test_skill_sets.cpp parses cpp/agents/bash/gaia-agent.yaml to prove a
+        # real shipped manifest that declares no skills stays empty and falsy.
+        GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 

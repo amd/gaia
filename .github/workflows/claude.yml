@@ -145,10 +145,19 @@ permissions:
 
 jobs:
   # Auto-review new PRs (including forks)
+  #
+  # Dependabot is excluded: claude-code-action hard-fails on a bot actor unless the bot is
+  # allowlisted ("Workflow initiated by non-human actor"), so every Dependabot PR went red on
+  # a job that never reviewed anything. Allowlisting instead of skipping would spend a review
+  # on a generated lockfile diff; Dependency Review and Audit Dependencies already cover those.
+  #
+  # Gate on github.actor, not pull_request.user.login: the action rejects on who INITIATED the
+  # run, so a human pushing to a Dependabot branch still gets reviewed (verified on #3155-#3157).
   pr-review:
     if: |
       github.repository == 'amd/gaia' &&
       github.event_name == 'pull_request_target' &&
+      github.actor != 'dependabot[bot]' &&
       (github.event.action == 'opened' || github.event.action == 'reopened' ||
        github.event.action == 'ready_for_review' ||
        (github.event.action == 'labeled' &&
@@ -442,9 +451,11 @@ jobs:
   # of the silent lightweight pass. --max-turns is raised to 80 for that path (a ceiling, so
   # it costs nothing extra on ordinary re-reviews).
   pr-rereview:
+    # Dependabot excluded for the same reason as pr-review above.
     if: |
       github.repository == 'amd/gaia' &&
       github.event_name == 'pull_request_target' &&
+      github.actor != 'dependabot[bot]' &&
       github.event.action == 'synchronize' &&
       (github.event.pull_request.draft == false ||
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
@@ -1052,7 +1063,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
+        uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1527,7 +1538,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
+        uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
