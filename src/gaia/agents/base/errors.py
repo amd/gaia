@@ -30,6 +30,22 @@ class MissingHostAttributeError(RuntimeError):
     """A tool mixin's host object never bound an attribute the mixin requires."""
 
 
+def missing_host_attr_message(
+    host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
+) -> str:
+    """Build the message used for a missing required host attribute.
+
+    Shared so every code path that reports this condition — whether it
+    raises (``require_host_attr``) or returns a structured error (a tool
+    that reports rather than raising) — uses identical wording.
+    """
+    return (
+        f"{type(host).__name__} registers {mixin_name}'s tools but never "
+        f"binds self.{attr_name}. {hint} See {doc_anchor} for a worked "
+        "example."
+    )
+
+
 def require_host_attr(
     host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
 ) -> Any:
@@ -62,9 +78,7 @@ def require_host_attr(
         return getattr(host, attr_name)
     except AttributeError as e:
         raise MissingHostAttributeError(
-            f"{type(host).__name__} registers {mixin_name}'s tools but never "
-            f"binds self.{attr_name}. {hint} See {doc_anchor} for a worked "
-            "example."
+            missing_host_attr_message(host, attr_name, mixin_name, hint, doc_anchor)
         ) from e
 
 

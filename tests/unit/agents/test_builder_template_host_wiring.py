@@ -73,7 +73,7 @@ def test_every_known_tool_generates_a_constructible_agent(tmp_path):
     # exposes register_skill_library_tools(), not register_skills_tools()).
     # That naming mismatch is a pre-existing Builder generator gap, not a
     # host-attribute contract defect (nothing here reads state "nothing
-    # sets"), and is out of scope for this issue — tracked separately.
+    # sets"), and is out of scope for this issue — tracked in #3333.
     for tool_name in sorted(KNOWN_TOOLS.keys() - {"sd", "vlm", "skills"}):
         module = _generate_and_exec(tmp_path, tool_name, "ContractTestAgent")
 

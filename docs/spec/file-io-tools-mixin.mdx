@@ -45,19 +45,19 @@ sets it before calling `super().__init__()`, because `_register_tools()` runs
 inside that call. The Builder's scaffolding (`gaia.agents.builder.template`)
 does the same for any generated agent that includes the `file_io` tool.
 
-A host that forgets is refused rather than silently unconfined or crashed:
+A host that forgets is told what's missing instead of the tool silently
+skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
 
 - **Write-capable tools** (`write_python_file`, `edit_python_file`,
-  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`) deny
-  the operation outright — the target file is never created or modified —
-  instead of proceeding without a confinement check.
+  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`)
+  report the missing setup and don't touch the target file, instead of
+  writing without running the check that would otherwise have applied.
 - **Read tools** (`read_file`, `search_code`, `generate_diff`,
   `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
-  class, the missing attribute, and this section, instead of surfacing a
-  bare, unhelpful `AttributeError`.
+  class, the missing attribute, and this section.
 
 `self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
-`self.rag`, there is no "intentionally disabled" state for path confinement.
+`self.rag`, there is no "intentionally disabled" state here.
 
 ---
 

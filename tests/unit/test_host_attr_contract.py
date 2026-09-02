@@ -5,13 +5,13 @@ Tests for the host-attribute contract (issue #3316).
 
 Tool mixins (``RAGToolsMixin``, ``FileIOToolsMixin``) read state off the host
 agent that nothing sets for them. A host that forgets used to fail in one of
-two ways: a file-write tool silently skipped its confinement check and wrote
-unconfined, or a bare ``self.rag`` read raised an ``AttributeError`` an outer
-``except Exception`` swallowed into a misleading "temporarily unavailable"
-response. This module pins the fix: writes now deny instead of proceeding
-unconfined, and reads now raise a loud, actionable error naming the host
-class, the missing attribute, and how to fix it — instead of masking either
-failure.
+two inconsistent ways: a file-write tool silently skipped its own check and
+wrote anyway, or a bare ``self.rag`` read raised an ``AttributeError`` an
+outer ``except Exception`` swallowed into a misleading "temporarily
+unavailable" response. This module pins the fix: every one of these paths
+now reports the missing setup — writes report it instead of proceeding, and
+reads raise a loud, actionable error naming the host class, the missing
+attribute, and how to fix it — instead of masking the real cause.
 
 These use synthetic ``Agent`` + mixin subclasses (real ``Agent``, constructed
 with ``skip_lemonade=True`` to avoid touching Lemonade/the network), never a
@@ -99,7 +99,7 @@ def test_write_file_denies_when_path_validator_unbound(tmp_path):
     result = _get_tool("write_file")(file_path=str(target), content="hello")
 
     assert result["status"] == "error"
-    assert "path confinement" in result["error"]
+    assert "never binds self.path_validator" in result["error"]
     assert not target.exists()
 
 
@@ -123,7 +123,7 @@ def test_write_tools_deny_when_path_validator_unbound(
     result = _get_tool(tool_name)(file_path=str(target), **extra_kwargs)
 
     assert result["status"] == "error"
-    assert "path confinement" in result["error"]
+    assert "never binds self.path_validator" in result["error"]
     assert not target.exists()
 
 
@@ -138,7 +138,7 @@ def test_edit_tools_deny_when_path_validator_unbound_without_touching_file(tmp_p
     )
 
     assert result["status"] == "error"
-    assert "path confinement" in result["error"]
+    assert "never binds self.path_validator" in result["error"]
     assert target.read_text() == "original\n"  # unchanged
 
 

@@ -13,20 +13,11 @@ import difflib
 import os
 from typing import Any, Dict, Optional
 
-from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
-
-# File-write tools refuse to run rather than proceed unconfined when no
-# path_validator is bound to the host agent.
-UNCONFINED_WRITE_ERROR = (
-    "Write blocked: path confinement is unavailable on this agent (no "
-    "path_validator configured). Refusing to write without a security check. "
-    f"{_PATH_VALIDATOR_HINT} See {_PATH_VALIDATOR_DOC_ANCHOR} for a worked "
-    "example."
-)
 
 
 def _require_path_validator(host: Any) -> Any:
@@ -38,6 +29,25 @@ def _require_path_validator(host: Any) -> Any:
         _PATH_VALIDATOR_HINT,
         _PATH_VALIDATOR_DOC_ANCHOR,
     )
+
+
+def _missing_path_validator_write_error(host: Any) -> Dict[str, Any]:
+    """Structured error for a write tool whose host never bound path_validator.
+
+    Write tools report this instead of raising so a caller mid-loop gets a
+    normal tool result to react to, using the same message shape as every
+    other reporting path in this module.
+    """
+    return {
+        "status": "error",
+        "error": missing_host_attr_message(
+            host,
+            "path_validator",
+            "FileIOToolsMixin",
+            _PATH_VALIDATOR_HINT,
+            _PATH_VALIDATOR_DOC_ANCHOR,
+        ),
+    }
 
 
 class FileIOToolsMixin:
@@ -251,10 +261,10 @@ class FileIOToolsMixin:
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access (path, blocklist, size).
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 is_allowed, reason = path_validator.validate_write(
                     str(file_path), content_size=content_size
@@ -324,10 +334,10 @@ class FileIOToolsMixin:
             """
             try:
                 # Security: validate write access.
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 # Check blocklist
                 is_blocked, reason = path_validator.is_write_blocked(str(file_path))
@@ -615,10 +625,10 @@ class FileIOToolsMixin:
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access (path, blocklist, size).
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 is_allowed, reason = path_validator.validate_write(
                     str(file_path), content_size=content_size
@@ -699,10 +709,10 @@ class FileIOToolsMixin:
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access.
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 is_allowed, reason = path_validator.validate_write(
                     str(path), content_size=content_size
@@ -793,10 +803,10 @@ class FileIOToolsMixin:
                 path = path.resolve()
 
                 # Security: validate write access.
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 # Check blocklist (no overwrite prompt needed for edit)
                 is_blocked, reason = path_validator.is_write_blocked(str(path))
@@ -1016,10 +1026,10 @@ class FileIOToolsMixin:
             """
             try:
                 # Security: validate write access.
-                # Never proceed unconfined — deny when no validator is bound.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is None:
-                    return {"status": "error", "error": UNCONFINED_WRITE_ERROR}
+                    return _missing_path_validator_write_error(self)
 
                 # Check blocklist
                 is_blocked, reason = path_validator.is_write_blocked(str(file_path))
