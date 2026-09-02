@@ -219,6 +219,7 @@ func TestClaudeModeDoesNotLetADownLemonadeRefuseTheLaunch(t *testing.T) {
 
 func TestClaudeCredentialIsRequiredBeforeTheFirstMessage(t *testing.T) {
 	t.Setenv(claudeAPIKeyEnv, "")
+	t.Chdir(t.TempDir())
 
 	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
 		checkClaudeCredential(context.Background(), localCfg())
@@ -296,6 +297,7 @@ func TestClaudeCredentialRowOnlyAppearsInClaudeMode(t *testing.T) {
 func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) {
 	isolateHome(t)
 	t.Setenv(claudeAPIKeyEnv, "")
+	t.Chdir(t.TempDir())
 	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
 	stubGaiaInit(t, func() (string, error) {
 		t.Error("the model row was probed even though the Claude credential is missing")
