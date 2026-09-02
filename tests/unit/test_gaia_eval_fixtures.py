@@ -346,9 +346,16 @@ def test_signed_rss_digest_installs_cleanly_and_experimental_notes_refuses(
 
 
 @pytest.mark.parametrize(
-    "filename, required_keys",
+    "filename, required_keys, expected_enforce",
     [
-        ("quality_gate_thresholds.json", {"min_judged_pass_rate", "min_avg_score"}),
+        (
+            "quality_gate_thresholds.json",
+            {"min_judged_pass_rate", "min_avg_score"},
+            # Quality blocks, on deliberately loose absolute floors. Pinned
+            # per-manifest rather than "all report-only": that blanket is what
+            # let the docs and the job summary call a blocking gate advisory.
+            True,
+        ),
         (
             "perf_gate_thresholds.json",
             {
@@ -359,15 +366,21 @@ def test_signed_rss_digest_installs_cleanly_and_experimental_notes_refuses(
                 "max_llm_calls_per_turn",
                 "max_tool_calls_per_turn",
             },
+            # Perf stays report-only until the first runner baseline calibrates
+            # it — there is no measured basis for a perf bar yet.
+            False,
         ),
     ],
 )
-def test_gate_threshold_manifests_parse_and_ship_report_mode(filename, required_keys):
+def test_gate_threshold_manifests_parse_and_pin_their_enforce_mode(
+    filename, required_keys, expected_enforce
+):
     manifest = json.loads((FIXTURES / filename).read_text(encoding="utf-8"))
     assert required_keys <= set(manifest)
-    assert manifest["enforce"] is False, (
-        f"{filename} must ship enforce:false until the first runner baseline "
-        "is committed (flipping it is a data change, reviewed on its own)"
+    assert manifest["enforce"] is expected_enforce, (
+        f"{filename} changed its enforce mode. Flipping it is a data change "
+        "that decides whether a breach fails the build — review it on its own, "
+        "and update the docs and job-summary footer with it."
     )
     for key in required_keys:
         assert isinstance(manifest[key], (int, float)), f"{key} must be numeric"

@@ -15,8 +15,11 @@
 # this YAML):
 #   - tests/fixtures/gaia/quality_gate_thresholds.json  (judged_pass_rate / avg_score)
 #   - tests/fixtures/gaia/perf_gate_thresholds.json     (tokens / cache / latency / calls)
-# BOTH SHIP `enforce: false` (report mode) until the first committed runner
-# baseline calibrates the bars. What still fails the build on every trigger is
+# QUALITY SHIPS `enforce: true` on deliberately loose absolute floors, so a
+# breached quality bar fails the build. PERF SHIPS `enforce: false` until the
+# first committed runner baseline gives its bars a measured basis. Read each
+# manifest rather than assuming a shared mode — they differ on purpose.
+# What still fails the build on every trigger, whatever the mode, is
 # the class of things that mean the eval could not prove anything: a missing
 # ANTHROPIC_API_KEY, zero judged scenarios, a scenario with no measurement
 # (infra_error / timeout / budget_exceeded / errored / skipped), or a harness
@@ -669,9 +672,9 @@ jobs:
           # fail the build anyway.
           $global:LASTEXITCODE = 0
 
-      # The reporting half of report mode: every gate manifest ships
-      # enforce:false, so a breached bar is a GREEN step whose number lives
-      # only in the artifact. eval_summary.py republishes every verdict into
+      # The reporting half: on a manifest that ships enforce:false a breached
+      # bar is a GREEN step whose number lives only in the artifact, which
+      # nobody opens. eval_summary.py republishes every verdict into
       # the job summary, one ::warning:: per breach. `if: always()` so "no
       # gate report was produced" is stated out loud even when an earlier
       # step died.
