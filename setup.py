@@ -166,7 +166,7 @@ setup(
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
-            # The daemon's sidecar registry imports psutil at module scope and
+            # The daemon relies on psutil for every liveness check and
             # _check_daemon_deps refuses to start without it — declare it rather
             # than rely on accelerate pulling it in transitively.
             "psutil>=5.9.0",
