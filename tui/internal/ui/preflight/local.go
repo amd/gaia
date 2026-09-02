@@ -1,12 +1,14 @@
 package preflight
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,9 +125,76 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 
 // --- 1.5. the Claude credential --------------------------------------------
 
+// claudeCredentialConfigured mirrors the agent's credential sources that are
+// available before the child starts: an inherited process variable or a .env
+// file discoverable from the TUI's working directory. The subprocess inherits
+// that same working directory, so accepting a .env here cannot turn a launch
+// into a false pass that the child would reject.
+func claudeCredentialConfigured() bool {
+	if strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != "" {
+		return true
+	}
+
+	dir, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	for {
+		if dotenvHasNonEmptyValue(filepath.Join(dir, ".env"), claudeAPIKeyEnv) {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+}
+
+// dotenvHasNonEmptyValue reads only the named key. It is intentionally a
+// small presence check rather than a general dotenv loader: preflight must not
+// mutate the TUI environment or expose a credential in a report.
+func dotenvHasNonEmptyValue(path, key string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		if strings.TrimSpace(dotenvValue(value)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func dotenvValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			return unquoted
+		}
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
 func (l localRunner) checkClaudeCredential(_ context.Context, _ Config) Row {
 	row := Row{Key: KeyClaudeCredential}
-	if strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != "" {
+	if claudeCredentialConfigured() {
 		row.State = StateOK
 		row.Line = "set"
 		return row
@@ -136,7 +205,7 @@ func (l localRunner) checkClaudeCredential(_ context.Context, _ Config) Row {
 	row.Line = "not set"
 	row.Detail = "Claude needs an Anthropic credential before the first message."
 	row.Remedy = Remedy{
-		Action: "Set " + claudeAPIKeyEnv + " in your shell, then press r to re-check.",
+		Action: "Set " + claudeAPIKeyEnv + " (or put it in .env), then relaunch — this session cannot pick up a variable exported after it started.",
 		Where:  "https://docs.anthropic.com/en/api/getting-started",
 	}
 	// Keep the raw answer diagnostic but never include the value of the secret.

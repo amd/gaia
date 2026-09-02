@@ -232,13 +232,32 @@ func TestClaudeCredentialIsRequiredBeforeTheFirstMessage(t *testing.T) {
 	if row.Line != "not set" {
 		t.Errorf("line = %q, want not set", row.Line)
 	}
-	for _, text := range []string{claudeAPIKeyEnv, "first message", "press r"} {
+	for _, text := range []string{claudeAPIKeyEnv, "first message", ".env", "relaunch"} {
 		if !strings.Contains(row.Detail+row.Remedy.Action+row.Raw, text) {
 			t.Errorf("missing %q from credential guidance: %+v", text, row)
 		}
 	}
 	if strings.Contains(row.Detail+row.Remedy.Action+row.Raw, "sk-ant-") {
 		t.Error("credential guidance must not suggest or expose a token value")
+	}
+}
+
+func TestClaudeCredentialAcceptsTheWorkingDirectoryDotenv(t *testing.T) {
+	t.Setenv(claudeAPIKeyEnv, "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("# local fixture\nexport ANTHROPIC_API_KEY=sk-ant-from-dotenv\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateOK {
+		t.Fatalf("working-directory .env credential is %s, want ok: %+v", row.State.Word(), row)
+	}
+	if strings.Contains(row.Line+row.Detail+row.Remedy.Action+row.Raw, "sk-ant-from-dotenv") {
+		t.Error("dotenv credential was echoed")
 	}
 }
 
