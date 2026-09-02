@@ -167,7 +167,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 10 CORE (FULL_CORE_TOOLS) + 16 dynamic slots. The inherited 14 was sized
+    # 12 CORE (FULL_CORE_TOOLS) + 14 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries: 22 cut

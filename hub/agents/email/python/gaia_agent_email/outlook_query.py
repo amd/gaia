@@ -45,7 +45,10 @@ from gaia_agent_email.gmail_query import parse_gmail_duration_value
 _IS_RE = re.compile(r"\bis:(unread|read)\b", re.IGNORECASE)
 
 _DURATION_RE = re.compile(
-    r"\b(?P<op>newer_than|older_than):(?P<val>\S+)", re.IGNORECASE
+    # Stop at grouping punctuation so `(newer_than:7d)` validates `7d`, not
+    # `7d)`, just like the Gmail query normalizer.
+    r'\b(?P<op>newer_than|older_than):(?P<val>"[^"]*"|[^\s)}\]]+)',
+    re.IGNORECASE,
 )
 
 # Graph has no calendar-aware relative-date filter, so a month is 30 days
@@ -122,6 +125,11 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
 
     remainder = _IS_RE.sub(_is_sub, query)
     remainder = _DURATION_RE.sub(_duration_sub, remainder)
+    if filters:
+        # Parentheses/brackets that wrapped a filter-only operator are syntax,
+        # not a second search term. Keep rejecting actual text after removing
+        # those wrappers, because Graph cannot combine $filter and $search.
+        remainder = re.sub(r"[()\[\]{}]", " ", remainder)
     remainder = " ".join(remainder.split())
 
     if filters and remainder:
