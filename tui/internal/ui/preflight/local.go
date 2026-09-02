@@ -91,7 +91,7 @@ func (l localRunner) Rows(cfg Config) []Row {
 	}
 	rows = append(rows,
 		Row{Key: KeyLemonade, Label: lemonadeRowLabel},
-		Row{Key: KeyModel, Label: "AI model"},
+		Row{Key: KeyModel, Label: modelRowLabel},
 	)
 	for i := range rows {
 		rows[i].State = StatePending
@@ -318,10 +318,18 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.Detail = "GAIA needs a local model server. It runs on your machine; no message " +
 		"text ever leaves it."
 	row.Remedy = lemonadeStartRemedy()
-	// Starting Lemonade is `gaia init`'s job, and that is the AI model row's
-	// fix — offering it twice would run the same multi-minute command from two
-	// rows.
-	row.Fix = FixNone
+	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
+	// the same one-key setup the model row does. It cannot run twice: Check
+	// stops at the FIRST failure, so whenever this row is the blocker the model
+	// row below it is pending and unfocusable. Withholding the key here left
+	// the commonest first-run failure with nothing to press.
+	row.Fix = FixRunSetup
+	// The shared remedy's Action describes starting Lemonade BY HAND, which is
+	// the right instruction where there is no `f` (the daemon runner). Here
+	// there is one, so say what it does first — otherwise the row explains the
+	// manual route while the key that automates it sits directly underneath.
+	row.Remedy.Action = "Press f and setup installs and starts it. Already have it? " +
+		row.Remedy.Action
 	return row
 }
 
@@ -415,7 +423,7 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 		"GAIA session."
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
-		Action:  "Download them — press f to run setup here, or run the command.",
+		Action:  "Setup downloads what is missing and starts the local server.",
 		Command: gaiainit.RunCommand(l.opts.ClaudeMode),
 		Where:   "https://amd-gaia.ai/docs/guides/install",
 	}

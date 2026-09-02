@@ -146,34 +146,43 @@ An all-green machine flashes through this screen and lands in chat without a
 keypress. A failure holds it open:
 
 ```
-  Getting GAIA ready                                                1 of 3 ready
+  Setting up GAIA                                                   1 of 3 ready
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          found at /usr/local/bin/gaia-agent
-  > [!]   Local AI            not running
+  > [!]   Lemonade            not running
           GAIA needs a local model server. It runs on your machine; no message
           text ever leaves it.
-          run:   lemonade-server serve
-    [ ]   AI model            —  checked once "Local AI" is fixed
+          f set it up now
+          or run: gaia init
+          look:   https://amd-gaia.ai/docs/guides/install
+    [ ]   Language model      —  checked once "Lemonade" is fixed
   ──────────────────────────────────────────────────────────────────────────────
-  r re-check · d details · esc back
+  f set it up now · r re-check · d details · esc back
 ```
+
+Pressing `f` runs `gaia init` right there and streams its progress into the
+screen; `esc` cancels it. The command is shown only as the copy-paste
+alternative — nothing on this screen requires leaving the TUI.
 
 If `gaia-agent` itself is missing, the gate stops on the first row and sends you
 to the installer — there is no in-TUI download for the agent binary:
 
 ```
-  Getting GAIA ready                                                0 of 3 ready
+  Setting up GAIA                                                   0 of 3 ready
   ──────────────────────────────────────────────────────────────────────────────
   > [!]   GAIA agent          not on this machine
           gaia-agent is the program that does the thinking. Nothing runs without it.
           Re-run the GAIA installer — it ships gaia-agent alongside gaia-tui.
           run:   https://amd-gaia.ai/#install
           look:  https://amd-gaia.ai/docs/guides/gaia
-    [ ]   Local AI            —  checked once "GAIA agent" is fixed
-    [ ]   AI model            —  checked once "GAIA agent" is fixed
+    [ ]   Lemonade            —  checked once "GAIA agent" is fixed
+    [ ]   Language model      —  checked once "GAIA agent" is fixed
   ──────────────────────────────────────────────────────────────────────────────
   r re-check · d details · esc back
 ```
+
+This row has no `f`: the TUI cannot install its own agent binary, so it names
+the installer instead of offering a key that would not work.
 
 `email` (and any other daemon-supervised agent) goes through the same three
 screens, but its gate has five rows instead of three: background service,

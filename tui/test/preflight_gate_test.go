@@ -70,7 +70,7 @@ func readyGateTransport() *gateTransport {
 				"version": "8.2.0", "min_version": "8.1.0", "compatible": true,
 			},
 			"model": map[string]any{
-				// At the profile window: below it the AI model row reports a shortfall,
+				// At the profile window: below it the language model row reports a shortfall,
 				// which is a real answer but not the "everything ready" this fixture means.
 				"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 65536,
 			},
@@ -404,7 +404,7 @@ func TestLaunchingAnAgentShowsPreflightNotChat(t *testing.T) {
 		t.Fatalf("view after launch = %q, want preflight", got)
 	}
 	screen := d.flat()
-	if !strings.Contains(screen, "Getting Email ready") {
+	if !strings.Contains(screen, "Checking Email setup") {
 		t.Errorf("the gate is not what got rendered:\n%s", d.screen())
 	}
 	if strings.Contains(screen, "Welcome to GAIA") {
@@ -443,9 +443,9 @@ func TestAFailingPreconditionKeepsTheUserOnTheGate(t *testing.T) {
 	}
 	screen := d.flat()
 	for _, want := range []string{
-		"AI model",          // the row
+		"Language model",    // the row
 		"not downloaded",    // what is wrong
-		"run: gaia init",    // the remedy command
+		"or run: gaia init", // the remedy command, now the alternative
 		"f download it now", // the one-key fix
 	} {
 		if !strings.Contains(screen, want) {
@@ -832,10 +832,10 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 		{name: "all ready", build: readyGateTransport, hold: true,
 			wants: []string{"Getting Email ready", "ready", "Mailbox", "esc back"}},
 		{name: "model missing", build: func() *gateTransport { return readyGateTransport().modelMissing() },
-			wants: []string{"AI model", "not downloaded", "run: gaia init", "esc back"}},
+			wants: []string{"Language model", "not downloaded", "or run: gaia init", "esc back"}},
 		{name: "model missing, details", build: func() *gateTransport { return readyGateTransport().modelMissing() },
 			keys:  []tea.KeyMsg{key("d")},
-			wants: []string{"AI model — failed", "esc back"}},
+			wants: []string{"Language model — failed", "esc back"}},
 		{name: "mailbox missing", build: func() *gateTransport { return readyGateTransport().mailboxMissing() },
 			wants: []string{"Mailbox", "not connected", "gaia connectors connect google", "esc back"}},
 		{name: "mailbox hand-off", build: func() *gateTransport { return readyGateTransport().mailboxMissing() },

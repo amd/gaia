@@ -188,10 +188,22 @@ func TestTheLemonadeRemedyIsSharedWithTheDaemonRunner(t *testing.T) {
 		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
 	}
 
+	// The COMMAND and the docs link are what must never drift — sending two
+	// screens to different start instructions for the same server is the bug
+	// this reuse exists to prevent. The Action legitimately differs: only this
+	// runner offers `f`, so only it leads with what that key does.
 	want := lemonadeStartRemedy()
-	if row.Remedy != want {
+	if row.Remedy.Command != want.Command || row.Remedy.Where != want.Where {
 		t.Errorf("the local runner's Lemonade remedy has drifted from the shared one:\n"+
 			" local: %+v\nshared: %+v", row.Remedy, want)
+	}
+	if !strings.Contains(row.Remedy.Action, want.Action) {
+		t.Errorf("the shared start instruction was dropped rather than prefixed:\n"+
+			" local: %q\nshared: %q", row.Remedy.Action, want.Action)
+	}
+	if !strings.HasPrefix(row.Remedy.Action, "Press f and setup installs") {
+		t.Errorf("the row explains the manual route before the key that automates "+
+			"it:\n%q", row.Remedy.Action)
 	}
 }
 
@@ -464,4 +476,53 @@ func exitStub(t *testing.T, code int) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A down Lemonade is the commonest first-run failure, and Check stops at the
+// FIRST failure — so when this row blocks, the model row below it is pending
+// and cannot be focused. Withholding the setup key here left the screen with
+// nothing to press and a command the user had to go type somewhere else.
+func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State != StateFailed {
+		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
+	}
+	if row.Fix != FixRunSetup {
+		t.Errorf("fix = %v, want FixRunSetup — `gaia init` installs and starts "+
+			"Lemonade, so this row is fixable from the screen", row.Fix)
+	}
+}
+
+// The guard the comment on that Fix depends on: the two rows that share
+// FixRunSetup can never both be offered, because the walk halts at the first
+// failure. If that ever changes, pressing f twice would run the same
+// multi-minute command from two rows.
+func TestOnlyOneRowEverOffersSetupAtATime(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	dir := t.TempDir()
+	name := "fixture-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := localRunner{opts: LocalOptions{Binary: path}}.
+		Check(context.Background(), localCfg())
+
+	offered := 0
+	for _, r := range rep.Rows {
+		if r.State == StateFailed && r.Fix == FixRunSetup {
+			offered++
+		}
+	}
+	if offered > 1 {
+		t.Errorf("%d failed rows offer setup at once; pressing f would run "+
+			"`gaia init` from either:\n%s", offered, rep)
+	}
 }
