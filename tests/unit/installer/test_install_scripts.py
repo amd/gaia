@@ -1,16 +1,22 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Coverage for terminal-hub installation in installer/scripts/install.{sh,ps1}.
+"""Coverage for installer/scripts/install.{sh,ps1}.
+
+The one-liner must install BOTH halves of the product: the terminal hub
+(``gaia-tui``) and the flagship agent it spawns (``gaia-agent``). Shipping the
+hub alone strands the user at a readiness gate whose remedy is "re-run the
+installer" — the very script that skipped the agent.
 
 Two layers, because a static check alone is what let the previous version ship
 pointing at a channel nothing published to:
 
-* static — the Agent Hub URL shape, the platform keys, the binary name, and the
-  absence of bash-only syntax (the documented one-liner pipes into ``sh``);
-* functional — ``install_tui`` run for real against a throwaway HTTP server that
-  serves a manifest in the Worker's shape, asserting it installs on a match and
-  installs *nothing* on a checksum mismatch.
+* static — the Agent Hub URL shape, the platform keys, the installed names, the
+  artifact each binary asks for, and the absence of bash-only syntax (the
+  documented one-liner pipes into ``sh``);
+* functional — the install functions run for real against a throwaway HTTP
+  server that serves a manifest in the Worker's shape, asserting they install on
+  a match and install *nothing* on a checksum mismatch.
 """
 
 from __future__ import annotations
@@ -64,16 +70,18 @@ def test_sh_reads_the_agent_hub_not_release_assets(sh_text):
     assert "gaia-tui-SHA256SUMS.txt" not in sh_text
     assert "hub.amd-gaia.ai" in sh_text
     assert 'TERMINAL_HUB_ID="terminal-hub"' in sh_text
-    assert "/agents/$TERMINAL_HUB_ID/manifest.json" in sh_text
-    assert "/agents/$TERMINAL_HUB_ID/$version/$filename" in sh_text
+    assert 'FLAGSHIP_AGENT_ID="gaia"' in sh_text
+    assert "/agents/$_hub_id/manifest.json" in sh_text
+    assert "/agents/$_hub_id/$version/$_hub_filename" in sh_text
 
 
 def test_ps1_reads_the_agent_hub(ps1_text):
     assert "releases/latest/download" not in ps1_text
     assert "hub.amd-gaia.ai" in ps1_text
     assert '$TERMINAL_HUB_ID = "terminal-hub"' in ps1_text
-    assert "/agents/$TERMINAL_HUB_ID/manifest.json" in ps1_text
-    assert "/agents/$TERMINAL_HUB_ID/$version/$filename" in ps1_text
+    assert '$FLAGSHIP_AGENT_ID = "gaia"' in ps1_text
+    assert "/agents/$AgentId/manifest.json" in ps1_text
+    assert "/agents/$AgentId/$version/$Filename" in ps1_text
 
 
 def test_component_id_matches_the_published_manifest():
@@ -116,13 +124,79 @@ def test_ps1_maps_processor_architecture_to_hub_keys(ps1_text):
 # ── the binary keeps the name `gaia-tui` ───────────────────────────────────
 
 
-def test_binary_is_installed_as_gaia_tui(sh_text, ps1_text):
+def test_binaries_are_installed_under_their_own_names(sh_text, ps1_text):
     """tui/internal/daemon/client.go resolves `gaia` on PATH to start the
-    Python-owned daemon; a Go binary named `gaia` would find itself."""
-    assert '"$GAIA_BIN/gaia-tui"' in sh_text
-    assert "$GAIA_BIN\\gaia-tui.exe" in ps1_text
+    Python-owned daemon; a binary named `gaia` would find itself."""
+    assert '"gaia-tui" \\' in sh_text
+    assert '"gaia-agent" \\' in sh_text
+    assert '-InstallAs "gaia-tui.exe"' in ps1_text
+    assert '-InstallAs "gaia-agent.exe"' in ps1_text
     assert '"$GAIA_BIN/gaia"' not in sh_text
     assert "$GAIA_BIN\\gaia.exe" not in ps1_text
+
+
+# ── both halves get installed, or the TUI is a dead end ────────────────────
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_the_installer_installs_the_agent_not_just_the_hub(sh_text, ps1_text, script):
+    """The regression this file exists for.
+
+    The terminal hub spawns `gaia-agent`; installing only `gaia-tui` leaves the
+    readiness gate halting on a missing binary whose remedy — "re-run the GAIA
+    installer" — is this script. Both must be fetched, and `main` must call
+    both.
+    """
+    text = sh_text if script == "sh" else ps1_text
+    installer = "install_agent" if script == "sh" else "Install-Agent"
+    hub = "install_tui" if script == "sh" else "Install-Tui"
+
+    assert installer in text, f"install.{script} never installs the flagship agent"
+    # Defined AND called: a function nothing invokes installs nothing.
+    assert text.count(installer) >= 2
+    assert text.index(hub) < text.index(installer)
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_the_agent_artifact_is_the_stdio_build_not_the_rest_sidecar(
+    sh_text, ps1_text, script
+):
+    """`agents/gaia/` publishes two different programs under names one character
+    apart, and only one of them can be spawned by the TUI.
+
+    `gaia-agent-<platform>` is the REST sidecar: it binds a port and ignores
+    stdin, so the TUI's JSON line scanner reads uvicorn's startup log (#3062).
+    `gaia-agent-stdio-<platform>` is the child the TUI actually talks to. Asking
+    for the wrong one turns the readiness gate green and then breaks the launch,
+    which is worse than today's honest halt.
+    """
+    text = sh_text if script == "sh" else ps1_text
+    assert "gaia-agent-stdio" in text
+
+    # The bare sidecar prefix must never be what gets requested. It may appear
+    # in prose explaining why; only the artifact-name construction is checked.
+    code = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#") and line.strip()
+    )
+    for wrong in ('"gaia-agent-%s"', "gaia-agent-$platform", "gaia-agent-$npmKey"):
+        assert wrong not in code, f"install.{script} asks for the REST sidecar: {wrong}"
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_a_platform_with_no_agent_build_fails_loudly(sh_text, ps1_text, script):
+    """The terminal hub builds for linux-arm64 / win-arm64 and the flagship does
+    not. Silently skipping the agent there ships the dead end on purpose."""
+    text = sh_text if script == "sh" else ps1_text
+    if script == "sh":
+        # An allowlist, so a NEW terminal-hub platform fails closed.
+        assert 'FLAGSHIP_PLATFORMS="darwin-arm64 darwin-x64 linux-x64"' in text
+        assert "linux-arm64" not in text.split("FLAGSHIP_PLATFORMS")[1][:200]
+    else:
+        assert '$FLAGSHIP_PLATFORM_KEYS = @{ "win-x64" = "win32-x64" }' in text
+        assert "win-arm64" not in text.split("FLAGSHIP_PLATFORM_KEYS")[1][:200]
+    assert "publishes no build for" in text
 
 
 def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
@@ -184,20 +258,48 @@ def _shell_function_body(sh_text: str, name: str) -> str:
     return match.group(1)
 
 
-def test_install_tui_never_soft_skips(sh_text):
-    body = _shell_function_body(sh_text, "install_tui")
+@pytest.mark.parametrize(
+    "func,min_exits",
+    [
+        # The wrappers only guard the platform and delegate the rest; the shared
+        # helper carries the network, manifest, checksum and write failures.
+        ("install_tui", 1),
+        ("install_agent", 1),
+        ("unsupported_platform_error", 1),
+        ("hub_install_binary", 6),
+    ],
+)
+def test_install_functions_never_soft_skip(sh_text, func, min_exits):
+    body = _shell_function_body(sh_text, func)
     assert "return 0" not in body
     assert "skipping" not in body
     # Every failure branch aborts.
-    assert body.count("exit 1") >= 6
+    assert body.count("exit 1") >= min_exits
 
 
-def test_install_tui_refuses_an_unverified_binary(sh_text, ps1_text):
-    body = _shell_function_body(sh_text, "install_tui")
+def test_both_binaries_are_verified_by_one_shared_path(sh_text, ps1_text):
+    """One download-and-verify implementation, used by both installs.
+
+    Two copies drift: the second binary is exactly where a checksum step gets
+    dropped, and nothing about the install would look different if it were.
+    """
+    body = _shell_function_body(sh_text, "hub_install_binary")
     assert "publishes %s with no SHA-256" in body
     assert "Checksum mismatch" in body
+    assert "sha256sum" in body and "shasum" in body
+    # Both wrappers delegate here rather than rolling their own.
+    for wrapper in ("install_tui", "install_agent"):
+        assert "hub_install_binary" in _shell_function_body(sh_text, wrapper)
+
     assert "no SHA-256" in ps1_text
     assert "Checksum mismatch" in ps1_text
+    assert ps1_text.count("Get-FileHash") == 1, (
+        "install.ps1 should verify through one shared Install-HubBinary; a "
+        "second Get-FileHash means a second, driftable copy"
+    )
+    for wrapper in ("Install-Tui", "Install-Agent"):
+        assert wrapper in ps1_text
+    assert ps1_text.count("Install-HubBinary") >= 3  # definition + two callers
 
 
 def test_elevation_is_announced_before_it_is_needed(sh_text, ps1_text):
@@ -273,32 +375,51 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+# The two hub lanes the installer reads, and what each publishes per platform.
+# `gaia` deliberately carries BOTH the REST sidecar and the stdio build, because
+# picking the wrong one is the failure this fixture has to be able to catch.
+TUI_KEYS = ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64")
+AGENT_KEYS = ("linux-x64", "darwin-x64", "darwin-arm64")
+
+
 @pytest.fixture
 def fake_hub(tmp_path):
-    """Serve an Agent-Hub-shaped manifest plus one binary over loopback."""
+    """Serve Agent-Hub-shaped manifests for both lanes over loopback."""
     root = tmp_path / "hub"
-    version_dir = root / "agents" / "terminal-hub" / "0.99.0"
-    version_dir.mkdir(parents=True)
+    digests: dict[tuple[str, str], str] = {}
+    lanes = {
+        "terminal-hub": [f"gaia-{k}" for k in TUI_KEYS],
+        "gaia": [f"gaia-agent-stdio-{k}" for k in AGENT_KEYS]
+        # The sidecar shares the lane. Asking for it must not install.
+        + [f"gaia-agent-{k}" for k in AGENT_KEYS],
+    }
 
-    payload = b"#!/bin/sh\necho gaia-tui 0.99.0\n"
-    digests = {}
-    for key in ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"):
-        (version_dir / f"gaia-{key}").write_bytes(payload + key.encode())
-        digests[key] = hashlib.sha256(payload + key.encode()).hexdigest()
+    for agent_id, filenames in lanes.items():
+        version_dir = root / "agents" / agent_id / "0.99.0"
+        version_dir.mkdir(parents=True)
+        for filename in filenames:
+            payload = f"#!/bin/sh\necho {filename} 0.99.0\n".encode()
+            (version_dir / filename).write_bytes(payload)
+            digests[(agent_id, filename)] = hashlib.sha256(payload).hexdigest()
 
-    def write_manifest(overrides=None):
+    def write_manifest(agent_id="terminal-hub", overrides=None):
+        """Rewrite one lane's manifest, optionally corrupting its digests."""
         artifacts = [
             {
-                "filename": f"gaia-{key}",
-                "path": f"agents/terminal-hub/0.99.0/gaia-{key}",
-                "size_bytes": len(payload) + len(key),
-                "sha256": (overrides or {}).get(key, digest),
+                "filename": filename,
+                "path": f"agents/{agent_id}/0.99.0/{filename}",
+                "size_bytes": (root / "agents" / agent_id / "0.99.0" / filename)
+                .stat()
+                .st_size,
+                "sha256": (overrides or {}).get(
+                    filename, digests[(agent_id, filename)]
+                ),
                 "content_type": "application/octet-stream",
             }
-            for key, digest in digests.items()
+            for filename in lanes[agent_id]
         ]
         manifest = {
-            "id": "terminal-hub",
+            "id": agent_id,
             "latest_version": "0.99.0",
             "versions": {
                 "0.99.0": {
@@ -308,11 +429,12 @@ def fake_hub(tmp_path):
                 }
             },
         }
-        (root / "agents" / "terminal-hub" / "manifest.json").write_text(
+        (root / "agents" / agent_id / "manifest.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )
 
-    write_manifest()
+    for agent_id in lanes:
+        write_manifest(agent_id)
 
     handler = type(
         "Handler",
@@ -356,23 +478,29 @@ def _run_sh_function(tmp_path, snippet, env_overrides=None, shell="sh"):
     return result, home
 
 
-def _run_install_tui(tmp_path, base_url, downloader="curl", shell="sh"):
+# Which shell function installs which binary, so every functional case below
+# runs against BOTH halves instead of proving the hub works and assuming.
+INSTALLS = {"install_tui": "gaia-tui", "install_agent": "gaia-agent"}
+
+
+def _run_install(tmp_path, base_url, func, downloader="curl", shell="sh"):
     result, home = _run_sh_function(
         tmp_path,
-        f"DOWNLOAD_CMD={downloader}; install_tui",
+        f"DOWNLOAD_CMD={downloader}; {func}",
         {"GAIA_HUB_BASE_URL": base_url},
         shell=shell,
     )
-    return result, home / ".gaia" / "bin" / "gaia-tui"
+    return result, home / ".gaia" / "bin" / INSTALLS[func]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.parametrize("func", sorted(INSTALLS))
 @pytest.mark.parametrize("downloader", ["curl", "wget"])
-def test_install_tui_installs_a_verified_binary(tmp_path, fake_hub, downloader):
+def test_install_puts_a_verified_binary_on_disk(tmp_path, fake_hub, downloader, func):
     if shutil.which(downloader) is None:
         pytest.skip(f"{downloader} not installed")
     base_url, _ = fake_hub
-    result, installed = _run_install_tui(tmp_path, base_url, downloader=downloader)
+    result, installed = _run_install(tmp_path, base_url, func, downloader=downloader)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert installed.is_file()
@@ -381,12 +509,27 @@ def test_install_tui_installs_a_verified_binary(tmp_path, fake_hub, downloader):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+def test_the_agent_install_fetches_the_stdio_build(tmp_path, fake_hub):
+    """Both programs live in `agents/gaia/`. Installing the REST sidecar would
+    satisfy the readiness gate and then break the launch (#3062), so assert on
+    the bytes that landed — not merely that something did."""
+    base_url, _ = fake_hub
+    result, installed = _run_install(tmp_path, base_url, "install_agent")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    body = installed.read_text(encoding="utf-8")
+    assert "gaia-agent-stdio-" in body, f"installed the wrong artifact: {body!r}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
 @pytest.mark.skipif(shutil.which("dash") is None, reason="dash not installed")
-def test_install_tui_works_under_dash(tmp_path, fake_hub):
+@pytest.mark.parametrize("func", sorted(INSTALLS))
+def test_install_works_under_dash(tmp_path, fake_hub, func):
     """`curl … | sh` is dash on Debian/Ubuntu; macOS `sh` is bash, so a
     curl-only, sh-only run would never exercise the real Linux shell."""
     base_url, _ = fake_hub
-    result, installed = _run_install_tui(tmp_path, base_url, shell="dash")
+    result, installed = _run_install(tmp_path, base_url, func, shell="dash")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert installed.is_file()
@@ -394,16 +537,18 @@ def test_install_tui_works_under_dash(tmp_path, fake_hub):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
 @pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
-def test_install_tui_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub):
+@pytest.mark.parametrize("func", sorted(INSTALLS))
+def test_install_puts_nothing_on_disk_on_a_checksum_mismatch(tmp_path, fake_hub, func):
     base_url, write_manifest = fake_hub
-    write_manifest(
-        overrides={
-            key: "d" * 64
-            for key in ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64")
-        }
+    agent_id = "terminal-hub" if func == "install_tui" else "gaia"
+    names = (
+        [f"gaia-{k}" for k in TUI_KEYS]
+        if func == "install_tui"
+        else [f"gaia-agent-stdio-{k}" for k in AGENT_KEYS]
     )
+    write_manifest(agent_id, overrides={name: "d" * 64 for name in names})
 
-    result, installed = _run_install_tui(tmp_path, base_url)
+    result, installed = _run_install(tmp_path, base_url, func)
 
     assert result.returncode != 0
     assert "Checksum mismatch" in result.stdout + result.stderr
@@ -412,11 +557,47 @@ def test_install_tui_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub)
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
 @pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
-def test_install_tui_fails_when_the_hub_is_unreachable(tmp_path):
-    result, installed = _run_install_tui(tmp_path, "http://127.0.0.1:1")
+@pytest.mark.parametrize("func", sorted(INSTALLS))
+def test_install_fails_when_the_hub_is_unreachable(tmp_path, func):
+    result, installed = _run_install(tmp_path, "http://127.0.0.1:1", func)
 
     assert result.returncode != 0
-    assert "Could not fetch the terminal hub manifest" in result.stdout + result.stderr
+    assert "Could not fetch" in result.stdout + result.stderr
+    assert not installed.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+def test_the_agent_install_fails_when_the_stdio_build_is_unpublished(
+    tmp_path, fake_hub
+):
+    """The lane exists and serves the sidecar, but the stdio build is absent.
+
+    Falling back to the sidecar here is exactly the silent degradation that
+    would reinstate the bug, so the install must stop and name what is missing.
+    """
+    base_url, write_manifest = fake_hub
+    root_manifest = json.loads(
+        (Path(tmp_path) / "hub" / "agents" / "gaia" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    entry = root_manifest["versions"]["0.99.0"]
+    entry["artifacts"] = [
+        a
+        for a in entry["artifacts"]
+        if not a["filename"].startswith("gaia-agent-stdio")
+    ]
+    entry["artifact"] = entry["artifacts"][0]
+    (Path(tmp_path) / "hub" / "agents" / "gaia" / "manifest.json").write_text(
+        json.dumps(root_manifest), encoding="utf-8"
+    )
+
+    result, installed = _run_install(tmp_path, base_url, "install_agent")
+
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "gaia-agent-stdio" in combined
     assert not installed.exists()
 
 
@@ -488,3 +669,42 @@ def test_add_to_path_does_not_write_a_file_an_unknown_shell_ignores(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert _rc_files(home) == []
     assert "Add these two directories to your PATH by hand" in result.stdout
+
+
+# ── a platform with no agent build stops the install, and stops it early ────
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_install_agent_refuses_a_platform_with_no_flagship_build(tmp_path):
+    """linux-arm64 has a terminal hub build and no agent build.
+
+    Installing the hub alone there is the dead end this whole file guards, so
+    the only correct outcome is a hard stop.
+    """
+    result, home = _run_sh_function(
+        tmp_path,
+        "terminal_hub_platform() { echo linux-arm64; }; install_agent",
+    )
+    combined = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "publishes no build for linux-arm64" in combined
+    assert not (home / ".gaia" / "bin" / "gaia-agent").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_an_unsupported_platform_is_refused_before_anything_is_installed(tmp_path):
+    """The check belongs in detect_environment, not at the download.
+
+    Discovering it after uv, a Python 3.12 download and the venv leaves a
+    half-install behind on every attempt.
+    """
+    result, home = _run_sh_function(
+        tmp_path,
+        "terminal_hub_platform() { echo linux-arm64; }; detect_environment",
+    )
+
+    assert result.returncode != 0
+    assert "publishes no build for linux-arm64" in result.stdout + result.stderr
+    # Nothing was created: the refusal happens before install_uv/install_gaia.
+    assert not (home / ".gaia").exists()

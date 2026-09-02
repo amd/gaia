@@ -19,6 +19,24 @@ GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL%/}"
 TERMINAL_HUB_ID="terminal-hub"
 
+# The terminal hub spawns `gaia-agent` as a child process, so installing the hub
+# alone ships a front end with nothing behind it — and the TUI's readiness gate
+# halts on the missing binary telling the user to re-run this installer.
+FLAGSHIP_AGENT_ID="gaia"
+
+# The STDIO build, not the REST sidecar. Both are published under agents/gaia/
+# and both would install as `gaia-agent`, but only this one speaks the
+# newline-delimited JSON the TUI writes to the child's stdin — the sidecar just
+# binds a port and ignores it (#3062).
+FLAGSHIP_ARTIFACT_PREFIX="gaia-agent-stdio"
+
+# Platform keys the flagship publishes a stdio build for. Mirrors PLATFORM_KEYS
+# in installer/tui/fetch_sidecar.py: linux-arm64 is absent on purpose — the
+# terminal hub builds there and the flagship does not, and an install that
+# quietly skipped the agent would produce exactly the dead end this installs it
+# to prevent.
+FLAGSHIP_PLATFORMS="darwin-arm64 darwin-x64 linux-x64"
+
 # Network limits: a black-holed connection must fail, not hang silently.
 CONNECT_TIMEOUT=15
 MAX_TIME=900
@@ -107,6 +125,16 @@ detect_environment() {
             exit 1
             ;;
     esac
+
+    # Before uv, Python and the venv: on a platform with no agent build this
+    # install can only end in failure, and finding that out after a multi-minute
+    # download leaves a half-install behind every single time.
+    platform=""
+    if platform="$(terminal_hub_platform)"; then
+        if ! flagship_filename "$platform" > /dev/null; then
+            unsupported_platform_error "$platform"
+        fi
+    fi
 
     print_success "Environment: $OS_LABEL ($ARCH)"
 }
@@ -275,7 +303,7 @@ terminal_hub_platform() {
 
 # Resolve the Python interpreter used to read the hub manifest. install_gaia has
 # already created the venv by the time this runs.
-terminal_hub_python() {
+hub_python() {
     if [ -x "$GAIA_VENV/bin/python" ]; then
         printf '%s\n' "$GAIA_VENV/bin/python"
     elif command -v python3 > /dev/null 2>&1; then
@@ -285,36 +313,75 @@ terminal_hub_python() {
     fi
 }
 
-# A missing terminal hub fails the install — it is the advertised entry point.
-install_tui() {
-    print_step "Installing the GAIA terminal hub"
+# Refuse a platform the flagship has no build for. Loud, never skipped: the
+# terminal hub builds for linux-arm64 and the flagship does not, so continuing
+# would install the exact dead end this installer exists to prevent.
+unsupported_platform_error() {
+    print_error "The GAIA agent publishes no build for $1."
+    echo "  The terminal hub runs here but has no agent to run, so GAIA would"
+    echo "  install a front end that cannot start. Nothing has been installed."
+    echo "  Published targets: $FLAGSHIP_PLATFORMS"
+    echo "  Fix:  build the agent yourself — it needs a Python 3.12 venv with"
+    echo "        pyinstaller, and the binary has to land on your PATH as"
+    echo "        gaia-agent:"
+    echo "          git clone https://github.com/amd/gaia && cd gaia"
+    echo "          python hub/agents/$FLAGSHIP_AGENT_ID/python/packaging/freeze.py --onefile --target stdio"
+    echo "          mkdir -p $GAIA_BIN && install -m 0755 \\"
+    echo "            hub/agents/$FLAGSHIP_AGENT_ID/python/packaging/dist/gaia-agent-stdio \\"
+    echo "            $GAIA_BIN/gaia-agent"
+    echo "  Look: $GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    echo "  Track: https://github.com/amd/gaia/issues"
+    exit 1
+}
 
-    platform=""
-    if ! platform="$(terminal_hub_platform)"; then
-        print_error "No terminal hub build for $(uname -s)/$(uname -m)."
-        echo "Published targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64,"
-        echo "win-x64, win-arm64. See $GAIA_HUB_BASE_URL/index.json"
-        exit 1
-    fi
-    filename="gaia-${platform}"
+# Print the flagship's artifact filename for a terminal-hub platform key, or
+# fail when the flagship publishes no build there.
+flagship_filename() {
+    for _supported in $FLAGSHIP_PLATFORMS; do
+        if [ "$_supported" = "$1" ]; then
+            printf '%s-%s\n' "$FLAGSHIP_ARTIFACT_PREFIX" "$1"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Download one Agent Hub artifact, verify it against the SHA-256 the manifest
+# publishes, and install it into $GAIA_BIN.
+#
+#   $1 hub agent id        $2 platform key, for messages
+#   $3 artifact filename to ask for
+#   $4 name to install as  $5 what to call it in messages
+#   $6 the build-from-source hint for a genuinely unpublished platform
+#
+# Both binaries go through here so their verification can never drift apart.
+# Every failure path exits: there is no branch that returns having installed
+# nothing.
+hub_install_binary() {
+    _hub_id="$1"
+    _hub_platform="$2"
+    _hub_filename="$3"
+    _hub_install_as="$4"
+    _hub_label="$5"
+    _hub_hint="$6"
 
     py=""
-    if ! py="$(terminal_hub_python)"; then
+    if ! py="$(hub_python)"; then
         print_error "No Python interpreter available to read the Agent Hub manifest."
         echo "Expected $GAIA_VENV/bin/python (created earlier in this install)."
         exit 1
     fi
 
-    scratch_dir tui
+    scratch_dir "$_hub_install_as"
     tmp="$SCRATCH"
 
-    manifest_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/manifest.json"
+    manifest_url="$GAIA_HUB_BASE_URL/agents/$_hub_id/manifest.json"
     if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
-        print_error "Could not fetch the terminal hub manifest."
+        print_error "Could not fetch the $_hub_label manifest."
         echo "  URL:  $manifest_url"
         echo "  Fix:  check your network, then retry. If the component is not yet"
         echo "        published for this release, build from source:"
-        echo "          git clone https://github.com/amd/gaia && cd gaia/tui && make build"
+        echo "          $_hub_hint"
         echo "  Look: $GAIA_HUB_BASE_URL/index.json lists what the hub serves."
         exit 1
     fi
@@ -322,7 +389,7 @@ install_tui() {
     # The manifest is the only source for the version, the per-platform
     # filename, and the Worker-computed SHA-256.
     resolved=""
-    if ! resolved="$("$py" - "$tmp/manifest.json" "$filename" <<'PYEOF'
+    if ! resolved="$("$py" - "$tmp/manifest.json" "$_hub_filename" <<'PYEOF'
 import json
 import sys
 
@@ -358,10 +425,10 @@ if not digest:
 print("%s %s" % (version, digest))
 PYEOF
 )"; then
-        print_error "Could not resolve the terminal hub build for $platform."
+        print_error "Could not resolve the $_hub_label build for $_hub_platform."
         echo "  Reported above by the manifest reader."
         echo "  Fix:  if your platform is genuinely unpublished, build from source:"
-        echo "          git clone https://github.com/amd/gaia && cd gaia/tui && make build"
+        echo "          $_hub_hint"
         echo "  Look: $manifest_url"
         exit 1
     fi
@@ -369,10 +436,10 @@ PYEOF
     version="${resolved%% *}"
     want="${resolved##* }"
 
-    binary_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
-    print_step "Downloading terminal hub $version for $platform"
-    if ! fetch_file "$binary_url" "$tmp/$filename"; then
-        print_error "Could not download the terminal hub binary."
+    binary_url="$GAIA_HUB_BASE_URL/agents/$_hub_id/$version/$_hub_filename"
+    print_step "Downloading $_hub_label $version for $_hub_platform"
+    if ! fetch_file "$binary_url" "$tmp/$_hub_filename"; then
+        print_error "Could not download the $_hub_label binary."
         echo "  URL:  $binary_url"
         echo "  Fix:  check your network and retry."
         echo "  Look: $manifest_url lists what is published for $version."
@@ -381,9 +448,9 @@ PYEOF
 
     # No checksum, no install.
     if command -v sha256sum > /dev/null 2>&1; then
-        got="$(sha256sum "$tmp/$filename" | awk '{print $1}')"
+        got="$(sha256sum "$tmp/$_hub_filename" | awk '{print $1}')"
     elif command -v shasum > /dev/null 2>&1; then
-        got="$(shasum -a 256 "$tmp/$filename" | awk '{print $1}')"
+        got="$(shasum -a 256 "$tmp/$_hub_filename" | awk '{print $1}')"
     else
         print_error "No sha256sum or shasum available to verify the download."
         echo "  Fix:  install coreutils (Linux) or perl (macOS ships shasum), then retry."
@@ -391,7 +458,7 @@ PYEOF
     fi
 
     if [ "$want" != "$got" ]; then
-        print_error "Checksum mismatch for $filename — refusing to install."
+        print_error "Checksum mismatch for $_hub_filename — refusing to install."
         echo "  expected $want"
         echo "  got      $got"
         echo "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues"
@@ -402,8 +469,55 @@ PYEOF
     # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
     mkdir -p "$GAIA_BIN"
-    install -m 0755 "$tmp/$filename" "$GAIA_BIN/gaia-tui"
-    print_success "Terminal hub $version installed to $GAIA_BIN/gaia-tui"
+    install -m 0755 "$tmp/$_hub_filename" "$GAIA_BIN/$_hub_install_as"
+    print_success "$_hub_label $version installed to $GAIA_BIN/$_hub_install_as"
+}
+
+# A missing terminal hub fails the install — it is the advertised entry point.
+install_tui() {
+    print_step "Installing the GAIA terminal hub"
+
+    platform=""
+    if ! platform="$(terminal_hub_platform)"; then
+        print_error "No terminal hub build for $(uname -s)/$(uname -m)."
+        echo "Published targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64,"
+        echo "win-x64, win-arm64. See $GAIA_HUB_BASE_URL/index.json"
+        exit 1
+    fi
+
+    hub_install_binary "$TERMINAL_HUB_ID" "$platform" "gaia-${platform}" "gaia-tui" \
+        "terminal hub" \
+        "git clone https://github.com/amd/gaia && cd gaia/tui && make build"
+}
+
+# A missing flagship agent fails the install too. The terminal hub spawns
+# `gaia-agent`, so shipping the hub without it installs a front end whose
+# readiness gate halts on the first launch — and whose remedy is "re-run the
+# GAIA installer", which is this script.
+install_agent() {
+    print_step "Installing the GAIA agent"
+
+    platform=""
+    if ! platform="$(terminal_hub_platform)"; then
+        print_error "No GAIA agent build for $(uname -s)/$(uname -m)."
+        echo "Published targets: $FLAGSHIP_PLATFORMS."
+        echo "See $GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+        exit 1
+    fi
+
+    filename=""
+    if ! filename="$(flagship_filename "$platform")"; then
+        # Unreachable in a normal run — detect_environment refuses this platform
+        # before anything is installed. Kept as the authoritative guard so the
+        # function is safe to call on its own.
+        unsupported_platform_error "$platform"
+    fi
+
+    # `gaia-agent`, never `gaia`: same collision as the terminal hub — the TUI
+    # resolves `gaia` on PATH to the Python CLI that starts the daemon.
+    hub_install_binary "$FLAGSHIP_AGENT_ID" "$platform" "$filename" "gaia-agent" \
+        "GAIA agent" \
+        "git clone https://github.com/amd/gaia && cd gaia && python hub/agents/$FLAGSHIP_AGENT_ID/python/packaging/freeze.py --onefile --target stdio"
 }
 
 # Add GAIA to PATH
@@ -490,16 +604,18 @@ show_next_steps() {
     printf '%s================================%s\n' "$COLOR_GREEN" "$COLOR_RESET"
     echo ""
 
-    printf '%sNext steps:%s\n' "$COLOR_CYAN" "$COLOR_RESET"
+    printf '%sStart GAIA:%s\n' "$COLOR_CYAN" "$COLOR_RESET"
     if [ -n "${RELOAD_FILE:-}" ]; then
         echo "  1. Reload your shell config:"
         printf '     %ssource %s%s\n' "$COLOR_GREEN" "$RELOAD_FILE" "$COLOR_RESET"
     else
         echo "  1. Open a new terminal (PATH was not written to a startup file)"
     fi
-    printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-    echo "     (installs Lemonade Server — asks for your password)"
-    printf '  3. Open the terminal hub: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  2. %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+    echo ""
+    echo "On first run it checks what is still missing and can download the"
+    printf 'models for you. To do that up front instead, run %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+    echo "first — it installs Lemonade Server and asks for your password."
     echo ""
 
     printf '%sDocumentation:%s https://amd-gaia.ai\n' "$COLOR_CYAN" "$COLOR_RESET"
@@ -531,8 +647,11 @@ main() {
     # CLI reachable.
     add_to_path
 
-    # Install the terminal hub binary
+    # The two halves of one program: the hub is the front end, the agent is what
+    # it spawns. Installing either without the other is a dead end, so they land
+    # in the same phase.
     install_tui
+    install_agent
 
     # Show next steps
     show_next_steps

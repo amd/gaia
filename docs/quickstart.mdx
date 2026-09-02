@@ -116,13 +116,18 @@ Install GAIA globally with a single command:
     - ✅ Download Python 3.12 (if needed)
     - ✅ Create `%USERPROFILE%\.gaia\venv` virtual environment
     - ✅ Install GAIA CLI (accessible globally via PATH)
+    - ✅ Download `gaia-tui` and `gaia-agent`, each verified against the
+      SHA-256 the Agent Hub publishes
     - ✅ Add GAIA to your PATH
 
     <Tip>
-      After installation, close and reopen your terminal, then run:
+      After installation, close and reopen your terminal, then start GAIA:
       ```powershell
-      gaia init --profile minimal
+      gaia-tui
       ```
+      The first run checks what is still missing and can download the models
+      for you. To do that up front instead, run `gaia init --profile minimal`
+      first.
     </Tip>
   </Tab>
 
@@ -138,14 +143,19 @@ Install GAIA globally with a single command:
     - ✅ Download Python 3.12 (if needed)
     - ✅ Create `~/.gaia/venv` virtual environment
     - ✅ Install GAIA CLI (accessible globally via PATH)
+    - ✅ Download `gaia-tui` and `gaia-agent`, each verified against the
+      SHA-256 the Agent Hub publishes
     - ✅ Add GAIA to your PATH
 
     <Tip>
-      After installation, reload your shell config, then run:
+      After installation, reload your shell config, then start GAIA:
       ```bash
       source ~/.bashrc  # or ~/.zshrc
-      gaia init --profile minimal
+      gaia-tui
       ```
+      The first run checks what is still missing and can download the models
+      for you. To do that up front instead, run `gaia init --profile minimal`
+      first.
     </Tip>
   </Tab>
 </Tabs>

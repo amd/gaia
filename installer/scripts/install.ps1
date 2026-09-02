@@ -15,6 +15,22 @@ $GAIA_HUB_BASE_URL = if ($env:GAIA_HUB_BASE_URL) { $env:GAIA_HUB_BASE_URL } else
 $GAIA_HUB_BASE_URL = $GAIA_HUB_BASE_URL.TrimEnd('/')
 $TERMINAL_HUB_ID = "terminal-hub"
 
+# The terminal hub spawns `gaia-agent` as a child process, so installing the hub
+# alone ships a front end with nothing behind it - and the TUI's readiness gate
+# halts on the missing binary telling the user to re-run this installer.
+$FLAGSHIP_AGENT_ID = "gaia"
+
+# The STDIO build, not the REST sidecar. Both are published under agents/gaia/
+# and both would install as `gaia-agent.exe`, but only this one speaks the
+# newline-delimited JSON the TUI writes to the child's stdin - the sidecar just
+# binds a port and ignores it (#3062).
+$FLAGSHIP_ARTIFACT_PREFIX = "gaia-agent-stdio"
+
+# Terminal-hub platform key -> the flagship's npm-style key. Mirrors
+# PLATFORM_KEYS in installer/tui/fetch_sidecar.py. win-arm64 is absent on
+# purpose: the terminal hub builds there and the flagship does not.
+$FLAGSHIP_PLATFORM_KEYS = @{ "win-x64" = "win32-x64" }
+
 # Network limit: a black-holed connection must fail, not hang silently.
 $HTTP_TIMEOUT_SEC = 900
 
@@ -146,6 +162,37 @@ function Install-Gaia {
     Write-Success "GAIA package installed successfully"
 }
 
+# Refuse a platform the flagship has no build for. Loud, never skipped: the
+# terminal hub builds for win-arm64 and the flagship does not, so continuing
+# would install the exact dead end this installer exists to prevent.
+function Show-UnsupportedPlatformError {
+    param([Parameter(Mandatory = $true)][string]$Platform)
+
+    Write-Error "The GAIA agent publishes no build for $Platform."
+    Write-Host "  The terminal hub runs here but has no agent to run, so GAIA would" -ForegroundColor $COLOR_YELLOW
+    Write-Host "  install a front end that cannot start. Nothing has been installed." -ForegroundColor $COLOR_YELLOW
+    Write-Host "  Published targets: $($FLAGSHIP_PLATFORM_KEYS.Keys -join ', ')" -ForegroundColor $COLOR_YELLOW
+    Write-Host "  Fix:  build the agent yourself - it needs a Python 3.12 venv with" -ForegroundColor $COLOR_YELLOW
+    Write-Host "        pyinstaller, and the binary has to land on your PATH as" -ForegroundColor $COLOR_YELLOW
+    Write-Host "        gaia-agent.exe:" -ForegroundColor $COLOR_YELLOW
+    Write-Host "          git clone https://github.com/amd/gaia; cd gaia" -ForegroundColor $COLOR_YELLOW
+    Write-Host "          python hub\agents\$FLAGSHIP_AGENT_ID\python\packaging\freeze.py --onefile --target stdio" -ForegroundColor $COLOR_YELLOW
+    Write-Host "          copy hub\agents\$FLAGSHIP_AGENT_ID\python\packaging\dist\gaia-agent-stdio.exe $GAIA_BIN\gaia-agent.exe" -ForegroundColor $COLOR_YELLOW
+    Write-Host "  Look: $GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json" -ForegroundColor $COLOR_YELLOW
+    Write-Host "  Track: https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
+    exit 1
+}
+
+# Before uv, Python and the venv: on a platform with no agent build this install
+# can only end in failure, and finding that out after a multi-minute download
+# leaves a half-install behind every single time.
+function Assert-FlagshipPlatform {
+    $platform = Get-TerminalHubPlatform
+    if ($platform -and -not $FLAGSHIP_PLATFORM_KEYS[$platform]) {
+        Show-UnsupportedPlatformError $platform
+    }
+}
+
 function Get-TerminalHubPlatform {
     # The Agent Hub platform keys are what release_components.yml publishes
     # under, so they are the authority - not GOARCH ("amd64").
@@ -157,32 +204,34 @@ function Get-TerminalHubPlatform {
     }
 }
 
-# A missing terminal hub fails the install - it is the advertised entry point.
-function Install-Tui {
-    Write-Step "Installing the GAIA terminal hub"
-
-    $platform = Get-TerminalHubPlatform
-    if (-not $platform) {
-        $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-        Write-Error "No terminal hub build for processor architecture '$arch'."
-        Write-Host "  Published targets: win-x64, win-arm64, linux-x64, linux-arm64," -ForegroundColor $COLOR_YELLOW
-        Write-Host "  darwin-x64, darwin-arm64. See $GAIA_HUB_BASE_URL/index.json" -ForegroundColor $COLOR_YELLOW
-        exit 1
-    }
-    $filename = "gaia-$platform.exe"
+# Download one Agent Hub artifact, verify it against the SHA-256 the manifest
+# publishes, and install it into $GAIA_BIN.
+#
+# Both binaries go through here so their verification can never drift apart.
+# Every failure path exits: there is no branch that returns having installed
+# nothing.
+function Install-HubBinary {
+    param(
+        [Parameter(Mandatory = $true)][string]$AgentId,
+        [Parameter(Mandatory = $true)][string]$Platform,
+        [Parameter(Mandatory = $true)][string]$Filename,
+        [Parameter(Mandatory = $true)][string]$InstallAs,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Hint
+    )
 
     # The manifest is the only source for the version, the per-platform
     # filename, and the Worker-computed SHA-256.
-    $manifestUrl = "$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/manifest.json"
+    $manifestUrl = "$GAIA_HUB_BASE_URL/agents/$AgentId/manifest.json"
     try {
         $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
     }
     catch {
-        Write-Error "Could not fetch the terminal hub manifest: $_"
+        Write-Error "Could not fetch the $Label manifest: $_"
         Write-Host "  URL:  $manifestUrl" -ForegroundColor $COLOR_YELLOW
         Write-Host "  Fix:  check your network, then retry. If the component is not yet" -ForegroundColor $COLOR_YELLOW
         Write-Host "        published for this release, build from source:" -ForegroundColor $COLOR_YELLOW
-        Write-Host "          git clone https://github.com/amd/gaia; cd gaia\tui; make build" -ForegroundColor $COLOR_YELLOW
+        Write-Host "          $Hint" -ForegroundColor $COLOR_YELLOW
         Write-Host "  Look: $GAIA_HUB_BASE_URL/index.json lists what the hub serves." -ForegroundColor $COLOR_YELLOW
         exit 1
     }
@@ -205,31 +254,31 @@ function Install-Tui {
         $artifacts = if ($entry.artifact) { @($entry.artifact) } else { @() }
     }
 
-    $match = $artifacts | Where-Object { $_.filename -eq $filename } | Select-Object -First 1
+    $match = $artifacts | Where-Object { $_.filename -eq $Filename } | Select-Object -First 1
     if (-not $match) {
         $listed = ($artifacts | ForEach-Object { $_.filename } | Sort-Object) -join ", "
         if (-not $listed) { $listed = "none" }
-        Write-Error "Terminal hub $version publishes no $filename (it publishes: $listed)."
+        Write-Error "$Label $version publishes no $Filename (it publishes: $listed)."
         Write-Host "  Fix:  if your platform is genuinely unpublished, build from source:" -ForegroundColor $COLOR_YELLOW
-        Write-Host "          git clone https://github.com/amd/gaia; cd gaia\tui; make build" -ForegroundColor $COLOR_YELLOW
+        Write-Host "          $Hint" -ForegroundColor $COLOR_YELLOW
         Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
         exit 1
     }
 
     $want = $match.sha256
     if (-not $want) {
-        Write-Error "Terminal hub $version publishes $filename with no SHA-256 - refusing to install unverified."
+        Write-Error "$Label $version publishes $Filename with no SHA-256 - refusing to install unverified."
         Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
         exit 1
     }
 
-    $binaryUrl = "$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
-    $tmpDir = Join-Path $env:TEMP ("gaia-tui-" + [guid]::NewGuid().ToString("N"))
+    $binaryUrl = "$GAIA_HUB_BASE_URL/agents/$AgentId/$version/$Filename"
+    $tmpDir = Join-Path $env:TEMP ("gaia-install-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-    $tmpFile = Join-Path $tmpDir $filename
+    $tmpFile = Join-Path $tmpDir $Filename
 
     try {
-        Write-Step "Downloading terminal hub $version for $platform"
+        Write-Step "Downloading $Label $version for $Platform"
         try {
             $prevProgress = $ProgressPreference
             $ProgressPreference = "SilentlyContinue"
@@ -241,7 +290,7 @@ function Install-Tui {
             }
         }
         catch {
-            Write-Error "Could not download the terminal hub binary: $_"
+            Write-Error "Could not download the $Label binary: $_"
             Write-Host "  URL:  $binaryUrl" -ForegroundColor $COLOR_YELLOW
             Write-Host "  Fix:  check your network and retry." -ForegroundColor $COLOR_YELLOW
             Write-Host "  Look: $manifestUrl lists what is published for $version." -ForegroundColor $COLOR_YELLOW
@@ -251,7 +300,7 @@ function Install-Tui {
         # No checksum, no install.
         $got = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash
         if ($got -ne $want.ToUpper()) {
-            Write-Error "Checksum mismatch for $filename - refusing to install."
+            Write-Error "Checksum mismatch for $Filename - refusing to install."
             Write-Host "  expected $($want.ToUpper())" -ForegroundColor $COLOR_YELLOW
             Write-Host "  got      $got" -ForegroundColor $COLOR_YELLOW
             Write-Host "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
@@ -265,20 +314,70 @@ function Install-Tui {
         if (-not (Test-Path $GAIA_BIN)) {
             New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
         }
+        $dest = Join-Path $GAIA_BIN $InstallAs
         try {
-            Move-Item -Path $tmpFile -Destination "$GAIA_BIN\gaia-tui.exe" -Force
+            Move-Item -Path $tmpFile -Destination $dest -Force
         }
         catch {
-            Write-Error "Downloaded and verified, but could not write $GAIA_BIN\gaia-tui.exe`: $_"
-            Write-Host "  Fix:  close any running gaia-tui (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
-            Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
+            Write-Error "Downloaded and verified, but could not write $dest`: $_"
+            Write-Host "  Fix:  close any running gaia-tui or gaia-agent (and any tool" -ForegroundColor $COLOR_YELLOW
+            Write-Host "        scanning that folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
             exit 1
         }
-        Write-Success "Terminal hub $version installed to $GAIA_BIN\gaia-tui.exe"
+        Write-Success "$Label $version installed to $dest"
     }
     finally {
         if (Test-Path $tmpDir) { Remove-Item -Path $tmpDir -Recurse -Force }
     }
+}
+
+# A missing terminal hub fails the install - it is the advertised entry point.
+function Install-Tui {
+    Write-Step "Installing the GAIA terminal hub"
+
+    $platform = Get-TerminalHubPlatform
+    if (-not $platform) {
+        $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+        Write-Error "No terminal hub build for processor architecture '$arch'."
+        Write-Host "  Published targets: win-x64, win-arm64, linux-x64, linux-arm64," -ForegroundColor $COLOR_YELLOW
+        Write-Host "  darwin-x64, darwin-arm64. See $GAIA_HUB_BASE_URL/index.json" -ForegroundColor $COLOR_YELLOW
+        exit 1
+    }
+
+    Install-HubBinary -AgentId $TERMINAL_HUB_ID -Platform $platform `
+        -Filename "gaia-$platform.exe" -InstallAs "gaia-tui.exe" `
+        -Label "terminal hub" `
+        -Hint "git clone https://github.com/amd/gaia; cd gaia\tui; make build"
+}
+
+# A missing flagship agent fails the install too. The terminal hub spawns
+# `gaia-agent`, so shipping the hub without it installs a front end whose
+# readiness gate halts on the first launch - and whose remedy is "re-run the
+# GAIA installer", which is this script.
+function Install-Agent {
+    Write-Step "Installing the GAIA agent"
+
+    $platform = Get-TerminalHubPlatform
+    if (-not $platform) {
+        $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+        Write-Error "No GAIA agent build for processor architecture '$arch'."
+        Write-Host "  Look: $GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json" -ForegroundColor $COLOR_YELLOW
+        exit 1
+    }
+
+    # Unreachable in a normal run - Assert-FlagshipPlatform refuses this before
+    # anything is installed. Kept as the authoritative guard so the function is
+    # safe to call on its own.
+    $npmKey = $FLAGSHIP_PLATFORM_KEYS[$platform]
+    if (-not $npmKey) {
+        Show-UnsupportedPlatformError $platform
+    }
+
+    # `gaia-agent.exe`, never `gaia.exe`: same collision as the terminal hub.
+    Install-HubBinary -AgentId $FLAGSHIP_AGENT_ID -Platform $platform `
+        -Filename "$FLAGSHIP_ARTIFACT_PREFIX-$npmKey.exe" -InstallAs "gaia-agent.exe" `
+        -Label "GAIA agent" `
+        -Hint "git clone https://github.com/amd/gaia; cd gaia; python hub\agents\$FLAGSHIP_AGENT_ID\python\packaging\freeze.py --onefile --target stdio"
 }
 
 function Add-ToPath {
@@ -323,14 +422,16 @@ function Show-NextSteps {
     Write-Host "================================" -ForegroundColor $COLOR_GREEN
     Write-Host "`n"
 
-    Write-Host "Next steps:" -ForegroundColor $COLOR_CYAN
+    Write-Host "Start GAIA:" -ForegroundColor $COLOR_CYAN
     Write-Host "  1. Close and reopen your terminal (or run: refreshenv)" -ForegroundColor White
-    Write-Host "  2. Run: " -ForegroundColor White -NoNewline
-    Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
-    Write-Host " to set up Lemonade Server and download models" -ForegroundColor White
-    Write-Host "     (the Lemonade installer asks for administrator approval)" -ForegroundColor White
-    Write-Host "  3. Open the terminal hub: " -ForegroundColor White -NoNewline
+    Write-Host "  2. " -ForegroundColor White -NoNewline
     Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+    Write-Host "`n"
+    Write-Host "On first run it checks what is still missing and can download the" -ForegroundColor White
+    Write-Host "models for you. To do that up front instead, run " -ForegroundColor White -NoNewline
+    Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
+    Write-Host " first" -ForegroundColor White
+    Write-Host "- it installs Lemonade Server and asks for administrator approval." -ForegroundColor White
     Write-Host "`n"
 
     Write-Host "Documentation: https://amd-gaia.ai" -ForegroundColor $COLOR_CYAN
@@ -354,6 +455,8 @@ function Main {
         exit 1
     }
 
+    Assert-FlagshipPlatform
+
     Show-ElevationNotice
 
     # Install uv if needed
@@ -366,8 +469,11 @@ function Main {
     # CLI reachable.
     Add-ToPath
 
-    # Install the terminal hub binary
+    # The two halves of one program: the hub is the front end, the agent is what
+    # it spawns. Installing either without the other is a dead end, so they land
+    # in the same phase.
     Install-Tui
+    Install-Agent
 
     # Show next steps
     Show-NextSteps

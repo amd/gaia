@@ -27,7 +27,7 @@ _spec.loader.exec_module(fetch_sidecar)  # type: ignore[union-attr]
 PLACEHOLDER = "PENDING-replace-with-real-sha256"
 VERSION = "0.1.1"
 WIN_KEY = "win32-x64"
-WIN_FILE = "gaia-agent-win32-x64.exe"
+WIN_FILE = "gaia-agent-stdio-win32-x64.exe"
 
 BODY = b"\x4d\x5a" + b"pretend this is a signed sidecar" * 8
 BODY_SHA = hashlib.sha256(BODY).hexdigest()
@@ -55,8 +55,15 @@ def _platform_entry(**overrides) -> dict:
 
 
 def _lock(platforms: dict, *, version: str = VERSION) -> dict:
+    # The `stdio` lane, not `sidecar`: what gets staged here is installed on PATH
+    # as `gaia-agent`, and only the stdio build answers the TUI's stdin (#3062).
     return {
-        "components": {"sidecar": {"componentVersion": version, "platforms": platforms}}
+        "components": {
+            fetch_sidecar.LOCK_COMPONENT: {
+                "componentVersion": version,
+                "platforms": platforms,
+            }
+        }
     }
 
 
@@ -382,3 +389,36 @@ def test_platform_has_sidecar_reflects_the_lock(write_lock):
     write_lock(_lock({WIN_KEY: _platform_entry()}))
     assert fetch_sidecar.platform_has_sidecar("win-x64") is True
     assert fetch_sidecar.platform_has_sidecar("linux-x64") is False
+
+
+# ---------------------------------------------------------------------------
+# The lane: the stdio child, never the REST sidecar
+# ---------------------------------------------------------------------------
+#
+# Every test above builds its lock from ``LOCK_COMPONENT``, so it would stay
+# green if the constant were flipped back to "sidecar" -- and the native
+# installers would silently go back to putting a program that binds a port and
+# ignores stdin on PATH under the name the TUI spawns (#3062). These two pin it
+# against the real, committed lock.
+
+
+def test_the_staged_lane_is_the_stdio_child():
+    assert fetch_sidecar.LOCK_COMPONENT == "stdio"
+
+
+def test_the_committed_lock_publishes_stdio_artifacts_for_every_platform():
+    lock_path = Path(__file__).resolve().parents[2] / fetch_sidecar.BINARIES_LOCK
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lane = lock["components"][fetch_sidecar.LOCK_COMPONENT]
+
+    # Every platform the fetcher can be asked for must be published.
+    assert set(lane["platforms"]) == set(fetch_sidecar.PLATFORM_KEYS.values())
+
+    for key, entry in lane["platforms"].items():
+        assert entry["filename"].startswith("gaia-agent-stdio-"), (
+            f"{key} stages {entry['filename']!r}: that is the REST sidecar, which "
+            "never answers the stdin the TUI writes to it"
+        )
+        # What it is INSTALLED as stays `gaia-agent` -- that is the name the
+        # TUI resolves on PATH.
+        assert entry["executable"] in ("gaia-agent", "gaia-agent.exe")
