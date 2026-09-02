@@ -133,3 +133,5 @@ def build_registration():
         icon="mail",
         tools_count=66,  # guarded by tests/test_email_agent.py (#1232)
     )
+
+# touch for #2767 CI verification
