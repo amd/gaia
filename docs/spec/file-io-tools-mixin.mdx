@@ -29,6 +29,38 @@ FileIOToolsMixin provides comprehensive file I/O operations with intelligent fil
 
 ---
 
+## Host Agent Contract
+
+`FileIOToolsMixin` is a mixin, not a base class — it reads `self.path_validator`
+off the host, which nothing sets for it. A class mixing it in must set
+`self.path_validator` to a `PathValidator` instance before `_register_tools()`
+runs.
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
+
+`ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+sets it before calling `super().__init__()`, because `_register_tools()` runs
+inside that call. The Builder's scaffolding (`gaia.agents.builder.template`)
+does the same for any generated agent that includes the `file_io` tool.
+
+A host that forgets is refused rather than silently unconfined or crashed:
+
+- **Write-capable tools** (`write_python_file`, `edit_python_file`,
+  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`) deny
+  the operation outright — the target file is never created or modified —
+  instead of proceeding without a confinement check.
+- **Read tools** (`read_file`, `search_code`, `generate_diff`,
+  `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
+  class, the missing attribute, and this section, instead of surfacing a
+  bare, unhelpful `AttributeError`.
+
+`self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
+`self.rag`, there is no "intentionally disabled" state for path confinement.
+
+---
+
 ## Tool Specifications
 
 ### 1. read_file

@@ -1185,5 +1185,73 @@ $secondary-color: #6c757d;
         # Should find button in CSS, JSX, etc.
 
 
+class TestChatAgentHostAttributeContract:
+    """Regression tests for issue #3316.
+
+    ChatAgent is the reference host for ``RAGToolsMixin``/``FileIOToolsMixin``
+    — it already binds every required attribute (``self.rag``,
+    ``self.path_validator``, ...) before ``super().__init__()`` runs, so the
+    host-attribute contract fix must leave it completely unaffected. Lemonade
+    and the chat client are mocked so this exercises a real ``ChatAgent``
+    without needing a live model server.
+    """
+
+    def _construct(self, cls, config):
+        with (
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ),
+            patch("gaia.agents.base.agent.AgentSDK"),
+        ):
+            return cls(config)
+
+    def test_chat_agent_constructs_and_rag_tool_runs(self, tmp_path):
+        """AC4: ChatAgent constructs and its rag tools run without raising."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        config = ChatAgentConfig(
+            silent_mode=True, max_steps=1, allowed_paths=[str(tmp_path)]
+        )
+        agent = self._construct(ChatAgent, config)
+        try:
+            result = _TOOL_REGISTRY["rag_status"]["function"]()
+            assert result["status"] == "success"
+
+            write_result = _TOOL_REGISTRY["write_file"]["function"](
+                file_path=str(tmp_path / "ok.txt"), content="hello"
+            )
+            assert write_result["status"] == "success"
+        finally:
+            agent.stop_watching()
+
+    def test_chat_agent_lite_constructs_and_tools_run(self):
+        """AC4: ChatAgentLite (no rag/file_io mixins — a collateral-damage
+        check, not a direct target of this fix) constructs and registers
+        its tools without raising. It hardcodes skip_lemonade=True itself."""
+        from gaia_agent_chat.lite_agent import ChatAgentLite, ChatAgentLiteConfig
+
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        ChatAgentLite(ChatAgentLiteConfig())
+        assert "take_screenshot" in _TOOL_REGISTRY
+
+    def test_chat_agent_rag_stays_lazily_unset_at_construction(self, tmp_path):
+        """AC5: constructing ChatAgent must not trigger the lazy self.rag
+        property — the read-time check added by #3316 must not probe
+        speculatively (hasattr/getattr-with-default) at any point outside an
+        actual tool call."""
+        from gaia_agent_chat.agent import _UNSET
+
+        config = ChatAgentConfig(
+            silent_mode=True, max_steps=1, allowed_paths=[str(tmp_path)]
+        )
+        agent = self._construct(ChatAgent, config)
+        try:
+            assert agent._rag is _UNSET
+        finally:
+            agent.stop_watching()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
