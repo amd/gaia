@@ -49,6 +49,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
@@ -213,6 +214,21 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
     return "default"
 
 
+def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
+    """Reject OAuth scopes outside the connector catalog ceiling (#2736).
+
+    The imports stay local because the catalog loads OAuth providers which
+    eventually import this flow module.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connector_spec = REGISTRY.get(provider_id)
+    disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
+    if disallowed:
+        raise ScopeNotAllowedError(None, provider_id, disallowed)
+
+
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
@@ -260,6 +276,8 @@ async def start_authorization(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # Both CLI and Agent UI browser flows converge here.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -680,6 +698,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -757,6 +776,9 @@ async def poll_device_flow(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # An SDK caller can reach poll_ without going through start_, and these
+    # scopes are what save_connection records.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)
