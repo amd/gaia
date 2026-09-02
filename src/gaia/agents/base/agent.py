@@ -198,6 +198,13 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Installs software, and signs a CLI in to the user's account. Both mutate
+    # the machine on the user's behalf, and neither can ever be pre-authorized:
+    # the only grant that skips this gate covers ``run_shell_command`` reads
+    # (``ShellToolsMixin.skill_grant_covers_call``), and ``grant_scope`` offers
+    # no "always" for either, so every call is asked about on its own.
+    "install_cli",
+    "sign_in_cli",
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
