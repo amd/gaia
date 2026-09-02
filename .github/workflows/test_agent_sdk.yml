@@ -43,10 +43,12 @@ permissions:
 jobs:
   test-agent-sdk-windows:
     name: Test Agent SDK on Windows (Lemonade Integration)
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Runs on the AMD Ryzen Dev Lab pool: a runner is registered for this job
+    # alone and destroyed afterwards. 'devlab-dispatch' is what routes it there;
+    # 'strix-halo' narrows to the silicon. The pool does not answer to 'stx' or
+    # 'stx-test' -- those name specific static machines, and a shared pool
+    # claiming them would compete for their work rather than add capacity.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
