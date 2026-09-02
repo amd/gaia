@@ -40,6 +40,10 @@ Without an activation, an MCP connector's tools never enter the agent's tool lis
 
 Grants are stored in `~/.gaia/connectors/grants.json` and activations in `~/.gaia/connectors/activations.json` — both flat files that are **not** secret stores. They contain agent IDs and scope/boolean values, never credentials.
 
+When a grant is requested during OAuth connect, GAIA records only the
+intersection of the agent's requested scopes and the scopes the token endpoint
+actually grants.
+
 ## Revocation
 
 You can revoke access at any level:

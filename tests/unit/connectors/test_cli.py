@@ -17,6 +17,8 @@ import pytest
 from gaia.connectors import cli as connections_cli
 from gaia.connectors.providers import _registry
 
+pytestmark = pytest.mark.allow_network
+
 
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
@@ -154,7 +156,6 @@ class TestConnectGrantAgent:
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
         )
-
         rc, _out, err = _run(
             "connectors", "connect", "google", "--grant-agent", "installed:email"
         )
@@ -190,6 +191,12 @@ class TestConnectGrantAgent:
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
         )
+        monkeypatch.setattr(
+            "gaia.connectors.grants.list_agent_grants",
+            lambda _connector_id: {
+                "installed:email": ["https://www.googleapis.com/auth/gmail.modify"]
+            },
+        )
 
         # --scopes is explicit here, so resolve_declared_scopes must never run.
         def _must_not_run(*_a, **_k):
@@ -207,16 +214,22 @@ class TestConnectGrantAgent:
             "google",
             "--scopes",
             "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
             "--grant-agent",
             "installed:email",
         )
         assert rc == 0
         # The grant rides the SAME scopes as the connect — no drift possible.
         assert captured["grant_agents"] == {
-            "installed:email": ["https://www.googleapis.com/auth/gmail.modify"]
+            "installed:email": [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+            ]
         }
         assert "Connected as alice@example.com" in out
         assert "granted google → installed:email" in out
+        assert "gmail.modify" in out
+        assert "gmail.send" not in out
 
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
