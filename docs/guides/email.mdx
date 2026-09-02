@@ -232,8 +232,11 @@ enable it with environment variables when launching the sidecar:
 Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
 (the classification path is shared — nothing is re-implemented) and persists it
 locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
-scheduled run). An invalid value fails sidecar startup with an actionable error
-rather than guessing a schedule. Push delivery and a cross-agent morning brief
+scheduled run). Because that is always a cached run, the response — and the agent's
+`get_briefing` tool — also carry `cache_age_seconds` and `stale`, and past 24 hours
+the briefing's own headline opens with its age. An old briefing is labeled, never
+refused or silently regenerated. An invalid value fails sidecar startup with an
+actionable error rather than guessing a schedule. Push delivery and a cross-agent morning brief
 are planned on the autonomy engine (#555).
 
 ## Small language model classifiers
