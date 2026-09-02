@@ -1260,3 +1260,98 @@ def test_approval_is_bound_to_the_skill_the_user_named(store):
         approve_delta(store, staged["delta_id"], BASE_SKILL, base_name="github-triage")
         is not None
     )
+
+
+# ----------------------------------------------------------------------
+# Store contracts the resolution path depends on
+# ----------------------------------------------------------------------
+
+
+def _put(store, name, section="procedure", scope="AgentA", digest="d"):
+    return store.put_delta(
+        base_name=name,
+        scope=scope,
+        kind=KIND_REPLACE_SECTION,
+        anchor_section=section,
+        anchor_digest=digest,
+        payload={"body": "x"},
+        provenance={"source": "user_instruction"},
+    )
+
+
+def test_the_row_ceiling_drops_the_newest_not_the_oldest(store):
+    """Rows come back oldest-first, so a LIMIT truncates the tail.
+
+    The tail is the set that wins resolution — the last write to a section is
+    the one applied — so a caller that resolves a skill must never accept a
+    truncated read. Two comments used to claim the opposite.
+    """
+    ids = [_put(store, "s") for _ in range(5)]
+
+    kept = [r["id"] for r in store.search_deltas(base_name="s", limit=2)]
+
+    assert kept == ids[:2]
+    assert ids[-1] not in kept, "the newest delta — the winner — was dropped"
+    assert len(store.search_deltas(base_name="s", limit=None)) == 5
+
+
+def test_archiving_is_bound_to_the_skill_and_scope_named(store):
+    mine = _put(store, "mine", scope="AgentA")
+    theirs = _put(store, "theirs", scope="AgentA")
+    other_scope = _put(store, "mine", scope="AgentB")
+
+    assert store.archive_delta(theirs, base_name="mine") is False
+    assert store.archive_delta(other_scope, base_name="mine", scope="AgentA") is False
+    assert store.archive_delta(mine, base_name="mine", scope="AgentA") is True
+
+    def status(delta_id):
+        return store.search_deltas(delta_id=delta_id, include_superseded=True)[0][
+            "status"
+        ]
+
+    assert status(mine) == "archived"
+    assert status(theirs) == "staged"
+    assert status(other_scope) == "staged"
+
+
+def test_archiving_the_same_delta_twice_reports_only_one_change(store):
+    delta_id = _put(store, "s")
+
+    assert store.archive_delta(delta_id) is True
+    assert store.archive_delta(delta_id) is False, "a no-op must not report success"
+
+
+def test_superseding_never_rewrites_an_existing_lineage(store):
+    original = _put(store, "s")
+    first = _put(store, "s")
+    second = _put(store, "s")
+
+    assert store.supersede_delta(original, first) is True
+    assert store.supersede_delta(original, second) is False
+
+    row = store.search_deltas(delta_id=original, include_superseded=True)[0]
+    assert row["superseded_by"] == first, "the audit trail was rewritten"
+
+
+def test_the_tool_refuses_to_stage_while_the_off_switch_is_on(store, monkeypatch):
+    """Off means nothing is learned, not learned-invisibly.
+
+    Resolution already ignores everything under the switch, so a delta staged
+    now would sit in a queue the user has said they do not want and cannot see
+    the effect of. Refusing tells the model to give the correction to the user
+    instead.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    # The tool closes over the mixin — that object is what a real agent IS.
+    agent._mixin.learned_skills_enabled = lambda: False
+
+    result = agent.call(
+        skill="github-triage",
+        section="rules",
+        corrected_text="A correction the user will never see.",
+    )
+
+    assert result["status"] == "error"
+    assert "switched off" in result["message"]
+    assert "GAIA_NO_LEARNED_SKILLS" in result["message"]
+    assert store.search_deltas(base_name="github-triage", scope=SCOPE) == []

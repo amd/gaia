@@ -153,3 +153,38 @@ def test_ui_combination_fails_loudly(capsys, monkeypatch):
     assert exc.value.code == 1
     launch.assert_not_called()
     assert "--no-learned-skills" in capsys.readouterr().err
+
+
+@needs_event_loop
+def test_the_env_var_reaches_agents_no_cli_flag_can(stub_chat_wheel, monkeypatch):
+    """``GAIA_NO_LEARNED_SKILLS`` is the off-switch for the agent that learns.
+
+    ``--no-learned-skills`` only exists on ``gaia chat``, which builds a
+    ChatAgent. The flagship — the only agent that registers
+    ``remember_skill_lesson`` — runs as a daemon sidecar and behind the UI
+    server, where no chat flag reaches it. The env var is read at call time so
+    it also holds for an agent constructed before it was set.
+    """
+    from gaia.agents.base.agent import effective_skill_body
+
+    _run_chat()
+    agent = stub_chat_wheel[0]
+    agent._memory_store = object()
+    agent._incognito = False
+    agent.learned_skills_enabled = types.MethodType(Agent.learned_skills_enabled, agent)
+
+    assert agent._learned_skills_enabled is True
+    assert agent.learned_skills_enabled() is True, "precondition: overlay is on"
+
+    monkeypatch.setenv("GAIA_NO_LEARNED_SKILLS", "1")
+    assert agent.learned_skills_enabled() is False
+    skill = types.SimpleNamespace(name="demo", body="authored body")
+    assert effective_skill_body(agent, skill) == "authored body"
+
+    # An unset or falsy value must not disable it by accident.
+    for value in ("0", "false", "no", "off", ""):
+        monkeypatch.setenv("GAIA_NO_LEARNED_SKILLS", value)
+        assert agent.learned_skills_enabled() is True, f"{value!r} disabled the overlay"
+
+    monkeypatch.delenv("GAIA_NO_LEARNED_SKILLS")
+    assert agent.learned_skills_enabled() is True

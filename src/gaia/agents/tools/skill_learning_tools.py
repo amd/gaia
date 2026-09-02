@@ -15,13 +15,14 @@ Three deliberate limits, each closing a way this could go wrong:
 * **User consent, not model judgement.** The tool only ever *stages*. A staged
   delta is inert — resolution reads active rows only — so what the model writes
   reaches the prompt when the user approves it through ``gaia skill deltas``,
-  and not before. The tool is also in the flagship's
-  ``CONFIRMATION_REQUIRED_TOOLS``, which gates the write itself; approval of
+  and not before. The tool is also in the base agent's
+  ``TOOLS_REQUIRING_CONFIRMATION``, which gates the write itself; approval of
   the content is the separate, explicit step.
 * **Bounded.** A lesson that would make the resolved skill materially larger
   than the authored one is refused at write time with the reason, rather than
   silently trimmed later. Learning is not allowed to become a prompt tax — the
-  case that motivated this feature was a skill hand-patched 48% larger.
+  case that motivated this feature was a skill hand-patched to fit, which made
+  it permanently longer without making it a better match.
 
 Kept out of :mod:`gaia.agents.tools.skill_library_tools` on purpose: that mixin
 is composed by every agent that wants skills, and one more always-registered
@@ -128,6 +129,18 @@ class SkillLearningToolsMixin:
                     "Ask the user to repeat the correction in a normal session "
                     "if they want it to stick."
                 )
+            # The off-switch means "no learned changes", not "learn silently
+            # into a store nothing reads" — a queue the user cannot see is
+            # worse than refusing. Staged rows are inert either way, so an
+            # agent that predates the switch keeps its old behaviour.
+            switch = getattr(agent, "learned_skills_enabled", None)
+            if callable(switch) and not switch():
+                return _failure(
+                    "Learned skill changes are switched off for this session "
+                    "(--no-learned-skills or GAIA_NO_LEARNED_SKILLS), so "
+                    "nothing was stored. Tell the user the correction so they "
+                    "can apply it, or ask them to re-run without the switch."
+                )
 
             # An empty replacement is a deletion wearing a rewrite's clothes:
             # it would blank the section while reporting "corrected". Removal
@@ -161,7 +174,7 @@ class SkillLearningToolsMixin:
             scope = agent.learned_skill_scope()
 
             existing_rows = store.search_deltas(
-                base_name=skill, scope=scope, status=STATUS_ACTIVE
+                base_name=skill, scope=scope, status=STATUS_ACTIVE, limit=None
             )
             existing = [SkillDelta.from_row(r) for r in existing_rows]
 
