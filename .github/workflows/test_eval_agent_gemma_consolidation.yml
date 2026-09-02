@@ -156,7 +156,7 @@ on:
   # `hub/agents/*/python/**`, so 18 hub packages newly qualify for a
   # single-slot pool — scoping to the PR diff is what keeps that affordable.
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The consolidation itself.
