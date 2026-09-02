@@ -21,6 +21,7 @@ if _util_dir not in sys.path:
 check_doc_code = importlib.import_module("check_doc_code")
 
 from gaia.agents.base import tools as tools_module  # noqa: E402
+from gaia.agents.registry import _accepted_init_params  # noqa: E402
 from gaia.security import PathValidator  # noqa: E402
 
 DOC_PATH = Path(__file__).resolve().parents[2] / "docs" / "guides" / "custom-agent.mdx"
@@ -130,6 +131,82 @@ def test_code_review_agent_example_is_runnable(monkeypatch, tmp_path):
     result = read_file(str(sample_file))
 
     assert result["status"] == "success"
+
+
+def _construct_through_registry_filter(klass, **kwargs):
+    """Mimic AgentRegistry's python_factory: filter kwargs to what the
+    class's __init__ chain actually accepts, then construct.
+
+    This is the same filtering ``python_factory`` (registry.py) applies
+    before calling a custom agent's constructor with session-level kwargs
+    injected by the Agent UI (``_session_agent_kwargs`` in
+    ``gaia.ui._chat_helpers``) or by ``AgentRegistry.create_agent`` itself
+    (e.g. ``model_tier``/``model_id``).
+    """
+    accepted = _accepted_init_params(klass)
+    filtered = (
+        kwargs
+        if accepted is None
+        else {k: v for k, v in kwargs.items() if k in accepted}
+    )
+    return klass(**filtered)
+
+
+@pytest.mark.parametrize(
+    "marker,extra_check",
+    [
+        ("class ResearchAgent(Agent", lambda agent: agent.rag is not None),
+        (
+            "class CodeReviewAgent(Agent",
+            lambda agent: isinstance(agent.path_validator, PathValidator),
+        ),
+    ],
+)
+def test_examples_stay_constructible_through_the_agent_registry(
+    monkeypatch, marker, extra_check
+):
+    """Regression: a narrowed __init__ must not reject kwargs the real app
+    sends through AgentRegistry.create_agent -> python_factory (#3312
+    checkpoint redirect). ``model_id`` is in Agent's own base signature, so
+    python_factory's kwarg filter lets it through — an example __init__ that
+    doesn't accept **kwargs and forward it to super().__init__() would
+    TypeError the moment a user picks a model in the Agent UI. UI
+    session-only kwargs (``ui_session_id``, ``rag_documents``,
+    ``allowed_paths``, ``dynamic_tools``) are NOT in Agent's base signature,
+    so python_factory drops them upstream by design — this is not something
+    the example needs to declare (see ``_session_agent_kwargs``'s own
+    docstring: "safe to pass to agents that don't need RAG or a path
+    validator").
+    """
+    monkeypatch.setattr(
+        tools_module, "_TOOL_REGISTRY", dict(tools_module._TOOL_REGISTRY)
+    )
+    block = _get_example_block(marker)
+    namespace = _exec_block(block)
+    class_name = marker.removeprefix("class ").split("(")[0]
+    klass = namespace[class_name]
+
+    # A realistic bundle of kwargs the real app can send: a model_id the
+    # user picked (base Agent accepts this) plus the UI's session-scoped
+    # kwargs (base Agent does NOT declare these — they must be silently
+    # and safely dropped, not raise).
+    agent = _construct_through_registry_filter(
+        klass,
+        model_id="Gemma-4-E4B-it-GGUF",
+        debug=False,
+        ui_session_id="s1",
+        rag_documents=["/tmp/doesnotmatter"],
+        library_documents=[],
+        allowed_paths=["/tmp"],
+        dynamic_tools=False,
+    )
+
+    assert agent.model_id == "Gemma-4-E4B-it-GGUF", (
+        "model_id was accepted by the registry's kwarg filter but never "
+        "reached Agent.__init__ — the example's own __init__ must accept "
+        "**kwargs and forward them to super().__init__(**kwargs)."
+    )
+    assert extra_check(agent)
 
 
 if __name__ == "__main__":
