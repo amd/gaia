@@ -96,12 +96,12 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Build Electron app
         run: |
-          cd ${{ matrix.app.path }}
-          npm ci --prefix .
-          npm run make
+          npm ci
+          npm run --workspace="${{ matrix.app.name }}" make
         shell: bash
 
       - name: Get platform info
