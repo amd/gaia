@@ -72,6 +72,7 @@ class TelegramAdapter:
         self.token = token
         self.allowed_users = allowed_users or set()
         self.application = None
+        self._poll_thread: Optional[threading.Thread] = None
 
     def _allowed(self, user_id: int) -> bool:
         if not self.allowed_users:
@@ -190,9 +191,10 @@ class TelegramAdapter:
     def start(self, token: str, background: bool = False) -> None:
         """Start the telegram Application and run polling.
 
-        If `background` is True, the `Application` instance is returned and not
-        run (caller can manage its lifecycle). Otherwise, this call blocks and
-        runs `run_polling()` until interrupted.
+        If `background` is True, polling runs in a non-daemon thread so a CLI
+        return cannot take the service process down. The application remains
+        available to the caller for lifecycle control. Otherwise, this call
+        blocks and runs `run_polling()` until interrupted.
         """
         # If running in background mode, create PID/log files early so tests
         # and supervisor systems can detect the process even if the
@@ -294,6 +296,16 @@ class TelegramAdapter:
             )
             hs_thread.start()
 
+            def _stop_application(*_):
+                stop_event.set()
+                try:
+                    app.stop_running()
+                except (AttributeError, RuntimeError) as e:
+                    # A partially initialized application may not be able to
+                    # stop its loop, but the signal should still wake the
+                    # health thread and leave the failure visible in logs.
+                    log.debug("Telegram application stop skipped: %s", e)
+
             def _run_polling():
                 try:
                     app.run_polling()
@@ -301,13 +313,17 @@ class TelegramAdapter:
                     # cleanup
                     stop_event.set()
 
-            poll_thread = threading.Thread(target=_run_polling, daemon=True)
+            # This thread owns the background service lifetime. A daemon thread
+            # dies as soon as the CLI handler returns, leaving only a stale PID
+            # file and a bot that never polls.
+            poll_thread = threading.Thread(target=_run_polling, daemon=False)
+            self._poll_thread = poll_thread
             poll_thread.start()
 
             # Register signal handlers for graceful shutdown (works in main thread only)
             try:
-                signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
-                signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+                signal.signal(signal.SIGTERM, _stop_application)
+                signal.signal(signal.SIGINT, _stop_application)
             except (ValueError, OSError) as e:
                 # Not all environments allow signal registration
                 log.debug("Signal registration skipped: %s", e)
