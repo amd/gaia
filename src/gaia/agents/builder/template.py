@@ -246,6 +246,10 @@ def _render_with_tools(
     card_description: str,
 ) -> List[str]:
     """Compose a template with tool mixins (and optional MCP)."""
+    needs_rag_wiring = "rag" in tools
+    needs_file_io_wiring = "file_io" in tools
+    needs_init = enable_mcp or needs_rag_wiring or needs_file_io_wiring
+
     # Build imports
     imports = [
         "from gaia.agents.base.agent import Agent",
@@ -254,6 +258,8 @@ def _render_with_tools(
     for t in tools:
         module_path, mixin_cls = KNOWN_TOOLS[t]
         imports.append(f"from {module_path} import {mixin_cls}")
+    if needs_file_io_wiring:
+        imports.append("from gaia.security import PathValidator")
     if enable_mcp:
         imports.extend(
             [
@@ -285,22 +291,48 @@ def _render_with_tools(
         "",
     ]
 
-    if enable_mcp:
-        lines.extend(
-            [
-                "    # -- MCP Setup --------------------------------------------------",
-                "    # _mcp_manager must be set BEFORE super().__init__() because",
-                "    # Agent.__init__() calls _register_tools(), which loads MCP tools.",
-                "",
-                "    def __init__(self, **kwargs):",
-                "        config_file = str(Path(__file__).parent / 'mcp_servers.json')",
-                "        self._mcp_manager = MCPClientManager(",
-                "            config=MCPConfig(config_file=config_file)",
-                "        )",
-                "        super().__init__(**kwargs)",
-                "",
-            ]
+    if needs_init:
+        lines.append(
+            "    # -- Host State Setup ---------------------------------------------"
         )
+        if enable_mcp:
+            lines.append(
+                "    # _mcp_manager must be set BEFORE super().__init__() because"
+            )
+            lines.append(
+                "    # Agent.__init__() calls _register_tools(), which loads MCP tools."
+            )
+        if needs_rag_wiring or needs_file_io_wiring:
+            lines.append(
+                "    # RAGToolsMixin/FileIOToolsMixin read this state off the host —"
+            )
+            lines.append("    # nothing sets it for you, so it must be bound before")
+            lines.append("    # super().__init__() runs _register_tools().")
+        lines.append("")
+        lines.append("    def __init__(self, **kwargs):")
+        if enable_mcp:
+            lines.extend(
+                [
+                    "        config_file = str(Path(__file__).parent / 'mcp_servers.json')",
+                    "        self._mcp_manager = MCPClientManager(",
+                    "            config=MCPConfig(config_file=config_file)",
+                    "        )",
+                ]
+            )
+        if needs_file_io_wiring:
+            lines.append("        self.path_validator = PathValidator()")
+        if needs_rag_wiring:
+            lines.extend(
+                [
+                    "        self.rag = None  # Wire a RAGSDK instance to enable retrieval",
+                    "        self.indexed_files = set()",
+                    "        self.max_chunks = 5",
+                    "        self.current_session = None",
+                    "        self.session_manager = None",
+                ]
+            )
+        lines.append("        super().__init__(**kwargs)")
+        lines.append("")
 
     lines.extend(
         [
