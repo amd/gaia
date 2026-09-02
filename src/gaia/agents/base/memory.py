@@ -47,6 +47,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.memory_store import (
     EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
@@ -428,6 +429,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # "unreachable" after the fact.
         self._memory_unavailable_reason: Optional[str] = None
         self._memory_unavailable_detail: Optional[str] = None
+        self._memory_unavailable_warning_reported = False
 
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
@@ -835,6 +837,31 @@ class MemoryMixin(ProceduralMemoryMixin):
             f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
             f"then restart the agent. {restart_note}"
         )
+
+    def report_memory_unavailable(self) -> bool:
+        """Report a real startup failure once through the current UI console.
+
+        A ``SilentConsole`` renders ``print_warning`` as a no-op, so reporting
+        through one must not spend the one-shot flag — the UI's non-streaming
+        path builds agents with a ``SilentConsole`` (``_chat_helpers.py``), and
+        the same cached agent later serves streaming turns with a real one.
+        """
+        if getattr(self, "_memory_unavailable_warning_reported", False):
+            return False
+        if getattr(self, "_memory_unavailable_reason", None) not in (
+            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+        ):
+            return False
+        target = getattr(self, "console", None)
+        if target is None or isinstance(target, SilentConsole):
+            return False
+        message = self.memory_unavailable_message()
+        if not message:
+            return False
+        target.print_warning(message)
+        self._memory_unavailable_warning_reported = True
+        return True
 
     # ------------------------------------------------------------------
     # Properties
@@ -2188,6 +2215,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         upcoming/overdue items) is injected per-turn by prepending it to the
         user message.
         """
+        # UI callers may replace the construction-time silent console before
+        # the first turn; report failures through the current handler.
+        self.report_memory_unavailable()
+
         # Run deferred LLM startup tasks on first real query (after self.chat exists)
         if getattr(self, "_memory_post_init_pending", False):
             self._memory_post_init_pending = False

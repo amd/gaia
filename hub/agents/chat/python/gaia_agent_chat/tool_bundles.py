@@ -169,15 +169,16 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (10 tools). Deliberately a smaller share of the registry than
+# Always-on set (12 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, and exactly two universal entry
-# points -- ``read_file`` and ``query_documents`` -- that answer "what is in
-# this file / what do my documents say" without a round trip. Everything else,
-# shell and the web included, is a bundle: it arrives when the turn asks for
-# it. Both entry points are bundle members too, so a file-shaped or
-# document-shaped turn pulls their whole cohort in with them.
+# signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
+# skill discovery, and exactly two universal entry points -- ``read_file`` and
+# ``query_documents`` -- that answer "what is in this file / what do my
+# documents say" without a round trip. Everything else, shell and the web
+# included, is a bundle: it arrives when the turn asks for it. Both entry
+# points are bundle members too, so a file-shaped or document-shaped turn pulls
+# their whole cohort in with them.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
@@ -194,6 +195,9 @@ FULL_CORE_TOOLS = frozenset(
         "request_user_input",
         # escape hatch (#1450)
         "load_tools",
+        # proactive skill discovery (#3235) — the shortlist prompt tells the
+        # model to call this even when the skills bundle was not selected.
+        "load_skill",
     }
 )
 
@@ -395,7 +399,7 @@ FULL_BUNDLES = [
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
 # ToolLoader as ``optional_tools`` so ``validate_registry`` tolerates exactly
-# these and still fails loudly on a typo or a deleted tool. Two structural
+# these and still fails loudly on a typo or a deleted tool. Three structural
 # reasons, not "it might be missing, who knows":
 #
 # 1. Environment-conditional registration -- ``search_documentation`` needs npx
@@ -404,12 +408,21 @@ FULL_BUNDLES = [
 #    registers it unconditionally for this profile.)
 # 2. Subclass-provided mixins -- the skill-library and code-index tools come
 #    from GaiaAgent, so a plain ChatAgent on prompt_profile="full" has none.
+# 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
+#    a degraded-but-running agent has a store and no memory tools. Selection
+#    already skips CORE names absent from the registry; without this, validation
+#    turned that survivable state into a hard ValueError on the first turn.
 #
 # The CI drift guard checks the other direction against the flagship registry,
 # where every one of these IS present, so a rename still fails the build.
 FULL_OPTIONAL_TOOLS = frozenset(
     {
         "search_documentation",
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "search_past_conversations",
         "index_codebase",
         "search_code_index",
         "get_index_status",

@@ -64,7 +64,24 @@ def retriever() -> SkillRetriever:
 
 
 def test_stopwords_and_stemming():
-    assert tokenize("What are the issues you would use?") == ["issu"]
+    assert tokenize("What are the issues you would use?") == ["issue"]
+
+
+def test_plural_and_singular_forms_share_a_stem():
+    assert tokenize("issue issues note notes file files") == [
+        "issue",
+        "issue",
+        "note",
+        "note",
+        "file",
+        "file",
+    ]
+
+
+def test_plural_query_matches_singular_skill_name():
+    retriever = SkillRetriever()
+    retriever.index_texts({"note-taker": "Organize personal notes and reminders."})
+    assert retriever.decide("my notes").load == "note-taker"
 
 
 def test_stemmer_never_shortens_below_the_minimum():

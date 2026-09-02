@@ -44,9 +44,9 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
-    GPU_CTX_SIZE,
     budget_for_ctx,
     is_context_overflow_error,
+    profile_ctx_size,
     truncation_budget,
 )
 
@@ -1516,7 +1516,7 @@ Do NOT wrap conversational replies in JSON.
         candidates: List[Path] = []
         try:
             module_dir = Path(inspect.getfile(type(self))).resolve().parent
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             module_dir = None
         if module_dir is not None:
@@ -1745,7 +1745,15 @@ Do NOT wrap conversational replies in JSON.
         if self.SKILL_MANIFEST:
             path = Path(self.SKILL_MANIFEST)
             if not path.is_absolute():
-                module_file = inspect.getfile(type(self))
+                try:
+                    module_file = inspect.getfile(type(self))
+                except (OSError, TypeError) as exc:
+                    raise _skill_validation_error(
+                        f"Agent {type(self).__name__} sets relative "
+                        f"SKILL_MANIFEST={self.SKILL_MANIFEST!r}, but its source "
+                        "file is unavailable. Use an absolute path or define "
+                        "the agent in a source-backed module."
+                    ) from exc
                 path = (Path(module_file).resolve().parent / path).resolve()
             if not path.is_file():
                 raise _skill_validation_error(
@@ -1758,7 +1766,7 @@ Do NOT wrap conversational replies in JSON.
 
         try:
             module_file = inspect.getfile(type(self))
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             return None
         module_dir = Path(module_file).resolve().parent
@@ -3842,8 +3850,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than GAIA's expected 64K (the
-        chat/rag profile default, ``65536``).
+        loaded with a context size smaller than the active device profile's
+        expected window.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -3873,12 +3881,20 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            device = self.device
+            if device is None:
+                # Match the device used by model loading when an agent was
+                # constructed without an explicit device (e.g. email).
+                from gaia.config import GaiaConfig
+
+                device = GaiaConfig.load().default_device
+            expected_ctx = profile_ctx_size(device)
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Threshold tracks the GPU/CPU profile window; anything
-                    # below it is too small for doc-Q&A and needs a reload.
-                    if 0 < ctx < GPU_CTX_SIZE:
+                    # Compare against the active profile: a correctly loaded
+                    # NPU model is 32K, while GPU/CPU profiles are 64K.
+                    if 0 < ctx < expected_ctx:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except

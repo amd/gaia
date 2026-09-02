@@ -59,6 +59,12 @@ def test_newer_than_days_becomes_ge_cutoff():
     assert result.filter == "receivedDateTime ge 2026-08-15T12:00:00Z"
 
 
+def test_grouped_newer_than_days_does_not_capture_closing_parenthesis():
+    result = translate_query("(newer_than:7d)", now=_NOW)
+    assert result.filter == "receivedDateTime ge 2026-08-15T12:00:00Z"
+    assert result.search is None
+
+
 def test_older_than_days_becomes_le_cutoff():
     result = translate_query("older_than:14d", now=_NOW)
     assert result.filter == "receivedDateTime le 2026-08-08T12:00:00Z"
@@ -96,6 +102,11 @@ def test_filter_and_search_operators_together_raises():
 def test_filter_and_bare_text_together_raises():
     with pytest.raises(ValueError, match="cannot be combined"):
         translate_query("newer_than:7d budget report", now=_NOW)
+
+
+def test_filter_and_grouped_bare_text_still_raises():
+    with pytest.raises(ValueError, match="cannot be combined"):
+        translate_query("(newer_than:7d) budget report", now=_NOW)
 
 
 if __name__ == "__main__":

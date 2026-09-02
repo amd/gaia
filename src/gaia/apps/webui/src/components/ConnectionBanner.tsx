@@ -216,13 +216,16 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
 
     // Case 2: Backend is up but Lemonade Server is not running
     if (systemStatus && !systemStatus.lemonade_running) {
+        const queryFailed = Boolean(systemStatus.lemonade_error);
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    LLM server is not responding &mdash; it may be busy or not running.{' '}
+                    {queryFailed
+                        ? 'Could not query the LLM server status.'
+                        : 'LLM server is not responding — it may be busy or not running.'}{' '}
                     <span className="connection-banner__hint">
                         {systemStatus.start_command
                             ? <>If not started, run: <code>{systemStatus.start_command}</code></>

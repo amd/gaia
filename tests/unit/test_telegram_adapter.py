@@ -1,8 +1,9 @@
 import logging
 import os
 import sys
+import types
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -22,13 +23,14 @@ def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
 
     # Run in background mode so the function does not block; in CI the
     # python-telegram-bot runtime may not be available, so guard accordingly.
+    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
+    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
     adapter = run_telegram(
         token="fake-token-123", allowed_users={12345}, background=True
     )
     assert adapter.token == "fake-token-123"
     assert 12345 in adapter.allowed_users
-    # Application may be None if the telegram dependency is missing.
-    assert hasattr(adapter, "application")
+    assert adapter.application is not None
 
 
 @pytest.mark.asyncio
@@ -84,18 +86,59 @@ async def test_allowed_user_gets_start_greeting():
     assert reply_text.await_args.args[0].startswith("Hello! I'm Gaia.")
 
 
-def test_every_update_handler_enforces_the_allowlist():
-    """A handler added without ``@require_allowed`` is reachable unauthenticated."""
-    handlers = [name for name in dir(TelegramAdapter) if name.startswith("_handle_")]
-    assert handlers, "no update handlers found — did they get renamed?"
+def test_every_registered_update_handler_enforces_the_allowlist(mock_home, monkeypatch):
+    """Every callback actually registered with Telegram must be guarded."""
+
+    class FakeHandler:
+        def __init__(self, *args):
+            self.callback = args[-1]
+
+    class FakeApplication:
+        def __init__(self):
+            self.handlers = []
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+    app = FakeApplication()
+
+    class FakeBuilder:
+        def token(self, token):
+            assert token == "fake-token"
+            return self
+
+        def build(self):
+            return app
+
+    class FakeFilter:
+        def __and__(self, other):
+            return self
+
+        def __invert__(self):
+            return self
+
+    fake_telegram = types.ModuleType("telegram")
+    fake_ext = types.ModuleType("telegram.ext")
+    fake_ext.ApplicationBuilder = FakeBuilder
+    fake_ext.CommandHandler = FakeHandler
+    fake_ext.MessageHandler = FakeHandler
+    fake_ext.filters = SimpleNamespace(ALL=FakeFilter(), COMMAND=FakeFilter())
+    fake_telegram.ext = fake_ext
+    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
+    monkeypatch.setitem(sys.modules, "telegram.ext", fake_ext)
+    monkeypatch.setenv("GAIA_TEST_MODE", "1")
+
+    adapter = TelegramAdapter(token="fake-token")
+    adapter.start(token="fake-token", background=True)
+
+    callbacks = [handler.callback for handler in app.handlers]
+    assert callbacks, "no Telegram handlers were registered"
     unguarded = [
-        name
-        for name in handlers
-        if not getattr(
-            getattr(TelegramAdapter, name), "__gaia_allowlist_guarded__", False
-        )
+        callback.__name__
+        for callback in callbacks
+        if not getattr(callback, "__gaia_allowlist_guarded__", False)
     ]
-    assert not unguarded, f"handlers missing @require_allowed: {unguarded}"
+    assert not unguarded, f"registered handlers missing @require_allowed: {unguarded}"
 
 
 @pytest.mark.asyncio
@@ -329,3 +372,44 @@ async def test_document_ingest_success_is_included_in_session_input(
         str(tmp_path / "gaia_telegram_document-2")
     )
     assert sent_inputs == ["Review this [file indexed: report.pdf]"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "media_type", ["video", "voice", "audio", "sticker", "animation", "video_note"]
+)
+async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock()
+    media = {
+        "video": None,
+        "voice": None,
+        "audio": None,
+        "sticker": None,
+        "animation": None,
+        "video_note": None,
+    }
+    media[media_type] = SimpleNamespace(file_id=f"{media_type}-1")
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="",
+            photo=[],
+            document=None,
+            reply_text=reply_text,
+            **media,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda user_id: (_ for _ in ()).throw(
+            AssertionError("unsupported media should not create a session")
+        ),
+    )
+
+    await adapter._handle_message(update, None)
+
+    reply_text.assert_awaited_once_with(
+        "Unsupported media type — I can handle photos and documents."
+    )

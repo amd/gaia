@@ -121,6 +121,21 @@ class TelegramAdapter:
                 media_note = f"[file indexed: {update.message.document.file_name}]"
             else:
                 media_note = f"[file uploaded: {update.message.document.file_name} - index failed]"
+        elif any(
+            getattr(update.message, media_type, None)
+            for media_type in (
+                "video",
+                "voice",
+                "audio",
+                "sticker",
+                "animation",
+                "video_note",
+            )
+        ):
+            await update.message.reply_text(
+                "Unsupported media type — I can handle photos and documents."
+            )
+            return
 
         user_input = f"{text} {media_note}".strip()
 
@@ -229,16 +244,23 @@ class TelegramAdapter:
                 MessageHandler,
                 filters,
             )
-        except ImportError as e:  # pragma: no cover - dependency missing
-            # If running in background mode (tests or dry-run), allow import to be missing
+        except ImportError as e:
             if background:
-                log.warning(
-                    "python-telegram-bot not installed; running in dry/background mode"
-                )
-                self.application = None
-                return
+                # The PID file is created before importing the optional
+                # dependency so supervisors can discover a real background
+                # process. Do not leave a false-positive PID behind when the
+                # process cannot start.
+                try:
+                    os.remove(pid_path)
+                except OSError as cleanup_error:
+                    log.warning(
+                        "Failed to remove Telegram PID file after startup failure: %s",
+                        cleanup_error,
+                    )
             raise RuntimeError(
-                "python-telegram-bot is required for Telegram support"
+                "python-telegram-bot is required for Telegram support. "
+                'Install it with: pip install "gaia[telegram]" '
+                "(see https://amd-gaia.ai/docs/guides/telegram-adapter)"
             ) from e
 
         app = ApplicationBuilder().token(token).build()
