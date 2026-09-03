@@ -34,14 +34,18 @@ def _installed_backend(client: LemonadeClient):
 
 
 def test_combined_spec_field_is_rejected(client, require_lemonade):
-    """Pins *why* the client splits the spec: a combined field is a 400."""
+    """Pins *why* the client splits the spec: a combined field is a 400.
+
+    Uses a nonexistent backend so that a server which *did* start honouring
+    ``spec`` would fail this test rather than kick off a real install.
+    """
     response = requests.post(
-        f"{client.base_url}/install", json={"spec": "flm:npu"}, timeout=30
+        f"{client.base_url}/install", json={"spec": "nonexistent:backend"}, timeout=30
     )
 
     assert response.status_code == 400, (
         "A combined 'spec' field was accepted -- if the server now supports it, "
-        "LemonadeClient._split_backend_spec can be simplified"
+        "split_backend_spec in lemonade_client can be simplified"
     )
     assert "recipe" in response.text and "backend" in response.text
 

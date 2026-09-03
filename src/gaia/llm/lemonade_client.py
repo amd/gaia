@@ -223,7 +223,7 @@ def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     return budget_for_ctx(ctx)
 
 
-def _split_backend_spec(spec: str) -> Tuple[str, str]:
+def split_backend_spec(spec: str) -> Tuple[str, str]:
     """Split a ``recipe:backend`` spec into its two parts.
 
     ``/install`` and ``/uninstall`` take the halves as separate fields and
@@ -2558,7 +2558,7 @@ class LemonadeClient:
             client.install_backend("llamacpp:rocm", force=True)
         """
         self.log.info(f"Installing backend: {spec}")
-        recipe, backend = _split_backend_spec(spec)
+        recipe, backend = split_backend_spec(spec)
         request_data: Dict[str, Any] = {"recipe": recipe, "backend": backend}
         if force:
             request_data["force"] = True
@@ -2585,7 +2585,7 @@ class LemonadeClient:
             LemonadeClientError: If the uninstall fails
         """
         self.log.info(f"Uninstalling backend: {spec}")
-        recipe, backend = _split_backend_spec(spec)
+        recipe, backend = split_backend_spec(spec)
         request_data: Dict[str, Any] = {"recipe": recipe, "backend": backend}
         url = f"{self.base_url}/uninstall"
         try:

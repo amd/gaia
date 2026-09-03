@@ -213,6 +213,9 @@ try {
     if ($Backend) {
         Write-Host "=== Installing Backend: $Backend ==="
         $recipe, $backendKey = $Backend.Split(":", 2)
+        if (-not $recipe -or -not $backendKey) {
+            throw "Invalid -Backend '$Backend': expected 'recipe:backend' (e.g. 'flm:npu')"
+        }
         $sysinfo = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/system-info" -TimeoutSec 30
         $backendInfo = $sysinfo.recipes.$recipe.backends.$backendKey
         if (-not $backendInfo) {
@@ -233,8 +236,15 @@ try {
             # /install takes recipe + backend as separate fields; a combined
             # "spec" is rejected with 400 "Both 'recipe' and 'backend' are required".
             $installBody = @{ recipe = $recipe; backend = $backendKey } | ConvertTo-Json
-            $installResponse = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/install" `
-                -Method POST -ContentType "application/json" -Body $installBody -TimeoutSec 900
+            try {
+                $installResponse = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/install" `
+                    -Method POST -ContentType "application/json" -Body $installBody -TimeoutSec 900
+            } catch {
+                # The JSON body carries the actionable reason; the exception
+                # message is only "(400) Bad Request".
+                $detail = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+                throw "Installing backend '$Backend' failed: $detail"
+            }
             Write-Host "[OK] Backend installed: $($installResponse | ConvertTo-Json -Compress)"
         }
 

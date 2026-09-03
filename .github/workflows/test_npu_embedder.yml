@@ -94,11 +94,14 @@ jobs:
               -Port 13305 `
               -CtxSize 32768 `
               -InitWaitTime 15
-          # The script exits non-zero on setup failure; without this check the
-          # step ran on regardless and passed on skipped tests.
-          if ($LASTEXITCODE -ne 0) { throw "Lemonade/FLM setup failed (exit $LASTEXITCODE)" }
+          $setupExit = $LASTEXITCODE
 
           try {
+              # The script exits non-zero on setup failure; without this check
+              # the step ran on regardless and passed on skipped tests. Inside
+              # the try so the finally still reaps a half-started server.
+              if ($setupExit -ne 0) { throw "Lemonade/FLM setup failed (exit $setupExit)" }
+
               # -rs prints skip reasons; under GAIA_REQUIRE_FLM=1 a missing FLM
               # model fails instead of skipping.
               python -m pytest tests/test_npu_flm_embedder_hw.py -v -rs --tb=short

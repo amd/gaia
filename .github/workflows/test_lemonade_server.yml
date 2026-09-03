@@ -77,6 +77,9 @@ jobs:
           try {
               # Start server and load model (all in one session)
               .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 13305 -CtxSize 32768 -InitWaitTime 10
+              # Stop here on setup failure: the script exits non-zero without
+              # loading the model, so the suite would run at Lemonade's own ctx.
+              if ($LASTEXITCODE -ne 0) { throw "Lemonade setup failed (exit $LASTEXITCODE)" }
 
               # Verify health endpoint
               Write-Host "=== Verifying Health Endpoint ==="

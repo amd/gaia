@@ -27,7 +27,7 @@ import os
 import pytest
 
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import LemonadeClient
 
 pytestmark = [pytest.mark.integration, pytest.mark.real_model]
 
@@ -42,11 +42,13 @@ EXPECTED_DIM = 768
 
 
 def _catalog_ids(client: LemonadeClient) -> set:
-    """Model ids the live server advertises (empty set if unreachable)."""
-    try:
-        catalog = client.list_models(show_all=True)
-    except LemonadeClientError:
-        return set()
+    """Model ids the live server advertises.
+
+    Deliberately does not swallow the error: an unreachable server must not be
+    reported as "the FLM backend is missing", which is what an empty set would
+    make the caller say.
+    """
+    catalog = client.list_models(show_all=True)
     data = catalog.get("data", catalog) if isinstance(catalog, dict) else catalog
     ids = set()
     for entry in data or []:
@@ -63,7 +65,9 @@ def _require_in_catalog(client: LemonadeClient, model: str) -> None:
         f"{model} not in the live Lemonade catalog -- FLM models are contributed "
         "by the flm:npu backend, which is not installed on this server"
     )
-    if os.getenv("GAIA_REQUIRE_FLM") == "1":
+    # Fail closed on any truthy spelling: a gate meant to stop silent passes
+    # must not revert to skipping because someone wrote "true" instead of "1".
+    if os.getenv("GAIA_REQUIRE_FLM", "").strip().lower() in {"1", "true", "yes", "on"}:
         pytest.fail(reason)
     pytest.skip(f"{reason}; requires an FLM/NPU-enabled server on Ryzen AI hardware")
 
