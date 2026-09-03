@@ -296,19 +296,34 @@ class TelegramAdapter:
             )
             hs_thread.start()
 
+            polling_loop: Optional[asyncio.AbstractEventLoop] = None
+            loop_ready = threading.Event()
+
             def _stop_application(*_):
                 stop_event.set()
+                if polling_loop is None:
+                    log.error(
+                        "Telegram polling loop never started; cannot stop it cleanly"
+                    )
+                    return
                 try:
-                    app.stop_running()
-                except (AttributeError, RuntimeError) as e:
-                    # A partially initialized application may not be able to
-                    # stop its loop, but the signal should still wake the
-                    # health thread and leave the failure visible in logs.
-                    log.debug("Telegram application stop skipped: %s", e)
+                    polling_loop.call_soon_threadsafe(polling_loop.stop)
+                except RuntimeError as e:
+                    log.error(
+                        "Telegram polling loop could not be stopped; "
+                        "use gaia telegram stop --force: %s",
+                        e,
+                    )
 
             def _run_polling():
+                nonlocal polling_loop
+                polling_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(polling_loop)
+                loop_ready.set()
                 try:
-                    app.run_polling()
+                    # PTB's default signal handlers only work in the main
+                    # thread. The background thread owns this event loop.
+                    app.run_polling(stop_signals=None)
                 finally:
                     # cleanup
                     stop_event.set()
@@ -319,6 +334,7 @@ class TelegramAdapter:
             poll_thread = threading.Thread(target=_run_polling, daemon=False)
             self._poll_thread = poll_thread
             poll_thread.start()
+            loop_ready.wait(timeout=10)
 
             # Register signal handlers for graceful shutdown (works in main thread only)
             try:

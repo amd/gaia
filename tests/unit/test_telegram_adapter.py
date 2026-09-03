@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import signal
@@ -35,22 +36,23 @@ def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
     assert hasattr(adapter, "application")
 
 
+@pytest.mark.allow_network
 def test_background_start_keeps_polling_process_alive_until_stopped(
     mock_home, monkeypatch
 ):
     poll_started = threading.Event()
     poll_stopped = threading.Event()
     signal_handlers = {}
+    polling_kwargs = {}
 
     class FakeApplication:
         def add_handler(self, handler):
             pass
 
-        def run_polling(self):
+        def run_polling(self, **kwargs):
+            polling_kwargs.update(kwargs)
             poll_started.set()
-            poll_stopped.wait(timeout=5)
-
-        def stop_running(self):
+            asyncio.get_event_loop().run_forever()
             poll_stopped.set()
 
     app = FakeApplication()
@@ -100,10 +102,12 @@ def test_background_start_keeps_polling_process_alive_until_stopped(
     assert adapter._poll_thread is not None
     assert not adapter._poll_thread.daemon
     assert signal.SIGTERM in signal_handlers
+    assert polling_kwargs == {"stop_signals": None}
 
     signal_handlers[signal.SIGTERM](signal.SIGTERM, None)
     adapter._poll_thread.join(timeout=2)
     assert not adapter._poll_thread.is_alive()
+    assert poll_stopped.is_set()
 
 
 @pytest.mark.asyncio
