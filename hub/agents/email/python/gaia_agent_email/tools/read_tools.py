@@ -2253,9 +2253,13 @@ def pre_scan_inbox_impl(
 
         # Session sender preferences affect salience, not classification:
         # surface priority senders first and low-priority senders last within
-        # each section. Stable sorting preserves the backend order for ties.
-        for section in (urgent, actionable, informational, suggested_archives):
+        # each attention section. Archive suggestions are a disposal list, so
+        # the safest candidates (low-priority senders) must come first and
+        # preferred senders last before the cap is applied. Stable sorting
+        # preserves the backend order for ties.
+        for section in (urgent, actionable, informational):
             section.sort(key=_preference_sort_key)
+        suggested_archives.sort(key=_preference_sort_key, reverse=True)
         needs_review.sort(key=_preference_sort_key)
 
         # #2743 redirect: waiting-on-you detections and persisted action

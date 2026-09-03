@@ -334,6 +334,22 @@ class TestPreScanInbox:
             "boss@company.example"
         )
 
+    def test_low_priority_sender_is_first_in_archive_suggestions(self, fake_gmail):
+        out = pre_scan_inbox_impl(
+            fake_gmail,
+            max_messages=50,
+            archive_cap=1,
+            session_preferences={
+                "priority_senders": {"orders@store.example"},
+                "low_priority_senders": {"noreply@github.example"},
+                "category_defaults": {"FYI": "archive"},
+            },
+        )
+        assert len(out["suggested_archives"]) == 1
+        assert extract_sender_email(out["suggested_archives"][0]["sender"]) == (
+            "noreply@github.example"
+        )
+
     def test_low_priority_sender_does_not_change_category(self, fake_gmail):
         """A sender flagged low-priority via session preference is tagged
         for de-prioritization but never has its category overridden
