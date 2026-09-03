@@ -14,7 +14,6 @@ import httpx
 import pytest
 
 from gaia.agents.tools._email.graph import (
-    GRAPH_API_BASE,
     MailboxAuthError,
     MailboxError,
     OutlookReadBackend,
