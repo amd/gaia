@@ -40,10 +40,8 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 30
