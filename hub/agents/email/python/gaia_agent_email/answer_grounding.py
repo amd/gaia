@@ -936,8 +936,11 @@ def find_ungrounded_invite_claim(
         return None
     if "create_event_from_email" in tools_called_this_turn(conversation):
         return None
-    if "received" in match.group(0).lower() and _calendar_has_received_invite_evidence(
-        conversation
+    claim = match.group(0).lower()
+    if (
+        "received" in claim
+        and not re.search(r"\b(?:sent|confirmed)\b", claim)
+        and _calendar_has_received_invite_evidence(conversation)
     ):
         return None
     return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"

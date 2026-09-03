@@ -730,6 +730,13 @@ class TestFindUngroundedInviteClaim:
         text = "The invite was sent to your inbox."
         assert find_ungrounded_invite_claim(text, convo) is not None
 
+    def test_external_evidence_does_not_ground_mixed_sent_and_received_claim(self):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
+        ]
+        text = "An invite was sent to the team and received by all."
+        assert find_ungrounded_invite_claim(text, convo) is not None
+
     def test_negation_far_from_the_word_invite_still_suppresses(self):
         text = "It's not true that an invite was sent for this one."
         assert find_ungrounded_invite_claim(text, []) is None

@@ -20,6 +20,8 @@ never re-derives from ``organizer``.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,9 +30,12 @@ pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     _extract_attendees,
+    _extract_organizer_self,
     detect_calendar_conflicts_impl,
     list_calendar_events_impl,
 )
+
+_CALENDAR_FIXTURE = Path(__file__).parent / "fixtures" / "calendar_invites_2787.json"
 
 # ---------------------------------------------------------------------------
 # _extract_attendees — the pure extraction helper
@@ -68,6 +73,42 @@ class TestExtractAttendees:
         assert _extract_attendees(event) == [
             {"email": "jane@example.com", "response_status": None}
         ]
+
+
+class TestExtractOrganizerSelf:
+    def test_direct_organizer_self_takes_precedence(self):
+        event = {
+            "organizer": {"email": "vendor@example.com", "self": False},
+            "attendees": [{"self": True, "organizer": True}],
+        }
+        assert _extract_organizer_self(event) is False
+
+    @pytest.mark.parametrize("organizer", [{"email": "vendor@example.com"}, None])
+    def test_missing_or_none_organizer_self_uses_explicit_attendee_flags(
+        self, organizer
+    ):
+        event = {
+            "organizer": organizer,
+            "attendees": [
+                {
+                    "email": "me@example.com",
+                    "self": True,
+                    "organizer": False,
+                }
+            ],
+        }
+        assert _extract_organizer_self(event) is False
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"organizer": {"email": "vendor@example.com", "self": None}},
+            {"organizer": {}, "attendees": [{"self": True}]},
+            {"attendees": [{"email": "me@example.com", "self": False}]},
+        ],
+    )
+    def test_missing_explicit_signals_remain_none(self, event):
+        assert _extract_organizer_self(event) is None
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +186,14 @@ class TestListCalendarEventsAttendees:
             {"email": "jane@example.com", "response_status": None}
         ]
 
+    def test_reference_fixture_contains_external_organizer_signal(self):
+        fixture = json.loads(_CALENDAR_FIXTURE.read_text(encoding="utf-8"))
+        cal = _FakeCalendar(fixture["events"])
+
+        out = list_calendar_events_impl(cal, time_min=None, time_max=None)
+
+        assert any(event["organizer_self"] is False for event in out["events"])
+
 
 # ---------------------------------------------------------------------------
 # detect_calendar_conflicts_impl — attendees surfaced per conflicting event
@@ -181,6 +230,35 @@ class TestDetectCalendarConflictsAttendees:
                     "start": {"dateTime": "2026-08-06T09:00:00Z"},
                     "end": {"dateTime": "2026-08-06T10:00:00Z"},
                     "organizer": {"email": "vendor@example.com", "self": False},
+                }
+            ]
+        )
+        out = detect_calendar_conflicts_impl(
+            cal,
+            start_iso="2026-08-06T09:30:00Z",
+            end_iso="2026-08-06T10:30:00Z",
+        )
+
+        assert out["conflicts"][0]["organizer_self"] is False
+
+    def test_conflicting_event_uses_attendee_flags_when_organizer_self_is_missing(
+        self,
+    ):
+        cal = _FakeCalendar(
+            [
+                {
+                    "id": "evt1",
+                    "summary": "Vendor meeting",
+                    "start": {"dateTime": "2026-08-06T09:00:00Z"},
+                    "end": {"dateTime": "2026-08-06T10:00:00Z"},
+                    "organizer": {"email": "vendor@example.com"},
+                    "attendees": [
+                        {
+                            "email": "me@example.com",
+                            "self": True,
+                            "organizer": False,
+                        }
+                    ],
                 }
             ]
         )

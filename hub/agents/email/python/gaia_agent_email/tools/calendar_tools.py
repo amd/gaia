@@ -649,6 +649,30 @@ def _extract_attendees(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _extract_organizer_self(event: Mapping[str, Any]) -> Optional[bool]:
+    """Return the provider's explicit user-organizer signal, if present.
+
+    Google normally exposes this as ``organizer.self``. Some event payloads
+    omit that field while still identifying the authenticated calendar in the
+    attendee list, where ``self`` and ``organizer`` together provide the same
+    explicit signal. Never derive the result from an email address.
+    """
+    organizer = event.get("organizer")
+    if isinstance(organizer, Mapping):
+        organizer_self = organizer.get("self")
+        if isinstance(organizer_self, bool):
+            return organizer_self
+
+    attendees = event.get("attendees") or []
+    for attendee in attendees:
+        if not isinstance(attendee, Mapping) or attendee.get("self") is not True:
+            continue
+        attendee_organizer = attendee.get("organizer")
+        if isinstance(attendee_organizer, bool):
+            return attendee_organizer
+    return None
+
+
 def intervals_overlap(a_start: Any, a_end: Any, b_start: Any, b_end: Any) -> bool:
     """Half-open ``[start, end)`` overlap test.
 
@@ -708,14 +732,13 @@ def detect_calendar_conflicts_impl(
             if intervals_overlap(candidate_start, candidate_end, ev_start, ev_end):
                 start_obj = ev.get("start") or {}
                 end_obj = ev.get("end") or {}
-                organizer_data = ev.get("organizer") or {}
                 conflicts.append(
                     {
                         "id": ev.get("id"),
                         "summary": ev.get("summary", ""),
                         "start": start_obj.get("dateTime") or start_obj.get("date"),
                         "end": end_obj.get("dateTime") or end_obj.get("date"),
-                        "organizer_self": organizer_data.get("self"),
+                        "organizer_self": _extract_organizer_self(ev),
                         "attendees": _extract_attendees(ev),
                     }
                 )
@@ -943,7 +966,7 @@ def list_calendar_events_impl(
                     or (e.get("end") or {}).get("date"),
                     "location": e.get("location"),
                     "organizer": organizer,
-                    "organizer_self": organizer_data.get("self"),
+                    "organizer_self": _extract_organizer_self(e),
                     "missing_organizer": organizer is None,
                     # Real attendees only, [] when the calendar has none
                     # beyond the organizer (#2766) — never inferred from the
@@ -1136,7 +1159,10 @@ class CalendarToolsMixin:
             explicit boolean: ``false`` means the user is not the organizer
             and may be reported as having received an invite for that event;
             ``true`` means the user organized it, and ``null`` means the
-            provider did not supply the signal. Never infer this field."""
+            provider did not supply the signal. When ``organizer.self`` is
+            omitted, the tool may use the provider's explicit
+            ``attendees[].self`` + ``attendees[].organizer`` pair. Never infer
+            this field from an email address."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
