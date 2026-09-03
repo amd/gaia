@@ -1176,7 +1176,8 @@ class OrganizeToolsMixin:
                 def _move_op(backend, mid: str) -> str:
                     resolved = _resolve_label_id(backend, label_id_local, label_cache)
                     backend.add_label(mid, resolved)
-                    backend.archive_message(mid)
+                    if resolved != _INBOX_LABEL:
+                        backend.archive_message(mid)
                     return resolved
 
                 def _move_prior_fn(msg: Dict[str, Any]) -> List[str]:

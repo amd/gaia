@@ -68,3 +68,28 @@ def test_move_to_label_non_inbox_target_still_archives():
     assert "Label_1" in mailbox.messages["inbox"]["labelIds"]
     assert "INBOX" not in mailbox.messages["inbox"]["labelIds"]
     assert mailbox.archive_calls == 1
+
+
+def test_move_to_label_batch_restores_every_message_without_archiving():
+    mailbox = _FakeMailbox()
+    mailbox.messages.update(
+        {
+            "outside-2": {"labelIds": ["Label_1"]},
+            "outside-3": {"labelIds": ["Label_1"]},
+        }
+    )
+    agent = _FakeAgent(mailbox)
+
+    move_batch = get_tool_metadata("move_to_label_batch")["function"]
+    result = json.loads(move_batch(["outside", "outside-2", "outside-3"], "INBOX"))
+
+    assert result["ok"] is True, result
+    assert len(result["data"]["succeeded"]) == 3
+    assert result["data"]["failed"] == []
+    assert all(
+        "INBOX" in mailbox.messages[mid]["labelIds"]
+        for mid in ("outside", "outside-2", "outside-3")
+    )
+    assert mailbox.archive_calls == 0
+
+    agent.close_db()
