@@ -435,6 +435,19 @@ class TestUninstall:
             manager.uninstall()
         assert manager.state_path.exists()
 
+    def test_uninstall_refuses_an_unresponsive_instance(self, manager, monkeypatch):
+        manager._write_state(
+            {"pid": 4321, "port": 13305, "api_key": "k", "version": manager.version}
+        )
+        monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda pid: True)
+        )
+
+        with pytest.raises(EmbeddedLemonadeError, match="embedded Lemonade.*running"):
+            manager.uninstall()
+        assert manager.state_path.exists()
+
 
 class TestCredentials:
     """The API key must not leak into scrollback, history or CI logs."""

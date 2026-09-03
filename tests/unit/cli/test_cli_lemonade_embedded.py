@@ -161,6 +161,19 @@ class TestDispatch:
         )
         assert "uninstalled" in capsys.readouterr().out
 
+    def test_uninstall_reports_when_nothing_is_installed(self, monkeypatch, capsys):
+        from gaia.cli import handle_lemonade_embedded_command
+
+        monkeypatch.setattr(
+            lemonade_embedded.EmbeddedLemonade,
+            "uninstall",
+            lambda self: False,
+        )
+        handle_lemonade_embedded_command(
+            _parser().parse_args(["lemonade", "embedded", "uninstall"])
+        )
+        assert "not installed" in capsys.readouterr().out
+
 
 class TestStatusOutput:
     """`status` must be readable from a cold state."""

@@ -422,6 +422,35 @@ def _close_gaia_log_handlers(home: Optional[Path] = None) -> None:
                 pass
 
 
+def _refuse_running_embedded_purge(
+    home: Optional[Path],
+    *,
+    printer: Callable[[str], None] = print,
+) -> bool:
+    """Refuse a purge while the embedded Lemonade daemon still owns its tree.
+
+    The purge path removes the entire ``lemonade`` directory, so it must use
+    the same health check and unresponsive-process detection as the dedicated
+    embedded uninstall command. The import stays lazy because the installer
+    command is also used by platform uninstallers that do not need Lemonade.
+
+    Returns:
+        True when a live or unresponsive instance blocks the purge.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    status = EmbeddedLemonade(home=_gaia_home(home)).status()
+    if not (status.running or status.unresponsive_pid):
+        return False
+
+    _print(
+        "error: Cannot purge embedded Lemonade while it is running. "
+        "Run `gaia lemonade embedded stop` first.",
+        printer=printer,
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Removal primitives
 # ---------------------------------------------------------------------------
@@ -792,6 +821,9 @@ def run(
     if dry_run:
         _print("[dry-run] No files were modified.", printer=printer)
         return EXIT_OK
+
+    if purge and _refuse_running_embedded_purge(home, printer=printer):
+        return EXIT_ABORTED
 
     if not _should_skip_prompt(yes):
         if not _confirm(input_fn=input_fn):
