@@ -2,9 +2,15 @@
 # SPDX-License-Identifier: MIT
 """Regression tests for restoring a message with ``move_to_label`` (#2626)."""
 
-from gaia_agent_email import action_store
-from gaia_agent_email.tools.organize_tools import move_to_label_impl
+import json
+from types import SimpleNamespace
 
+import pytest
+
+from gaia_agent_email import action_store
+from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin, move_to_label_impl
+
+from gaia.agents.base.tools import _TOOL_REGISTRY, get_tool_metadata
 from gaia.database.mixin import DatabaseMixin
 
 
@@ -47,6 +53,42 @@ def _make_db():
     db.init_db(":memory:")
     action_store.init_schema(db)
     return db
+
+
+class _FakeAgent(OrganizeToolsMixin, DatabaseMixin):
+    """Minimal host that registers the real organize tool closures."""
+
+    def __init__(self, mailbox):
+        self.config = SimpleNamespace(debug=False, undo_window_seconds=30)
+        self._backends = {"google": mailbox}
+        self._providers = {
+            message_id: "google" for message_id in mailbox.messages
+        }
+        self._organize_batch_id = "test-batch"
+        self._last_archive_batch_id = None
+        self.init_db(":memory:")
+        action_store.init_schema(self)
+        self._register_organize_tools()
+
+    def _organize_batch_threshold_exceeded(self):
+        return False
+
+    def _provider_for_message(self, message_id, mailbox=None):
+        return self._providers[message_id]
+
+    def _backend_for_message(self, message_id):
+        return self._backends[self._providers[message_id]]
+
+    def _record_organize_op(self, message_id, sender):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _preserve_tool_registry():
+    snapshot = dict(_TOOL_REGISTRY)
+    yield
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(snapshot)
 
 
 def test_move_to_label_inbox_restores_without_archiving():
