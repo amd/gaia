@@ -254,6 +254,16 @@ set_emitter(_emitter)
 def _raise_http_for(exc: ConnectorsError) -> HTTPException:
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, ScopeNotAllowedError):
+        return HTTPException(
+            status_code=400,
+            detail={
+                "error": "scope_not_allowed",
+                "agent_id": exc.agent_id,
+                "connector_id": exc.connector_id,
+                "scopes": exc.scopes,
+            },
+        )
     if isinstance(exc, AuthRequiredError):
         if exc.reason in (
             AuthRequiredError.Reason.NOT_CONNECTED,

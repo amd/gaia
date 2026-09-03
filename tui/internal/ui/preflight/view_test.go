@@ -66,13 +66,15 @@ func TestRenderAllFailedAt80x24(t *testing.T) {
 
 	assertFits(t, lines, 80, 24)
 
-	// Every row is present and legible without colour.
+	// Every row is present and legible without colour. The title names the work
+	// in progress rather than a fixed caption — a blocked screen is a SETUP
+	// screen, and saying so is what tells the user the work happens here.
 	for _, want := range []string{
-		"Getting Email ready",
+		"Setting up Email",
 		"Background service",
 		"Email agent",
 		"Lemonade",
-		"AI model",
+		"Language model",
 		"Mailbox",
 	} {
 		if !strings.Contains(screen, want) {
@@ -368,4 +370,66 @@ func TestRenderWrapsLongRemediesInsteadOfOverflowing(t *testing.T) {
 // panel wrapping a long line. Only for assertions — never for what a user sees.
 func squeezeSpace(s string) string {
 	return strings.Join(strings.Fields(s), "")
+}
+
+// The one-key fix has to be the FIRST thing under a fixable row.
+//
+// It used to render last, under `run: <command>` — so the screen led with a
+// command the user was expected to go type, on a row the TUI fixes in place.
+// That is the whole reason `f` exists, and the ordering hid it.
+func TestFixableRowOffersTheKeyBeforeTheManualCommand(t *testing.T) {
+	f := newFake()
+	f.attachErr = &daemon.NotRunningError{Path: "/Users/you/.gaia/host/instance.json"}
+
+	_, lines := renderAt(t, f, 80, 24)
+
+	fixAt, cmdAt := -1, -1
+	for i, l := range lines {
+		if fixAt < 0 && strings.Contains(l, "f start it for me") &&
+			!strings.Contains(l, "r re-check") { // skip the footer key list
+			fixAt = i
+		}
+		if cmdAt < 0 && strings.Contains(l, "gaia daemon start") {
+			cmdAt = i
+		}
+	}
+	if fixAt < 0 || cmdAt < 0 {
+		t.Fatalf("expected both a fix key and a command line:\n%s", joined(lines))
+	}
+	if fixAt > cmdAt {
+		t.Errorf("the manual command (line %d) is offered before the one-key fix "+
+			"(line %d) — the screen reads as 'go run this yourself':\n%s",
+			cmdAt, fixAt, joined(lines))
+	}
+}
+
+// A row the TUI can fix says the command is the ALTERNATIVE, not the
+// instruction. Without "or", the two read as two required steps.
+func TestFixableRowMarksTheCommandAsAnAlternative(t *testing.T) {
+	f := newFake()
+	f.attachErr = &daemon.NotRunningError{Path: "/Users/you/.gaia/host/instance.json"}
+
+	_, lines := renderAt(t, f, 80, 24)
+	if !strings.Contains(joined(lines), "or run:") {
+		t.Errorf("a fixable row does not present its command as an alternative:\n%s",
+			joined(lines))
+	}
+}
+
+// The title tracks what the screen is doing. "Getting X ready" on a screen
+// that is blocking a launch understates it; the user needs to know setup runs
+// right here.
+func TestTitleSaysReadyWhenNothingIsBlocking(t *testing.T) {
+	m, _ := renderAt(t, newFake(), 80, 24)
+	if got := headerTitle(m); got != "Getting Email ready" {
+		t.Errorf("unblocked title = %q, want the ready caption", got)
+	}
+}
+
+func TestTitleSaysSettingUpWhileProvisioning(t *testing.T) {
+	m, _ := renderAt(t, newFake(), 80, 24)
+	m.phase = phaseProvisioning
+	if got := headerTitle(m); got != "Setting up Email" {
+		t.Errorf("provisioning title = %q, want the setup caption", got)
+	}
 }

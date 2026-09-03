@@ -355,6 +355,22 @@ class TestAuthorizeGrantAgents:
         _, kwargs = mock_start.call_args
         assert kwargs["grant_agents"] is None
 
+    @pytest.mark.allow_network
+    def test_authorize_explicit_scope_outside_catalog_is_rejected(self, ui_api_client):
+        bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": [bogus_scope]},
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "scope_not_allowed"
+        assert detail["connector_id"] == "google"
+        assert detail["scopes"] == [bogus_scope]
+
     def test_authorize_unknown_agent_is_404(self, ui_api_client, monkeypatch):
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(

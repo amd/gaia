@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -175,6 +176,29 @@ func TestTheSidecarsEncodedEnvelopeDecidesTheExitCode(t *testing.T) {
 
 	if res.ExitCode != 1 {
 		t.Fatalf("exit = %d, want 1: success:true on the event does not outrank ok:false in the envelope", res.ExitCode)
+	}
+}
+
+func TestTruncatedPartialSuccessExitsZero(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary": `{"succeeded":["a","b"],"failed":[{"error":"already archived"`,
+		"success": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _, _ := captureOneShot(t,
+		event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "archive_message_batch",
+			Data: data,
+		},
+		event.CanonicalFinalEvent{Type: "final", Answer: "Two messages archived."},
+	)
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d, want 0: visible successes prove the partial batch did work", res.ExitCode)
+	}
+	if len(res.FailedTools) != 0 {
+		t.Fatalf("FailedTools = %v, want none", res.FailedTools)
 	}
 }
 

@@ -19,7 +19,10 @@ from typing import Any, Dict, List
 
 import pytest
 
-pytest.importorskip("mcp", reason="mcp SDK not installed ([mcp] extra)")
+try:
+    from mcp.server import MCPServer  # noqa: F401
+except ImportError:
+    pytest.skip("mcp 2.x SDK not installed", allow_module_level=True)
 
 from gaia.agents.base.console import SilentConsole  # noqa: E402
 from gaia.agents.base.mcp_agent import MCPAgent  # noqa: E402

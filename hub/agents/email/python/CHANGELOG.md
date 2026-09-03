@@ -9,6 +9,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
+  a bare text 500 (#3000).** Only four connector exception types were mapped to
+  a status code, so anything else — a `KeyError` on an unexpected Graph payload,
+  a `TypeError` from a shape change — fell through to Starlette's default:
+  `Content-Type: text/plain` with the body `Internal Server Error` and nothing a
+  client could branch on. The sidecar now installs an app-level handler, so those
+  come back as `{"detail": "Internal server error", "error_id": "<12 hex>"}` with
+  the traceback logged server-side against that `error_id`. **Integrators
+  parsing the old text body must switch to the JSON shape.** Known error paths
+  are unchanged — 403/400/502/503, request-validation 422s, and 404/405 all keep
+  their existing status and detail.
 - **An Outlook search containing a quoted value no longer sends Graph a malformed
   `$search` (#3021).** `from:"Acme Corp"` was wrapped verbatim, producing
   `$search="from:"Acme Corp""` nested unescaped quotes. Inner quotes and
@@ -20,6 +31,22 @@ contract version is tracked separately as
   regardless — this closes a defence-in-depth fail-open, not a live bypass. The
   refusal message quotes the header back when one was sent, so a malformed value
   (`:8131`, an unbracketed `::1`) no longer reports as "no Host header".
+
+- **Gmail-style operator search (`from:`, `subject:`, `is:unread`, `newer_than:`) against a
+  connected Outlook mailbox returned nothing (#2996).** `LiveOutlookBackend.list_messages`
+  wrapped the entire query string in quotes and sent it to Microsoft Graph's `$search` as one
+  exact phrase, so an operator reached Graph as literal characters instead of a scope, and the
+  agent's own system prompt instructs it to prefer operators over a bare phrase. `from:` and
+  `subject:` now reach `$search` as KQL scoping keywords inside the wrapping quotes #3021
+  established, which Graph's own KQL-based mail search parses the same way Outlook's web
+  search box does. `is:unread`, `is:read`,
+  `newer_than:`, and `older_than:` (reusing #2830's duration parser) now route to an OData
+  `$filter` instead, since Graph's `$search` does not expose either concept. Graph rejects
+  `$search` and `$filter` together, so a query mixing the two families (`is:unread
+  from:alice`, for example) now raises an actionable error instead of silently searching only
+  one half of it. Absolute-date operators (`after:`, `before:`, `older:`, `newer:`) are
+  unaffected by this change and stay out of scope, matching #2830's own duration-only framing
+  of the Outlook gap.
 
 - **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
   `require_caller_token` enforces a per-session bearer token at runtime, but was

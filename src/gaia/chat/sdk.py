@@ -874,13 +874,17 @@ class AgentSDK:
         """Get the number of conversation pairs (user + assistant)."""
         return len(self.chat_history) // 2
 
-    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs):
+    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs) -> bool:
         """
         Enable RAG (Retrieval-Augmented Generation) for document-based chat.
 
         Args:
             documents: List of PDF file paths to index
             **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True when RAG is enabled and every requested document was indexed;
+            False when one or more documents could not be indexed.
         """
         try:
             from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -901,19 +905,27 @@ class AgentSDK:
         self.rag_enabled = True
 
         # Index documents if provided
+        document_count = len(documents) if documents else 0
+        indexed_count = 0
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
                 result = self.rag.index_document(doc_path)
 
-                if result:
+                if isinstance(result, dict) and result.get("success") is True:
+                    indexed_count += 1
                     self.log.info(f"Successfully indexed: {doc_path}")
                 else:
                     self.log.warning(f"Failed to index document: {doc_path}")
 
-        self.log.info(
-            f"RAG enabled with {len(documents) if documents else 0} documents"
-        )
+        if indexed_count == document_count:
+            self.log.info(f"RAG enabled with {document_count} documents")
+        else:
+            self.log.warning(
+                f"RAG enabled but indexed {indexed_count} of "
+                f"{document_count} documents"
+            )
+        return indexed_count == document_count
 
     def disable_rag(self):
         """Disable RAG functionality."""

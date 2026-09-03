@@ -18,6 +18,7 @@ PYTHON_VERSION="3.12"
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL%/}"
 TERMINAL_HUB_ID="terminal-hub"
+FLAGSHIP_AGENT_ID="gaia"
 
 # Network limits: a black-holed connection must fail, not hang silently.
 CONNECT_TIMEOUT=15
@@ -285,6 +286,106 @@ terminal_hub_python() {
     fi
 }
 
+# Read one artifact's version and SHA-256 out of a hub manifest. The manifest is
+# the only source for the version, the per-platform filename, and the
+# Worker-computed digest, so both installers read it the same way.
+#
+# Args: python, manifest path, filename. Echoes "<version> <sha256>".
+read_hub_manifest() {
+    "$1" - "$2" "$3" <<'MANIFEST_PY'
+import json
+import sys
+
+manifest_path, filename = sys.argv[1], sys.argv[2]
+try:
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+except (OSError, ValueError) as exc:
+    sys.exit("the hub manifest is not readable JSON: %s" % exc)
+
+version = manifest.get("latest_version")
+if not version:
+    sys.exit("the hub manifest declares no latest_version")
+
+entry = (manifest.get("versions") or {}).get(version)
+if not isinstance(entry, dict):
+    sys.exit("the hub manifest names latest_version %s but publishes no such version" % version)
+
+artifacts = entry.get("artifacts")
+if not artifacts:
+    primary = entry.get("artifact")
+    artifacts = [primary] if primary else []
+
+match = next((a for a in artifacts if a.get("filename") == filename), None)
+if match is None:
+    listed = ", ".join(sorted(a.get("filename", "?") for a in artifacts)) or "none"
+    sys.exit("version %s publishes no %s (it publishes: %s)" % (version, filename, listed))
+
+digest = match.get("sha256")
+if not digest:
+    sys.exit("version %s publishes %s with no SHA-256" % (version, filename))
+
+print("%s %s" % (version, digest))
+MANIFEST_PY
+}
+
+# Download one hub artifact and refuse to install it unless its SHA-256 matches
+# what the manifest published. Shared by the terminal hub and the flagship agent
+# so there is exactly one place the verification rule lives.
+#
+# Args: url, temp path, expected digest, destination path, label.
+# Returns: 0 installed, 2 checksum mismatch, 1 anything else. Callers that treat
+# the artifact as optional must still abort on 2 — only integrity is fatal there.
+download_and_verify() {
+    _url="$1"; _tmp="$2"; _want="$3"; _dest="$4"; _label="$5"
+
+    if ! fetch_file "$_url" "$_tmp"; then
+        print_error "Could not download the $_label binary."
+        echo "  URL:  $_url"
+        echo "  Fix:  check your network and retry."
+        return 1
+    fi
+
+    # No checksum, no install.
+    if command -v sha256sum > /dev/null 2>&1; then
+        _got="$(sha256sum "$_tmp" | awk '{print $1}')"
+    elif command -v shasum > /dev/null 2>&1; then
+        _got="$(shasum -a 256 "$_tmp" | awk '{print $1}')"
+    else
+        print_error "No sha256sum or shasum available to verify the download."
+        echo "  Fix:  install coreutils (Linux) or perl (macOS ships shasum), then retry."
+        return 1
+    fi
+
+    if [ "$_want" != "$_got" ]; then
+        print_error "Checksum mismatch for $_label — refusing to install."
+        echo "  expected $_want"
+        echo "  got      $_got"
+        echo "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues"
+        return 2
+    fi
+
+    # Checked, because this is where a verified download still fails: an
+    # unwritable directory, a full disk, a read-only $HOME. Both callers invoke
+    # this as `if ! download_and_verify ...`, which switches `set -e` off inside
+    # the body, so an unchecked failure here reached the caller as success and
+    # printed "installed" over a binary that was never written.
+    # (A running gaia-tui is not one of the cases: `install` unlinks the target
+    # first, so the replace succeeds and the live process keeps the old inode.)
+    if ! mkdir -p "$(dirname "$_dest")"; then
+        print_error "Could not create $(dirname "$_dest") for $_label."
+        echo "  Fix:  check you own that directory and that the disk is not full."
+        return 1
+    fi
+    if ! install -m 0755 "$_tmp" "$_dest"; then
+        print_error "Downloaded and verified $_label, but could not write $_dest."
+        echo "  Fix:  check you own $(dirname "$_dest") and that it is writable, then retry."
+        echo "  Look: free disk space, and whether $_dest is held by another tool."
+        return 1
+    fi
+    return 0
+}
+
 # A missing terminal hub fails the install — it is the advertised entry point.
 install_tui() {
     print_step "Installing the GAIA terminal hub"
@@ -322,42 +423,7 @@ install_tui() {
     # The manifest is the only source for the version, the per-platform
     # filename, and the Worker-computed SHA-256.
     resolved=""
-    if ! resolved="$("$py" - "$tmp/manifest.json" "$filename" <<'PYEOF'
-import json
-import sys
-
-manifest_path, filename = sys.argv[1], sys.argv[2]
-try:
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-except (OSError, ValueError) as exc:
-    sys.exit("the hub manifest is not readable JSON: %s" % exc)
-
-version = manifest.get("latest_version")
-if not version:
-    sys.exit("the hub manifest declares no latest_version")
-
-entry = (manifest.get("versions") or {}).get(version)
-if not isinstance(entry, dict):
-    sys.exit("the hub manifest names latest_version %s but publishes no such version" % version)
-
-artifacts = entry.get("artifacts")
-if not artifacts:
-    primary = entry.get("artifact")
-    artifacts = [primary] if primary else []
-
-match = next((a for a in artifacts if a.get("filename") == filename), None)
-if match is None:
-    listed = ", ".join(sorted(a.get("filename", "?") for a in artifacts)) or "none"
-    sys.exit("version %s publishes no %s (it publishes: %s)" % (version, filename, listed))
-
-digest = match.get("sha256")
-if not digest:
-    sys.exit("version %s publishes %s with no SHA-256" % (version, filename))
-
-print("%s %s" % (version, digest))
-PYEOF
-)"; then
+    if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
         print_error "Could not resolve the terminal hub build for $platform."
         echo "  Reported above by the manifest reader."
         echo "  Fix:  if your platform is genuinely unpublished, build from source:"
@@ -371,39 +437,86 @@ PYEOF
 
     binary_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
     print_step "Downloading terminal hub $version for $platform"
-    if ! fetch_file "$binary_url" "$tmp/$filename"; then
-        print_error "Could not download the terminal hub binary."
-        echo "  URL:  $binary_url"
-        echo "  Fix:  check your network and retry."
+    # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
+    # start the Python-owned daemon, so a Go binary by that name finds itself.
+    if ! download_and_verify "$binary_url" "$tmp/$filename" "$want" \
+            "$GAIA_BIN/gaia-tui" "terminal hub"; then
         echo "  Look: $manifest_url lists what is published for $version."
         exit 1
     fi
+    print_success "Terminal hub $version installed to $GAIA_BIN/gaia-tui"
+}
 
-    # No checksum, no install.
-    if command -v sha256sum > /dev/null 2>&1; then
-        got="$(sha256sum "$tmp/$filename" | awk '{print $1}')"
-    elif command -v shasum > /dev/null 2>&1; then
-        got="$(shasum -a 256 "$tmp/$filename" | awk '{print $1}')"
-    else
-        print_error "No sha256sum or shasum available to verify the download."
-        echo "  Fix:  install coreutils (Linux) or perl (macOS ships shasum), then retry."
-        exit 1
+# The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
+# child process, so without this binary the flagship is listed but cannot run —
+# which is what `curl | sh` left behind before: a UI with no agent under it.
+#
+# Installed into $GAIA_BIN because that is the directory this installer owns and
+# has already put on PATH, so the hub's exec.LookPath finds gaia-agent there.
+#
+# Only a checksum mismatch is fatal. A missing build or a failed download leaves
+# a working hub and a working Python CLI, so those warn and continue rather than
+# failing an otherwise complete install. Never silent — an unrunnable flagship is
+# exactly the thing a user must be told about.
+install_flagship_agent() {
+    print_step "Installing the GAIA flagship agent"
+
+    platform=""
+    if ! platform="$(terminal_hub_platform)"; then
+        print_warning "No flagship agent build for $(uname -s)/$(uname -m) — skipping."
+        echo "  The terminal hub still works; the GAIA agent will show as unavailable."
+        return 0
+    fi
+    filename="gaia-agent-${platform}"
+
+    py=""
+    if ! py="$(terminal_hub_python)"; then
+        print_warning "No Python interpreter available to read the agent manifest — skipping."
+        return 0
     fi
 
-    if [ "$want" != "$got" ]; then
-        print_error "Checksum mismatch for $filename — refusing to install."
-        echo "  expected $want"
-        echo "  got      $got"
-        echo "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues"
+    scratch_dir agent
+    tmp="$SCRATCH"
+
+    manifest_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
+        print_warning "Could not fetch the flagship agent manifest — skipping."
+        echo "  URL:  $manifest_url"
+        echo "  The GAIA agent will show as unavailable until you re-run this installer."
+        return 0
+    fi
+
+    resolved=""
+    if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
+        print_warning "Could not resolve the flagship agent for $platform — skipping."
+        echo "  Reported above by the manifest reader."
+        echo "  Look: $manifest_url"
+        return 0
+    fi
+
+    version="${resolved%% *}"
+    want="${resolved##* }"
+
+    binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
+    print_step "Downloading GAIA agent $version for $platform"
+    # `|| _rc=$?` rather than `if !`: `set -e` must stay armed, and the two
+    # failure modes are not the same failure.
+    _rc=0
+    download_and_verify "$binary_url" "$tmp/$filename" "$want" \
+            "$GAIA_BIN/gaia-agent" "GAIA agent" || _rc=$?
+    if [ "$_rc" -eq 2 ]; then
+        # A checksum mismatch is never downgraded to a warning.
         echo "  Look: $manifest_url"
         exit 1
+    elif [ "$_rc" -ne 0 ]; then
+        print_warning "The GAIA agent did not install — skipping."
+        echo "  The terminal hub still works; re-run this installer to retry."
+        return 0
     fi
-
-    # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
-    # start the Python-owned daemon, so a Go binary by that name finds itself.
-    mkdir -p "$GAIA_BIN"
-    install -m 0755 "$tmp/$filename" "$GAIA_BIN/gaia-tui"
-    print_success "Terminal hub $version installed to $GAIA_BIN/gaia-tui"
+    # Read by show_next_steps: every path above this line leaves the machine
+    # without an agent, and the closing banner must not promise one.
+    FLAGSHIP_INSTALLED=1
+    print_success "GAIA agent $version installed to $GAIA_BIN/gaia-agent"
 }
 
 # Add GAIA to PATH
@@ -499,7 +612,14 @@ show_next_steps() {
     fi
     printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
     echo "     (installs Lemonade Server — asks for your password)"
-    printf '  3. Open the terminal hub: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+    if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
+        printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '     (it opens the GAIA agent; type %s/hub%s for the agent hub)\n' "$COLOR_GREEN" "$COLOR_RESET"
+    else
+        printf '  3. Open the terminal hub: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '     %sThe GAIA agent was skipped — see the warning above — so this\n' "$COLOR_YELLOW"
+        printf '     opens the agent list, not a chat. Re-run this installer to retry.%s\n' "$COLOR_RESET"
+    fi
     echo ""
 
     printf '%sDocumentation:%s https://amd-gaia.ai\n' "$COLOR_CYAN" "$COLOR_RESET"
@@ -533,6 +653,10 @@ main() {
 
     # Install the terminal hub binary
     install_tui
+
+    # The agent the hub spawns. After install_tui so it lands in the same
+    # directory, which is where the hub looks for it first.
+    install_flagship_agent
 
     # Show next steps
     show_next_steps

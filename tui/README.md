@@ -192,8 +192,8 @@ Anthropic to come back a 404 mid-turn.
 is skipped, so `LemonadeServer.exe` is never launched and the first answer is
 not held behind an install. The transcript says so, and says what it costs:
 retrieval, memory and the code index still embed through Lemonade (Anthropic
-has no embeddings API), so those need `gaia init --profile chat
---skip-chat-model`, or `/setup` in the composer, before they work.
+has no embeddings API), so those need `gaia init --skip-chat-model`, or
+`/setup` in the composer, before they work.
 
 Paths that cannot honour the flag say so instead of quietly ignoring it: the
 daemon transport refuses it, `--claude-model` without `--use-claude` refuses,

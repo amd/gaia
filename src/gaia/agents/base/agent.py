@@ -44,9 +44,9 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
-    GPU_CTX_SIZE,
     budget_for_ctx,
     is_context_overflow_error,
+    profile_ctx_size,
     truncation_budget,
 )
 
@@ -520,6 +520,17 @@ class Agent(abc.ABC):
 
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
+
+    #: Proactive skill discovery: matches the user's turn against skills that
+    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
+    #: has to know a skill's name. ``None`` (the default) leaves every existing
+    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
+    #: See :mod:`gaia.agents.base.skill_discovery`.
+    _skill_discovery: Optional[Any] = None
+
+    #: This turn's discovery note, rendered by
+    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
+    _skill_discovery_result: Optional[Any] = None
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1288,6 +1299,86 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
+    def _discover_skills_for_turn(self, user_input: str) -> None:
+        """Match this turn against installed-but-unloaded skills and act on it.
+
+        No-op unless a subclass built a
+        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
+        agent's composed prompt stays byte-identical.
+
+        Runs BEFORE :meth:`_refresh_active_tool_filter` so tools the loaded skill
+        registers are visible on the same turn, and BEFORE
+        :meth:`_refresh_active_skill_filter` so the skill is in ``loaded_skills``
+        when the body filter is computed. Pinned via :meth:`_pin_skill_body` so
+        that filter cannot immediately hide the body of the skill it just decided
+        the turn was about.
+        """
+        discovery = self._skill_discovery
+        if discovery is None:
+            return
+
+        previous = self._skill_discovery_result
+        query = self._build_skill_discovery_query(user_input)
+        result = discovery.run(
+            query, loaded=self.loaded_skills, load_fn=self.load_skill
+        )
+        self._skill_discovery_result = result
+        if result.loaded:
+            self._pin_skill_body(result.loaded)
+
+        # Rebuild whenever the note changed, INCLUDING after a successful load.
+        # ``load_skill`` rebuilds too, but it runs before the line above, so the
+        # prompt it composed still carries the *previous* turn's note — the
+        # "SKILL ACTIVATED" line would be missing on exactly the turns that
+        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
+        # when the body filter changes, so it cannot be relied on to fix this.
+        before = previous.prompt_fragment() if previous is not None else ""
+        if result.prompt_fragment() != before:
+            self.rebuild_system_prompt()
+
+    def _build_skill_discovery_query(self, user_input: str) -> str:
+        """The text discovery matches on — previous + current user message.
+
+        Reuses ChatAgent's tool-selection query when the agent has one, so a
+        follow-up ("and the one before that?") still carries the prior turn's
+        subject instead of matching on four pronouns.
+        """
+        builder = getattr(self, "_build_tool_selection_query", None)
+        if callable(builder):
+            return builder(user_input)
+        return user_input
+
+    def get_skill_discovery_system_prompt(self) -> str:
+        """Sourcing rule + this turn's discovery note.
+
+        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
+        without discovery enabled, so no existing prompt changes.
+        """
+        if self._skill_discovery is None:
+            return ""
+        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+
+        result = self._skill_discovery_result
+        note = result.prompt_fragment() if result is not None else ""
+        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+
+    def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
+        """Keep *name*'s body rendered for the next few filter refreshes.
+
+        Unlike :meth:`_note_skill_active` this works before any filter exists —
+        proactive discovery runs before the first refresh of a session, and
+        without the pin the very next selection could hide the body of the skill
+        that was just loaded *because* this turn needed it.
+        """
+        # getattr throughout: test stubs copy these methods onto a plain class
+        # without inheriting the class attributes they read.
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if sticky is None:
+            sticky = {}
+            self._sticky_skill_turns = sticky
+        default = getattr(self, "STICKY_SKILL_TURNS", 3)
+        sticky[name] = default if turns is None else turns
+
     def _refresh_active_skill_filter(self, user_input: str) -> None:
         """Update the active skill-body filter for this turn, if it changed.
 
@@ -1351,13 +1442,7 @@ Do NOT wrap conversational replies in JSON.
         # "yes, continue" scores nothing against the skill's description, and
         # collapsing the body one turn after the user asked for it strands
         # the model mid-recipe.
-        # getattr, not attribute access: test stubs copy this method without
-        # inheriting the class attributes.
-        sticky = getattr(self, "_sticky_skill_turns", None)
-        if sticky is None:
-            sticky = {}
-            self._sticky_skill_turns = sticky
-        sticky[name] = getattr(self, "STICKY_SKILL_TURNS", 3)
+        self._pin_skill_body(name)
         if name not in current:
             self._active_skill_filter = sorted(set(current) | {name})
 
@@ -1431,7 +1516,7 @@ Do NOT wrap conversational replies in JSON.
         candidates: List[Path] = []
         try:
             module_dir = Path(inspect.getfile(type(self))).resolve().parent
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             module_dir = None
         if module_dir is not None:
@@ -1660,7 +1745,15 @@ Do NOT wrap conversational replies in JSON.
         if self.SKILL_MANIFEST:
             path = Path(self.SKILL_MANIFEST)
             if not path.is_absolute():
-                module_file = inspect.getfile(type(self))
+                try:
+                    module_file = inspect.getfile(type(self))
+                except (OSError, TypeError) as exc:
+                    raise _skill_validation_error(
+                        f"Agent {type(self).__name__} sets relative "
+                        f"SKILL_MANIFEST={self.SKILL_MANIFEST!r}, but its source "
+                        "file is unavailable. Use an absolute path or define "
+                        "the agent in a source-backed module."
+                    ) from exc
                 path = (Path(module_file).resolve().parent / path).resolve()
             if not path.is_file():
                 raise _skill_validation_error(
@@ -1673,7 +1766,7 @@ Do NOT wrap conversational replies in JSON.
 
         try:
             module_file = inspect.getfile(type(self))
-        except TypeError:
+        except (OSError, TypeError):
             # A class defined in a REPL/exec has no source file to search from.
             return None
         module_dir = Path(module_file).resolve().parent
@@ -3757,8 +3850,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than GAIA's expected 64K (the
-        chat/rag profile default, ``65536``).
+        loaded with a context size smaller than the active device profile's
+        expected window.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -3788,12 +3881,20 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            device = self.device
+            if device is None:
+                # Match the device used by model loading when an agent was
+                # constructed without an explicit device (e.g. email).
+                from gaia.config import GaiaConfig
+
+                device = GaiaConfig.load().default_device
+            expected_ctx = profile_ctx_size(device)
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Threshold tracks the GPU/CPU profile window; anything
-                    # below it is too small for doc-Q&A and needs a reload.
-                    if 0 < ctx < GPU_CTX_SIZE:
+                    # Compare against the active profile: a correctly loaded
+                    # NPU model is 32K, while GPU/CPU profiles are 64K.
+                    if 0 < ctx < expected_ctx:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except
@@ -4384,6 +4485,12 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+
+        # Proactive skill discovery: a skill the user never named can become
+        # loaded here, registering its tools — so it must run BEFORE the tool
+        # filter, or those tools are invisible on the very turn that loaded the
+        # skill, and before the body filter for the same reason.
+        self._discover_skills_for_turn(user_input)
 
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.

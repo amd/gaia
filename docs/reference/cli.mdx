@@ -122,7 +122,7 @@ Each tool call is bounded so a hung tool (e.g. a stuck connector or network requ
 export GAIA_AGENT_TOOL_TIMEOUT=300
 ```
 
-Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
 ### Confirming dangerous tools
 
@@ -186,7 +186,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, email, npu, all) |
+| `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -207,10 +207,10 @@ canonical choices list):
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
+| `gaia` **(default)** | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) — chat, documents, data, web, memory | ~4 GB |
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
-| `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support (the flagship's base class, without the flagship itself) | ~4 GB |
 | `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
@@ -219,17 +219,21 @@ canonical choices list):
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
-agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
-`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
-checkout, `uv pip install -e hub/agents/gaia/python`. See the
-[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
-and current release status.
+A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
+embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
+**not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
+fetches and verifies both binaries with no Python required.
+</Note>
+
+<Note>
+`gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
+device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
+their FLM equivalents — the default never switches your backend for you.
 </Note>
 
 <Note>
 The `talk` agent relies on the `chat` profile — there is no dedicated `talk`
-profile. Run `gaia init --profile chat` (or `all`) to prepare its dependencies.
+profile. The default `gaia` profile is a superset, so a bare `gaia init` covers it.
 </Note>
 
 <Note>
@@ -247,16 +251,12 @@ gaia init
 gaia init --minimal
 ```
 
-```bash Code Development
-gaia init --profile code
-```
-
 ```bash Vision Pipeline (Lightweight)
 gaia init --profile vlm
 ```
 
 ```bash Non-Interactive CI/CD
-gaia init --profile chat --yes
+gaia init --yes
 ```
 
 ```bash Remote Lemonade Server
@@ -1567,6 +1567,118 @@ lemonade-server pull MODEL_NAME [OPTIONS]
 <Tip>
 Use `lemonade-server list` to see all available models and their download status.
 </Tip>
+
+---
+
+## Embedded Lemonade
+
+GAIA can run its own private Lemonade Server instead of the machine-wide install.
+Nothing else on the machine can reach it: it binds a port picked at start time and
+requires an API key GAIA generates, so two apps never fight over one server.
+
+This is the self-contained path — GAIA downloads the server itself, no installer
+and no admin rights. The system-wide install (`gaia init`) is unaffected and keeps
+serving everything else.
+
+```bash
+gaia lemonade embedded start      # download if needed, then run
+gaia lemonade embedded status
+gaia lemonade embedded stop
+```
+
+Both the port and the API key change on every start, and requests without the key
+get a 401. `start` writes them to a file you source rather than printing the key,
+so the secret never lands in terminal scrollback, shell history or a CI log:
+
+```
+✅ Embedded Lemonade 11.8.1 running on http://localhost:62232/api/v1
+   pid 26080   logs: ~/.gaia/lemonade/lemond.log
+
+   The instance is private. Load its URL and API key with:
+   source ~/.gaia/lemonade/env.sh
+```
+
+The file sets `LEMONADE_BASE_URL` and `LEMONADE_API_KEY`, is owner-readable only,
+and is deleted on `stop` — credentials naming a dead port are worse than none,
+since whatever grabs that port next would inherit the trust. On Windows it is
+`env.ps1`, loaded with `. $HOME\.gaia\lemonade\env.ps1`.
+
+<Note>
+GAIA agents do not pick the embedded instance up on their own yet — source that
+file to point them at it. Automatic preference is coming with the startup wiring.
+</Note>
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `start` | Start the private instance, downloading the artifact if missing |
+| `stop` | Stop the private instance |
+| `status` | Show installed version, running port, and installed backends |
+| `install` | Download and unpack the artifact without starting it |
+| `install-backend SPEC` | Download an inference backend, e.g. `llamacpp:vulkan` |
+
+**`start` options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--port` | integer | auto | Port to bind; a free one is chosen when omitted |
+| `--no-install` | flag | false | Fail instead of downloading a missing artifact |
+| `--timeout` | float | 60 | Seconds to wait for the server to become healthy |
+
+**`install` options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--force` | flag | false | Re-download and unpack even if already installed. Refuses while an instance is running — stop it first |
+
+### Inference backends
+
+The downloaded server is small (~5 MB) and ships **no inference backend** — those
+are fetched separately, and only the ones your hardware needs:
+
+| Backend | Size | Covers |
+|---------|------|--------|
+| `llamacpp:cpu` | ~45 MB | CPU inference |
+| `llamacpp:vulkan` | ~96 MB | AMD iGPU / dGPU |
+| `flm:npu` | ~169 MB | Ryzen AI NPU |
+| `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
+
+GAIA's default models (`Gemma-4-E4B-it-GGUF`, `embeddinggemma-300m`) run on the
+`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+
+```bash
+gaia lemonade embedded install-backend llamacpp:vulkan
+```
+
+### Where it stores things
+
+Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
+
+| Path | Contents |
+|------|----------|
+| `dist/<version>/` | The unpacked server for one version |
+| `cache/` | Downloaded backends (`bin/`), shared across versions |
+| `config/config.json` | Server configuration |
+| `state.json` | The running instance: pid, port, API key (owner-only) |
+| `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
+| `lemond.log` | Server output — read this first when `start` fails |
+
+Downloaded **models** are not duplicated: the embedded server reads the same
+Hugging Face cache as every other Lemonade install, so models you already have
+are picked up immediately.
+
+<Note>
+`cache/` is deliberately shared across versions. Backends run from 141 MB to
+4.3 GB, so a Lemonade version bump re-downloads the 5 MB server, not the backends.
+</Note>
+
+After a Lemonade version bump, stop the old instance before starting the new one —
+`start` refuses rather than silently leaving the previous version serving:
+
+```bash
+gaia lemonade embedded stop && gaia lemonade embedded start
+```
 
 ---
 

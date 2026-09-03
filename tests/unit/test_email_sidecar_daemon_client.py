@@ -146,8 +146,9 @@ def test_acquire_stale_daemon_minor_zero_raises_restart_hint(monkeypatch):
     monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
-    with pytest.raises(SidecarError, match="gaia daemon restart"):
+    with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
         daemon_client_module.acquire_handle()
+    assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
 def test_acquire_stale_daemon_major_only_raises_restart_hint(monkeypatch):
@@ -155,8 +156,9 @@ def test_acquire_stale_daemon_major_only_raises_restart_hint(monkeypatch):
     monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
-    with pytest.raises(SidecarError, match="gaia daemon restart"):
+    with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
         daemon_client_module.acquire_handle()
+    assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
 def test_acquire_stale_daemon_floor_check_precedes_http_call(monkeypatch):
@@ -308,8 +310,9 @@ def test_stop_sidecar_stale_daemon_below_minor_floor_raises_restart_hint(
     monkeypatch.setattr(daemon_client_module, "attach", lambda **k: inst)
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
-    with pytest.raises(SidecarError, match="gaia daemon restart"):
+    with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
         daemon_client_module.stop_sidecar()
+    assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
 def test_stop_sidecar_success_posts_bearer_and_returns_none(monkeypatch):

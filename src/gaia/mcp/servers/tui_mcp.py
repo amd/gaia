@@ -36,7 +36,7 @@ import requests
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
 logger = get_logger(__name__)
 
@@ -671,12 +671,21 @@ def _wait(
 
 
 def _wait_for(
-    contains: str = "", absent: str = "", timeout_ms: int = 30000
+    contains: str = "",
+    absent: str = "",
+    state: Optional[Dict[str, Any]] = None,
+    timeout_ms: int = 30000,
 ) -> Dict[str, Any]:
     info, error = _discovered()
     if error:
         return error
-    return _wait(info, contains=contains, absent=absent, timeout_ms=timeout_ms)
+    return _wait(
+        info,
+        contains=contains,
+        absent=absent,
+        state=state,
+        timeout_ms=timeout_ms,
+    )
 
 
 def _resize(cols: int, rows: int) -> Dict[str, Any]:
@@ -708,13 +717,13 @@ def route_logging_to_stderr() -> None:
             handler.setStream(sys.stderr)
 
 
-def create_tui_mcp() -> "FastMCP":
+def create_tui_mcp() -> "MCPServer":
     """Create the MCP server exposing the GAIA TUI control tools."""
     # Imported lazily so the helpers above stay importable without the optional
     # ``mcp`` dependency, which the unit-test job does not install (issue #1750).
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
-    mcp = FastMCP(name="GAIA TUI")
+    mcp = MCPServer(name="GAIA TUI")
 
     @mcp.tool()
     def tui_status() -> Dict[str, Any]:
@@ -786,20 +795,34 @@ def create_tui_mcp() -> "FastMCP":
 
     @mcp.tool()
     def tui_wait_for(
-        contains: str = "", absent: str = "", timeout_ms: int = 30000
+        contains: str = "",
+        absent: str = "",
+        state: Optional[Dict[str, Any]] = None,
+        timeout_ms: int = 30000,
     ) -> Dict[str, Any]:
         """Block until the GAIA TUI's screen matches, instead of polling it.
 
-        Pass at least one matcher; both are ANDed and matched against the plain
-        (ANSI-stripped) screen. On timeout this returns an error containing the
-        text the screen actually had, so you can see why the match never landed.
+        Pass at least one matcher. Text matchers are ANDed against the plain
+        (ANSI-stripped) screen; state matchers are ANDed against the TUI's
+        structured state. On timeout this returns an error containing the text
+        and state the TUI actually had, so you can see why the match never
+        landed.
 
         Args:
             contains: Text that must appear on screen.
             absent: Text that must have disappeared from the screen.
+            state: State fields that must match — supported keys are view, agent,
+                overlay, blocker (strings) and streaming (bool), e.g.
+                {"view": "chat"} or {"streaming": False}. Other keys are
+                rejected by the control server.
             timeout_ms: How long to wait before giving up (default 30000).
         """
-        return _wait_for(contains=contains, absent=absent, timeout_ms=timeout_ms)
+        return _wait_for(
+            contains=contains,
+            absent=absent,
+            state=state,
+            timeout_ms=timeout_ms,
+        )
 
     @mcp.tool()
     def tui_resize(cols: int, rows: int) -> Dict[str, Any]:
@@ -849,14 +872,17 @@ def main():
         print("Starting GAIA TUI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
         print("\n🚀 GAIA TUI MCP Server")
         print(f"   Control file: {_display_path()}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
-        tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
-        print(f"   Tools: {tool_count} registered\n")
-        mcp.run(transport="streamable-http")
+        try:
+            tool_count = len(
+                mcp._tool_manager._tools
+            )  # pylint: disable=protected-access
+            print(f"   Tools: {tool_count} registered\n")
+        except AttributeError:
+            logger.debug("MCPServer tool registry layout changed; skipping tool count")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

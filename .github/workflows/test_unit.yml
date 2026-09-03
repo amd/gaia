@@ -21,6 +21,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
+      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
+      # blocks, so a docs-only change can still break the guard.
+      - 'docs/guides/custom-agent.mdx'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -34,6 +37,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
+      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
+      # blocks, so a docs-only change can still break the guard.
+      - 'docs/guides/custom-agent.mdx'
   merge_group:
   workflow_dispatch:
 
@@ -87,8 +93,14 @@ jobs:
           # (the security-audit scorer); it lives in the [dev] extra, not [api].
           # responses is required by tests/unit/test_lemonade_error_classification.py
           # — same story as cvss: declared in [dev], and this job installs [api].
+          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py:
+          # it execs the custom-agent guide's own RAG example, which constructs a
+          # real RAGSDK — RAGSDK._check_dependencies() raises ImportError without
+          # them. They live only in the [rag]/[ui] extras, which this job (like the
+          # RAG dependencies above) does not install.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
+                                  faiss-cpu pypdf
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -111,6 +123,15 @@ jobs:
           echo ""
           pytest tests/unit/ -v --tb=short \
             --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Run CLI tool-confirmation integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Running CLI Tool-Confirmation Integration Tests ==="
+          echo "The subprocess probe exercises the real confirmation gate, including dynamic agents."
+          echo ""
+          pytest tests/integration/test_cli_tool_confirmation.py -v --tb=short --timeout=300
 
       - name: Upload coverage to Codecov
         if: always()
@@ -147,6 +168,15 @@ jobs:
           echo "Catches an upstream asset rename before it 404s gaia init"
           echo ""
           pytest tests/integration/test_lemonade_release_assets.py -v --tb=short
+
+      - name: Run embedded Lemonade checksum pinning test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Verifying embedded Lemonade SHA-256 pins against live upstream ==="
+          echo "Catches a stale executable digest before embedded install reaches users"
+          echo ""
+          pytest tests/integration/test_lemonade_embeddable_assets.py -v --tb=short
 
       - name: Run daemon integration tests
         env:
@@ -210,8 +240,13 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py
+          # (see the main unit-tests job's install step for why) — this job runs the
+          # same tests/unit/ suite with -x, so a missing dep here doesn't just fail
+          # loudly, it truncates the whole macOS smoke run at that test.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
+                                  faiss-cpu pypdf
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

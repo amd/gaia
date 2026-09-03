@@ -11,6 +11,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import signal
 import tempfile
@@ -43,6 +44,29 @@ def get_or_create_session(user_id: int) -> AgentSDK:
         return sdk
 
 
+UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+
+def require_allowed(handler):
+    """Enforce the allowlist on a Telegram update handler.
+
+    Every handler needs its own check: command updates are routed to their
+    ``CommandHandler`` and never reach the ``~filters.COMMAND`` message handler.
+    """
+
+    @functools.wraps(handler)
+    async def guarded(self, update, context):
+        user = update.effective_user
+        if not self._allowed(user.id):
+            log.warning("Refused Telegram message from unauthorized user %s", user.id)
+            await update.message.reply_text(UNAUTHORIZED_REPLY)
+            return None
+        return await handler(self, update, context)
+
+    guarded.__gaia_allowlist_guarded__ = True
+    return guarded
+
+
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
         self.token = token
@@ -54,20 +78,15 @@ class TelegramAdapter:
             return True
         return user_id in self.allowed_users
 
+    @require_allowed
     async def _handle_start(self, update, context):
         await update.message.reply_text(
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
 
+    @require_allowed
     async def _handle_message(self, update, context):
         user = update.effective_user
-        if not self._allowed(user.id):
-            log.warning("Refused Telegram message from unauthorized user %s", user.id)
-            await update.message.reply_text(
-                "Sorry — you're not authorized to use this bot."
-            )
-            return
-
         text = update.message.text or ""
 
         # If the user sent media, note it and download to tmp for later ingestion
@@ -102,6 +121,21 @@ class TelegramAdapter:
                 media_note = f"[file indexed: {update.message.document.file_name}]"
             else:
                 media_note = f"[file uploaded: {update.message.document.file_name} - index failed]"
+        elif any(
+            getattr(update.message, media_type, None)
+            for media_type in (
+                "video",
+                "voice",
+                "audio",
+                "sticker",
+                "animation",
+                "video_note",
+            )
+        ):
+            await update.message.reply_text(
+                "Unsupported media type — I can handle photos and documents."
+            )
+            return
 
         user_input = f"{text} {media_note}".strip()
 
@@ -210,16 +244,23 @@ class TelegramAdapter:
                 MessageHandler,
                 filters,
             )
-        except ImportError as e:  # pragma: no cover - dependency missing
-            # If running in background mode (tests or dry-run), allow import to be missing
+        except ImportError as e:
             if background:
-                log.warning(
-                    "python-telegram-bot not installed; running in dry/background mode"
-                )
-                self.application = None
-                return
+                # The PID file is created before importing the optional
+                # dependency so supervisors can discover a real background
+                # process. Do not leave a false-positive PID behind when the
+                # process cannot start.
+                try:
+                    os.remove(pid_path)
+                except OSError as cleanup_error:
+                    log.warning(
+                        "Failed to remove Telegram PID file after startup failure: %s",
+                        cleanup_error,
+                    )
             raise RuntimeError(
-                "python-telegram-bot is required for Telegram support"
+                "python-telegram-bot is required for Telegram support. "
+                'Install it with: pip install "gaia[telegram]" '
+                "(see https://amd-gaia.ai/docs/guides/telegram-adapter)"
             ) from e
 
         app = ApplicationBuilder().token(token).build()

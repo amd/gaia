@@ -87,12 +87,13 @@ def _can_send(provider: str) -> bool:
     from gaia_agent_email.outlook_scopes import SCOPE_MAIL_SEND
     from gaia_agent_email.scopes import SCOPE_GMAIL_SEND
 
-    from gaia.connectors.api import list_agent_grants
+    from gaia.connectors.api import get_connection, list_agent_grants
 
     send_scope = SCOPE_GMAIL_SEND if provider == "google" else SCOPE_MAIL_SEND
     try:
-        granted = list_agent_grants(provider).get(EMAIL_AGENT_ID, [])
-        return send_scope in granted
+        connection_scopes = set((get_connection(provider) or {}).get("scopes", []))
+        granted = set(list_agent_grants(provider).get(EMAIL_AGENT_ID, []))
+        return send_scope in connection_scopes & granted
     except Exception as e:
         # Badge fails closed, but a broken grant store must stay diagnosable.
         log.warning("can_send check failed for %s: %s", provider, e)
