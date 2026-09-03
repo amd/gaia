@@ -13,6 +13,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Base tools the smoke harness needs:
 #   libfuse2       — AppImage v2 FUSE mount
+#   software-properties-common — add-apt-repository for the Linux init path
 #   xvfb, xauth    — headless display for Chromium
 #   ca-certificates— TLS trust for any egress from the app itself
 #   file, procps   — assertion helpers
@@ -25,6 +26,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends \
       libfuse2 \
+      software-properties-common \
       xvfb \
       xauth \
       ca-certificates \
