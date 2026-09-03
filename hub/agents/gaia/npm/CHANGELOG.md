@@ -14,6 +14,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **The agent can set up a skill's CLI instead of handing the job back.** Asking
+  it to triage GitHub issues on a machine without `gh` used to end the
+  conversation. Three new tools — `check_cli_setup` (read-only), `install_cli`
+  and `sign_in_cli` — let it report exactly what is wrong, install the CLI with
+  the machine's package manager, and drive the browser sign-in. Both mutating
+  tools are confirmation-gated on every call and no skill grant pre-approves
+  them; over `/v1/gaia/query` they are refused, like every other gated tool
+  (§8). Registered tool count goes 67 → 70.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a

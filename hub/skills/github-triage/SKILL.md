@@ -35,7 +35,7 @@ that failed, and never run `gh --version` to guess.
 | `missing` | `install_cli`. Linux has no automated install — give the user https://cli.github.com. |
 | `unauthenticated` | `sign_in_cli`. |
 | `insufficient_scopes` | `sign_in_cli` — signing in again re-requests `repo` and `read:org`. |
-| `env_token` | **Not a sign-in.** `gh` already works on a `GH_TOKEN`/`GITHUB_TOKEN` from the environment, and refuses to store its own credential while that is set. Say so and move on. |
+| `env_token` | **Never `sign_in_cli`.** The credential is a `GH_TOKEN`/`GITHUB_TOKEN` from the environment, and `gh` refuses to store its own while that is set. Relay the `detail` verbatim — it says whether the token is working, or expired and needing a new value in the variable — and move on. |
 
 Pass `command` back exactly as `check_cli_setup` returned it — `install_command`
 or `sign_in_command`. That string is what the user sees in the approval prompt,

@@ -127,7 +127,7 @@ The check reports one of five states, and only one of them means "sign in":
 | `missing` | Not on `PATH`. | Install it. |
 | `unauthenticated` | Installed, no working credential. | Sign in. |
 | `insufficient_scopes` | Signed in, but the token lacks a permission the skill needs. | Sign in again — the flow re-requests it. |
-| `env_token` | Signed in from a `GH_TOKEN` / `GITHUB_TOKEN` environment variable. **This works.** | Nothing, unless you *want* a browser login — then clear the variable first, because `gh` refuses to store its own credential while it is set. |
+| `env_token` | The credential comes from a `GH_TOKEN` / `GITHUB_TOKEN` environment variable — normally working, and reported here even when that token has expired. | Nothing while it works. If it has expired, replace the variable's value — signing in cannot fix it, because `gh` refuses to store its own credential while the variable is set. Clear the variable to switch to a browser login. |
 
 **You approve every install and every sign-in, one at a time.** Both are in the confirmation set below, and neither offers an "always" — there is no way to pre-authorize them, and loading a skill does not exempt them.
 

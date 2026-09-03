@@ -317,7 +317,40 @@ def _classify_auth_status(
         if part.strip()
     )
 
-    if str(account.get("state") or "") != "success":
+    working = str(account.get("state") or "") == "success"
+
+    # Source before health: a dead env token is still an env token, and while
+    # the variable is set the CLI refuses to store a credential — so a login is
+    # not the remedy for either. Classifying it as UNAUTHENTICATED would spend a
+    # user approval on a command the CLI rejects.
+    if _is_env_token(token_source):
+        return SetupStatus(
+            binary=policy.binary,
+            state=ENV_TOKEN,
+            detail=(
+                (
+                    f"'{policy.binary}' is signed in as {login or 'an account'} "
+                    f"using the {token_source} environment variable. That works, "
+                    "and GAIA will not change it. "
+                    if working
+                    else (
+                        f"'{policy.binary}' is using the {token_source} "
+                        "environment variable, and that token is not working — "
+                        "it was most likely revoked or has expired. Replacing "
+                        "the variable's value is what fixes it. "
+                    )
+                )
+                + f"While {token_source} is set, '{policy.binary}' refuses to "
+                f"store its own credentials, so signing in would fail. To use a "
+                f"browser sign-in instead, clear {token_source} from the "
+                "environment and ask again."
+            ),
+            account=login,
+            scopes=scopes,
+            token_source=token_source,
+        )
+
+    if not working:
         return SetupStatus(
             binary=policy.binary,
             state=UNAUTHENTICATED,
@@ -327,23 +360,6 @@ def _classify_auth_status(
                 "or has expired. Signing in again replaces it."
             ),
             account=login,
-            token_source=token_source,
-        )
-
-    if _is_env_token(token_source):
-        return SetupStatus(
-            binary=policy.binary,
-            state=ENV_TOKEN,
-            detail=(
-                f"'{policy.binary}' is signed in as {login or 'an account'} using "
-                f"the {token_source} environment variable. That works, and GAIA "
-                f"will not change it: while {token_source} is set, "
-                f"'{policy.binary}' refuses to store its own credentials, so "
-                "signing in would fail. To switch to a browser sign-in instead, "
-                f"clear {token_source} from the environment and ask again."
-            ),
-            account=login,
-            scopes=scopes,
             token_source=token_source,
         )
 
@@ -680,11 +696,14 @@ def start_device_login(
 def _login_env() -> dict:
     """The environment the sign-in child runs in.
 
-    Inherited as-is but with the browser-launch hook cleared: ``BROWSER`` names
-    a command the CLI will execute, and a value that arrived from somewhere
-    else in the environment would run under the sign-in rather than open a
-    page. The user is given the URL and opens it themselves, so nothing is lost.
+    Inherited as-is but with every browser-launch hook cleared: these name a
+    command the CLI will execute, and a value that arrived from somewhere else
+    in the environment would run under the sign-in rather than open a page.
+    ``GH_BROWSER`` outranks ``BROWSER`` in gh's own precedence order, so both go
+    — clearing the lower one alone leaves the hook live. The user is given the
+    URL and opens it themselves, so nothing is lost.
     """
     env = os.environ.copy()
-    env.pop("BROWSER", None)
+    for name in ("GH_BROWSER", "BROWSER"):
+        env.pop(name, None)
     return env
