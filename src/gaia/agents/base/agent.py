@@ -117,8 +117,10 @@ def effective_skill_body(agent, skill) -> str:
 
     Resolution is cached per (skill, base digest) on the agent *instance*, which
     outlives a session — ``gaia chat`` reuses one agent across ``/new`` and a
-    daemon sidecar is longer-lived still. So a delta approved from the CLI takes
-    effect on the next agent launch, which is what the approval prompt says.
+    daemon sidecar is longer-lived still. So a delta changed from the CLI takes
+    effect on the next agent launch, which is what that command says.
+    ``remember_skill_lesson`` clears this cache itself, so a lesson the agent
+    learns applies from its next step.
 
     **This must never raise.** ``_get_mixin_prompts`` invokes the calling
     fragment inside a bare ``except`` that drops it on error, so an exception
@@ -300,10 +302,14 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
-    # Writes to the instructions the agent itself runs under. Gated here rather
-    # than on one agent because SkillLearningToolsMixin is composable by name
-    # (KNOWN_TOOLS["skill_learning"]) — a per-agent set leaves every other
-    # composer ungated.
+}
+
+# Tools whose result is nothing but a receipt for what the agent itself just
+# did. EVERY other tool is treated as bringing in content the user did not type
+# — including the skill-library reads, whose text comes from third-party
+# packages, and any name this build has never heard of. Read by
+# ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
+TOOLS_WITHOUT_EXTERNAL_CONTENT = {
     "remember_skill_lesson",
 }
 
@@ -624,8 +630,9 @@ class Agent(abc.ABC):
     # before ``learned_skills_enabled()`` says so.
     _learned_skills_enabled: bool = True
     #: (skill name, base digest) -> resolved body. Resolution happens once per
-    #: session so the fragment is stable across turns; a delta approved
-    #: mid-session applies to the next one.
+    #: session so the fragment is stable across turns; a delta changed from
+    #: outside the process applies on the next launch, and one this agent
+    #: learns applies at once because the write clears this.
     _effective_skill_cache: Optional[Dict[tuple, str]] = None
     #: skill name -> ids of the deltas currently applied to it.
     _overlaid_skills: Optional[Dict[str, List[str]]] = None
@@ -871,6 +878,13 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Fail closed outside the normal loop: an agent driven directly (a test,
+        # the MCP server) has no turn boundary to reset this, and "no turn" must
+        # not read as "the user just said this".
+        self._turn_saw_external_content: bool = True
+        # Set by a caller that injects content into the next turn; consumed by
+        # it. See ``mark_external_content``.
+        self._pending_external_context: bool = False
         # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
@@ -2135,6 +2149,53 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
+
+    def _begin_turn_provenance(self) -> None:
+        """Open a turn: only the user has spoken, unless a caller pushed content.
+
+        A fresh user message is the one moment when that is true, so this is
+        the single place the taint resets. Called from ``_process_query_impl``.
+        """
+        self._turn_saw_external_content = getattr(
+            self, "_pending_external_context", False
+        )
+        self._pending_external_context = False
+
+    def mark_external_content(self) -> None:
+        """Declare that the next turn carries content the user did not type.
+
+        For a caller that injects content directly rather than letting the
+        agent fetch it — the flagship's ``/query`` pushed ``context``, for
+        instance. Consumed by the next :meth:`process_query`, which would
+        otherwise open that turn believing only the user had spoken.
+        """
+        self._pending_external_context = True
+
+    def turn_content_provenance(self) -> str:
+        """Where anything the agent writes down this turn could have come from.
+
+        ``"user_instruction"`` only while the user's own message is still the
+        only thing that has arrived. Any tool returning anything — a web page,
+        an email, an issue body, a command's output, a skill listing, an MCP
+        call — flips this to ``"tool_content"`` for the rest of the turn, and
+        it resets on the next user message. The allowlist holds exactly one
+        name, the learning tool's own receipt, so a tool nobody classified
+        taints by default rather than by omission.
+
+        This exists because a learned skill change persists across sessions: a
+        page that says "the correct command is X" must not become a permanent
+        instruction the agent runs under. ``validate_delta`` refuses anything
+        but ``user_instruction``, and this is the only honest way to answer it.
+
+        **The taint is per turn.** Content pulled in an *earlier* turn is not
+        tracked — a session-wide taint would disable learning in any session
+        where the agent ever browsed, which is most of them. That residual gap
+        is why announcing the change and making undo one command is not a
+        nicety here; it is the second half of the control.
+        """
+        if getattr(self, "_turn_saw_external_content", True):
+            return "tool_content"
+        return "user_instruction"
 
     def learned_skill_scope(self) -> str:
         """The leak boundary for learned deltas. Never ``None``.
@@ -3691,6 +3752,11 @@ Do NOT wrap conversational replies in JSON.
             logger.error(coercion_error)
             return {"status": "error", "error": coercion_error}
 
+        # Before dispatch, not after: a tool that times out or raises may still
+        # have pulled content into the turn, and its error string can carry it.
+        if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
+            self._turn_saw_external_content = True
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
@@ -4654,6 +4720,7 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._begin_turn_provenance()
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool

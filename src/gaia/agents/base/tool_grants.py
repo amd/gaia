@@ -106,7 +106,7 @@ _SKILL_ARG_NAMES = ("skill", "skill_name", "skill_id", "name")
 
 # Each takes the skill as its first argument, so an "always" answer scopes to
 # that one skill rather than to the tool at large.
-_SKILL_TOOLS = frozenset({"install_skill", "remove_skill", "remember_skill_lesson"})
+_SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 
 
 @dataclass(frozen=True)

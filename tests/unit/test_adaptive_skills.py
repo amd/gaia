@@ -17,8 +17,10 @@ What it proves, in the order the sections appear below:
    what one costs, because a revised lesson supersedes its predecessor instead
    of stacking. Shape adaptation trends the resolved skill *smaller*.
 3. **The authored file is never written.** Hashed before and after.
-4. **Nothing takes effect without consent**, and the off-switch restores the
-   authored bytes exactly.
+4. **A lesson applies at once, and only the user can teach one.** The agent
+   activates what it learned in the same turn it learned it — and a turn in
+   which anything else has spoken (a fetched page, a command's output) cannot
+   teach it at all. The off-switch restores the authored bytes exactly.
 5. **A base edit never silently re-points a delta** at text it was not approved
    against.
 6. **The real bug from the session that motivated this** — a POSIX-quoted `gh`
@@ -53,6 +55,7 @@ from gaia.agents.base.skill_deltas import (
     supersession_key,
     validate_delta,
 )
+from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.skills.sections import parse_sections, render_sections, section_digest
 
 from .skills_helpers import LearnedOverlayStubMixin
@@ -333,11 +336,17 @@ def test_the_authored_file_is_never_written(tmp_path, store):
 
 
 # --------------------------------------------------------------------------
-# 4. CONSENT GATE + OFF SWITCH
+# 4. ONLY AN ACTIVE DELTA RESOLVES + OFF SWITCH
 # --------------------------------------------------------------------------
 
 
-def test_a_staged_delta_has_zero_effect(store):
+def test_a_delta_that_was_never_activated_has_zero_effect(store):
+    """Resolution reads active rows only — the invariant activation relies on.
+
+    The write path activates its own delta now, so nothing routinely stages.
+    This pins the resolver rule anyway: a row that is not active is not in the
+    prompt, which is what makes ``--revert`` (archive) an actual undo.
+    """
     delta_id = store.put_delta(
         base_name="github-triage",
         scope=SCOPE,
@@ -355,7 +364,7 @@ def test_a_staged_delta_has_zero_effect(store):
     assert resolved.body == BASE_SKILL
     assert resolved.applied == []
 
-    # ...and takes effect only after consent.
+    # ...and takes effect once it is activated.
     assert store.approve_delta(delta_id) is True
     rows = store.search_deltas(base_name="github-triage")
     assert (
@@ -761,8 +770,8 @@ def test_the_composed_prompt_carries_the_overlay_not_the_authored_procedure(stor
     assert agent.overlaid_skills["github-triage"]
 
 
-def test_a_staged_delta_does_not_reach_the_composed_prompt(store):
-    store.put_delta(  # staged, never approved
+def test_a_delta_that_was_never_activated_stays_out_of_the_prompt(store):
+    store.put_delta(  # staged, never activated
         base_name="github-triage",
         scope=SCOPE,
         kind=KIND_REPLACE_SECTION,
@@ -846,22 +855,40 @@ def test_a_delta_for_another_agent_scope_does_not_leak(store):
 # --------------------------------------------------------------------------
 
 
-class _LearningAgent(_OverlayStubAgent):
-    """Stub agent with the real learning tool registered onto it."""
+class _RecordingConsole:
+    """The user-visible surface, captured. ``print_info`` is what the real
+    AgentConsole / SSEOutputHandler both implement."""
+
+    def __init__(self):
+        self.info = []
+
+    def print_info(self, message):
+        self.info.append(message)
+
+
+class _LearningAgent(_OverlayStubAgent, SkillLearningToolsMixin):
+    """The real learning mixin composed onto the real render path.
+
+    The mixin is a *base*, not a side object, so the ``agent`` the tool closes
+    over is the same object ``get_skills_system_prompt`` renders — which is what
+    lets these tests assert that a correction reaches the prompt with no cache
+    poking in between.
+
+    ``turn_content_provenance`` is the genuine ``Agent`` method reading the
+    genuine ``_turn_saw_external_content`` flag, so a test that taints the turn
+    exercises the shipping guard rather than a stand-in for it.
+    """
+
+    turn_content_provenance = Agent.turn_content_provenance
 
     def __init__(self, store, skill):
         super().__init__(store, skill)
-        self._registered = {}
-        from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
+        self._turn_saw_external_content = False
+        self.console = _RecordingConsole()
+        self.rebuilds = 0
 
-        self._mixin = SkillLearningToolsMixin()
-        self._mixin._namespaced_agent_id = self._namespaced_agent_id
-        self._mixin.learned_skill_scope = self.learned_skill_scope
-        self._mixin.loaded_skills = self._loaded_skills
-        self._mixin._memory_store = store
-        self._mixin._incognito = False
-        self._mixin._effective_skill_cache = None
-        self._mixin.rebuild_system_prompt = lambda: None
+    def rebuild_system_prompt(self):
+        self.rebuilds += 1
 
     def call(self, **kwargs):
         """Invoke remember_skill_lesson by capturing it at registration."""
@@ -883,15 +910,21 @@ class _LearningAgent(_OverlayStubAgent):
         real = tools_mod.tool
         tools_mod.tool = _tool
         try:
-            self._mixin.register_skill_learning_tools()
+            self.register_skill_learning_tools()
         finally:
             tools_mod.tool = real
         return captured["fn"](**kwargs)
 
 
 def test_the_tool_corrects_a_broken_command_by_replacement(store):
-    """The correction reaches the prompt on approval — and not one turn before."""
+    """The correction reaches the prompt in the same session it was learned.
+
+    The prompt is read back with no cache poking in between: an agent that
+    learns a fix and then keeps running the broken command until it restarts
+    has not learned anything the user can see.
+    """
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    assert BROKEN_INBOX_CMD in agent.get_skills_system_prompt()
 
     result = agent.call(
         skill="github-triage",
@@ -902,29 +935,21 @@ def test_the_tool_corrects_a_broken_command_by_replacement(store):
     )
     assert result["status"] == "success", result
     assert result["change"] == KIND_REPLACE_SNIPPET
-    assert result["applied"] is False
-
-    # The model wrote it, so nothing may have moved yet.
-    staged_prompt = agent.get_skills_system_prompt()
-    assert BROKEN_INBOX_CMD in staged_prompt
-    assert FIXED_INBOX_CMD not in staged_prompt
-
-    approve_delta(store, result["delta_id"], BASE_SKILL)
-    agent._effective_skill_cache = None
-    agent._overlaid_skills = None
+    assert result["applied"] is True
 
     prompt = agent.get_skills_system_prompt()
     assert FIXED_INBOX_CMD in prompt
     assert BROKEN_INBOX_CMD not in prompt
     assert "--jq '" not in prompt
+    assert agent.rebuilds == 1, "the cached system prompt must be rebuilt"
 
 
-def test_the_tool_stages_and_never_activates(store):
-    """The consent gate, at the only layer that can enforce it.
+def test_the_tool_activates_what_it_learned(store):
+    """The reversal of the staged model, pinned at the store layer.
 
-    The model may propose a change to the instructions it runs under; only the
-    user may activate one. A tool that approved its own write would make every
-    "nothing applies without your consent" claim in the docs false.
+    The agent applies the correction it wrote — that is the point of an
+    adaptive agent. Nothing is left waiting for a human to press approve, so
+    no queue can silently accumulate changes the user never sees.
     """
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
     result = agent.call(
@@ -936,9 +961,78 @@ def test_the_tool_stages_and_never_activates(store):
     assert result["status"] == "success", result
 
     rows = store.search_deltas(base_name="github-triage", scope=SCOPE)
-    assert [r["status"] for r in rows] == ["staged"]
-    assert rows[0]["approved_at"] is None
-    assert store.search_deltas(base_name="github-triage", status="active") == []
+    assert [r["status"] for r in rows] == ["active"]
+    assert rows[0]["approved_at"] is not None
+    assert store.search_deltas(base_name="github-triage", status="staged") == []
+
+
+def test_the_user_is_told_what_changed_and_how_to_undo_it(store):
+    """Transparency is what replaced the approval prompt, so it is not optional.
+
+    The announcement must name the skill, the section, the reason, and a revert
+    command carrying the *real* id — a notice the user cannot act on is the
+    same as no notice.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+    delta_id = result["delta_id"]
+    undo = f"gaia skill deltas github-triage --revert {delta_id}"
+
+    assert agent.console.info, "the write must announce itself on the console"
+    notice = agent.console.info[-1]
+    for expected in ("github-triage", "procedure", "inbox, not backlog", undo):
+        assert expected in notice, f"{expected!r} missing from: {notice}"
+
+    # The same sentence rides the tool result, which is the surface that stays
+    # in the transcript after the status line is overwritten.
+    assert result["message"] == notice
+    assert result["undo_command"] == undo
+
+
+def test_the_undo_command_the_notice_prints_is_one_the_cli_accepts(store):
+    """A notice naming a command that does not parse is worse than no notice.
+
+    The string is built by hand in the tool and consumed by a parser defined in
+    another module, so nothing else would catch a renamed flag or a reordered
+    argument. Parsed by the real ``gaia skill`` argparse tree, then the archive
+    it names is performed and the correction is gone from the prompt.
+    """
+    import argparse
+
+    from gaia.skills import cli as skills_cli
+
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="inbox, not backlog",
+    )
+    assert "Pull what landed on you" in agent.get_skills_system_prompt()
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    sub = parser.add_subparsers(dest="action")
+    skills_cli.add_subparser(sub)
+    argv = result["undo_command"].split()
+    assert argv[0] == "gaia"
+    parsed = parser.parse_args(argv[1:])
+
+    assert (parsed.action, parsed.skill_action) == ("skill", "deltas")
+    assert parsed.name == "github-triage"
+    assert parsed.revert == result["delta_id"]
+
+    # What `--revert` then does, and what the user gets for it.
+    assert store.archive_delta(parsed.revert, base_name=parsed.name) is True
+    reverted = _OverlayStubAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    prompt = reverted.get_skills_system_prompt()
+    assert "Pull the backlog" in prompt
+    assert "Pull what landed on you" not in prompt
+    assert [r["id"] for r in store.search_deltas(status="archived")] == [parsed.revert]
 
 
 def test_the_tool_supersedes_instead_of_stacking(store):
@@ -954,23 +1048,19 @@ def test_the_tool_supersedes_instead_of_stacking(store):
             reason=f"revision {n}",
         )
         assert result["status"] == "success", result
-        approve_delta(store, result["delta_id"], BASE_SKILL)
-        agent._effective_skill_cache = None
-        agent._overlaid_skills = None
         sizes.append(len(agent.get_skills_system_prompt()))
 
     live = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
     assert len(live) == 1, "each correction must retire the last, not stack"
-    # The revisions the user never approved must not pile up either.
-    pending = store.search_deltas(
-        base_name="github-triage", scope=SCOPE, status="staged"
-    )
-    assert pending == []
     assert max(sizes) - min(sizes) <= 20, sizes
 
 
-def test_an_unapproved_revision_leaves_the_live_correction_alone(store):
-    """Staging a replacement must not retire the correction it would replace."""
+def test_a_revision_replaces_the_live_correction_in_the_same_session(store):
+    """A second correction to the same section supersedes the first at once.
+
+    Both surviving would put the superseded instruction in the prompt beside
+    the one that replaced it — the exact failure this design exists to avoid.
+    """
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
 
     first = agent.call(
@@ -979,22 +1069,19 @@ def test_an_unapproved_revision_leaves_the_live_correction_alone(store):
         corrected_text=INBOX_PROCEDURE,
         reason="inbox, not backlog",
     )
-    approve_delta(store, first["delta_id"], BASE_SKILL)
-
-    agent.call(
+    second = agent.call(
         skill="github-triage",
         section="procedure",
-        corrected_text=INBOX_PROCEDURE + "\n\n5. Unapproved revision.",
-        reason="a revision the user has not seen",
+        corrected_text=INBOX_PROCEDURE + "\n\n5. Also skim the mentions tab.",
+        reason="mentions matter too",
     )
+    assert second["superseded"] == [first["delta_id"]]
 
     live = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
-    assert [r["id"] for r in live] == [first["delta_id"]]
+    assert [r["id"] for r in live] == [second["delta_id"]]
 
-    agent._effective_skill_cache = None
-    agent._overlaid_skills = None
     prompt = agent.get_skills_system_prompt()
-    assert "Unapproved revision." not in prompt
+    assert "Also skim the mentions tab." in prompt
     assert "--involves @me" in prompt
 
 
@@ -1016,7 +1103,7 @@ def test_the_tool_refuses_a_bad_section_and_lists_the_real_ones(store):
 
 def test_the_tool_refuses_to_save_in_a_private_session(store):
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    agent._mixin._incognito = True
+    agent._incognito = True
     result = agent.call(
         skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
     )
@@ -1045,6 +1132,74 @@ def test_the_tool_cannot_delete_a_section(store):
     assert "Never close an issue on your own judgement." in prompt
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        # A whole-section rewrite that forgot the heading...
+        {"corrected_text": "1. Pull what landed on you."},
+        # ...and a snippet whose 'old' happens to span it. The tool's docstring
+        # tells the model to prefer this form, so guarding only the first would
+        # leave the recommended path open.
+        {"corrected_text": "1. Pull what landed on you.", "replaces": "## Procedure"},
+    ],
+    ids=["whole-section", "snippet-swallows-the-heading"],
+)
+def test_an_edit_that_deletes_the_heading_is_refused(store, kwargs):
+    """Losing the heading merges the section into the one above it.
+
+    A section's span carries its own heading line, so the rendered prompt ends
+    up with two procedures read as one — the same "wrong instruction beside the
+    right one" this whole design exists to avoid. A human reviewing the diff
+    would have caught it; nothing does now, so it is refused at write time.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    result = agent.call(skill="github-triage", section="procedure", **kwargs)
+
+    assert result["status"] == "error", result
+    assert "## Procedure" in result["message"], "the error must quote the line to keep"
+    assert store.search_deltas(base_name="github-triage") == []
+
+
+def test_the_same_lesson_with_the_heading_kept_is_accepted(store):
+    """The guard must not block the ordinary case it exists to shape."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    ok = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text="## Procedure\n\n1. Pull what landed on you.\n",
+        reason="inbox, not backlog",
+    )
+
+    assert ok["status"] == "success", ok
+    rows = store.search_deltas(base_name="github-triage", scope=SCOPE, status="active")
+    resolved = resolve_skill_body(BASE_SKILL, [_from_row(r) for r in rows])
+    assert "procedure" in [s.slug for s in parse_sections(resolved.body)]
+
+
+def test_renaming_a_heading_is_still_allowed(store):
+    """The rule is "keep a heading", not "keep this heading".
+
+    Retitling a section is legitimate shape adaptation, and resolution anchors
+    on the authored base, so the delta still finds its section next time.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    ok = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text="## Inbox triage",
+        replaces="## Procedure",
+        reason="it is an inbox, not a backlog",
+    )
+
+    assert ok["status"] == "success", ok
+    prompt = agent.get_skills_system_prompt()
+    assert "## Inbox triage" in prompt
+    assert "## Procedure" not in prompt
+
+
 def test_the_tool_reports_the_token_cost_it_added(store):
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
     result = agent.call(
@@ -1058,24 +1213,21 @@ def test_the_tool_reports_the_token_cost_it_added(store):
     # procedure REPLACES the old one instead of sitting beneath it. Contrast
     # the two alternatives measured on this fixture — appending the same lesson
     # costs +36%, hand-patching the authored file cost +48%.
-    cost = result["token_delta_vs_authored_if_approved"]
+    cost = result["token_delta_vs_authored"]
     assert abs(cost) <= MAX_OVERLAY_TOKENS
     assert cost < 0.05 * estimate_tokens(BASE_SKILL)
-    # ...and the tool reports the cost, and that nothing has applied yet.
-    assert "prompt tokens" in result["message"]
-    assert "approve" in result["message"]
+    assert result["learned_changes_on_this_skill"] == 1
 
 
 def test_shape_adaptation_plus_pruning_makes_the_skill_cheaper(store):
     """Replacement is neutral; removing what the user never uses is the saving."""
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    correction = agent.call(
+    agent.call(
         skill="github-triage",
         section="procedure",
         corrected_text=INBOX_PROCEDURE,
         reason="inbox, not backlog",
     )
-    approve_delta(store, correction["delta_id"], BASE_SKILL)
     # The user prunes a section they never exercise (a human action, via CLI).
     drop_id = store.put_delta(
         base_name="github-triage",
@@ -1131,69 +1283,201 @@ def test_a_skill_with_no_headings_anchors_to_the_whole_body():
 
 
 # --------------------------------------------------------------------------
-# The consent gate is a floor, and a floor may only grow
+# Learning raises no modal — transparency and undo are what stand in its place
 # --------------------------------------------------------------------------
 
 
-def test_remember_skill_lesson_is_in_the_base_confirmation_floor():
-    """Pins the tool into the gate so it cannot quietly fall back out.
+def test_learning_raises_no_confirmation_modal():
+    """A prompt on every learned lesson would destroy the feature.
 
-    The tool writes to the instructions the agent runs under. It shipped absent
-    from every confirmation set once already; this is the test that catches the
-    second time.
-
-    Asserted on the BASE set, not one agent's: the mixin is composable by name
-    (``KNOWN_TOOLS["skill_learning"]``), so a per-agent gate would leave every
-    other composer ungated. No hub wheel needed, so this always runs in CI.
+    Deliberate, not an oversight: the tool writes only to this agent's own
+    memory, announces itself, and undoes in one command. Pinned so it is not
+    "fixed" back into the gate by pattern-matching on "it writes something".
     """
     from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
-
-    assert "remember_skill_lesson" in TOOLS_REQUIRING_CONFIRMATION
-    assert "remember_skill_lesson" in Agent.confirmation_required_tools()
-
-
-def test_every_skill_learning_tool_is_gated():
-    """The floor covers the whole mixin, not just the one name known today."""
     from gaia.agents.tools.skill_learning_tools import SKILL_LEARNING_TOOL_NAMES
 
     gated = Agent.confirmation_required_tools()
-    assert set(SKILL_LEARNING_TOOL_NAMES) <= gated, (
-        "a skill-learning tool ships ungated: "
-        f"{sorted(set(SKILL_LEARNING_TOOL_NAMES) - gated)}"
-    )
+    assert not set(SKILL_LEARNING_TOOL_NAMES) & set(TOOLS_REQUIRING_CONFIRMATION)
+    assert not set(SKILL_LEARNING_TOOL_NAMES) & gated
 
 
-def test_an_always_allow_grant_scopes_to_one_skill():
-    """ "Always" on a learning call must not become "always, for every skill"."""
+def test_no_always_allow_grant_is_offered_for_learning():
+    """A grant scope with no modal behind it is a promise nothing keeps."""
     from gaia.agents.base.tool_grants import grant_scope
 
-    scope = grant_scope("remember_skill_lesson", {"skill": "github-triage"})
-    assert scope is not None, "no grant scope means the UI cannot offer 'always'"
-    assert "github-triage" in scope.key
+    assert grant_scope("remember_skill_lesson", {"skill": "github-triage"}) is None
+    # The tools that DO raise a modal keep theirs.
+    assert grant_scope("install_skill", {"skill": "github-triage"}) is not None
+
+
+# --------------------------------------------------------------------------
+# Provenance — the guard that replaced the human in the loop
+# --------------------------------------------------------------------------
+
+
+class _TaintProbeAgent:
+    """Drives the real ``_execute_tool`` so the taint is observed, not simulated.
+
+    Every method here is the shipping ``Agent`` one. Only the registry is
+    fabricated, because the question is which *names* taint a turn, not what
+    the bodies behind them do.
+    """
+
+    _execute_tool = Agent._execute_tool
+    _resolve_tool_name = Agent._resolve_tool_name
+    _policy_refusal = Agent._policy_refusal
+    _tool_requires_confirmation = Agent._tool_requires_confirmation
+    _call_is_pre_authorized = Agent._call_is_pre_authorized
+    _on_tool_invoked = Agent._on_tool_invoked
+    _coerce_tool_args = Agent._coerce_tool_args
+    _call_tool_bounded = Agent._call_tool_bounded
+    _fold_tool_usage = Agent._fold_tool_usage
+    _resolve_tool_timeout = Agent._resolve_tool_timeout
+    _begin_turn_provenance = Agent._begin_turn_provenance
+    mark_external_content = Agent.mark_external_content
+    turn_content_provenance = Agent.turn_content_provenance
+    confirmation_required_tools = Agent.confirmation_required_tools
+
+    current_plan = None
+    current_step = 0
+
+    def __init__(self):
+        self._tool_reported_usage = []
+        self._tools_registry = {
+            name: {"function": lambda: {"status": "success"}}
+            for name in ("list_skills", "fetch_webpage")
+        }
+
+
+def test_a_lesson_from_tool_returned_content_is_refused(store):
+    """Prompt injection into long-term memory, refused at the write.
+
+    The agent reads a page, an email, or an issue containing text shaped like
+    an instruction. Without this it "learns" that, activates it immediately,
+    and carries it into every later session. The turn is tainted the moment any
+    tool returns content the user did not type, and the write dies there.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    agent._turn_saw_external_content = True  # a web fetch ran earlier this turn
+
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text=INBOX_PROCEDURE,
+        reason="a web page said so",
+    )
+
+    assert result["status"] == "error"
+    assert "tool_content" in result["message"]
+    assert store.search_deltas(base_name="github-triage") == [], "nothing stored"
+    assert "Pull the backlog" in agent.get_skills_system_prompt()
+    assert agent.console.info == [], "a refusal must not announce a change"
+
+
+def test_an_agent_that_cannot_report_provenance_is_refused(store):
+    """Fail closed: no answer is not the same as "the user said it"."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    del agent.__class__.turn_content_provenance
+    try:
+        result = agent.call(
+            skill="github-triage",
+            section="procedure",
+            corrected_text=INBOX_PROCEDURE,
+        )
+    finally:
+        agent.__class__.turn_content_provenance = Agent.turn_content_provenance
+
+    assert result["status"] == "error"
+    assert "unknown" in result["message"]
+    assert store.search_deltas(base_name="github-triage") == []
+
+
+def test_the_turn_is_clean_until_any_tool_returns_content():
+    """The taint is derived from the live turn, not asserted by the caller.
+
+    Driven through the real ``_execute_tool``, because the allowlist and the
+    flag only mean anything if the shipping dispatch path sets them.
+    """
+    agent = _TaintProbeAgent()
+    agent._turn_saw_external_content = False
+    assert agent.turn_content_provenance() == "user_instruction"
+
+    # The learning tool's own receipt tells the agent nothing new, so two
+    # lessons in one turn both go through.
+    agent._execute_tool("remember_skill_lesson", {})
+    assert agent.turn_content_provenance() == "user_instruction"
+
+    # Everything else taints — a name this build has never heard of included,
+    # so a tool nobody classified fails closed.
+    agent._execute_tool("fetch_webpage", {})
+    assert agent.turn_content_provenance() == "tool_content"
+
+
+def test_even_a_skill_listing_taints_the_turn():
+    """A skill's own text is third-party, and could name a DIFFERENT skill.
+
+    Skill B's body asking for a rewrite of skill A would outlive uninstalling
+    B, so "it is in the prompt anyway" does not make it safe to learn from.
+    """
+    from gaia.agents.base.agent import TOOLS_WITHOUT_EXTERNAL_CONTENT
+
+    assert TOOLS_WITHOUT_EXTERNAL_CONTENT == {"remember_skill_lesson"}
+
+    agent = _TaintProbeAgent()
+    agent._turn_saw_external_content = False
+    agent._execute_tool("list_skills", {})
+    assert agent.turn_content_provenance() == "tool_content"
+
+
+def test_pushed_context_taints_the_turn_it_arrives_in():
+    """Content the caller injects is not content the user typed.
+
+    The flagship's ``/query`` accepts pushed ``context``, which an orchestrator
+    can fill with a page it fetched. That content arrives in *this* turn, so
+    the per-turn taint has to see it — otherwise the whole guard is one HTTP
+    field away from being bypassed.
+    """
+    agent = _TaintProbeAgent()
+    agent.mark_external_content()
+    agent._begin_turn_provenance()  # what _process_query_impl does per turn
+
+    assert agent.turn_content_provenance() == "tool_content"
+
+    # Consumed by that turn only — the next one starts clean again.
+    agent._begin_turn_provenance()
+    assert agent.turn_content_provenance() == "user_instruction"
+
+
+def test_provenance_defaults_to_tainted_outside_a_turn():
+    """No turn boundary (MCP server, a direct driver) must not read as trusted."""
+    assert _TaintProbeAgent().turn_content_provenance() == "tool_content"
 
 
 def test_the_ceiling_is_re_checked_at_approval(store):
     """Write-time validation cannot see the deltas queued behind it.
 
-    Each staged lesson is validated against the deltas active *at write time*,
-    so N of them can each pass alone and still blow the overlay budget once
-    approved in turn. Approval is the only point that sees the real resolved
-    skill, so the ceiling has to hold there too.
+    ``approve_delta`` still runs for every ``--approve`` and every
+    ``--drop-section``, and a row staged by hand was validated against whatever
+    was active when it was written. N of them can each pass alone and still blow
+    the overlay budget once activated in turn, so the ceiling has to hold here
+    too.
     """
-    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    # Sized so each lesson clears the ceiling alone but the three together do not.
+    # Sized so each delta clears the ceiling alone but the three together do not.
     filler = "\n".join(f"- padding line {n} to grow the section." for n in range(13))
 
-    staged = []
-    for section in ("setup", "rules", "fork-this"):
-        result = agent.call(
-            skill="github-triage",
-            section=section,
-            corrected_text=f"## {section.title()}\n\n{filler}",
-            reason=f"grow {section}",
+    staged = [
+        store.put_delta(
+            base_name="github-triage",
+            scope=SCOPE,
+            kind=KIND_REPLACE_SECTION,
+            anchor_section=section,
+            anchor_digest=_digest_of(BASE_SKILL, section),
+            payload={"body": f"## {section.title()}\n\n{filler}"},
+            provenance=dict(TRUSTED),
         )
-        assert result["status"] == "success", result
-        staged.append(result["delta_id"])
+        for section in ("setup", "rules", "fork-this")
+    ]
 
     approved, refused = 0, 0
     for delta_id in staged:
@@ -1209,56 +1493,47 @@ def test_the_ceiling_is_re_checked_at_approval(store):
     assert resolved.token_delta <= MAX_OVERLAY_TOKENS, resolved.token_delta
 
 
+def _stage(store, body):
+    """A staged row, the way ``--drop-section`` and a hand edit make one."""
+    return store.put_delta(
+        base_name="github-triage",
+        scope=SCOPE,
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest_of(BASE_SKILL, "procedure"),
+        payload={"body": body},
+        provenance=dict(TRUSTED),
+    )
+
+
 def test_a_superseded_staged_delta_cannot_be_approved(store):
     """No success receipt for a change that can never apply.
 
-    Staging a revision retires the staged one it replaces. Approving the older
+    A staged revision retires the staged row it replaces. Approving the older
     id — the one the user may still have in front of them — must fail, not
     report success and silently activate a row that can never resolve.
     """
-    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    first = agent.call(
-        skill="github-triage",
-        section="procedure",
-        corrected_text=INBOX_PROCEDURE,
-        reason="inbox, not backlog",
-    )
-    second = agent.call(
-        skill="github-triage",
-        section="procedure",
-        corrected_text=INBOX_PROCEDURE + "\n\n5. Revised.",
-        reason="a better version",
-    )
+    first = _stage(store, INBOX_PROCEDURE)
+    second = _stage(store, INBOX_PROCEDURE + "\n\n5. Revised.")
+    store.supersede_delta(first, second)
 
-    assert approve_delta(store, first["delta_id"], BASE_SKILL) is None
+    assert approve_delta(store, first, BASE_SKILL) is None
     assert store.search_deltas(base_name="github-triage", status="active") == []
 
-    assert approve_delta(store, second["delta_id"], BASE_SKILL) is not None
+    assert approve_delta(store, second, BASE_SKILL) is not None
     live = store.search_deltas(base_name="github-triage", status="active")
-    assert [r["id"] for r in live] == [second["delta_id"]]
+    assert [r["id"] for r in live] == [second]
 
 
 def test_approval_is_bound_to_the_skill_the_user_named(store):
     """An id from another skill must not be approved under this one's name."""
-    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    staged = agent.call(
-        skill="github-triage",
-        section="procedure",
-        corrected_text=INBOX_PROCEDURE,
-        reason="inbox, not backlog",
-    )
+    staged = _stage(store, INBOX_PROCEDURE)
 
-    assert (
-        approve_delta(
-            store, staged["delta_id"], BASE_SKILL, base_name="some-other-skill"
-        )
-        is None
-    )
+    assert approve_delta(store, staged, BASE_SKILL, base_name="other-skill") is None
     assert store.search_deltas(base_name="github-triage", status="active") == []
 
     assert (
-        approve_delta(store, staged["delta_id"], BASE_SKILL, base_name="github-triage")
-        is not None
+        approve_delta(store, staged, BASE_SKILL, base_name="github-triage") is not None
     )
 
 
@@ -1333,17 +1608,15 @@ def test_superseding_never_rewrites_an_existing_lineage(store):
     assert row["superseded_by"] == first, "the audit trail was rewritten"
 
 
-def test_the_tool_refuses_to_stage_while_the_off_switch_is_on(store, monkeypatch):
+def test_the_tool_refuses_to_write_while_the_off_switch_is_on(store, monkeypatch):
     """Off means nothing is learned, not learned-invisibly.
 
-    Resolution already ignores everything under the switch, so a delta staged
-    now would sit in a queue the user has said they do not want and cannot see
-    the effect of. Refusing tells the model to give the correction to the user
-    instead.
+    Resolution ignores everything under the switch, so a row written now would
+    sit in a store the user has said they do not want and cannot see the effect
+    of. Refusing tells the model to give the correction to the user instead.
     """
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
-    # The tool closes over the mixin — that object is what a real agent IS.
-    agent._mixin.learned_skills_enabled = lambda: False
+    agent.learned_skills_enabled = lambda: False
 
     result = agent.call(
         skill="github-triage",

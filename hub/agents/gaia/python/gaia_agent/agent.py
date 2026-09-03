@@ -219,8 +219,8 @@ class GaiaAgent(
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
     # removing one deletes it, so both are gated the way file mutation is.
-    # remember_skill_lesson is gated in the base TOOLS_REQUIRING_CONFIRMATION,
-    # so every agent composing the mixin inherits it — not just this one.
+    # remember_skill_lesson deliberately is not: it writes only to this agent's
+    # own memory, applies at once, announces itself, and undoes in one command.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
         {"install_skill", "remove_skill"}
     )

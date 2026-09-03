@@ -2009,11 +2009,11 @@ Skills are discovered from three roots, highest precedence first:
 
     | Option | Description |
     |--------|-------------|
-    | `--pending` | Show staged changes awaiting approval instead of active ones |
+    | `--pending` | Show staged changes, if anything ever staged one (an agent's own writes apply directly) |
     | `--archived` | Show changes reverted with `--revert` or `--reset` |
     | `--diff` | Unified diff of the shipped skill vs the one this agent runs |
     | `--scope` | Agent the changes belong to (default: every scope) |
-    | `--approve` | Approve one staged change |
+    | `--approve` | Activate a staged change |
     | `--revert` | Archive one learned change — listed by `--archived`, never deleted |
     | `--reset` | Archive **every** learned change, back to the shipped skill |
     | `--drop-section` | Remove a section this agent never needs (the model cannot do this) |
@@ -2023,7 +2023,9 @@ Skills are discovered from three roots, highest precedence first:
 
     Learned changes are **substitutive**: a correction replaces the text it fixes rather than being appended beneath it, and a second correction to the same section supersedes the first. So a skill an agent has been taught ten things about is no larger than one it has been taught one thing about.
 
-    Nothing takes effect until you approve it, and a reverted change is archived rather than deleted — `--archived` lists what `--revert` and `--reset` retired. Approving or reverting applies from the agent's next launch, not mid-session.
+    A learned change applies as soon as the agent makes it, and the agent says so when it does — naming the skill, the section, the reason, and the `--revert` command with the id already filled in. Only a correction that came from you can be recorded: the moment any tool has returned anything in that turn — a fetched page, an email, a command's output — the write is refused and the agent has to tell you the correction instead.
+
+    Nothing is ever deleted. `--revert` and `--reset` archive, and `--archived` lists what they retired; reverting applies from the agent's next launch, not mid-session.
 
     To run with no learned changes at all, set `GAIA_NO_LEARNED_SKILLS=1`. That covers every agent in every process, including the ones behind the daemon and the Agent UI; `gaia chat --no-learned-skills` is the same switch for a single chat session. Either way the composed prompt is byte-identical to a build with no overlay.
   </Tab>

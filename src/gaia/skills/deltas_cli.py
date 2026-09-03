@@ -23,27 +23,6 @@ from typing import Any, Dict, List, Optional
 EXIT_OK = 0
 EXIT_USAGE = 2
 
-#: Everything printed here is model-authored. Escape sequences in it could
-#: repaint the diff the user is reading to decide whether to approve it, so
-#: strip control characters on the way out — tabs and newlines excepted.
-_KEEP = {"\n", "\t"}
-
-
-def _sanitized(text: str) -> str:
-    """Model-authored text, safe to print to a terminal.
-
-    Escapes wide as ``\\uXXXX`` so a zero-width space cannot be misread as a
-    space followed by digits.
-    """
-    return "".join(
-        (
-            ch
-            if ch in _KEEP or ch.isprintable()
-            else (f"\\x{ord(ch):02x}" if ord(ch) <= 0xFF else f"\\u{ord(ch):04x}")
-        )
-        for ch in text
-    )
-
 
 def add_deltas_parser(sub: Any) -> None:
     """Register the ``deltas`` subcommand on ``gaia skill``'s subparsers."""
@@ -64,7 +43,8 @@ def add_deltas_parser(sub: Any) -> None:
     view.add_argument(
         "--pending",
         action="store_true",
-        help="Show staged changes awaiting approval instead of active ones",
+        help="Show staged changes (an agent's own writes apply directly, so "
+        "this is normally empty)",
     )
     view.add_argument(
         "--archived",
@@ -115,6 +95,7 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
         approve_delta,
         preview_diff,
         resolve_skill_body,
+        sanitized,
         supersession_key,
     )
     from gaia.skills.sections import find_section, parse_sections
@@ -176,8 +157,8 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
             if stale:
                 sys.stderr.write(stale)
                 return EXIT_USAGE
-        # Retires the live correction this one replaces, which is deferred to
-        # here: until now the replacement had no consent behind it.
+        # Also retires the live correction this one replaces — a staged row has
+        # no effect, so nothing may be taken away before its replacement lands.
         try:
             approved = approve_delta(
                 store,
@@ -343,7 +324,7 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
     if args.diff:
         diff = preview_diff(base_body, [_as_delta(r) for r in diff_deltas])
         print(
-            _sanitized(diff)
+            sanitized(diff)
             if diff.strip()
             else "(no difference — this agent runs the skill exactly as shipped)"
         )
@@ -360,8 +341,8 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
         f"— learned changes ({label})"
     )
 
-    # Surface the queue on the view users actually type. Staging is the whole
-    # consent mechanism, so it must not take a flag to discover it exists.
+    # Nothing routinely stages, so a queue that exists at all is unexpected —
+    # surface it on the view users type rather than behind a flag.
     def _pending_hint() -> None:
         if args.pending:
             return
@@ -386,11 +367,11 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
         print(f"  {row['id']}")
         # anchor_section is a slug from the SKILL.md, which for a hub-installed
         # skill is third-party text.
-        section = _sanitized(str(row["anchor_section"]))
+        section = sanitized(str(row["anchor_section"]))
         print(f"    change  : {row['kind']} on section '{section}'")
         print(f"    scope   : {row['scope']}")
-        print(f"    why     : {_sanitized(str(reason))}")
-        print(f"    source  : {_sanitized(str(provenance.get('source', 'unknown')))}")
+        print(f"    why     : {sanitized(str(reason))}")
+        print(f"    source  : {sanitized(str(provenance.get('source', 'unknown')))}")
         print(f"    learned : {row['created_at']}")
         if row["approved_at"]:
             print(f"    approved: {row['approved_at']}")
