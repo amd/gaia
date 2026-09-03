@@ -43,8 +43,8 @@ permissions:
 jobs:
   test-agent-sdk-windows:
     name: Test Agent SDK on Windows (Lemonade Integration)
-    # Default lane runs on the AMD Ryzen DevLab Dispatch ephemeral pool via devlab-dispatch; a PR labelled stx-test still goes to the static stx-test box.
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && fromJSON('["self-hosted","Windows","stx-test"]') || fromJSON('["self-hosted","Windows","devlab-dispatch","strix-halo"]') }}
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7

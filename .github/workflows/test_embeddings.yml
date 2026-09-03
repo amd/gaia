@@ -40,8 +40,8 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    # Default lane runs on the AMD Ryzen DevLab Dispatch ephemeral pool via devlab-dispatch; a PR labelled stx-test still goes to the static stx-test box.
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && fromJSON('["self-hosted","Windows","stx-test"]') || fromJSON('["self-hosted","Windows","devlab-dispatch","strix-halo"]') }}
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 30
