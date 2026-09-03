@@ -908,6 +908,15 @@ jobs:
             --security-opt apparmor=unconfined
             --ipc=host
             -v "${APPIMAGE_HOST}:/work/gaia.AppImage:ro"
+            # This matrix asserts AppImage *packaging* — FUSE mount, bundled
+            # Chromium libs, sandbox, and the bundled-uv-not-curl backend
+            # install. Provisioning Lemonade is out of scope and cannot
+            # succeed here anyway: Lemonade Linux ships only via
+            # ppa:lemonade-team/stable, which needs apt (absent on the
+            # fedora row) plus add-apt-repository (absent on minimal
+            # ubuntu:24.04). Same flag the appimage-userns-restricted job
+            # already sets for the same reason.
+            --env GAIA_SKIP_GAIA_INIT=1
             # Expand to nothing if WHEEL_MOUNTS is empty (set -u compat)
             "${WHEEL_MOUNTS[@]+"${WHEEL_MOUNTS[@]}"}"
           )
@@ -927,8 +936,8 @@ jobs:
               xvfb-run --auto-servernum /tmp/gaia.AppImage \
                 >/tmp/stdout.log 2>/tmp/stderr.log &
               APP_PID=$!
-              # Poll for readiness up to 300s — fresh install downloads
-              # Lemonade + a model on first run; 90s was too tight.
+              # Poll for readiness up to 300s — first run still installs the
+              # backend wheel (PyPI or the mounted local wheel) before serving.
               for i in $(seq 1 300); do
                 if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
                   break
