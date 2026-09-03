@@ -4625,13 +4625,19 @@ def handle_email_command(args):
     from gaia.daemon.errors import DaemonError
 
     model = getattr(args, "model", None)
+    trace = bool(getattr(args, "trace", False))
 
     try:
         if interactive:
-            sys.exit(_email_interactive(model=model, verbose=verbose))
+            sys.exit(_email_interactive(model=model, verbose=verbose, trace=trace))
         renderer = ConsoleRenderer(verbose=verbose)
         outcome = run_query(
-            "email", query, model=model, renderer=renderer, verbose=verbose
+            "email",
+            query,
+            model=model,
+            renderer=renderer,
+            verbose=verbose,
+            trace=trace,
         )
         sys.exit(outcome.exit_code)
     except DaemonError as e:
@@ -4642,12 +4648,12 @@ def handle_email_command(args):
         sys.exit(1)
 
 
-def _email_interactive(*, model, verbose: bool) -> int:
+def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
     """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
 
     Maintains the transcript locally and pushes it as ``context`` on each turn
     (the host owns the transcript; the stateless sidecar is fed the relevant
-    slice per request, spec §2.4).
+    slice per request, spec §2.4). ``trace`` writes one trace file per turn.
     """
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
@@ -4671,6 +4677,7 @@ def _email_interactive(*, model, verbose: bool) -> int:
             model=model,
             renderer=renderer,
             verbose=verbose,
+            trace=trace,
         )
         # Only extend the transcript on a successful turn — a failed run must not
         # poison the context of the next one.

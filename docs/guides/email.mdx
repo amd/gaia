@@ -158,6 +158,13 @@ Email-body inference runs on your local Lemonade instance. The agent **rejects**
 | `-i, --interactive` | REPL loop. Type queries until `/quit`. |
 | `-v, --verbose` | Emit structured logs for every triage decision and tool call. Recommended when benchmarking against other email agents. |
 | `--debug` | Adds full prompt + LLM-response logging to verbose. Sensitive payloads in logs — use with care. |
+| `--trace` | Write the run's request and full event stream (every `status` / `tool_call` / `tool_result` / `final`) to `./email_trace_<timestamp>_<run-id>.json` in the current directory. The path is echoed on stderr. Interactive mode writes one file per turn. |
+
+<Note>
+  A trace contains the query, the agent's answer, and every tool argument and
+  result — i.e. real email content. It stays on your machine, but treat the file
+  like an inbox export before attaching it to a bug report.
+</Note>
 
 ## Daily-driver pre-scan (Agent UI)
 

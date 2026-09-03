@@ -110,3 +110,42 @@ class TestDispatch:
             assert init_kwargs.get("use_chatgpt", False) is False
             assert "use_claude" not in call.kwargs
             assert "use_chatgpt" not in call.kwargs
+            # No --trace on the namespace -> tracing stays off.
+            assert call.kwargs["trace"] is False
+
+    def test_handle_email_command_relays_trace_flag(self):
+        """``--trace`` is advertised on the email subcommand, so it must reach
+        ``run_query`` — it used to be parsed and dropped (#3345)."""
+        import argparse
+
+        from gaia import cli
+        from gaia.daemon.agent_query import QueryOutcome
+
+        ns = argparse.Namespace(
+            action="email",
+            query="triage my inbox",
+            interactive=False,
+            verbose=False,
+            debug=False,
+            no_lemonade_check=False,
+            base_url=None,
+            model=None,
+            spec=False,
+            trace=True,
+        )
+
+        with (
+            patch("gaia.daemon.agent_query.run_query") as run_query,
+            patch("gaia.cli.initialize_lemonade_for_agent", return_value=(True, None)),
+        ):
+            run_query.return_value = QueryOutcome(
+                exit_code=0,
+                terminal_type="final",
+                final_answer="done",
+                trace_path="/tmp/email_trace.json",
+            )
+            with pytest.raises(SystemExit) as exc:
+                cli.handle_email_command(ns)
+            assert exc.value.code == 0
+
+            assert run_query.call_args.kwargs["trace"] is True
