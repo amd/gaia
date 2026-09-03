@@ -415,11 +415,24 @@ def _handle_connect(args: argparse.Namespace) -> int:
         # descriptions the Agent UI's consent dialog renders for a scope. Keep
         # this before the device/browser split so both paths show the same
         # requested access.
-        from gaia.connectors.providers.google import SCOPE_DESCRIPTIONS
+        from gaia.connectors.providers.google import (
+            SCOPE_DESCRIPTIONS as GOOGLE_SCOPE_DESCRIPTIONS,
+        )
+        from gaia.connectors.providers.microsoft import (
+            SCOPE_DESCRIPTIONS as MICROSOFT_SCOPE_DESCRIPTIONS,
+        )
+
+        # Both OAuth providers use the same CLI preview. Keep the provider
+        # label tables independent while making every known scope render as a
+        # human-readable permission, including Microsoft Graph URLs.
+        scope_descriptions = {
+            **GOOGLE_SCOPE_DESCRIPTIONS,
+            **MICROSOFT_SCOPE_DESCRIPTIONS,
+        }
 
         sys.stdout.write(f"Requesting access to {args.connector_id}:\n")
         for scope in scopes:
-            sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
+            sys.stdout.write(f"  - {scope_descriptions.get(scope, scope)}\n")
 
     if getattr(args, "device", False):
         return _handle_connect_device(args, scopes=scopes, grant_agents=grant_agents)

@@ -279,6 +279,50 @@ class TestConnectGrantAgent:
         assert "Connected as alice@example.com" in out
         assert "granted google → installed:email" in out
 
+    @pytest.mark.allow_network  # asyncio's Windows event loop uses a local socketpair
+    def test_device_connect_describes_microsoft_graph_scopes(self, monkeypatch):
+        async def _fake_start(connector_id, *, scopes):
+            assert connector_id == "microsoft"
+            return {
+                "message": "Go to https://microsoft.example and enter CODE",
+                "device_code": "device-code",
+                "user_code": "CODE",
+                "verification_uri": "https://microsoft.example",
+                "scopes": list(scopes),
+                "interval": 1,
+                "expires_in": 900,
+            }
+
+        async def _fake_poll(
+            connector_id,
+            device_code,
+            *,
+            scopes,
+            interval,
+            expires_in,
+            grant_agents=None,
+        ):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_device_flow", _fake_start)
+        monkeypatch.setattr("gaia.connectors.api.poll_device_flow", _fake_poll)
+
+        graph_scope = "https://graph.microsoft.com/Mail.Read"
+        rc, out, err = _run(
+            "connectors",
+            "connect",
+            "microsoft",
+            "--device",
+            "--scopes",
+            graph_scope,
+        )
+
+        assert rc == 0, err
+        assert "Requesting access to microsoft:" in out
+        assert "Read your email" in out
+        assert graph_scope not in out
+        assert "Connected as alice@example.com" in out
+
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 
