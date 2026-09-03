@@ -49,8 +49,8 @@ permissions:
 jobs:
   test-api:
     name: API Tests
-    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
-    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    # Default lane runs on the AMD Ryzen DevLab Dispatch ephemeral pool via devlab-dispatch; a PR labelled stx-test still goes to the static stx-test box.
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && fromJSON('["self-hosted","Windows","stx-test"]') || fromJSON('["self-hosted","Windows","devlab-dispatch","strix-halo"]') }}
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
