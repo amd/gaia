@@ -327,15 +327,16 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Seven of the agent's 67 tools mutate the machine and need explicit approval
-before they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Nine of the agent's 71 tools mutate the machine and need explicit approval
+before they run. Seven sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
-child on Windows to draw the notification — and the flagship adds two of its
-own, **`install_skill`** and **`remove_skill`**, because installing a skill
-writes third-party code under `~/.gaia/skills` and removing one deletes it.
-Everything else — reading, indexing, querying, web fetching, memory — runs
-without asking.
+**`execute_python_file`**, **`notify_desktop`**, which spawns a PowerShell child
+on Windows to draw the notification, and **`install_cli`** / **`sign_in_cli`**,
+which install software and sign a CLI in to the user's account — and the
+flagship adds two of its own, **`install_skill`** and **`remove_skill`**,
+because installing a skill writes third-party code under `~/.gaia/skills` and
+removing one deletes it. Everything else — reading, indexing, querying, web
+fetching, memory, and the read-only `check_cli_setup` — runs without asking.
 
 Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
 does not prompt. When the agent reaches one of those tools it emits a

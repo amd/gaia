@@ -283,7 +283,10 @@ def test_a_platform_with_no_packaged_install_says_so_rather_than_offering_one(
     assert result["can_install_here"] is False
     assert result["install_command"] == ""
     assert "no packaged install" in result["detail"]
-    assert "https://cli.github.com" in result["detail"]
+    # The table's own docs URL, not a literal — a substring check against a
+    # hardcoded URL reads as URL sanitization to CodeQL, and this asserts the
+    # stronger property anyway: the message ends by pointing at that URL.
+    assert result["detail"].endswith(f"install it from {GH.setup.install_docs_url}.")
 
 
 def test_a_status_read_that_failed_is_surfaced_not_swallowed(tools, monkeypatch):

@@ -170,6 +170,28 @@ def test_an_env_token_wins_over_a_scope_shortfall():
     assert status.needs_login is False
 
 
+def test_an_env_token_that_stopped_working_is_still_not_a_login_problem():
+    """The combination gh really emits for an expired ``$GH_TOKEN``:
+    ``state: "error"`` *and* ``tokenSource: "GH_TOKEN"``.
+
+    Health must not outrank source. gh refuses to store a credential while the
+    variable is set, so ``unauthenticated`` here would spend a user approval on
+    a sign-in the CLI rejects — the exact dead end this module exists to remove.
+    """
+    status = _detect(
+        _hosts(_account(state="error", tokenSource="GH_TOKEN", scopes="repo"))
+    )
+
+    assert status.state == ENV_TOKEN
+    assert status.needs_login is False
+    assert status.ready is False
+    assert status.token_source == "GH_TOKEN"
+    # Says the token is dead AND that signing in is not what fixes it.
+    assert "revoked" in status.detail or "expired" in status.detail
+    assert "signing in would fail" in status.detail.lower()
+    assert "clear GH_TOKEN" in status.detail
+
+
 def test_a_credential_store_source_is_not_mistaken_for_an_env_variable():
     """Stores are lower case (``keyring``), variables are not — shape is the test."""
     assert _detect(_hosts(_account(tokenSource="keyring"))).state == READY
@@ -540,16 +562,22 @@ def test_the_one_time_code_and_url_are_parsed_out_of_the_clis_own_output():
 
 
 def test_the_sign_in_child_gets_no_terminal_and_no_browser_hook(monkeypatch):
-    """``BROWSER`` names a command gh will execute. A value inherited from the
-    environment would run under the sign-in rather than open a page — and the
-    user is handed the URL anyway."""
+    """``GH_BROWSER``/``BROWSER`` name a command gh will execute. A value
+    inherited from the environment would run under the sign-in rather than open
+    a page — and the user is handed the URL anyway.
+
+    Both, not just ``BROWSER``: ``GH_BROWSER`` is the higher-precedence one in
+    gh's own order, so clearing only the lower leaves the hook live.
+    """
     monkeypatch.setenv("BROWSER", "calc.exe")
+    monkeypatch.setenv("GH_BROWSER", "calc.exe")
     popen = _popen_returning(_FakeLoginProcess(DEVICE_OUTPUT))
 
     login = start_device_login(GH, popen=popen, code_wait_s=5.0)
 
     _argv, kwargs = popen.calls[0]
     assert "BROWSER" not in kwargs["env"]
+    assert "GH_BROWSER" not in kwargs["env"]
     assert kwargs["stdin"] == subprocess.DEVNULL
     login.cancel()
 
