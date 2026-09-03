@@ -1150,6 +1150,16 @@ class CalendarEventsResponse(_Strict):
     events: List[CalendarEvent] = Field(
         default_factory=list, description="Matching events, ordered by start time."
     )
+    count: int = Field(
+        default=0, ge=0, description="Number of events returned in this page."
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the provider reported another page; the events list is "
+            "not the complete calendar window."
+        ),
+    )
 
 
 class CalendarCreateEventRequest(_Strict):
