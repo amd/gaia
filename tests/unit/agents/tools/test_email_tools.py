@@ -429,8 +429,19 @@ def test_skill_declares_no_permissions():
 
 def test_email_tools_are_bundled_for_the_loader():
     """An unbundled tool can never be pulled in with its cohort."""
+    # The chat agent is a separate hub package; the core unit-test job does not
+    # install it. "Test Chat Agent" and "Test Gaia Agent" do, and run this there.
+    pytest.importorskip("gaia_agent_chat")
     from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
     bundles = PROFILE_TOOL_CONFIGS["full"].bundles
-    email = next(b for b in bundles if b.name == "email")
+    email = next(
+        (b for b in bundles if b.name == "email"),
+        None,
+    )
+    assert email is not None, (
+        "the 'email' bundle is missing from the full profile: add it to "
+        "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
+        "pull the email tools in as a cohort"
+    )
     assert email.members == set(_inbox_triage_skill().gaia.tools_required)
