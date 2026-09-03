@@ -27,6 +27,27 @@ def pytest_configure(config):
 
     del config
     os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+    import keyring
+    from keyring.backends.null import Keyring
+
+    keyring.set_keyring(Keyring())
+
+
+@pytest.fixture(autouse=True)
+def _use_noninteractive_keyring():
+    """Keep this subtree on the null backend in the shared pytest process.
+
+    ``tests/unit/connectors/`` installs its own in-memory backend. The
+    environment variable alone cannot undo that process-global replacement,
+    so install the harmless backend at each email test boundary as well.
+    """
+    import keyring
+    from keyring.backends.null import Keyring
+
+    previous = keyring.get_keyring()
+    keyring.set_keyring(Keyring())
+    yield
+    keyring.set_keyring(previous)
 
 
 @pytest.fixture(autouse=True)

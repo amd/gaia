@@ -23,7 +23,6 @@ ceiling doesn't.
 from __future__ import annotations
 
 import inspect
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,7 +62,10 @@ def _registered_tool(name: str):
 
 class TestDefaultCeilingRaisedTo50:
     def test_suite_uses_noninteractive_keyring_backend(self):
-        assert os.environ["PYTHON_KEYRING_BACKEND"] == ("keyring.backends.null.Keyring")
+        import keyring
+        from keyring.backends.null import Keyring
+
+        assert isinstance(keyring.get_keyring(), Keyring)
 
     def test_pre_scan_inbox_tool_default_is_50(self, tmp_path):
         agent = _make_agent(tmp_path)
