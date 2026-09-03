@@ -914,6 +914,7 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 | `-i, --interactive` | flag | false | REPL loop until `/quit`. |
 | `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
 | `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+| `--trace` | flag | false | Write the run's request and full agent event stream to `./email_trace_<timestamp>_<run-id>.json` (path echoed on stderr). One file per turn in interactive mode; contains real email content. |
 | `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
 | `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
 
