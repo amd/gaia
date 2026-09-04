@@ -90,6 +90,15 @@ asyncio.run(main())
 | `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
 | `REAUTH_REQUIRED` | OAuth client ID was rotated. |
 
+`AGENT_NOT_GRANTED` with `agent_id=None` is a distinct case: the call came from
+inside an agent turn that carries no identity, so no grant could be checked and
+none is assumed. Fix the identity, not the grants — see the warning below.
+
+It also raises `ConfigurationError` when an `agent_id` resolves but `scopes` is
+empty. An empty list satisfies the grant check vacuously, so it would hand back
+a full-capability token with the ledger never consulted; naming nothing is
+refused rather than treated as needing nothing.
+
 ## Forwarded connections (no re-auth)
 
 When a host app has **already** authenticated the user (its own OAuth flow),
