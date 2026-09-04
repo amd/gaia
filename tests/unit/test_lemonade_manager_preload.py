@@ -11,6 +11,7 @@ model with the required `ctx_size` instead of asking the user to run a manual
 """
 
 import threading
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -45,6 +46,10 @@ def _make_client_mock(status):
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
     client.get_status.return_value = status
+    # Ceiling unknown by default (#2992) — most tests aren't exercising the
+    # clamp, and an unconfigured MagicMock return value would break the
+    # int/None comparisons in `resolve_effective_ctx_size`.
+    client.get_model_max_context_window.return_value = None
     return client
 
 
@@ -303,3 +308,517 @@ def test_default_context_size_literal():
     """Belt-and-braces: assert the *literal* 32768 — testing-against-the-import
     is circular and would silently accept a value-drift regression."""
     assert DEFAULT_CONTEXT_SIZE == 32768
+
+
+# ---------------------------------------------------------------------------
+# Case 9 — idle preload clamps to a KNOWN ceiling below the request (#2992)
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_idle_preload_clamps_to_known_ceiling(mock_cls):
+    """DEFAULT_MODEL_NAME's max_context_window (40960) is below the
+    requested 65536: load_model must be called with the CLAMPED value, and
+    the cached context size must be the real (clamped) value, not the
+    requested one — this is the reporting-accuracy bug from #2992."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=65536,  # Lemonade's config echo of the request
+            loaded_models=[
+                {
+                    "id": "Gemma-4-E4B-it-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok is True
+    client.load_model.assert_called_once()
+    kwargs = client.load_model.call_args.kwargs
+    assert kwargs.get("ctx_size") == 40960, (
+        "GAIA must request the model's real ceiling, not the flat device "
+        "profile value, once the ceiling is known."
+    )
+    assert LemonadeManager.get_context_size() == 40960, (
+        "The reported/cached ctx must be the value actually in force, not "
+        "an echo of what was requested (#2992)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Case 10 — reload path clamps to a known ceiling and reports honestly
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_reload_clamps_to_known_ceiling_and_reports_honestly(mock_cls):
+    """A model already loaded at a too-small ctx, whose real ceiling
+    (40960) is below the device-profile request (65536): the reload must
+    request the clamped value and cache/report it honestly, not lie that
+    the full 65536 is in force."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.side_effect = [
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        ),
+        _status(
+            running=True,
+            context_size=40960,  # server actually honored the clamped value
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok is True
+    kwargs = client.load_model.call_args.kwargs
+    assert kwargs.get("ctx_size") == 40960
+    assert LemonadeManager.get_context_size() == 40960
+
+
+# ---------------------------------------------------------------------------
+# Case 11 — a known ceiling below the request must not trigger a reload
+#           storm: once discovered, subsequent ensure_ready() calls accept
+#           the capped reality instead of retrying forever (#2992).
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_known_ceiling_stops_repeat_reload_attempts(mock_cls):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=65536,
+            loaded_models=[
+                {
+                    "id": "Gemma-4-E4B-it-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+    assert ok is True
+    assert client.load_model.call_count == 1
+
+    # Force past the rate limiter so a second call would otherwise recheck.
+    LemonadeManager._last_recheck_time = 0.0
+    ok2 = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok2 is True
+    assert client.load_model.call_count == 1, (
+        "Once the model's real ceiling is known and already reached, "
+        "ensure_ready must not keep retrying a reload that can't succeed."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Case 12 — unknown ceiling: no clamp, but a warning is logged (fail loudly,
+#           not silently) — and the flat request still goes through.
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_idle_preload_unknown_ceiling_warns_and_proceeds_unclamped(mock_cls, caplog):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_model_max_context_window.return_value = None
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=32768,
+            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    with caplog.at_level("WARNING", logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
+
+    assert ok is True
+    kwargs = client.load_model.call_args.kwargs
+    assert kwargs.get("ctx_size") == 32768
+    assert any(
+        "max_context_window" in rec.message for rec in caplog.records
+    ), "Missing ceiling must be surfaced, not silently assumed absent (#2992)."
+
+
+# ---------------------------------------------------------------------------
+# Case 13 — the clamp applies under the NPU profile too, not just GPU_CTX_SIZE
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_idle_preload_clamps_under_npu_profile(mock_cls):
+    """NPU_CTX_SIZE (32768) is the requested value here — a ceiling below it
+    (16384) must clamp exactly like the GPU/CPU 65536 case. The clamp helper
+    is profile-agnostic, but this pins the NPU-scale number explicitly so a
+    future regression that special-cases GPU_CTX_SIZE gets caught."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_model_max_context_window.return_value = 16384
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=32768,
+            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF", "max_context_window": 16384}],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
+
+    assert ok is True
+    kwargs = client.load_model.call_args.kwargs
+    assert kwargs.get("ctx_size") == 16384
+    assert LemonadeManager.get_context_size() == 16384
+
+
+# ---------------------------------------------------------------------------
+# Case 14 — a model already loaded reporting an ECHOED ctx_size that already
+#           satisfies min_context_size must still be cross-checked against
+#           its real ceiling. Found via hardware verification: Lemonade will
+#           report back recipe_options.ctx_size == the request even when it
+#           silently capped the actual window lower, so "already sufficient"
+#           must not be trusted without checking max_context_window (#2992).
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_already_sufficient_echo_is_cross_checked_against_ceiling(mock_cls):
+    """A model loaded with recipe_options.ctx_size=65536 (the echo matches
+    the request) but whose real max_context_window is 40960 must be
+    detected and reported honestly on the very first `ensure_ready` call —
+    not just on a reload-triggered path."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=65536,  # config echo already looks "sufficient"
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 65536},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.side_effect = [
+        _status(
+            running=True,
+            context_size=65536,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 65536},
+                }
+            ],
+        ),
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok is True
+    assert LemonadeManager.get_context_size() == 40960, (
+        "A config echo that merely repeats the request must never be "
+        "trusted as 'sufficient' without checking the model's real ceiling."
+    )
+    # The model is already at its honest ceiling (40960) — reloading it at
+    # the same clamped value cannot change anything and must not be
+    # attempted (#2992).
+    client.load_model.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Case 15 — a reload that CANNOT raise the effective context (resident model
+#           already at its known ceiling) must not fire at all: no
+#           load_model call, no "Reloading..." message, just the honest
+#           capped-context report emitted exactly once.
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_reload_skipped_when_already_at_known_ceiling(mock_cls, caplog):
+    """Qwen3-0.6B-GGUF already resident at its real ceiling (40960), GPU
+    profile requests 65536: a reload can only reproduce the identical
+    40960 result, so it must be skipped entirely — not attempted once."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=40960,
+        loaded_models=[
+            {
+                "id": "Qwen3-0.6B-GGUF",
+                "model_name": "Qwen3-0.6B-GGUF",
+                "max_context_window": 40960,
+                "recipe_options": {"ctx_size": 40960},
+            }
+        ],
+    )
+    mock_cls.return_value = client
+
+    with caplog.at_level("WARNING", logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok is True
+    client.load_model.assert_not_called()
+    capped_msgs = [
+        rec.message
+        for rec in caplog.records
+        if "capped by" in rec.message and "trained context" in rec.message
+    ]
+    assert (
+        len(capped_msgs) == 1
+    ), f"Expected exactly one honest capped-context report, got {capped_msgs}"
+    assert LemonadeManager.get_context_size() == 40960
+
+
+# ---------------------------------------------------------------------------
+# Case 16 — the ceiling message must NOT reuse print_context_message's
+# server-remediation text (stop the server, restart it) — none of that can
+# raise a GGUF's trained context. It must instead name the shortfall as a
+# property of the model and point at the only real remedy: a bigger model.
+# ---------------------------------------------------------------------------
+
+
+def test_print_ceiling_message_has_no_server_remediation_text():
+    stderr_capture = StringIO()
+    with patch("sys.stderr", stderr_capture):
+        LemonadeManager.print_ceiling_message(40960, 65536)
+
+    output = stderr_capture.getvalue()
+    assert "To fix this issue" not in output
+    assert "Stop the Lemonade server" not in output
+    assert "gaia init" not in output
+    assert "40960" in output
+    assert "65536" in output
+    assert "trained context" in output
+    assert "larger trained context" in output
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_first_discovery_of_ceiling_skips_restart_advice(mock_cls, capsys):
+    """A reload that *just discovered* the ceiling (not one already known
+    before the attempt) must not fall through to "Restart Lemonade Server"
+    — that advice cannot raise a GGUF's trained context either, and the
+    reload path already printed the correct ceiling message once (#2992)."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[{"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}],
+        )
+    )
+    # Ceiling unresolved before the reload, discovered only afterwards.
+    client.get_model_max_context_window.side_effect = [None, None, 40960]
+    client.get_status.side_effect = [
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[{"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}],
+        ),
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=False)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert ok is True
+    assert "Restart Lemonade Server" not in output
+    assert "To fix this issue" not in output
+    assert LemonadeManager.get_context_size() == 40960
+    # The reload path already announced the cap once — the fall-through
+    # must not print a second, separate ceiling message.
+    assert (
+        output.count("trained context") == 1
+    ), f"Expected exactly one ceiling announcement, got:\n{output}"
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_ceiling_does_not_stick_after_switching_to_a_roomier_model(mock_cls):
+    """A long-lived process (e.g. gaia.ui.server) caches a small model's
+    ceiling, then the server switches to a model with real headroom. The
+    cached ceiling must not keep capping `_context_size` forever just
+    because it was true for the PREVIOUS model (#2992)."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+    assert ok is True
+    assert LemonadeManager.get_context_size() == 40960
+    assert LemonadeManager._context_ceiling == 40960
+    assert LemonadeManager._context_ceiling_model == "Qwen3-0.6B-GGUF"
+
+    # The server switches to a roomier model. Force past the rate limiter
+    # so the next ensure_ready() call actually re-checks live status
+    # instead of trusting the stale small-model ceiling.
+    LemonadeManager._last_recheck_time = 0.0
+    client.get_model_max_context_window.return_value = 131072
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=65536,
+        loaded_models=[
+            {
+                "id": "Gemma-4-E4B-it-GGUF",
+                "model_name": "Gemma-4-E4B-it-GGUF",
+                "max_context_window": 131072,
+                "recipe_options": {"ctx_size": 65536},
+            }
+        ],
+    )
+
+    ok2 = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok2 is True
+    assert LemonadeManager.get_context_size() == 65536, (
+        "The new model's real (larger) context must replace the stale "
+        "cached ceiling from the previously loaded model."
+    )
+    assert LemonadeManager._context_ceiling_model == "Gemma-4-E4B-it-GGUF"
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_ensure_ready_ceiling_path_prints_no_server_remediation(mock_cls):
+    """End-to-end through `ensure_ready`, not just the message function
+    directly: a model already at its known ceiling must surface the
+    model-property message on stderr, never the "stop the server / restart
+    it" text meant for an actually-too-small server configuration."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=40960,
+        loaded_models=[
+            {
+                "id": "Qwen3-0.6B-GGUF",
+                "model_name": "Qwen3-0.6B-GGUF",
+                "max_context_window": 40960,
+                "recipe_options": {"ctx_size": 40960},
+            }
+        ],
+    )
+    mock_cls.return_value = client
+
+    stderr_capture = StringIO()
+    with patch("sys.stderr", stderr_capture):
+        ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=False)
+
+    output = stderr_capture.getvalue()
+    assert ok is True
+    assert "To fix this issue" not in output
+    assert "Stop the Lemonade server" not in output
+    assert "trained context is 40960 tokens" in output
+    assert "larger trained context" in output

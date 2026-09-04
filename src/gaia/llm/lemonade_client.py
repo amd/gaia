@@ -184,6 +184,30 @@ def profile_ctx_size(device: Optional[str]) -> int:
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
 
 
+def resolve_effective_ctx_size(
+    requested_ctx: int, max_context_window: Optional[int]
+) -> int:
+    """The ctx_size actually in force for a load of *requested_ctx* (#2992).
+
+    ``profile_ctx_size`` picks a flat per-device value with no knowledge of
+    the model being loaded. Lemonade's own llama.cpp backend already caps an
+    over-large request at the model's trained context internally (logging
+    ``n_ctx_seq > n_ctx_train``) — but it keeps *reporting* the requested
+    value in ``recipe_options.ctx_size``, a config echo, not a measurement.
+    Clamp against the model's real ``max_context_window`` so GAIA requests
+    and reports the true ceiling instead of relying on — and repeating —
+    that silent server-side cap.
+
+    ``max_context_window`` of ``None`` or ``0`` means "unknown" (Lemonade
+    hasn't resolved the model's metadata yet, e.g. before first download) —
+    never treat that as "no ceiling"; the caller is responsible for warning
+    when the ceiling can't be determined.
+    """
+    if not max_context_window or max_context_window <= 0:
+        return requested_ctx
+    return min(requested_ctx, max_context_window)
+
+
 # ``_handle_large_tool_result``'s truncation trigger/target were tuned as a
 # flat 30000/20000 chars for the NPU's 32768 ctx (#2620). Keep that profile
 # exact and scale the same ratio to the active device's window instead of
@@ -1031,6 +1055,10 @@ class LemonadeClient:
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
         self._downloads_lock = threading.Lock()
+
+        # Models already warned about a floor-vs-ceiling clamp (#2992), so the
+        # warning fires once per model instead of on every already-loaded call.
+        self._ceiling_clamp_warned: set = set()
 
         # Set logging level based on verbosity
         if not verbose:
@@ -2465,6 +2493,51 @@ class LemonadeClient:
         url = f"{self.base_url}/models/{model_id}"
         return self._send_request("get", url)
 
+    def get_model_max_context_window(
+        self,
+        model_id: str,
+        status: Optional["LemonadeStatus"] = None,
+        *,
+        allow_catalog_lookup: bool = True,
+    ) -> Optional[int]:
+        """Trained context ceiling for *model_id* (Lemonade's ``max_context_window``).
+
+        The value is read from the model's own GGUF metadata, not GAIA's
+        requested ctx_size — it's only populated once Lemonade has resolved
+        that metadata (already loaded, or previously downloaded). Returns
+        ``None`` when unresolved (e.g. an undownloaded model); callers must
+        treat that as "unknown", never as "no ceiling" (#2992).
+
+        Args:
+            model_id: Model identifier to look up.
+            status: An already-fetched :class:`LemonadeStatus` — checked
+                first (no extra HTTP call) via its enriched ``loaded_models``.
+            allow_catalog_lookup: When the model isn't in *status*, fall back
+                to a ``list_models(show_all=True)`` catalog query. Set False
+                for a best-effort, no-network-call check (e.g. a hot loop
+                that already pays for one HTTP round trip per call).
+        """
+        if status is not None:
+            entry = self._find_loaded_entry(status, model_id)
+            if entry is not None:
+                ceiling = entry.get("max_context_window")
+                if ceiling:
+                    return int(ceiling)
+
+        if not allow_catalog_lookup:
+            return None
+
+        try:
+            catalog = self.list_models(show_all=True).get("data", [])
+        except LemonadeClientError as e:
+            self.log.debug(f"Could not query model catalog for {model_id!r}: {e}")
+            return None
+        for m in catalog:
+            if _model_ids_match(m.get("id"), model_id):
+                ceiling = m.get("max_context_window")
+                return int(ceiling) if ceiling else None
+        return None
+
     def pull_model(
         self,
         model_name: str,
@@ -3235,33 +3308,77 @@ class LemonadeClient:
         # model is already loaded at a sufficient ctx. A probe failure here is
         # NOT fatal — fall through to the actual load below, whose failure DOES
         # propagate. Only the status/ctx check is swallowed; never the load.
+        status: Optional["LemonadeStatus"] = None
         try:
             # Check current server state. ``status.loaded_models`` carries
             # health entries enriched with ``id`` + ``recipe_options`` so we
             # can read ctx_size.
             status = self.get_status()
-            loaded_entry = self._find_loaded_entry(status, model)
-
-            if loaded_entry is not None:
-                loaded_ctx = (
-                    loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
-                )
-                if loaded_ctx >= expected_ctx:
-                    self.log.debug(
-                        f"Model '{model}' already loaded at ctx={loaded_ctx} "
-                        f"(expected >= {expected_ctx})"
-                    )
-                    return
-                # Loaded but under-sized — fall through to the reload path
-                # which calls /load with explicit ctx_size.
-                self.log.info(
-                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                    f"expects ctx={expected_ctx}; reloading."
-                )
-            else:
-                self.log.debug(f"Model '{model}' not loaded, loading...")
         except Exception as e:  # pylint: disable=broad-except
             self.log.debug(f"Could not pre-check model status: {e}")
+
+        # Best-effort floor-vs-ceiling conflict check (#2992): if the MODELS
+        # registry requires more context than the model can actually train
+        # on, clamp to the model's real ceiling rather than raise — this must
+        # agree with LemonadeManager._report_capped_at_ceiling, which treats
+        # the identical situation as "proceed capped", not fatal. No extra
+        # HTTP call here (``allow_catalog_lookup=False``) — this only catches
+        # the conflict when the model happens to already be loaded (and thus
+        # in ``status``); an undownloaded model's ceiling is unknown anyway.
+        # Resolved BEFORE the already-loaded comparison below, so a model
+        # resident at its (clamped) ceiling short-circuits instead of
+        # reloading forever at the same ceiling every call.
+        _ceiling = self.get_model_max_context_window(
+            model, status=status, allow_catalog_lookup=False
+        )
+        if _ceiling and expected_ctx > _ceiling:
+            if model not in self._ceiling_clamp_warned:
+                self.log.warning(
+                    f"'{model}' requires ctx_size={expected_ctx} (MODELS "
+                    f"registry min_ctx_size), but its trained context ceiling "
+                    f"is {_ceiling} tokens (max_context_window); loading at "
+                    f"{_ceiling} instead. Use a model with a larger trained "
+                    f"context if more is needed — no server restart or config "
+                    f"change raises a GGUF's trained context."
+                )
+                self._ceiling_clamp_warned.add(model)
+            expected_ctx = _ceiling
+        elif _ceiling is None:
+            # Not an error — the common case for a model not yet loaded (its
+            # metadata isn't resolvable without a catalog round trip, which
+            # this best-effort check intentionally skips). Named at debug so
+            # the "unknown, proceeding anyway" choice is traceable, not a
+            # silent no-op (#2992).
+            self.log.debug(
+                f"No max_context_window resolvable for '{model}' from the "
+                f"current status; proceeding with ctx_size={expected_ctx} "
+                f"without a floor/ceiling check."
+            )
+
+        if status is not None:
+            try:
+                loaded_entry = self._find_loaded_entry(status, model)
+
+                if loaded_entry is not None:
+                    loaded_ctx = (
+                        loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+                    )
+                    if loaded_ctx >= expected_ctx:
+                        self.log.debug(
+                            f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                            f"(expected >= {expected_ctx})"
+                        )
+                        return
+                    # Loaded but under-sized — fall through to the reload path
+                    # which calls /load with explicit ctx_size.
+                    self.log.info(
+                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                        f"expects ctx={expected_ctx}; reloading."
+                    )
+                else:
+                    self.log.debug(f"Model '{model}' not loaded, loading...")
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.debug(f"Could not pre-check model status: {e}")
 
         # Distinguish "needs download" from "needs memory-map" so the user
         # sees an honest expectation. ``list_models`` returns per-model
@@ -3994,6 +4111,11 @@ class LemonadeClient:
                         "labels": catalog.get("labels", []),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
+                        # Trained-context ceiling (#2992) — ``/health`` reports
+                        # this directly on the loaded entry, so no second
+                        # catalog round trip is needed once a model is loaded.
+                        "max_context_window": hm.get("max_context_window")
+                        or catalog.get("max_context_window"),
                         "_health": hm,
                     }
                 )
