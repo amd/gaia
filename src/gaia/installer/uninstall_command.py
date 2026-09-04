@@ -560,11 +560,16 @@ def _is_link(path: Path) -> bool:
     isjunction = getattr(os.path, "isjunction", None)  # 3.12+
     if isjunction is not None:
         return bool(isjunction(path))
+    if not sys.platform.startswith("win"):
+        # Junctions are a Windows concept; is_symlink() is the whole story.
+        return False
+    mount_point_tag = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
+    if mount_point_tag is None:
+        return False
     try:
-        reparse_tag = getattr(path.lstat(), "st_reparse_tag", None)
+        return getattr(path.lstat(), "st_reparse_tag", None) == mount_point_tag
     except OSError:
         return False
-    return reparse_tag == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
 
 
 def _unlink_link(path: Path) -> None:

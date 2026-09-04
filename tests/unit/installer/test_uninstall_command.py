@@ -1221,3 +1221,84 @@ class TestWindowsJunctions:
         assert not (gaia / "documents").exists()
         assert not (gaia / "electron-install.log").exists(), "purge ran to completion"
         assert (target / "keep.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# The pre-3.12 junction-detection fallback
+# ---------------------------------------------------------------------------
+
+
+class TestLinkDetectionFallback:
+    """``os.path.isjunction`` is 3.12+, so on py3.10/3.11 ``_is_link`` takes a
+    reparse-tag fallback. Both of its inputs are absent on POSIX, and comparing
+    two missing attributes made every directory look like a link — ``_unlink_link``
+    then ``rmdir``'d a populated ``~/.gaia/venv`` and the whole purge failed.
+    These force the fallback on any interpreter so CI's 3.12+ lanes cover it too.
+    """
+
+    @pytest.fixture
+    def posix_pre_312(self, monkeypatch):
+        """Reproduce py3.10/3.11-on-POSIX regardless of the running interpreter:
+        no ``os.path.isjunction``, and no reparse-tag attributes on either side
+        of the comparison."""
+        monkeypatch.delattr("os.path.isjunction", raising=False)
+        monkeypatch.delattr("stat.IO_REPARSE_TAG_MOUNT_POINT", raising=False)
+        monkeypatch.setattr("sys.platform", "linux")
+
+        # A POSIX os.stat_result carries no st_reparse_tag. Without this the
+        # comparison still has a real 0 on one side and the bug hides.
+        real_lstat = Path.lstat
+
+        class _PosixStat:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def __getattr__(self, name):
+                if name == "st_reparse_tag":
+                    raise AttributeError(name)
+                return getattr(self._wrapped, name)
+
+        monkeypatch.setattr(
+            Path, "lstat", lambda self, *a, **kw: _PosixStat(real_lstat(self))
+        )
+
+    def test_plain_directory_is_not_a_link(self, posix_pre_312, tmp_path):
+        target = tmp_path / "venv"
+        (target / "bin").mkdir(parents=True)
+        (target / "bin" / "python").write_text("#!/bin/sh\n")
+
+        assert not uc._is_link(target)
+
+    def test_plain_file_is_not_a_link(self, posix_pre_312, tmp_path):
+        target = tmp_path / "gaia.log"
+        target.write_text("log line")
+
+        assert not uc._is_link(target)
+
+    def test_missing_path_is_not_a_link(self, posix_pre_312, tmp_path):
+        assert not uc._is_link(tmp_path / "never-created")
+
+    def test_purge_still_removes_a_populated_venv(self, posix_pre_312, tmp_path):
+        """The end-to-end symptom: exit 2 and 'Directory not empty'."""
+        gaia = tmp_path / ".gaia"
+        (gaia / "venv" / "bin").mkdir(parents=True)
+        (gaia / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        (gaia / "chat").mkdir()
+        (gaia / "chat" / "history.db").write_text("db")
+
+        captured = _Capture()
+        exit_code = uc.execute_plan(
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+                home=tmp_path,
+            ),
+            allowed_roots=[gaia],
+            printer=captured,
+        )
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (gaia / "venv").exists()
+        assert not (gaia / "chat").exists()
