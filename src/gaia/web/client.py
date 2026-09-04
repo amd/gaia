@@ -103,7 +103,7 @@ class PinnedIPAdapter(HTTPAdapter):
     On ``send()``, the adapter resolves the request hostname once via
     ``socket.getaddrinfo``, replaces the request URL netloc with the
     resolved IP:port, and sets the ``Host`` header to the original
-    hostname.  The resolved IP is cached per ``(host, port)`` tuple so
+    hostname. The resolved IP is cached per ``(host, port)`` tuple so
     subsequent requests to the same origin reuse the same IP — preventing
     DNS-rebind attacks between ``WebClient.validate_url`` and the actual
     TCP connect.
@@ -115,34 +115,44 @@ class PinnedIPAdapter(HTTPAdapter):
     one. Validating the exact address the adapter is about to dial closes
     that residual rebind window for BOTH http and https.
 
-    For HTTPS, the original hostname is encoded in the URL's userinfo
-    section (``originalhostname@pinnedip:port``) so that urllib3 creates
-    separate connection-pool keys per original hostname.  This avoids a
-    race where two threads requesting different hostnames that resolve to
-    the same IP would overwrite each other's ``assert_hostname`` on a
-    shared pool.
+    For HTTPS the connect address and the TLS identity are decoupled, so
+    pinning the IP does not break SNI-based virtual hosting (most of the
+    web). The original hostname is carried in the URL's userinfo section
+    (``originalhostname@pinnedip:port``) and
+    ``build_connection_pool_key_attributes`` — the extension point
+    ``requests`` documents for exactly this — turns it into
+    ``server_hostname``, which urllib3 uses both as the ClientHello SNI and
+    as the name OpenSSL verifies the certificate against, so a certificate
+    valid only for the bare IP is never accepted. It is a ``PoolKey`` field,
+    so two hostnames that resolve to the same IP get distinct connection
+    pools rather than sharing one.
 
-    Residual HTTPS limitation (documented, not silently ignored):
-    Because ``requests`` derives the urllib3 pool host — and therefore the
-    TLS SNI ``server_hostname`` — from the request URL's hostname (which we
-    rewrote to the pinned IP), the ClientHello SNI is sent as the IP, not the
-    original hostname. ``assert_hostname`` still forces certificate-name
-    verification against the real hostname (so verification is NOT disabled
-    and we never trust a cert for the bare IP), but servers that rely on SNI
-    for virtual hosting (most CDNs / shared hosts) may return the wrong
-    certificate or reject the handshake, surfacing as a TLS error rather than
-    a silent downgrade. This affects whether legitimate HTTPS *succeeds* — it
-    does not weaken the SSRF block, which fires on the validated IP before any
-    bytes are sent. Fixing SNI cleanly requires a custom urllib3
-    ``PoolManager``/``HTTPSConnection`` that decouples ``server_hostname``
-    from the connect address; that is intentionally out of scope here in
-    favour of a correct, narrower guarantee.
+    ``assert_hostname`` is deliberately NOT set: it would move name checking
+    out of the handshake into urllib3's post-hoc matcher by setting
+    ``check_hostname = False`` on the SSL context — which ``requests`` shares
+    process-wide on some versions, silently weakening every other caller.
+
+    The socket still connects to the validated, pinned IP: the URL host is
+    the IP, and ``server_hostname`` changes only what is *named* in the
+    handshake, never what is dialed. The SSRF block is unaffected — it fires
+    on the validated IP before any bytes are sent.
     """
 
     def __init__(self, *args, **kwargs):
+        # Without this hook the SNI override below is never called and TLS
+        # silently names the pinned IP again. A capability check rather than a
+        # version parse: requests 2.32.2 also routes through
+        # get_connection_with_tls_context without providing the hook.
+        if not hasattr(HTTPAdapter, "build_connection_pool_key_attributes"):
+            raise RuntimeError(
+                "PinnedIPAdapter needs requests>=2.32.3 to send the correct TLS "
+                f"SNI while pinning the IP, but requests {requests.__version__} "
+                "is installed. Without it every HTTPS fetch names the pinned IP "
+                "in the handshake and CDN-fronted hosts reject the connection. "
+                "Upgrade with: pip install --upgrade 'requests>=2.32.3'"
+            )
         super().__init__(*args, **kwargs)
         self._pinned_cache: Dict[Tuple[str, int], str] = {}
-        self._warned_https_sni = False
 
     def _resolve_first_ip(self, host: str, port: int) -> str:
         key = (host, port)
@@ -209,22 +219,9 @@ class PinnedIPAdapter(HTTPAdapter):
             url_ip = self._format_ip_for_url(pinned_ip)
 
             if parsed.scheme == "https":
-                # Encode original hostname in userinfo for unique pool keys.
-                # See class docstring: SNI is sent as the pinned IP, so
-                # SNI-vhosted servers may fail the handshake. Cert-name
-                # verification still binds to the real hostname.
-                if not getattr(self, "_warned_https_sni", False):
-                    log.warning(
-                        "PinnedIPAdapter: HTTPS request to %s is pinned to %s; "
-                        "TLS SNI will be sent as the IP. Servers using "
-                        "SNI-based virtual hosting may return the wrong "
-                        "certificate or reject the handshake. Certificate-name "
-                        "verification still validates against %s.",
-                        host,
-                        pinned_ip,
-                        host,
-                    )
-                    self._warned_https_sni = True
+                # Carry the original hostname in userinfo; it is read back in
+                # build_connection_pool_key_attributes to set the TLS SNI and
+                # the certificate-name assertion. Never sent on the wire.
                 new_netloc = f"{host}@{url_ip}:{port}"
             else:
                 new_netloc = f"{url_ip}:{port}"
@@ -244,24 +241,21 @@ class PinnedIPAdapter(HTTPAdapter):
 
         return super().send(request, **kwargs)
 
-    def get_connection(self, url, proxies=None):
-        clean_url, tls_hostname = self._strip_tls_host(url)
-        pool = super().get_connection(clean_url, proxies)
-        if tls_hostname:
-            pool.assert_hostname = tls_hostname
-        return pool
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        """Pin the connect address to the IP while keeping the TLS identity.
 
-    def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
-        original_url = request.url
-        clean_url, tls_hostname = self._strip_tls_host(original_url)
-        request.url = clean_url
-        pool = super().get_connection_with_tls_context(
-            request, verify, proxies=proxies, cert=cert
+        ``requests`` documents this as the hook for customising urllib3 pool
+        arguments. ``host_params["host"]`` is already the pinned IP (urlparse
+        drops the userinfo), so the only thing left is to name the real host
+        in TLS terms via ``server_hostname``.
+        """
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request, verify, cert
         )
-        request.url = original_url
-        if tls_hostname:
-            pool.assert_hostname = tls_hostname
-        return pool
+        _, tls_hostname = self._strip_tls_host(request.url)
+        if tls_hostname and host_params.get("scheme") == "https":
+            pool_kwargs["server_hostname"] = tls_hostname
+        return host_params, pool_kwargs
 
 
 class WebClient:
@@ -711,17 +705,31 @@ class WebClient:
         save_dir: str,
         filename: str = None,
         max_size: int = None,
+        on_path_resolved=None,
     ) -> dict:
         """Download a file from URL to local disk.
 
         Streams to disk to handle large files. Returns dict with
         path, size, and content_type.
 
+        Refuses to overwrite an existing file: the destination is checked (and
+        handed to ``on_path_resolved`` for policy screening) *before* any bytes
+        are written, and the body is streamed to a sibling ``.part`` file that
+        is renamed into place only on success. The filename can come from an
+        attacker-controlled ``Content-Disposition`` header, so a failed policy
+        check must not have already clobbered the user's file. The check is
+        repeated immediately before the rename, leaving only the sub-microsecond
+        window between that check and ``os.replace`` in which a file created by
+        another local process would still be replaced.
+
         Args:
             url: URL to download
             save_dir: Directory to save file in
             filename: Override filename (default: from URL/headers)
             max_size: Max file size in bytes (default: self._max_download_size)
+            on_path_resolved: Optional callable invoked with the resolved
+                destination ``Path`` before the file is created. Raise from it
+                to refuse the download.
         """
         max_size = max_size or self._max_download_size
 
@@ -808,21 +816,65 @@ class WebClient:
         # access is fragile (future requests versions may clear them).
         content_type = response.headers.get("Content-Type", "unknown")
 
-        # Stream to disk
-        downloaded = 0
-        with open(save_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                downloaded += len(chunk)
-                if downloaded > max_size:
-                    f.close()
-                    save_path.unlink(missing_ok=True)
-                    response.close()
-                    raise ValueError(
-                        f"Download exceeded max size: {downloaded} bytes (max: {max_size})"
-                    )
-                f.write(chunk)
+        # Refuse to clobber an existing file. The name may come straight from
+        # a remote Content-Disposition header, so `report.pdf` from a hostile
+        # page must not be able to replace the user's own ~/Downloads/report.pdf.
+        if save_path.exists():
+            response.close()
+            raise ValueError(
+                f"Refusing to overwrite existing file: {save_path}. "
+                f"Pass an explicit filename= to download under a different name."
+            )
 
-        response.close()
+        # Policy screening happens before the file is created, not after —
+        # a blocked download must leave the filesystem untouched.
+        if on_path_resolved is not None:
+            try:
+                on_path_resolved(save_path)
+            except BaseException:
+                response.close()
+                raise
+
+        # Stream to a sibling .part file and rename into place, so an
+        # interrupted download never leaves a truncated file under the real
+        # name. Exclusive create means a concurrent download of the same name,
+        # or a .part left by a crashed one, fails loudly rather than having
+        # two writers interleave into one file.
+        part_path = save_path.with_name(save_path.name + ".part")
+        try:
+            part_file = open(part_path, "xb")
+        except FileExistsError:
+            response.close()
+            raise ValueError(
+                f"Cannot download to {save_path.name}: {part_path.name} already "
+                f"exists, so another download of this name is either in flight "
+                f"or was interrupted. Delete it, or pass a different filename=."
+            ) from None
+
+        # Only ever clean up the .part this call created — unlinking on any
+        # failure would delete a concurrent download's file.
+        downloaded = 0
+        try:
+            with part_file as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    downloaded += len(chunk)
+                    if downloaded > max_size:
+                        raise ValueError(
+                            f"Download exceeded max size: {downloaded} bytes "
+                            f"(max: {max_size})"
+                        )
+                    f.write(chunk)
+            if save_path.exists():
+                raise ValueError(
+                    f"Refusing to overwrite existing file: {save_path}. "
+                    f"It appeared while the download was in flight."
+                )
+            os.replace(part_path, save_path)
+        except BaseException:
+            part_path.unlink(missing_ok=True)
+            raise
+        finally:
+            response.close()
 
         return {
             "path": str(save_path),
