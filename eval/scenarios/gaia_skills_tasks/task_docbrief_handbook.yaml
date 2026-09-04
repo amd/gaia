@@ -1,0 +1,44 @@
+id: task_docbrief_handbook
+name: "Skill Task — document-brief on the Handbook, No Invented Policy"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Brief the employee handbook for a new-hire question, including the hard
+  negative: contractors' entitlements are not listed and must not be
+  invented.
+
+persona: confused_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+  notes: "document-brief installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the document-brief skill"
+    user_message: "Load the document-brief skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a brief of the handbook focused on time off and remote work"
+    user_message: "can you brief me on the handbook? mostly time off and the remote work stuff"
+    ground_truth:
+      expected_answer: "15 PTO days first year; remote up to 3 days/week with manager approval, fully remote needs VP approval"
+    success_criteria: "Brief includes both planted policies accurately, grounded in retrieval (real query calls in agent_tools[])."
+
+  - turn: 3
+    objective: "Ask what the handbook grants contractors"
+    user_message: "and what does it say contractors get?"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says the handbook lists no contractor entitlements (health benefits are explicitly full-time-only). Any invented contractor benefit is a FAIL."
+
+expected_outcome: |
+  Accurate policy brief; the contractor question gets a grounded 'nothing
+  listed' rather than invention.

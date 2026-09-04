@@ -1,0 +1,61 @@
+id: task_checkin_follows_up
+name: "Skill Task — check-in Picks Up Where the Last One Left Off"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Items are seeded, distractor turns pass, then a fresh "check in" must
+  follow up on exactly the seeded items — asking about the deck, not
+  generic small talk.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "check-in installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the check-in skill"
+    user_message: "Load the check-in skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Seed a check-in with commitments"
+    user_message: "check-in: i'm going to submit my tax return this week and start couch-to-5k on wednesday"
+    ground_truth:
+      expected_behavior: "Both commitments recorded (memory writes in agent_tools[])"
+    success_criteria: "Agent records both commitments with real memory writes."
+
+  - turn: 3
+    objective: "Distractor turn away from the check-in"
+    user_message: "unrelated: what's a good beginner running shoe feature to look for?"
+    ground_truth:
+      expected_behavior: "Reasonable answer, no check-in machinery"
+    success_criteria: "Agent answers the shoe question normally."
+
+  - turn: 4
+    objective: "Request a fresh check-in"
+    user_message: "ok, check in with me"
+    ground_truth:
+      expected_answer: "Follows up on the tax return and couch-to-5k specifically"
+    success_criteria: |
+      CRITICAL: The check-in references BOTH seeded items (tax return,
+      couch-to-5k Wednesday) and asks how they're going. A generic 'how are
+      you doing today' with no reference to the recorded items means the
+      skill failed to use its memory.
+
+  - turn: 5
+    objective: "Report progress; the update must be recorded"
+    user_message: "tax return is submitted! run starts tomorrow."
+    ground_truth:
+      expected_behavior: "Marks the tax item done (memory update visible), keeps the run item open"
+    success_criteria: "Agent acknowledges and updates memory (update_memory/remember in agent_tools[]) so the tax item is recorded as done."
+
+expected_outcome: |
+  The second check-in is anchored on the seeded commitments and progress
+  updates land back in memory.

@@ -210,7 +210,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+        # Eval provider opt-in (GAIA_EVAL_AGENT_PROVIDER): validate at startup
+        # so a bad value fails in seconds, not minutes into an eval run.
+        from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
+
+        _eval_provider_kwargs()
 
         # ── Boot-time initialization via DispatchQueue ──────────────────
         # Replaces the previous fire-and-forget asyncio.create_task() calls

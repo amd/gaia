@@ -1,0 +1,36 @@
+id: shell_pwd_basic
+name: "Shell — Run pwd and Report (L4)"
+category: gaia_shell
+agent_type: gaia
+severity: high
+tags: [tui]
+description: |
+  Ladder rung L4: run a harmless shell command and report its real output.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to use its shell tool to run pwd and report the directory"
+    user_message: "Use your shell tool to run pwd and tell me the directory."
+    ground_truth:
+      expected_behavior: "Command actually runs (directly or after a confirmation) and a real path is reported"
+    success_criteria: |
+      agent_tools[] must include run_shell_command, and the reported
+      directory must be a plausible real path from that output. A directory
+      answer with no shell call is a CRITICAL FAIL. If a confirmation is
+      surfaced first, approving and then running also passes.
+
+  - turn: 2
+    objective: "Follow up: how many items are in that directory?"
+    user_message: "How many items are in that directory?"
+    ground_truth:
+      expected_behavior: "A real count from a real listing of the SAME directory"
+    success_criteria: "Agent runs a real listing (run_shell_command or a file tool in agent_tools[]) against the directory it just reported and gives the count. FAIL on a guessed number."
+
+expected_outcome: |
+  Real command execution both turns; the second turn operates on the
+  directory established in the first.

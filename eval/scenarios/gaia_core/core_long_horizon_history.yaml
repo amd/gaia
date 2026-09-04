@@ -1,0 +1,129 @@
+id: core_long_horizon_history
+name: "Core — Long-Horizon Recall Across Distractor Turns"
+category: gaia_core
+agent_type: gaia
+severity: high
+tags: [t3_stress]
+description: |
+  A fact is planted in turn 2 and recalled at turn 14 with eleven distracting
+  turns between — general-knowledge questions plus light tool work, so the
+  context grows realistically. Pure session-history test: the pass answer
+  must come from the conversation, not the memory store.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Casual opener"
+    user_message: "hey, got a few random questions today"
+    ground_truth:
+      expected_behavior: "Friendly brief greeting"
+    success_criteria: "Agent responds briefly and invites the questions."
+
+  - turn: 2
+    objective: "Plant the fact in passing"
+    user_message: "first, context for later: my sister Priya is visiting on the 30th and I need gift ideas eventually. but first the random stuff"
+    ground_truth:
+      expected_behavior: "Acknowledges, holds the thread"
+    success_criteria: "Agent acknowledges the sister/visit context briefly and lets the user continue."
+
+  - turn: 3
+    objective: "Distractor: general knowledge"
+    user_message: "whats the tallest mountain in africa?"
+    ground_truth:
+      expected_answer: "Kilimanjaro"
+    success_criteria: "Agent answers Kilimanjaro."
+
+  - turn: 4
+    objective: "Distractor: arithmetic"
+    user_message: "what's 14 squared?"
+    ground_truth:
+      expected_answer: "196"
+    success_criteria: "Agent answers 196, no tools."
+
+  - turn: 5
+    objective: "Distractor: unit conversion"
+    user_message: "how many ounces in a kilogram, roughly?"
+    ground_truth:
+      expected_answer: "About 35.3 ounces"
+    success_criteria: "Agent answers approximately 35 ounces."
+
+  - turn: 6
+    objective: "Distractor: light tool work — system info"
+    user_message: "quick check — what operating system are you running on right now?"
+    ground_truth:
+      expected_behavior: "Reports the OS, ideally via a real check"
+    success_criteria: "Agent reports an operating system. If it states specifics as fact (version, hostname), agent_tools[] must show a real call (e.g. get_system_info or run_shell_command); otherwise it must hedge."
+
+  - turn: 7
+    objective: "Distractor: general knowledge"
+    user_message: "who painted the starry night?"
+    ground_truth:
+      expected_answer: "Vincent van Gogh"
+    success_criteria: "Agent answers Van Gogh."
+
+  - turn: 8
+    objective: "Distractor: opinion question"
+    user_message: "is it better to run in the morning or evening?"
+    ground_truth:
+      expected_behavior: "Balanced brief answer"
+    success_criteria: "Agent gives a reasonable balanced answer."
+
+  - turn: 9
+    objective: "Distractor: general knowledge"
+    user_message: "how many time zones does russia have?"
+    ground_truth:
+      expected_answer: "11"
+    success_criteria: "Agent answers 11."
+
+  - turn: 10
+    objective: "Distractor: arithmetic"
+    user_message: "if a book has 480 pages and I read 32 a day, how many days to finish?"
+    ground_truth:
+      expected_answer: "15 days"
+    success_criteria: "Agent answers 15."
+
+  - turn: 11
+    objective: "Distractor: general knowledge"
+    user_message: "what element has the symbol W?"
+    ground_truth:
+      expected_answer: "Tungsten"
+    success_criteria: "Agent answers tungsten (wolfram)."
+
+  - turn: 12
+    objective: "Distractor: casual chat"
+    user_message: "ok almost done with the random stuff. what's a good podcast length for a commute?"
+    ground_truth:
+      expected_behavior: "Reasonable answer (20-45 min typical commute)"
+    success_criteria: "Agent answers reasonably."
+
+  - turn: 13
+    objective: "Distractor: general knowledge"
+    user_message: "last one — what year did the berlin wall come down?"
+    ground_truth:
+      expected_answer: "1989"
+    success_criteria: "Agent answers 1989."
+
+  - turn: 14
+    objective: "Recall the planted fact with an indirect reference"
+    user_message: "ok NOW the thing from the start — who did I say is visiting, and when?"
+    ground_truth:
+      expected_answer: "Your sister Priya, on the 30th"
+    success_criteria: |
+      Agent recalls both the name Priya (sister) and the date (the 30th) from
+      turn 2, eleven turns back. CRITICAL FAIL if it cannot recall, asks the
+      user to repeat, or invents a different name or date.
+
+  - turn: 15
+    objective: "Use the recalled context for the deferred request"
+    user_message: "right — so, gift ideas?"
+    ground_truth:
+      expected_behavior: "Gift ideas framed for the sister's visit"
+    success_criteria: "Agent offers gift ideas connected to the visiting-sister context without asking who the gift is for."
+
+expected_outcome: |
+  The turn-2 fact (sister Priya, visiting on the 30th) survives eleven
+  distractor turns and is recalled exactly, then used for the deferred task.

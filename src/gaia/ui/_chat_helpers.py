@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re as _re
 import threading
 import time as _time
@@ -467,6 +468,47 @@ async def _maybe_update_session_title(
         logger.debug("Auto-title DB update failed: %s", exc)
 
 
+# Eval-only provider opt-in (plan §5c): lets `gaia eval agent` drive a
+# Claude-backed agent on machines that must never start Lemonade. Explicit by
+# design — no value means exactly the current Lemonade behaviour, and a bad
+# value is a construction-time error, never a silent fallback.
+_EVAL_PROVIDER_ENV = "GAIA_EVAL_AGENT_PROVIDER"
+_EVAL_CLAUDE_MODEL_ENV = "GAIA_EVAL_CLAUDE_MODEL"
+_VALID_EVAL_PROVIDERS = ("claude",)
+
+
+def _eval_provider_kwargs() -> dict:
+    """Provider kwargs for registry.create_agent from the eval opt-in env vars.
+
+    Returns ``{}`` when ``GAIA_EVAL_AGENT_PROVIDER`` is unset/empty (the normal
+    UI path). ``claude`` requires ``GAIA_EVAL_CLAUDE_MODEL`` and yields
+    ``use_claude=True`` + ``claude_model=<value>``; the base ``Agent.__init__``
+    then skips Lemonade entirely. Any other value raises.
+
+    Raises:
+        ValueError: unknown provider value, or provider=claude with no model —
+            both actionable, neither falls back to Lemonade.
+    """
+    provider = os.environ.get(_EVAL_PROVIDER_ENV, "").strip().lower()
+    if not provider:
+        return {}
+    if provider not in _VALID_EVAL_PROVIDERS:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}={provider!r} is not a supported eval agent "
+            f"provider. Valid values: {', '.join(_VALID_EVAL_PROVIDERS)} (or unset "
+            "the variable for the default Lemonade backend). Refusing to guess a "
+            "backend."
+        )
+    claude_model = os.environ.get(_EVAL_CLAUDE_MODEL_ENV, "").strip()
+    if not claude_model:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}=claude requires {_EVAL_CLAUDE_MODEL_ENV} to name "
+            "the Claude model (e.g. claude-haiku-4-5). Set both variables, or unset "
+            f"{_EVAL_PROVIDER_ENV} for the default Lemonade backend."
+        )
+    return {"use_claude": True, "claude_model": claude_model}
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -489,9 +531,22 @@ def _build_create_kwargs(
     requested device is validated at runtime. Agent factories filter unknown
     kwargs via ``dataclasses.fields``, so this is safe for agents whose config
     doesn't declare them.
+
+    ``GAIA_EVAL_AGENT_PROVIDER=claude`` (eval-only opt-in, see
+    :func:`_eval_provider_kwargs`) additionally passes ``use_claude=True`` and
+    ``claude_model`` so the eval harness can run agents off-Lemonade.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
+    provider_kwargs = _eval_provider_kwargs()
+    if provider_kwargs:
+        kwargs.update(provider_kwargs)
+        logger.info(
+            "create_agent: %s=claude -> use_claude=True, claude_model=%s%s",
+            _EVAL_PROVIDER_ENV,
+            provider_kwargs["claude_model"],
+            suffix,
+        )
     if streaming:
         kwargs["streaming"] = True
     if device is not None:
@@ -1188,6 +1243,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     the one-shot retry in the streaming worker (see ``_run_agent``).
     """
     if not model_id:
+        return
+    # Provider override is authoritative: with GAIA_EVAL_AGENT_PROVIDER=claude
+    # the agent runs on Claude, and this Lemonade preflight would contact — and
+    # possibly load a model into — a backend the eval must never touch.
+    if _eval_provider_kwargs():
+        logger.info(
+            "Pre-flight skipped: %s=claude — Lemonade is not in use",
+            _EVAL_PROVIDER_ENV,
+        )
         return
     try:
         import httpx

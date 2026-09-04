@@ -320,7 +320,7 @@ class TestCarryForwardPatch:
     def test_carry_forward_sets_inherited_from(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.inherited_from == "0.2.3"
@@ -328,7 +328,7 @@ class TestCarryForwardPatch:
     def test_carry_forward_copies_metrics_verbatim(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.metrics == src.metrics
@@ -352,7 +352,7 @@ class TestCarryForwardPatch:
             "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
         }
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.breakdown == src.breakdown
@@ -363,7 +363,7 @@ class TestCarryForwardPatch:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         # Use a different filename to confirm it's not read from stem
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.agent_version == "0.2.4"
@@ -379,7 +379,7 @@ class TestCarryForwardMinorBumpRefuses:
     def test_minor_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         with pytest.raises(ValueError, match="re-run"):
             carry_forward(card_path, "0.3.0")
@@ -387,7 +387,7 @@ class TestCarryForwardMinorBumpRefuses:
     def test_major_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         with pytest.raises(ValueError, match="re-run"):
             carry_forward(card_path, "1.0.0")
@@ -447,7 +447,7 @@ class TestSecondAgentGeneralization:
         write_scorecard(payload, scorecard_path)
 
         # Validate the written scorecard
-        text = scorecard_path.read_text()
+        text = scorecard_path.read_text(encoding="utf-8")
         parsed = parse_scorecard(text)
         errors = validate_scorecard(parsed)
         assert errors == [], f"Second-agent scorecard should be valid, got: {errors}"
@@ -487,7 +487,9 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         scorecard_dest = benchmark_dir / "email_benchmark_scorecard.json"
-        scorecard_dest.write_text(EMAIL_BENCHMARK_FIXTURE.read_text())
+        scorecard_dest.write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
         # Fake ground_truth.json with 3 keys (2 labeled + 1 _meta → dataset_size=2)
         ground_truth = {
@@ -496,7 +498,7 @@ class TestEmailAdapter:
             "email2": {"label": "promo"},
         }
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(ground_truth))
+        gt_path.write_text(json.dumps(ground_truth), encoding="utf-8")
 
         payload = mod.build_payload(benchmark_dir, gt_path)
 
@@ -516,10 +518,12 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            EMAIL_BENCHMARK_FIXTURE.read_text()
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
         )
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        gt_path.write_text(
+            json.dumps({"_meta": {}, "a": {"label": "x"}}), encoding="utf-8"
+        )
 
         payload = mod.build_payload(benchmark_dir, gt_path)
         names = {m["name"]: m["weight"] for m in payload.metrics}
@@ -538,7 +542,7 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            EMAIL_BENCHMARK_FIXTURE.read_text()
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
         )
         variance = {
             "n_runs": 2,
@@ -557,9 +561,13 @@ class TestEmailAdapter:
             "category_accuracy": 0.46,
             "acceptance_variance": variance,
         }
-        (benchmark_dir / "quality.json").write_text(json.dumps(quality))
+        (benchmark_dir / "quality.json").write_text(
+            json.dumps(quality), encoding="utf-8"
+        )
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        gt_path.write_text(
+            json.dumps({"_meta": {}, "a": {"label": "x"}}), encoding="utf-8"
+        )
 
         payload = mod.build_payload(benchmark_dir, gt_path)
         # quality.json wins over per-scenario means.
@@ -586,10 +594,12 @@ class TestEmailAdapter:
             ],
         }
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            json.dumps(legacy)
+            json.dumps(legacy), encoding="utf-8"
         )
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        gt_path.write_text(
+            json.dumps({"_meta": {}, "a": {"label": "x"}}), encoding="utf-8"
+        )
 
         with pytest.raises(ValueError, match="acceptance metric"):
             mod.build_payload(benchmark_dir, gt_path)
@@ -600,7 +610,9 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         scorecard_dest = benchmark_dir / "email_benchmark_scorecard.json"
-        scorecard_dest.write_text(EMAIL_BENCHMARK_FIXTURE.read_text())
+        scorecard_dest.write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
         ground_truth = {
             "_meta": {"count": 3},
@@ -608,7 +620,7 @@ class TestEmailAdapter:
             "email2": {"label": "promo"},
         }
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(ground_truth))
+        gt_path.write_text(json.dumps(ground_truth), encoding="utf-8")
 
         payload = mod.build_payload(benchmark_dir, gt_path)
         # Two experiments over the SAME 12-email corpus → per-run count is 12,
@@ -622,7 +634,9 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         scorecard_dest = benchmark_dir / "email_benchmark_scorecard.json"
-        scorecard_dest.write_text(EMAIL_BENCHMARK_FIXTURE.read_text())
+        scorecard_dest.write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
         ground_truth = {
             "_meta": {"count": 3},
@@ -630,7 +644,7 @@ class TestEmailAdapter:
             "email2": {"label": "promo"},
         }
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(ground_truth))
+        gt_path.write_text(json.dumps(ground_truth), encoding="utf-8")
 
         payload = mod.build_payload(benchmark_dir, gt_path)
         # 3 keys - 1 _meta = 2
@@ -658,12 +672,12 @@ class TestEmailAdapter:
             ],
         }
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            json.dumps(empty_scorecard)
+            json.dumps(empty_scorecard), encoding="utf-8"
         )
 
         ground_truth = {"_meta": {"count": 1}, "email1": {"label": "spam"}}
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(ground_truth))
+        gt_path.write_text(json.dumps(ground_truth), encoding="utf-8")
 
         with pytest.raises(ValueError):
             mod.build_payload(benchmark_dir, gt_path)
@@ -674,7 +688,9 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         scorecard_dest = benchmark_dir / "email_benchmark_scorecard.json"
-        scorecard_dest.write_text(EMAIL_BENCHMARK_FIXTURE.read_text())
+        scorecard_dest.write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
         ground_truth = {
             "_meta": {"count": 3},
@@ -682,7 +698,7 @@ class TestEmailAdapter:
             "email2": {"label": "promo"},
         }
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(ground_truth))
+        gt_path.write_text(json.dumps(ground_truth), encoding="utf-8")
 
         payload = mod.build_payload(benchmark_dir, gt_path, limit=25)
         assert payload.reproduction_command is not None
@@ -700,10 +716,12 @@ class TestEmailAdapter:
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            EMAIL_BENCHMARK_FIXTURE.read_text()
+            EMAIL_BENCHMARK_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
         )
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        gt_path.write_text(
+            json.dumps({"_meta": {}, "a": {"label": "x"}}), encoding="utf-8"
+        )
         return benchmark_dir, gt_path
 
     def test_drafting_report_folds_reported_metric(self, tmp_path):
@@ -715,7 +733,8 @@ class TestEmailAdapter:
         bench, gt = self._bench_and_gt(tmp_path)
         report = tmp_path / "drafting_gate_report.json"
         report.write_text(
-            json.dumps({"summary": {"drafting": {"draft_approval_rate": 0.73}}})
+            json.dumps({"summary": {"drafting": {"draft_approval_rate": 0.73}}}),
+            encoding="utf-8",
         )
 
         base = mod.build_payload(bench, gt)
@@ -735,7 +754,9 @@ class TestEmailAdapter:
         mod = self._load_gen_scorecard()
         bench, gt = self._bench_and_gt(tmp_path)
         report = tmp_path / "drafting_gate_report.json"
-        report.write_text(json.dumps({"skipped": True, "reason": "no key"}))
+        report.write_text(
+            json.dumps({"skipped": True, "reason": "no key"}), encoding="utf-8"
+        )
 
         with pytest.raises(ValueError, match="skipped"):
             mod.build_payload(bench, gt, drafting_report=str(report))
@@ -745,7 +766,7 @@ class TestEmailAdapter:
         mod = self._load_gen_scorecard()
         bench, gt = self._bench_and_gt(tmp_path)
         report = tmp_path / "drafting_gate_report.json"
-        report.write_text(json.dumps({"summary": {"drafting": {}}}))
+        report.write_text(json.dumps({"summary": {"drafting": {}}}), encoding="utf-8")
 
         with pytest.raises(ValueError, match="draft_approval_rate"):
             mod.build_payload(bench, gt, drafting_report=str(report))
@@ -949,7 +970,7 @@ class TestPerformanceRoundTrip:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         src.performance = self._make_perf()
         card = tmp_path / "SCORECARD.md"
-        card.write_text(render_scorecard(src))
+        card.write_text(render_scorecard(src), encoding="utf-8")
         result = carry_forward(card, "0.2.4")
         assert result.performance is not None
         assert result.performance["throughput_tps"] == 12.1
@@ -1012,7 +1033,7 @@ class TestCapabilityQualityRoundTrip:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         src.capability_quality = self._make_capq()
         card = tmp_path / "SCORECARD.md"
-        card.write_text(render_scorecard(src))
+        card.write_text(render_scorecard(src), encoding="utf-8")
         result = carry_forward(card, "0.2.4")
         assert result.capability_quality is not None
         assert result.capability_quality["briefing"]["approval"] == 0.95
@@ -1344,13 +1365,15 @@ class TestBreakdownAdapter:
     def _make_benchmark_dir(self, tmp_path, scorecard_data):
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
-        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard_data))
+        (benchmark_dir / "scorecard.json").write_text(
+            json.dumps(scorecard_data), encoding="utf-8"
+        )
         return benchmark_dir
 
     def _make_gt(self, tmp_path):
         gt = {"a": {"label": "x"}, "b": {"label": "y"}}
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps(gt))
+        gt_path.write_text(json.dumps(gt), encoding="utf-8")
         return gt_path
 
     def test_performance_extracted_from_summary(self, tmp_path):
@@ -1611,7 +1634,8 @@ class TestBreakdownAdapter:
                         "extraction": {"precision": 0.8, "recall": 0.7, "f1": 0.75}
                     }
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         br = tmp_path / "br.json"
         br.write_text(
@@ -1626,7 +1650,8 @@ class TestBreakdownAdapter:
                         }
                     }
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         bd = self._make_benchmark_dir(
             tmp_path, self._scorecard_with_spam(0.9, 0.8, 0.85)
@@ -1646,7 +1671,7 @@ class TestBreakdownAdapter:
         """A report marked skipped raises rather than silently omitting the metric."""
         mod = self._load_gen_scorecard()
         rep = tmp_path / "skipped.json"
-        rep.write_text(json.dumps({"skipped": True}))
+        rep.write_text(json.dumps({"skipped": True}), encoding="utf-8")
         with pytest.raises(ValueError, match="skipped"):
             mod._load_report_metrics(rep, "extraction", {"f1": "f1"})
 
@@ -1654,7 +1679,10 @@ class TestBreakdownAdapter:
         """A judged report missing a mapped source key raises (no silent omit)."""
         mod = self._load_gen_scorecard()
         rep = tmp_path / "partial.json"
-        rep.write_text(json.dumps({"summary": {"extraction": {"precision": 0.8}}}))
+        rep.write_text(
+            json.dumps({"summary": {"extraction": {"precision": 0.8}}}),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError, match="summary.extraction.f1"):
             mod._load_report_metrics(rep, "extraction", {"f1": "f1"})
 
@@ -1663,7 +1691,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1684,7 +1714,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1701,7 +1733,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1725,7 +1759,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1740,7 +1776,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1772,7 +1810,9 @@ class TestBreakdownAdapter:
                 }
             ],
         }
-        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        (benchmark_dir / "scorecard.json").write_text(
+            json.dumps(scorecard), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(benchmark_dir, gt_path)
 
@@ -1785,7 +1825,9 @@ class TestBreakdownAdapter:
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
-        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        (bd / "scorecard.json").write_text(
+            json.dumps(_RICHER_SCORECARD), encoding="utf-8"
+        )
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
@@ -1833,10 +1875,12 @@ class TestEnvironmentAdapter:
                 }
             ],
         }
-        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        (benchmark_dir / "scorecard.json").write_text(
+            json.dumps(scorecard), encoding="utf-8"
+        )
         gt = {"a": {"label": "x"}}
         gt_path = tmp_path / "gt.json"
-        gt_path.write_text(json.dumps(gt))
+        gt_path.write_text(json.dumps(gt), encoding="utf-8")
         return benchmark_dir, gt_path
 
     def test_environment_embedded_verbatim(self, tmp_path):
@@ -1918,10 +1962,12 @@ class TestGenScorecardCtxSizePreRead:
                 }
             ],
         }
-        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        (benchmark_dir / "scorecard.json").write_text(
+            json.dumps(scorecard), encoding="utf-8"
+        )
         gt = {"a": {"label": "x"}}
         gt_path = tmp_path / "gt.json"
-        gt_path.write_text(json.dumps(gt))
+        gt_path.write_text(json.dumps(gt), encoding="utf-8")
         return benchmark_dir, gt_path
 
     def _main_argv(self, benchmark_dir, gt_path, output_dir):
@@ -1947,7 +1993,8 @@ class TestGenScorecardCtxSizePreRead:
                     "ctx_size": 16384,
                     "within_one_bucket_accuracy": 0.8,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         output_dir = tmp_path / "out"
 
@@ -1972,7 +2019,7 @@ class TestGenScorecardCtxSizePreRead:
         mod = self._load_gen_scorecard()
         benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
         (benchmark_dir / "quality.json").write_text(
-            json.dumps({"within_one_bucket_accuracy": 0.8})
+            json.dumps({"within_one_bucket_accuracy": 0.8}), encoding="utf-8"
         )
         output_dir = tmp_path / "out"
 
@@ -2001,10 +2048,12 @@ class TestGenScorecardCtxSizePreRead:
                 }
             ],
         }
-        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        (benchmark_dir / "scorecard.json").write_text(
+            json.dumps(scorecard), encoding="utf-8"
+        )
         gt = {"a": {"label": "x"}}
         gt_path = tmp_path / "gt.json"
-        gt_path.write_text(json.dumps(gt))
+        gt_path.write_text(json.dumps(gt), encoding="utf-8")
 
         env = {
             "gaia_commit": "deadbeef",

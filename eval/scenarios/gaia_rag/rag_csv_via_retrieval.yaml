@@ -1,0 +1,47 @@
+id: rag_csv_via_retrieval
+name: "RAG — Tabular Facts From an Indexed CSV"
+category: gaia_rag
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  The corpus sales CSV is indexed as a document; questions target exact
+  values from its rows. Numeric fidelity through the RAG path.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: sales_data
+      path: "eval/corpus/documents/sales_data_2025.csv"
+
+turns:
+  - turn: 1
+    objective: "Ask for the best-selling product in March 2025"
+    user_message: "What was the best-selling product in March 2025?"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_product_march
+      expected_answer: "Widget Pro X with 150 units and $30,000 revenue"
+    success_criteria: "Agent names Widget Pro X (150 units / $30,000)."
+
+  - turn: 2
+    objective: "Ask for total Q1 2025 revenue"
+    user_message: "What was total Q1 2025 revenue?"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: q1_total_revenue
+      expected_answer: "$340,000"
+    success_criteria: "Agent states $340,000. A different total is a FAIL."
+
+  - turn: 3
+    objective: "Ask who the top salesperson by revenue was"
+    user_message: "Who was the top salesperson by revenue?"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_salesperson
+      expected_answer: "Sarah Chen with $70,000"
+    success_criteria: "Agent names Sarah Chen ($70,000)."
+
+expected_outcome: |
+  Exact tabular values retrieved correctly from the indexed CSV.

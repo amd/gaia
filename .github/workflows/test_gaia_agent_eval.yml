@@ -1,0 +1,706 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Judged eval for the FLAGSHIP gaia agent — on gaia PRs (subset), on demand
+# (full), and as a release/weekly gate via workflow_call.
+#
+# Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
+# (eval/scenarios/gaia_*, 13 categories, ~99 scenarios) against the Agent UI
+# backend + a real Lemonade Server, scored by the Claude judge on planted-fact
+# ground truth (fixtures under tests/fixtures/gaia/ — every external surface is
+# canned: fake gh shim, local web/RSS pages, fixture skill hub; nothing live).
+#
+# SINGLE SOURCE. The gate bars + the single on/off switch live in the committed
+# manifests, read here only through the gate-reader scripts (no thresholds in
+# this YAML):
+#   - tests/fixtures/gaia/quality_gate_thresholds.json  (judged_pass_rate / avg_score)
+#   - tests/fixtures/gaia/perf_gate_thresholds.json     (tokens / cache / latency / calls)
+# QUALITY SHIPS `enforce: true` on deliberately loose absolute floors, so a
+# breached quality bar fails the build. PERF SHIPS `enforce: false` until the
+# first committed runner baseline gives its bars a measured basis. Read each
+# manifest rather than assuming a shared mode — they differ on purpose.
+# What still fails the build on every trigger, whatever the mode, is
+# the class of things that mean the eval could not prove anything: a missing
+# ANTHROPIC_API_KEY, zero judged scenarios, a scenario with no measurement
+# (infra_error / timeout / budget_exceeded / errored / skipped), or a harness
+# crash (CLAUDE.md fail-loudly — report mode softens "measured and worse",
+# never "didn't measure").
+#
+# REGRESSION GATE. Committed per-category baselines are expected under
+# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-gemma-4-e4b). NONE EXIST
+# YET — they are captured by the first full `workflow_dispatch` on this runner
+# (the dev boxes must never start Lemonade). Until then the compare step prints
+# a loud "first adoption — no baseline" notice per category and skips the diff;
+# once a baseline is committed, `gaia eval agent --compare` exit 2 surfaces as
+# a ::warning:: in report mode and fails the build under `enforce: true` (the
+# dispatch input) or an `[eval-enforce]` PR title tag.
+#
+# MEMORY IS ON — a deliberate deviation from every other eval workflow (they
+# set GAIA_MEMORY_DISABLED=1). Persistent memory is core to the flagship
+# (gaia_memory is a whole category), and the switch is backend-global, so the
+# whole run keeps it on; per-scenario isolation comes from the corpus'
+# memory_clear(scope=all) convention via the admin tools (GAIA_MEMORY_ADMIN=1).
+# Consequence: the RAG/memory embedder must actually serve on this runner —
+# the embeddings preflight below fails in seconds when it cannot (the email
+# refresh disabled memory for exactly that failure; here it would silently
+# hollow out gaia_memory instead, which is worse).
+#
+# TWO TAGS ARE ALWAYS EXCLUDED on this runner:
+#   - `live`: real-service canaries stay off CI until the starter skills are
+#     published to the real hub (eval plan phase 5) — a red weekly caused by
+#     unpublished skills would be harness noise, not signal.
+#   - `local_blocked_win_shim`: the fake-gh fixture is a .cmd shim, and the
+#     hardened argv path (shell=False) cannot resolve .cmd on Windows
+#     (CreateProcess ignores PATHEXT). This pool is Windows, so those
+#     scenarios cannot produce a measurement here; they need a Linux eval
+#     runner (tracked in the validation report, finding #4). Excluding them
+#     is what keeps the unconditional integrity gate meaningful for the rest.
+#
+# Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
+# backend, so it runs on the [self-hosted, Windows, lemonade-eval] pool. THIS
+# POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
+# default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
+# documents the scar). Serial execution across the eval workflows is enforced
+# by the shared `lemonade-eval` concurrency group on the JOB (never also at
+# the workflow level — that is a self-deadlock; see the concurrency notes).
+#
+# PATHS deliberately do NOT include `src/gaia/eval/**`: the email + gemma
+# consolidation workflows already trigger on it, and doubling the load on the
+# single serial Lemonade slot for the same machinery change buys nothing. For
+# a core-eval change you suspect moves gaia behavior, `workflow_dispatch` this
+# workflow against the branch.
+#
+# FORKS AND DRAFTS are skipped by the job-level `if` (unreviewed code must not
+# reach the lab pool; fork PRs carry no ANTHROPIC_API_KEY anyway). The
+# `skip-gaia-eval` label is the documented opt-OUT for a gaia PR that provably
+# cannot move behavior (docs, comments, packaging metadata).
+
+name: GAIA Agent Eval (judged scenarios, report mode)
+
+on:
+  # Pre-merge coverage for flagship behavior changes — PR subset only: the
+  # cheap tiers of gaia_core plus gaia_shell + gaia_tool_selection (~14
+  # scenarios), tier-filtered via --tag (category+tags compose in
+  # find_scenarios: tags OR within the list, AND with category).
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      # The flagship agent itself (prompts, tools, gate policy, packaging
+      # gate-readers this workflow invokes).
+      - 'hub/agents/gaia/python/**'
+      # GaiaAgent subclasses ChatAgent — a chat prompt/tool change moves it.
+      - 'hub/agents/chat/python/**'
+      # The judged corpus + its ground-truth contract.
+      - 'eval/scenarios/gaia_*/**'
+      - 'eval/scenarios/GAIA_FIXTURE_VALUES.md'
+      # Fixtures, thresholds manifests, fixture hub/server.
+      - 'tests/fixtures/gaia/**'
+      - '.github/workflows/test_gaia_agent_eval.yml'
+      - '.github/actions/setup-venv/**'
+      - '.github/actions/install-lemonade/**'
+      - 'installer/scripts/ensure-lemonade-running.ps1'
+  # Manual trigger — the FULL run (all 13 categories, all tiers). This is also
+  # how the first Gemma baselines get captured on the runner.
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: 'Comma-separated gaia_* categories to run (default: all 12)'
+        required: false
+        default: ''
+      enforce:
+        description: 'Fail the build on a baseline regression (false = ::warning:: only)'
+        required: false
+        type: boolean
+        default: false
+      eval_model:
+        description: 'Driver + judge model for the eval harness (must match the baseline)'
+        required: false
+        default: 'claude-sonnet-4-6'
+      iterations:
+        description: 'Runs per scenario. >1 exposes flaky vs stable-fail, which n=1 cannot. Cost and wall clock scale linearly with N.'
+        required: false
+        default: '3'
+  # Reusable: called by weekly_eval.yml and release_agent_gaia.yml so the
+  # weekly and the release run the same eval definition. The `lemonade-eval`
+  # job group keeps calls strictly serial on the single Lemonade slot.
+  workflow_call:
+    inputs:
+      categories:
+        description: 'Comma-separated gaia_* categories to run (default: all 12)'
+        required: false
+        type: string
+        default: ''
+      iterations:
+        description: 'Runs per scenario (cost and wall clock scale linearly with N)'
+        required: false
+        type: string
+        default: '1'
+      eval_model:
+        description: 'Driver + judge model for the eval harness'
+        required: false
+        type: string
+        default: 'claude-sonnet-4-6'
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Judge/driver credential — REQUIRED; absent → the preflight fails the run before any eval spend, never a skip. (Declared optional only so `secrets: inherit` call sites need not name it.)'
+        required: false
+
+concurrency:
+  # PER-INVOCATION SUPERSEDING — NOT the serial slot. The `lemonade-eval`
+  # group lives on the JOB below and is deliberately NOT repeated here: a run
+  # holding a group at the workflow level while its only job waits on the same
+  # group is a self-deadlock (test_email_agent_eval.yml documents it).
+  #
+  # Non-PR key is `github.run_id` on purpose, NOT `github.ref`: a called
+  # reusable workflow's `concurrency` is evaluated in the CALLER's context
+  # (the weekly_eval.yml phantom-job scar), so run_id makes each
+  # weekly/release/dispatch run the sole member of its own group. The PR key
+  # is the PR number so successive pushes to the SAME PR supersede each other.
+  group: gaia-agent-eval-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # `inputs.*` (not github.event.inputs.*) so values propagate for BOTH
+  # workflow_dispatch AND workflow_call.
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
+  # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
+  # as scoring it (runner.py passes it to `claude -p`), so changing it
+  # compares two different eval agents. Override per-run via the input.
+  EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Runs per scenario. A PR keeps 1 (cost); dispatch/weekly default to 3 so
+  # `flaky` is distinguishable from `stable-fail` — n=1 cannot express it.
+  # Cost and wall clock scale linearly with this number.
+  EVAL_ITERATIONS: ${{ inputs.iterations || '1' }}
+  # A dispatch input always wins; otherwise `[eval-enforce]` in the PR TITLE
+  # opts in pre-merge (workflow_dispatch is only offered once this file is on
+  # the default branch). Retitling alone does not re-run the gate — add the
+  # tag, then push.
+  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
+  BACKEND_URL: http://127.0.0.1:4200
+  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
+  # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
+  # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
+  FIXTURE_PORT: '8765'
+  # The fixture-hub lane of the same server (skill search/install scenarios).
+  GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
+  # The SSRF guard correctly refuses loopback; this opt-in allowlists exactly
+  # the fixture host so web scenarios can reach the canned pages. Production
+  # posture unchanged — other private IPs stay blocked.
+  GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
+  # MEMORY ON (deviation, see header): GAIA_MEMORY_DISABLED is deliberately
+  # NOT set; the admin seed/clear tools are exposed for scenario isolation.
+  GAIA_MEMORY_ADMIN: '1'
+  # Unattended approval of confirmation-gated tools (file writes,
+  # install_skill, CONFIRM-tier shell) — the designed switch for trusted
+  # automated runs. Must be process env, not .env (#2210), which a job-level
+  # env satisfies.
+  GAIA_AUTO_APPROVE_TOOLS: '1'
+  # Loopback services — bypass any runner proxy (Python side; PowerShell's
+  # Invoke-RestMethod ignores NO_PROXY).
+  NO_PROXY: 'localhost,127.0.0.1'
+  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself.
+  LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
+  # The eval prints box-drawing characters; the runner console is cp1252.
+  PYTHONIOENCODING: 'utf-8'
+  # Connector resolution blocks on the OS keyring in a headless runner.
+  PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+
+jobs:
+  gaia-eval:
+    name: gaia_* judged categories vs committed baselines
+    # Fork PRs and drafts never reach the lab pool; `ready_for_ci` is the
+    # repo-wide escape hatch for a draft that does want CI; `skip-gaia-eval`
+    # is the opt-OUT for a provably behavior-neutral gaia PR. Kept
+    # flat-indented: an `if:` folded scalar must fold to a single line.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')) &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-gaia-eval'))
+    # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
+    # `lemonade-eval` narrows to the box carrying the label; serialization
+    # comes from the concurrency group, not the label.
+    runs-on: [self-hosted, Windows, lemonade-eval]
+    # THE SERIAL SLOT. Same group name as test_email_agent_eval.yml,
+    # email_scorecard_refresh.yml and test_eval_agent_gemma_consolidation.yml
+    # — `lemonade-eval`, exactly — so at most one eval touches the single
+    # Lemonade backend at a time (CLAUDE.md: at most one `gaia eval agent`
+    # process, period).
+    concurrency:
+      group: lemonade-eval
+      cancel-in-progress: false
+      # `queue: single` (the default) cancels the previously-queued run — a
+      # phantom red X. `max` queues FIFO.
+      queue: max
+    defaults:
+      run:
+        # Pinned to Windows PowerShell 5.1 — everything below is written to
+        # its rules (no `&&`, $LASTEXITCODE care, Out-File encodings).
+        shell: powershell
+    # BUDGET DERIVATION — from the only measured numbers this pool has, not
+    # guesses (the #2094 lesson: a hand-typed ceiling burned 100 dispatches).
+    # No gaia category has run on this runner yet, so the basis is (a) the
+    # consolidation run 30869194618 on this box: worst measured 15.5-23.1
+    # min/scenario for judged multi-turn chat scenarios at Gemma-4-E4B, and
+    # (b) the local Haiku validation: gaia scenarios average FEWER doc-indexing
+    # turns than rag_quality but go up to 20 turns. Ceiling basis: 20
+    # min/scenario.
+    #   PR subset: ~14 scenarios (gaia_core t1_basic+t2_compound = 5,
+    #     gaia_shell 4 of 6 after the win-shim exclusion, gaia_tool_selection
+    #     5) x 20 -> 280 -> eval step 300
+    #   FULL: ~95 scenarios (99 - 2 win_shim - 2 live) x 20 -> 1900 -> eval
+    #     step 1980 (33h — self-hosted jobs may run up to 5 days; the serial
+    #     slot cost is real and is why the full run is dispatch/weekly only)
+    #   setup (venv + node + lemonade start with its own 15-min cap +
+    #     embeddings preflight + fixture staging)                    -> 40
+    #   collect + integrity + gates + compare + summary + upload     -> 20
+    #   job: PR 300+40+20 = 360; full 1980+40+20 = 2040
+    # These are CEILINGS, not expectations. The eval step carries its OWN
+    # timeout so an overrun fails at a NAMED step with the collect/gate steps
+    # still running on the partial results (a job-level timeout CANCELS and
+    # skips every `!cancelled()` step — how run 30869194618 lost 124 min of
+    # data). Re-tighten from the per-category [TIMING] lines once the first
+    # full run lands; if the full run approaches the ceiling, shard categories
+    # across two sequential jobs rather than raising it further.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 360 || 2040 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Fail-fast: without the judge/driver credential every scenario scores
+      # as an infra error after hours on the serial slot. Die in 10 seconds
+      # instead, on EVERY trigger (a run that cannot judge proves nothing).
+      - name: Preflight — judge credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::ANTHROPIC_API_KEY is not set. gaia eval agent drives + judges every scenario via claude -p, which needs the credential on this runner; without it the run could only produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass secrets: inherit from the calling workflow.'
+            exit 1
+          }
+          Write-Host "Judge credential present."
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          # [dev]+[eval] for the harness + judge deps; [ui] for the Agent UI
+          # backend the scenarios run against; [api] for the connectors layer.
+          # The chat + gaia agents ship as standalone hub wheels and are NOT
+          # pulled by the extras — install the LOCAL editable packages (this
+          # branch's code) or session creation dies with ModuleNotFoundError.
+          # Core gaia stays editable (-e .) so eval fixtures + thresholds
+          # resolve in-repo.
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      # `gaia eval agent` shells out to `claude -p` to DRIVE each scenario;
+      # its preflight hard-fails without the CLI on PATH.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the eval's scenario driver)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server (version-matched, warmed)
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          # Persistent Scheduled Task, reused if healthy; default -WarmModel is
+          # Gemma-4-E4B-it-GGUF — the flagship's model under test.
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+
+      # MEMORY IS ON, so the embedder is load-bearing for gaia_memory AND
+      # gaia_rag/gaia_code — an embedder that cannot start turns those
+      # categories into non-answers that read as a model regression (the
+      # consolidation workflow's run 31051933420 spent 3.5h proving it).
+      # tests/ci_lemonade_check.py is the shared probe: --register-embedding
+      # repairs the one failure CI can repair (a stale registration), and the
+      # --llamacpp-args flag loads it exactly the way gaia.rag.sdk does. On
+      # failure, fail in seconds with a pointer — the deeper backend-cache
+      # recovery lives in test_eval_agent_gemma_consolidation.yml; run it (or
+      # its documented wipe) on the box rather than duplicating it here.
+      - name: Preflight — embedder serves embeddings (memory-on run)
+        run: |
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, MODELS; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 3) {
+            Write-Host "::error::Could not resolve the embedding model from the venv - the install is broken."
+            exit 1
+          }
+          $embedOut = & python tests/ci_lemonade_check.py `
+            --model $probe[-3] --checkpoint $probe[-2] --recipe $probe[-1] `
+            --register-embedding --embeddings `
+            --llamacpp-args "--ubatch-size 2048" 2>&1
+          $embedCode = $LASTEXITCODE
+          $embedOut | ForEach-Object { Write-Host "$_" }
+          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in test_eval_agent_gemma_consolidation.yml (its embeddings preflight); run it on the box, then re-run this workflow."
+            exit 1
+          }
+
+      # Path-staging contract (tests/fixtures/gaia/README.md): GaiaAgent pins
+      # allowed_paths=[home], so scenario user messages reference
+      # ~/gaia-eval/... — repo paths would be sandbox refusals on a runner
+      # whose workspace is outside home. Skills: pre-seed the starter pack
+      # into the agent's skills root (scenarios that USE skills), then build
+      # + sign + trust the fixture hub with a per-run ephemeral key
+      # (scenarios ABOUT the install loop).
+      - name: Stage fixtures + skills + fixture hub
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:USERPROFILE "gaia-eval"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          Copy-Item tests\fixtures\gaia $stage -Recurse
+          Write-Host "staged fixtures -> $stage"
+
+          $skillsRoot = Join-Path $env:USERPROFILE ".gaia\skills"
+          New-Item -ItemType Directory -Force $skillsRoot | Out-Null
+          Copy-Item hub\skills\* $skillsRoot -Recurse -Force
+          Write-Host "pre-seeded starter skills -> $skillsRoot"
+
+          python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root $skillsRoot
+          if ($LASTEXITCODE -ne 0) { throw "prepare_fixture_hub failed" }
+
+      - name: Run the gaia eval categories serially
+        # Own timeout so an overrun fails HERE, by name, with the collect /
+        # gate steps still running on the partial results. See the budget
+        # derivation on the job.
+        timeout-minutes: ${{ github.event_name == 'pull_request' && 300 || 1980 }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Deliberately NOT "Stop": the eval's stderr is piped through 2>&1
+          # and under Stop the first stderr line becomes a terminating
+          # NativeCommandError. Every failure is checked explicitly.
+          $ErrorActionPreference = "Continue"
+          $ProgressPreference = "SilentlyContinue"
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          New-Item -ItemType Directory -Force -Path eval-out | Out-Null
+
+          function Test-Backend {
+            try { Invoke-RestMethod -Uri "$env:BACKEND_URL/api/health" -TimeoutSec 5 | Out-Null; return $true }
+            catch { return $false }
+          }
+
+          # A leftover backend from a cancelled run still holds :4200 on this
+          # persistent runner; evaluating a stale checkout while reporting
+          # green is worse than failing.
+          if (Test-Backend) {
+            Write-Host "::error::$env:BACKEND_URL is already serving - a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the previous checkout."
+            exit 1
+          }
+
+          # Children do not survive a step boundary, so the fixture server,
+          # the backend, and every category run live in this ONE session.
+          $fixtureLog = Join-Path $PWD "eval-out\fixtures.log"
+          $fixture = Start-Process -FilePath "python" `
+            -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","$env:FIXTURE_PORT" `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput $fixtureLog `
+            -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
+            -NoNewWindow -PassThru
+
+          $outLog = Join-Path $PWD "eval-out\backend.out.log"
+          $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          $backend = Start-Process -FilePath "python" `
+            -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -NoNewWindow -PassThru
+          if (-not $backend -or -not $fixture) {
+            Write-Host "::error::Could not start gaia.ui.server / serve_fixtures.py - the venv install is broken."
+            exit 1
+          }
+
+          try {
+            Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
+            $ready = $false
+            foreach ($attempt in 1..120) {
+              if ($backend.HasExited) {
+                Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              if (Test-Backend) { $ready = $true; break }
+              Start-Sleep -Seconds 5
+            }
+            if (-not $ready) {
+              Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            try {
+              Invoke-RestMethod -Uri "http://127.0.0.1:$env:FIXTURE_PORT/atlas.html" -TimeoutSec 10 | Out-Null
+            } catch {
+              Write-Host "::error::Fixture server not serving on port $env:FIXTURE_PORT - see eval-out\fixtures*.log. The web/skill scenarios depend on it."
+              exit 1
+            }
+            Write-Host "Backend + fixture server healthy."
+
+            # Per-category wall clock, appended to the step summary the moment
+            # each category ends — this is what replaces the guessed ceiling
+            # with a measurement (BOM-free: PS5.1 Out-File would prepend one).
+            $summaryEnc = New-Object System.Text.UTF8Encoding($false)
+            function Add-Summary($line) {
+              if ($env:GITHUB_STEP_SUMMARY) {
+                [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
+              }
+            }
+            $swTotal = [Diagnostics.Stopwatch]::StartNew()
+            Add-Summary "## Gaia eval wall clock"
+            Add-Summary ""
+            Add-Summary "| category | minutes |"
+            Add-Summary "| --- | ---: |"
+
+            # PR subset: tier-filtered cheap categories. Everything else: the
+            # category list from the dispatch/call input (default all 12).
+            if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+              $runs = @(
+                @{ cat = 'gaia_core';           extra = @('--tag','t1_basic','--tag','t2_compound') },
+                @{ cat = 'gaia_shell';          extra = @() },
+                @{ cat = 'gaia_tool_selection'; extra = @() }
+              )
+            } else {
+              $runs = @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { @{ cat = $_; extra = @() } })
+            }
+
+            # Serial by construction (CLAUDE.md: at most one gaia eval agent).
+            # `gaia eval agent --category X` exits 0 whatever the scenarios
+            # score; non-zero here is a harness crash, never a regression.
+            foreach ($run in $runs) {
+              $category = $run.cat
+              Write-Host "=================================================================="
+              Write-Host "  gaia eval agent --agent-type gaia --category $category"
+              Write-Host "=================================================================="
+              $swCat = [Diagnostics.Stopwatch]::StartNew()
+              $global:LASTEXITCODE = 0
+              $evalArgs = @('eval','agent','--agent-type','gaia','--category',$category,
+                            '--backend',"$env:BACKEND_URL",'--model',"$env:EVAL_MODEL",
+                            '--budget','5.00','--iterations',"$env:EVAL_ITERATIONS",
+                            '--exclude-tag','live','--exclude-tag','local_blocked_win_shim') + $run.extra
+              & gaia @evalArgs 2>&1 |
+                ForEach-Object { Write-Host "$_"; "$_" } |
+                Out-File -FilePath "eval-out\$category.log" -Encoding utf8
+              $code = $LASTEXITCODE
+              $swCat.Stop()
+
+              $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
+              Add-Summary "| ``$category`` | $mins |"
+
+              if ($code -ne 0) {
+                # Never `exit $LASTEXITCODE` - on a launch failure it can be
+                # $null, which PowerShell turns into exit 0.
+                Write-Host "::error::gaia eval agent --category $category crashed with exit $code (a harness failure, not a regression verdict)."
+                exit 1
+              }
+            }
+
+            $swTotal.Stop()
+            Add-Summary "| **total** | **$([math]::Round($swTotal.Elapsed.TotalMinutes, 1))** |"
+          }
+          finally {
+            foreach ($proc in @($backend, $fixture)) {
+              if ($proc -and -not $proc.HasExited) {
+                Write-Host "Stopping pid $($proc.Id)..."
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
+      - name: Collect scorecards from the printed run directories
+        # Not always(): on a concurrency cancel this would pile misleading
+        # "missing scorecard" errors on the cancellation. An eval STEP timeout
+        # fails rather than cancels, so this still names what went unmeasured.
+        if: ${{ !cancelled() }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $missing = $false
+          $cats = if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            @('gaia_core','gaia_shell','gaia_tool_selection')
+          } else {
+            @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          }
+          foreach ($category in $cats) {
+            $log = "eval-out\$category.log"
+            if (-not (Test-Path $log)) {
+              Write-Host "::error::No log for $category - the chain stopped before it ran."
+              $missing = $true
+              continue
+            }
+            # The runner prints an ABSOLUTE `Output: <run-dir>` line. Take the
+            # last match; never glob by mtime (a fresh clone stamps every file
+            # with checkout time).
+            $hit = Select-String -Path $log -Encoding UTF8 -Pattern '^Output:\s*(.+?)\s*$' | Select-Object -Last 1
+            $runDir = if ($hit) { $hit.Matches[0].Groups[1].Value } else { $null }
+            $scorecard = if ($runDir) { Join-Path $runDir "scorecard.json" } else { $null }
+            if (-not $runDir -or -not (Test-Path $scorecard)) {
+              Write-Host "::error::Could not resolve a scorecard for $category - see eval-out\$category.log."
+              $missing = $true
+              continue
+            }
+            New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
+            Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            $traces = Join-Path $runDir "traces"
+            if (Test-Path $traces) {
+              try { Copy-Item $traces "eval-out\$category\traces" -Recurse }
+              catch { Write-Host "::warning::${category}: could not copy traces ($($_.Exception.Message))." }
+            }
+            Write-Host "${category}: $runDir"
+          }
+          if ($missing) { exit 1 }
+
+      - name: Integrity gate — did we actually measure? (ignores `enforce`)
+        if: ${{ !cancelled() }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # UNCONDITIONAL: `enforce` decides whether a WORSE result blocks; it
+          # must never decide whether a NON-EXISTENT result blocks. Statuses
+          # that mean "no measurement was produced" (FAIL is a legitimate,
+          # comparable outcome; `skipped` = corpus file absent from disk).
+          $noMeasurement = @("infra_error", "errored", "timeout", "blocked", "budget_exceeded", "skipped")
+          $problems = @()
+          $cards = @(Get-ChildItem -Path eval-out -Recurse -Filter scorecard.json)
+          if ($cards.Count -eq 0) {
+            Write-Host "::error::Integrity: no scorecards collected at all."
+            exit 1
+          }
+          foreach ($file in $cards) {
+            $category = $file.Directory.Name
+            $card = Get-Content $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $judged = [int]$card.summary.passed + [int]$card.summary.failed + [int]$card.summary.blocked
+            if ($judged -le 0) {
+              $problems += "${category}: zero judged scenarios"
+            }
+            $unmeasured = @()
+            foreach ($status in $noMeasurement) {
+              $count = $card.summary.$status
+              if ($count) { $unmeasured += "${status}=$count" }
+            }
+            if ($unmeasured.Count -gt 0) {
+              $problems += "${category}: scenarios without a measurement: $($unmeasured -join ', ')"
+            }
+            Write-Host "${category}: judged=$judged unmeasured=$(if ($unmeasured) { $unmeasured -join ', ' } else { 'none' })"
+          }
+          if ($problems.Count -gt 0) {
+            foreach ($p in $problems) { Write-Host "::error::Integrity: $p" }
+            Write-Host "Report mode softens a WORSE score, never a MISSING one. Check the backend/fixture logs in the artifact, then re-run."
+            exit 1
+          }
+          Write-Host "Integrity OK - every collected category was fully measured."
+
+      # Gate-readers: read the bars ONLY through the committed manifests under
+      # tests/fixtures/gaia/ (single source), write eval-out/*_gate_report.json,
+      # exit non-zero ONLY on should_fail (enforce:true AND breached) or
+      # nothing-measured.
+      - name: Quality gate (report mode — reads the thresholds manifest)
+        if: ${{ !cancelled() }}
+        run: |
+          python hub/agents/gaia/python/packaging/eval_quality_report.py
+          if ($LASTEXITCODE -ne 0) { throw "quality gate report failed" }
+
+      - name: Perf gate (report mode — reads the thresholds manifest)
+        if: ${{ !cancelled() }}
+        run: |
+          python hub/agents/gaia/python/packaging/eval_perf_report.py
+          if ($LASTEXITCODE -ne 0) { throw "perf gate report failed" }
+
+      - name: Compare each category against its committed Gemma baseline
+        if: ${{ !cancelled() }}
+        run: |
+          $regressed = @()
+          $failedCompare = $false
+          foreach ($file in @(Get-ChildItem -Path eval-out -Recurse -Filter scorecard.json)) {
+            $category = $file.Directory.Name
+            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+            if (-not (Test-Path $baseline)) {
+              # No baselines exist until the first full workflow_dispatch on
+              # this runner commits them (dev boxes must never start
+              # Lemonade). Loud, per-category, never silent.
+              Write-Host "::notice::${category}: no committed baseline at $baseline - first adoption, comparison skipped. Capture baselines via a full workflow_dispatch run (--save-baseline) and commit them."
+              continue
+            }
+            Write-Host "=================================================================="
+            Write-Host "  ${category}: $baseline  ->  $($file.FullName)"
+            Write-Host "=================================================================="
+            # `--compare` exits 2 on status/score/time regressions, 0 otherwise.
+            $global:LASTEXITCODE = 0
+            gaia eval agent --compare "$baseline" "$($file.FullName)"
+            switch ($LASTEXITCODE) {
+              0 { Write-Host "${category}: no regression vs baseline." }
+              2 {
+                Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
+                $regressed += $category
+              }
+              default {
+                Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (a harness/IO error, not a regression verdict)."
+                $failedCompare = $true
+              }
+            }
+          }
+          Write-Host ""
+          Write-Host "SUMMARY - enforce=$env:ENFORCE; regressed: $(if ($regressed) { $regressed -join ' ' } else { 'none' })"
+          if ($failedCompare) {
+            Write-Host "::error::One or more comparisons could not be performed. Failing regardless of enforce."
+            exit 1
+          }
+          if ($regressed.Count -gt 0 -and $env:ENFORCE -eq "true") {
+            Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build. Fix the prompt/tooling, or regenerate the baseline with --save-baseline and call it out in the PR."
+            exit 1
+          }
+          # GitHub appends an exit-$LASTEXITCODE trailer to PowerShell steps;
+          # without this a report-mode regression in the LAST category would
+          # fail the build anyway.
+          $global:LASTEXITCODE = 0
+
+      # The reporting half: on a manifest that ships enforce:false a breached
+      # bar is a GREEN step whose number lives only in the artifact, which
+      # nobody opens. eval_summary.py republishes every verdict into
+      # the job summary, one ::warning:: per breach. `if: always()` so "no
+      # gate report was produced" is stated out loud even when an earlier
+      # step died.
+      # One tidy sheet per run: config repeated on every row so several runs
+      # concatenate into one spreadsheet and pivot as a time series. Unmeasured
+      # metrics write an empty cell, never 0.
+      - name: Export results to CSV
+        if: always()
+        run: |
+          Get-ChildItem -Path eval-out -Directory | ForEach-Object {
+            if (Test-Path (Join-Path $_.FullName 'scorecard.json')) {
+              python hub/agents/gaia/python/packaging/eval_csv_export.py `
+                --run-dir $_.FullName --output-dir eval-out
+            }
+          }
+
+      - name: Gate verdicts (job summary)
+        if: always()
+        run: |
+          python hub/agents/gaia/python/packaging/eval_summary.py eval-out
+          if ($LASTEXITCODE -ne 0) { throw "eval summary failed" }
+
+      - name: Upload scorecards + eval logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-agent-eval
+          path: eval-out/
+          if-no-files-found: warn

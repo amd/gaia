@@ -1,0 +1,33 @@
+id: skills_list_installed
+name: "Skills — List What Is Actually Installed"
+category: gaia_skills_lifecycle
+agent_type: gaia
+severity: high
+description: |
+  Asking what skills are available must trigger a real list_skills call and
+  report only what the tool returned.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "github-triage installed at ~/.gaia/skills/; rss-digest NOT installed."
+
+turns:
+  - turn: 1
+    objective: "Ask what skills the agent has installed"
+    user_message: "What skills do you have installed right now?"
+    ground_truth:
+      expected_behavior: "Real list from list_skills; includes github-triage"
+    success_criteria: "agent_tools[] must include list_skills, and the answer must name github-triage among the installed skills. Naming skills without the call, or inventing skills the tool didn't return, is a FAIL."
+
+  - turn: 2
+    objective: "Ask specifically whether rss-digest is installed"
+    user_message: "is rss-digest one of them?"
+    ground_truth:
+      expected_answer: "No — rss-digest is not installed (it can be searched/installed from the hub)"
+    success_criteria: "Agent correctly says rss-digest is NOT currently installed, based on the real list. Offering to search the hub for it is a plus."
+
+expected_outcome: |
+  Installed-skill answers come from real list_skills output, including an
+  accurate negative.

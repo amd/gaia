@@ -183,3 +183,63 @@ class TestErrorEnvelopeCallers:
         ):
             result = index_document(filepath="/tmp/x.txt", session_id="sess-1")
         assert "linked_to_session" not in result
+
+
+class TestStreamChatModelPin:
+    """The /api/chat/send model pin must be provider-aware (eval plan §5c).
+
+    env unset -> DEFAULT_MODEL_NAME pinned, byte-identical to today.
+    GAIA_EVAL_AGENT_PROVIDER=claude -> NO Lemonade pin (the backend's
+    use_claude opt-in is authoritative). Anything else -> loud error,
+    never a silent Lemonade fallback.
+    """
+
+    @staticmethod
+    def _capture_payload():
+        """Patch requests.post to capture the json payload and end the stream."""
+        captured = {}
+
+        def _fake_post(url, json=None, stream=False, timeout=None):
+            captured["payload"] = json
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            resp.iter_lines.return_value = iter(["data: [DONE]"])
+            return resp
+
+        return captured, _fake_post
+
+    def test_default_payload_pins_the_lemonade_model(self, monkeypatch):
+        monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+
+        captured, fake_post = self._capture_payload()
+        with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", fake_post):
+            _stream_chat("http://localhost:4200", "sess-1", "hi")
+
+        assert captured["payload"] == {
+            "session_id": "sess-1",
+            "message": "hi",
+            "stream": True,
+            "model": DEFAULT_MODEL_NAME,
+        }
+
+    def test_claude_provider_omits_the_lemonade_pin(self, monkeypatch):
+        monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+
+        captured, fake_post = self._capture_payload()
+        with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", fake_post):
+            _stream_chat("http://localhost:4200", "sess-1", "hi")
+
+        assert "model" not in captured["payload"]
+        assert captured["payload"]["session_id"] == "sess-1"
+
+    def test_unknown_provider_fails_loudly_not_a_lemonade_fallback(self, monkeypatch):
+        monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "lemonade")
+        from gaia.mcp.servers.agent_ui_mcp import _model_pin
+
+        with pytest.raises(ValueError) as excinfo:
+            _model_pin()
+        assert "GAIA_EVAL_AGENT_PROVIDER" in str(excinfo.value)
+        assert "claude" in str(excinfo.value)

@@ -1,0 +1,34 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html served on 127.0.0.1:8765 —
+# see GAIA_FIXTURE_VALUES.md.
+id: web_download_file
+name: "Web — Download a File to Disk"
+category: gaia_web
+agent_type: gaia
+severity: medium
+description: |
+  Download a fixture URL to a local file and prove it landed by checking
+  the saved copy.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Requires the fixture server on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to download http://127.0.0.1:8765/atlas.html into the home directory and report where it saved it"
+    user_message: "Download http://127.0.0.1:8765/atlas.html into my home directory and tell me where you saved it."
+    ground_truth:
+      expected_behavior: "Real download; a concrete saved path is reported"
+    success_criteria: "agent_tools[] must include download_file (or an equivalent real fetch-and-write chain). Claiming a save location with no tool call is a CRITICAL FAIL."
+
+  - turn: 2
+    objective: "Ask it to confirm the saved file mentions the tent's weight"
+    user_message: "Confirm the saved file mentions the tent's weight."
+    ground_truth:
+      expected_answer: "Yes — 1.9 kg appears in the saved file"
+    success_criteria: "Agent checks the SAVED file (read_file or equivalent in agent_tools[]) and confirms the 1.9 kg fact is present."
+
+expected_outcome: |
+  A real download verified by reading the saved copy.

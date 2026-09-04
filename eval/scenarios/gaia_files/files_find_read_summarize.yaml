@@ -1,0 +1,42 @@
+id: files_find_read_summarize
+name: "Files — Find, Read, Summarize"
+category: gaia_files
+agent_type: gaia
+severity: high
+description: |
+  Locate a file by name, read it, and summarize a fact from it. The whole
+  chain must run on real tool calls.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  # FIXTURE-SYNC: staged loose file ~/gaia-eval/documents/meeting_notes_q3.txt
+  # (see GAIA_FIXTURE_VALUES.md — Staged loose files).
+  notes: "meeting_notes_q3.txt staged at ~/gaia-eval/documents/ so a name-search under home finds it."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to find the file meeting_notes_q3.txt (search, not a given path)"
+    user_message: "I have a file called meeting_notes_q3.txt somewhere — can you find it?"
+    ground_truth:
+      expected_behavior: "Finds the file via a real search tool and reports its path"
+    success_criteria: "Agent locates the file. agent_tools[] must show a real search call (search_file, find_files, or search_directory). FAIL if it claims a location with no tool call."
+
+  - turn: 2
+    objective: "Ask it to read the file and report when the next meeting is"
+    user_message: "great, read it and tell me when the next meeting is"
+    ground_truth:
+      expected_answer: "October 15, 2025 at 2:00 PM"
+    success_criteria: "Agent reads the file (read_file or query_specific_file in agent_tools[]) and reports the next meeting: October 15, 2025 at 2:00 PM."
+
+  - turn: 3
+    objective: "Ask for a two-sentence summary of the notes"
+    user_message: "can you give me a two-sentence summary of the notes?"
+    ground_truth:
+      expected_behavior: "A short summary faithful to the file's actual content"
+    success_criteria: "Summary reflects real file content (Q3 meeting notes, next meeting date) with no invented agenda items."
+
+expected_outcome: |
+  Search → read → summarize, each step backed by a real tool call, with the
+  planted meeting date reported exactly.

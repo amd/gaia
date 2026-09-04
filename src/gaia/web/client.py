@@ -52,6 +52,20 @@ def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     )
 
 
+def _loopback_allowed_hosts() -> frozenset:
+    """Hostnames the operator has explicitly opted to allow on loopback.
+
+    Off by default. ``GAIA_WEB_ALLOWED_HOSTS`` (comma-separated) is a trusted
+    automated-testing affordance — the eval's fixture HTTP server runs on
+    127.0.0.1 and the SSRF guard would otherwise (correctly) refuse it. It only
+    ever permits *loopback* for a host the operator named; every other address
+    that name resolves to still goes through the block list. Nothing about the
+    default production posture changes.
+    """
+    raw = os.environ.get("GAIA_WEB_ALLOWED_HOSTS", "")
+    return frozenset(h.strip() for h in raw.split(",") if h.strip())
+
+
 def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     """Raise ValueError if ``ip_str`` is a private/reserved address.
 
@@ -69,6 +83,11 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
         raise ValueError(
             f"Blocked: {hostname} resolved to unparseable address {ip_str!r}."
         )
+    # Opt-in affordance: loopback ONLY, for a host the operator named. Not
+    # `is_private` — that covers 169.254.0.0/16, so it would reopen the cloud
+    # metadata endpoint to any allowlisted name.
+    if hostname in _loopback_allowed_hosts() and ip.is_loopback:
+        return
     if _is_blocked_ip(ip):
         raise ValueError(
             f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
@@ -348,6 +367,7 @@ class WebClient:
 
     def _validate_host_ip(self, hostname: str) -> None:
         """Resolve hostname and check IP is not private/internal."""
+        allowed = hostname in _loopback_allowed_hosts()
         try:
             results = socket.getaddrinfo(hostname, None)
         except socket.gaierror:
@@ -358,6 +378,11 @@ class WebClient:
             try:
                 ip = ipaddress.ip_address(ip_str)
             except ValueError:
+                continue
+
+            # Opt-in affordance: loopback ONLY, for a named host (see
+            # ``_assert_ip_allowed`` for why not ``is_private``).
+            if allowed and ip.is_loopback:
                 continue
 
             if _is_blocked_ip(ip):

@@ -1,0 +1,45 @@
+id: skills_load_persists
+name: "Skills — Loaded Skill Survives the Turn (L5/L6)"
+category: gaia_skills_lifecycle
+agent_type: gaia
+severity: critical
+tags: [tui]
+description: |
+  Ladder rungs L5/L6: load a skill, then verify next turn that it is still
+  loaded. L6 is the regression canary for the skill-vanishes-between-turns
+  bug.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "github-triage installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the github-triage skill"
+    user_message: "Load the github-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[]) and confirms."
+
+  - turn: 2
+    objective: "Ask which skills are currently loaded"
+    user_message: "Which skills do you currently have loaded? Name them."
+    ground_truth:
+      expected_answer: "github-triage"
+    success_criteria: |
+      CRITICAL: Agent names github-triage as loaded (a real check —
+      list_skills or skill_status in agent_tools[] — is expected). Saying no
+      skills are loaded is the skill-vanished regression.
+
+  - turn: 3
+    objective: "Ask what new capability the loaded skill grants"
+    user_message: "What new capability does that skill actually give you?"
+    ground_truth:
+      expected_behavior: "Describes GitHub triage via the gh CLI — consistent with the actually loaded skill"
+    success_criteria: "Agent describes the github-triage capability (triage issues/notifications with gh). Describing capabilities of skills that are not loaded is a FAIL."
+
+expected_outcome: |
+  The loaded skill persists across turns and the agent can accurately say
+  what it granted.

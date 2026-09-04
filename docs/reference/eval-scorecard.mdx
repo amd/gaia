@@ -43,6 +43,16 @@ The secondaries are recorded with **weight 0**, so they are displayed but exclud
 
 The corpus + greedy decoding (`temperature=0.0`) are fixed, and the `needs_llm` routing is a deterministic heuristic, so the only run-to-run noise is GPU floating-point non-determinism (not seedable — measured, not removed). `gaia eval benchmark --experiments N` runs N times over the same corpus and the adapter records an additive `acceptance_variance` block (mean / stdev / CV% / 95% CI / `n_runs`) in `recipe.config`. It never affects `aggregate.value` (the mean); it lets the gate tell a real regression from noise.
 
+## Aggregate metric — GAIA flagship
+
+The flagship's scorecard is built from **`gaia eval agent --agent-type gaia`** runs over the committed 13-category scenario corpus (`eval/scenarios/gaia_*`, ~99 judged multi-turn scenarios: conversation/memory tiers through adversarial, RAG, files, data, web, the shell permission gate, skill lifecycle + all 12 skills, the honesty floor, tool selection, code index). The adapter is `hub/agents/gaia/python/packaging/gen_scorecard.py`; it reads the run's `scorecard.json` (or merges the CI `eval-out/<category>/scorecard.json` collection from serial per-category runs) and never imports the eval runner.
+
+- **Aggregate = `judged_pass_rate`** (weight 1.0): passed ÷ judged, where judged = `PASS + FAIL + BLOCKED_BY_ARCHITECTURE`. Infra failures (timeout / budget / errored / skipped) are excluded from the rate — and fail the CI run's integrity gate instead, so they can never quietly improve it.
+- **Reported secondaries (weight 0):** `avg_score_normalized` (the judge's 0–10 rubric mean ÷ 10) and one `<category>_pass_rate` per category. `aggregate.value` stays `round(100 × judged_pass_rate, 2)`, recomputable from the displayed components.
+- **Environment stamps:** `gaia_commit`, the agent `model`, `ctx_size` (#1892), the hardware class, and `eval_model` (the Claude driver/judge — recorded because it drives the scenarios, not just scores them).
+
+Bars + the enforce switch live in `tests/fixtures/gaia/quality_gate_thresholds.json` (with a perf sibling). The quality manifest ships **`enforce: true`** with deliberately loose absolute floors (judged pass rate ≥ 0.60, avg score ≥ 5.0), so a breach fails the build; the perf sibling ships `enforce: false` until the first self-hosted-runner baseline calibrates it. Expect the quality bars to be retuned after that first Gemma run rather than assumed correct. CI: `test_gaia_agent_eval.yml` (PR subset / dispatch full / weekly via `weekly_eval.yml`), `gaia_scorecard_refresh.yml` (dispatch-only card refresh with the same basis guards as email's), and the `scorecard-gate` + `gaia-eval` release gates in `release_agent_gaia.yml`.
+
 ## File format
 
 Scorecard files are **Markdown with YAML front matter** (`.md`). The front matter holds all machine-readable fields; the body is a human-readable summary with a worked recomputation and a Reproduction section.
@@ -213,6 +223,7 @@ The `doc-root` is the location of the agent's canonical README:
 | Agent | doc-root |
 |-------|----------|
 | Email Triage (`@amd-gaia/agent-email`) | `hub/agents/email/npm/` |
+| GAIA flagship (`@amd-gaia/gaia`) | `hub/agents/gaia/npm/` |
 
 The relative link `./SCORECARD.md` resolves both in-repo and when the directory is published as an npm package. The npm `files` array includes `SCORECARD.md` (not a `scorecards/` directory).
 

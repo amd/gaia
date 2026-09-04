@@ -1,0 +1,44 @@
+[
+  {
+    "number": 142,
+    "title": "Crash on startup when config file is missing",
+    "body": "Widgetworks 2.4.0 crashes at launch when `~/.widgetworks/config.toml` is absent. Stack trace points at `config.load()`.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}],
+    "createdAt": "2026-08-19T09:14:00Z",
+    "updatedAt": "2026-08-20T15:02:00Z",
+    "author": {"login": "sparrow-dev"},
+    "comments": [
+      {
+        "author": {"login": "maintainer-kim"},
+        "body": "Reproduced on 2.4.0. The loader needs to create a default config instead of raising.",
+        "createdAt": "2026-08-19T16:40:00Z"
+      }
+    ],
+    "url": "https://github.com/acme-labs/widgetworks/issues/142"
+  },
+  {
+    "number": 139,
+    "title": "Add dark mode to the settings page",
+    "body": "Users have asked for a dark theme. Settings page only — no editor theming in scope.",
+    "state": "open",
+    "labels": [{"name": "enhancement", "color": "a2eeef"}],
+    "createdAt": "2026-08-15T11:30:00Z",
+    "updatedAt": "2026-08-15T11:30:00Z",
+    "author": {"login": "nightowl-ui"},
+    "comments": [],
+    "url": "https://github.com/acme-labs/widgetworks/issues/139"
+  },
+  {
+    "number": 137,
+    "title": "Quickstart guide links to a 404",
+    "body": "The quickstart's \"next steps\" section links to /docs/setup, which no longer exists. Users hit a 404 right after install.",
+    "state": "open",
+    "labels": [{"name": "documentation", "color": "0075ca"}],
+    "createdAt": "2026-08-12T08:05:00Z",
+    "updatedAt": "2026-08-12T08:05:00Z",
+    "author": {"login": "docs-first"},
+    "comments": [],
+    "url": "https://github.com/acme-labs/widgetworks/issues/137"
+  }
+]

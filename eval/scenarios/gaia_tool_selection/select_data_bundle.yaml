@@ -1,0 +1,41 @@
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+id: select_data_bundle
+name: "Tool Selection — CSV Question Pulls Data Tools"
+category: gaia_tool_selection
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  A CSV aggregation question must route to the data bundle (analyze /
+  scratchpad SQL) — not to RAG indexing, not to reading the raw file into
+  the context and eyeballing.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Staged fixture CSV at ~/gaia-eval/csv/sales.csv; dynamic tool selection enabled."
+
+turns:
+  - turn: 1
+    objective: "Ask for total revenue in ~/gaia-eval/csv/sales.csv"
+    user_message: "What's total revenue in ~/gaia-eval/csv/sales.csv?"
+    ground_truth:
+      expected_answer: "$18,600"
+    success_criteria: |
+      Agent routes to data tooling — analyze_data_file or
+      create_table/insert_data/query_data in agent_tools[] — and answers
+      exactly $18,600. Indexing the CSV into RAG and quoting chunks, or
+      eyeballing raw text, is a tool-selection FAIL even if the number is
+      close.
+
+  - turn: 2
+    objective: "Ask for the number of distinct products"
+    user_message: "How many distinct products are in there?"
+    ground_truth:
+      expected_answer: "3"
+    success_criteria: "Agent answers 3 via a real query against the loaded data."
+
+expected_outcome: |
+  Tabular questions land in the data bundle and produce exact fixture
+  numbers.
