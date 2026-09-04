@@ -96,20 +96,14 @@ something fixed on another branch. Build from a merged integration branch, or
 say explicitly which slice you tested.
 
 Similarly, `mode: user` runs the **published frozen sidecar**, which is routinely
-older than source (2.4 vs 2.6). Confirm with
-`gaia daemon start-agent <id> --mode dev` when testing source behaviour, and
-check `api_version` in `GET /daemon/v1/agents`.
+older than source (2.4 vs 2.6). When testing an agent from a checkout, set the
+same mode on the TUI launch so its ensure request agrees with the sidecar:
 
-## The card/context trap
+```bash
+GAIA_EMAIL_AGENT_MODE=dev /path/to/gaia-tui --control-port 8815
+```
 
-Cards are rendered by the TUI from `tool_result.render`, not by the sidecar. The
-transcript pushed back as `context` must therefore carry a compact record of what
-was displayed, or a follow-up referring to a visible row ("when is that one?")
-resolves against nothing. See `SSEClient.appendTurn` / `displayedCard`.
-
-## Reporting what you saw
-
-Write results per [CLAUDE.md → How You
-Communicate](../../../CLAUDE.md#how-you-communicate): open with whether the thing works, in
-one plain sentence, then the captures and `file:line` detail beneath it. Say plainly which
-screens you never reached — an unstated gap reads as a pass.
+Use `GAIA_GAIA_AGENT_MODE=dev` for the flagship `gaia` agent. The TUI resolves
+the caller checkout and sends the per-agent source directory to the daemon;
+starting a dev sidecar separately while the TUI still defaults to `user`
+creates a mode conflict. Check `api_version` in `GET /daemon/v1/agents`.

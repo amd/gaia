@@ -9,7 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -505,6 +508,13 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if agentID == "" {
 		return nil, &RequestError{Op: "ensure an agent sidecar", Detail: "no agent id was given"}
 	}
+	body, err := ensureRequestBody(agentID)
+	if err != nil {
+		return nil, &RequestError{
+			Op:     fmt.Sprintf("resolve the caller settings for the '%s' sidecar", agentID),
+			Detail: err.Error(),
+		}
+	}
 	inst, err := c.StartOrAttach(ctx)
 	if err != nil {
 		return nil, err
@@ -516,7 +526,7 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	resp, inst, err := c.Do(ctx, inst, Request{
 		Method:     http.MethodPost,
 		Path:       APIPrefix + "/agents/" + agentID + "/ensure",
-		Body:       []byte("{}"),
+		Body:       body,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: c.ensure,
 		Op:         fmt.Sprintf("ensure the '%s' sidecar via the daemon", agentID),
@@ -533,6 +543,70 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 		}
 	}
 	return inst, nil
+}
+
+// callerMode mirrors the built-in sidecar mode environment variables used by
+// the Python callers. Unknown IDs intentionally default to user mode: only
+// registered built-in agents have a caller-owned mode switch.
+func callerMode(agentID string) string {
+	envVar := ""
+	switch agentID {
+	case "email":
+		envVar = "GAIA_EMAIL_AGENT_MODE"
+	case "gaia":
+		envVar = "GAIA_GAIA_AGENT_MODE"
+	}
+	if envVar != "" {
+		if mode := os.Getenv(envVar); mode != "" {
+			return mode
+		}
+	}
+	return "user"
+}
+
+// callerDevSrcDir resolves the same per-agent source layout as the daemon,
+// anchored to the checkout containing the caller's current working directory.
+// The TUI binary's location is not a reliable checkout anchor, especially for
+// installed binaries and Windows development checkouts.
+func callerDevSrcDir(agentID string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("could not determine the current working directory: %w", err)
+	}
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = cwd
+	raw, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not determine the git checkout root from %s: %w; run from inside a git work tree",
+			cwd, err,
+		)
+	}
+	root := strings.TrimSpace(string(raw))
+	if root == "" {
+		return "", fmt.Errorf("git returned an empty checkout root; run from inside a git work tree")
+	}
+	if runtime.GOOS == "windows" && len(root) >= 3 && root[0] == '/' &&
+		((root[1] >= 'a' && root[1] <= 'z') || (root[1] >= 'A' && root[1] <= 'Z')) &&
+		root[2] == '/' {
+		// Git for Windows may emit /c/path when invoked from a Unix-like shell.
+		root = string(root[1]) + ":" + root[2:]
+	}
+	root = filepath.Clean(filepath.FromSlash(root))
+	return filepath.Join(root, "hub", "agents", agentID, "python"), nil
+}
+
+func ensureRequestBody(agentID string) ([]byte, error) {
+	mode := callerMode(agentID)
+	body := map[string]string{"mode": mode}
+	if mode == "dev" {
+		devSrcDir, err := callerDevSrcDir(agentID)
+		if err != nil {
+			return nil, err
+		}
+		body["dev_src_dir"] = devSrcDir
+	}
+	return json.Marshal(body)
 }
 
 // Logf emits a diagnostic through the client's configured logger. Exported so
