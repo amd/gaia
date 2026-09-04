@@ -240,6 +240,111 @@ class TestConnectGrantAgent:
         assert rc == 5
         assert bogus_scope in err
 
+    def test_device_grant_matches_browser_scope_and_grant_contract(self, monkeypatch):
+        declared = [
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        ]
+        self._install_fake_agent_registry(monkeypatch, declared)
+
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes):
+            captured["start_connector_id"] = connector_id
+            captured["start_scopes"] = list(scopes)
+            return {
+                "message": "Go to https://auth.example and enter CODE",
+                "device_code": "device-code",
+                "user_code": "CODE",
+                "verification_uri": "https://auth.example",
+                "scopes": list(scopes),
+                "interval": 1,
+                "expires_in": 900,
+            }
+
+        async def _fake_poll(
+            connector_id,
+            device_code,
+            *,
+            scopes,
+            interval,
+            expires_in,
+            grant_agents=None,
+        ):
+            captured["poll_connector_id"] = connector_id
+            captured["device_code"] = device_code
+            captured["poll_scopes"] = list(scopes)
+            captured["grant_agents"] = grant_agents
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_device_flow", _fake_start)
+        monkeypatch.setattr("gaia.connectors.api.poll_device_flow", _fake_poll)
+
+        rc, out, err = _run(
+            "connectors",
+            "connect",
+            "google",
+            "--device",
+            "--grant-agent",
+            "installed:email",
+        )
+        assert rc == 0, err
+
+        expected_grant = {"installed:email": declared}
+        expected_scopes = sorted(
+            set(declared) | {"openid", "https://www.googleapis.com/auth/userinfo.email"}
+        )
+        assert captured["start_scopes"] == expected_scopes
+        assert captured["poll_scopes"] == expected_scopes
+        assert captured["grant_agents"] == expected_grant
+        assert "Requesting access to google:" in out
+        assert "Connected as alice@example.com" in out
+        assert "granted google → installed:email" in out
+
+    @pytest.mark.allow_network  # asyncio's Windows event loop uses a local socketpair
+    def test_device_connect_describes_microsoft_graph_scopes(self, monkeypatch):
+        async def _fake_start(connector_id, *, scopes):
+            assert connector_id == "microsoft"
+            return {
+                "message": "Go to https://microsoft.example and enter CODE",
+                "device_code": "device-code",
+                "user_code": "CODE",
+                "verification_uri": "https://microsoft.example",
+                "scopes": list(scopes),
+                "interval": 1,
+                "expires_in": 900,
+            }
+
+        async def _fake_poll(
+            connector_id,
+            device_code,
+            *,
+            scopes,
+            interval,
+            expires_in,
+            grant_agents=None,
+        ):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_device_flow", _fake_start)
+        monkeypatch.setattr("gaia.connectors.api.poll_device_flow", _fake_poll)
+
+        graph_scope = "https://graph.microsoft.com/Mail.Read"
+        rc, out, err = _run(
+            "connectors",
+            "connect",
+            "microsoft",
+            "--device",
+            "--scopes",
+            graph_scope,
+        )
+
+        assert rc == 0, err
+        assert "Requesting access to microsoft:" in out
+        assert "Read your email" in out
+        assert graph_scope not in out
+        assert "Connected as alice@example.com" in out
+
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 
