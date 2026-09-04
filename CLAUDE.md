@@ -620,6 +620,35 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
+### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
+
+There are **three** launch forms, and only one is right for a given machine. Writing
+any of them as a literal string in a message, doc, or start path is a bug:
+
+| Form | Command | When |
+|------|---------|------|
+| Legacy CLI | `lemonade-server serve` | **Pre-10.7 only — dropped.** Errors with "command not found" on every modern install |
+| Modern install | Win `LemonadeServer.exe --silent` (+ `LEMONADE_CTX_SIZE` in env) · Linux `systemctl --user start lemond` · macOS the `lemond` daemon | A user-installed Lemonade |
+| [Embeddable](https://lemonade-server.ai/docs/embeddable/runtime/) | `LEMONADE_API_KEY=KEY lemond ./ --port PORT` | A Lemonade GAIA bundles and owns |
+
+**Resolve against the machine; never switch on `runtime.GOOS` or the platform.**
+[`resolve_lemonade()` / `build_start_command()`](src/gaia/llm/lemonade_launcher.py) own
+this decision and return a `StartSpec(argv, env)` — go through them. The embeddable form
+takes a working directory and a port that the others don't, so **nothing may assume the
+argv shape.** `tui/internal/ui/preflight/lemonade.go` is the reference for doing this
+from Go, and its header comment explains why a GOOS table inherits the Python probe's
+macOS blind spot.
+
+For the embeddable form, the positional `./` is lemond's working directory (holding
+`config.json`, `bin/`, `models/`), `LEMONADE_API_KEY` locks the endpoints to GAIA, and
+every request then carries `Authorization: Bearer KEY` — which
+`lemonade_auth_headers()` already emits. Readiness is `GET /v1/health`.
+
+**Why this is a rule and not a note:** a remedy naming a command that errors is worse
+than no remedy — the user has no path forward and no reason to doubt the instruction.
+GAIA shipped `lemonade-server serve` in ~10 user-facing strings for releases after it
+stopped existing, and it was found only when a user tried to follow it.
+
 ## CLI Commands
 
 All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -h` for the authoritative list.

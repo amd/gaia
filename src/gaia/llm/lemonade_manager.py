@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
+    CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
@@ -22,6 +23,16 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+
+
+def _is_cloud_entry(entry: dict) -> bool:
+    """True when a ``loaded_models`` entry is gateway-routed rather than local.
+
+    Checked on both the recipe and the labels because the two Lemonade
+    surfaces that populate this list do not agree on which one they set.
+    """
+    return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
+
 
 # Allow-list mapping from detected device -> Lemonade recipe
 # TODO: Confirm full recipe vocabulary with the Lemonade specialist
@@ -626,6 +637,7 @@ class LemonadeManager:
                         # SD models don't have context size, only LLM models do
                         llm_models_loaded = any(
                             "image" not in model.get("labels", [])
+                            and not _is_cloud_entry(model)
                             for model in status.loaded_models
                         )
 
@@ -716,6 +728,9 @@ class LemonadeManager:
                         and "image" not in model.get("labels", [])
                         and "embeddings" not in model.get("labels", [])
                     )
+                    # A gateway model is resident nowhere local, so it must not
+                    # count as "an LLM is loaded" for context-size decisions.
+                    and not _is_cloud_entry(model)
                     for model in status.loaded_models
                 )
 
@@ -738,6 +753,7 @@ class LemonadeManager:
                         status.loaded_models = []
                     llm_models_loaded = any(
                         "image" not in model.get("labels", [])
+                        and not _is_cloud_entry(model)
                         for model in status.loaded_models
                     )
 
@@ -891,12 +907,19 @@ class LemonadeManager:
         llm_models = [
             m
             for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
+            if (
+                m.get("type") == "llm"
+                or (
+                    m.get("type") is None
+                    and "image" not in m.get("labels", [])
+                    and "embeddings" not in m.get("labels", [])
+                )
             )
+            # A gateway-routed model has no local weights and no context to
+            # pin — its window is whatever the gateway serves. Reloading one
+            # is a no-op that reports back the default 4096 and then tells the
+            # user to restart Lemonade over a size it does not control.
+            and not _is_cloud_entry(m)
         ]
         if not llm_models:
             return False

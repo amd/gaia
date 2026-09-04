@@ -178,11 +178,12 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 
 	// commandText does the same for submit's local commands.
 	commandText := map[string]string{
-		"/help":   "/help",
-		"/clear":  "/clear",
-		"/memory": "/memory",
-		"/setup":  "/setup",
-		"/bypass": "/bypass",
+		"/help":    "/help",
+		"/clear":   "/clear",
+		"/memory":  "/memory",
+		"/setup":   "/setup",
+		"/bypass":  "/bypass",
+		"/gateway": "/gateway",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		key := cmd

@@ -1379,6 +1379,50 @@ environment variable; see [the Microsoft connector guide](/connectors/microsoft#
 
 ---
 
+## AMD LLM Gateway
+
+Runs GAIA agents on gateway-hosted models — larger on-prem models and frontier
+models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
+
+You enter your token once. Lemonade holds it in memory and forgets it on
+restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
+SecretService) and replays it — encrypted at rest, never in a GAIA file.
+
+```bash
+gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway
+gaia gateway auth                     # prompts for the token without echo
+gaia gateway status                   # registration, auth state, active model
+gaia gateway models                   # what the gateway offers
+gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
+gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
+gaia gateway test "Say hello"         # end-to-end round trip
+gaia gateway auth --no-remember       # ask me every restart instead
+gaia gateway logout                   # drop Lemonade's copy, keep the stored one
+gaia gateway logout --forget          # also delete it from the credential store
+gaia gateway uninstall                # remove the provider
+```
+
+| Flag | Command | Purpose |
+|------|---------|---------|
+| `--base-url` | `install` | Gateway OpenAI-compatible base URL |
+| `--auth-header-name` | `install` | Auth header name (default `Ocp-Apim-Subscription-Key`) |
+| `--auth-header-prefix` | `install` | Header value prefix (default empty — the AMD gateway takes a bare key) |
+| `--skip-probe` | `install` | Register without first testing the gateway |
+| `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
+| `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
+| `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
+| `--forget` | `logout` | Also delete the stored token |
+| `--model` | `test` | Model to test (default: the active gateway model) |
+
+Gateway models are namespaced `amd.<model>` and work anywhere a local model
+does. `LEMONADE_AMD_API_KEY` in **Lemonade's** environment still takes
+precedence over a stored token; if both are set, Lemonade says so rather than
+silently choosing.
+
+[→ LLM Gateway Guide](/guides/llm-gateway)
+
+---
+
 ## Configuration
 
 GAIA keeps a small persistent config at `~/.gaia/config.json` (override the
