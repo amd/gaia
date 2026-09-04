@@ -165,6 +165,66 @@ def test_a_module_level_function_guarded_by_if_is_still_module_level(replace, tm
     assert "def after():\n    return 2" in after
 
 
+CLASS_WITH_ATTR = """\
+class Alpha:
+    x = 1
+
+    def run(self):
+        return "alpha"
+"""
+
+
+def test_a_de_indented_method_replacement_is_refused(replace, tmp_path):
+    """Parsing clean is not the same as landing in the right scope.
+
+    Without the indentation the replacement is a valid module-level ``def``, so
+    the syntax gate passes while ``Alpha.run`` quietly leaves its class.
+    """
+    target = tmp_path / "alpha.py"
+    target.write_text(CLASS_WITH_ATTR, encoding="utf-8")
+
+    result = replace(
+        str(target),
+        "Alpha.run",
+        'def run(self):\n    return "PATCHED"',
+        backup=False,
+    )
+
+    assert result["status"] == "error"
+    assert "Alpha.run" in result["error"] and "indent" in result["error"].lower()
+    assert target.read_text(encoding="utf-8") == CLASS_WITH_ATTR
+
+
+def test_the_correctly_indented_replacement_of_the_same_method_succeeds(
+    replace, tmp_path
+):
+    """The guard must not cost the legitimate edit."""
+    target = tmp_path / "alpha.py"
+    target.write_text(CLASS_WITH_ATTR, encoding="utf-8")
+
+    result = replace(
+        str(target),
+        "Alpha.run",
+        '    def run(self):\n        return "PATCHED"',
+        backup=False,
+    )
+    after = target.read_text(encoding="utf-8")
+
+    assert result["status"] == "success"
+    assert 'return "PATCHED"' in after
+    assert "    x = 1" in after
+    assert after.startswith("class Alpha:")
+
+
+def test_a_replacement_that_renames_the_function_is_refused(replace, module):
+    """`replace_function` replaces one definition; it does not rename one."""
+    result = replace(str(module), "foo", "def renamed():\n    return 99", backup=False)
+
+    assert result["status"] == "error"
+    assert "does not define 'foo'" in result["error"]
+    assert module.read_text(encoding="utf-8") == MODULE
+
+
 def test_a_missing_function_is_still_reported_as_not_found(replace, module):
     result = replace(str(module), "nope", "def nope(): pass", backup=False)
 

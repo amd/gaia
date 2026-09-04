@@ -203,6 +203,10 @@ Replace one function definition in a Python file. The replaced span is the
 definition and its decorators, taken from the AST — nothing between it and the
 next definition is touched.
 
+The edit is refused unless the function still resolves at the same qualified name
+afterwards, so a de-indented replacement cannot silently relocate a method to
+module level, and the tool never renames or moves a definition.
+
 **Parameters:**
 - `file_path` (str, required): Path to Python file
 - `function_name` (str, required): A module-level function name, or a qualified

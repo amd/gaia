@@ -63,8 +63,8 @@ def _resolve_function_node(tree: ast.Module, function_name: str):
         where = ", ".join(str(node.lineno) for node in matches)
         raise FunctionLookupError(
             f"'{name}' is defined more than once (lines {where}). Refusing to "
-            "guess which definition to replace — rename one, or edit the file "
-            "with edit_python_file instead."
+            "guess which definition to replace — for an @overload stack or a "
+            "conditional definition, edit the file with edit_python_file instead."
         )
 
     if "." not in name:
@@ -78,6 +78,40 @@ def _resolve_function_node(tree: ast.Module, function_name: str):
             )
 
     raise FunctionLookupError(f"Function '{function_name}' not found in file")
+
+
+def _misplaced_target(new_tree: ast.Module, qualname: str) -> Optional[str]:
+    """Why the rewritten module no longer defines ``qualname``; ``None`` if fine.
+
+    An exact span is not enough on its own: a de-indented method parses cleanly
+    at module level, so the syntax gate passes while the definition quietly
+    leaves its class. The qualified name encodes the scope, so resolving it again
+    in the rewritten tree checks placement, not just presence.
+    """
+    table = _qualified_functions(new_tree)
+    found = table.get(qualname, [])
+    if len(found) == 1:
+        return None
+
+    if len(found) > 1:
+        return (
+            f"The replacement defines '{qualname}' {len(found)} times; it must "
+            "define it exactly once."
+        )
+
+    basename = qualname.rsplit(".", 1)[-1]
+    moved = sorted(q for q in table if q.rsplit(".", 1)[-1] == basename)
+    if moved:
+        return (
+            f"The replacement moves '{qualname}' to "
+            f"{', '.join(repr(q) for q in moved)}. Indent new_implementation to "
+            f"match the definition it replaces — nothing was written."
+        )
+    return (
+        f"The replacement does not define '{qualname}'. It must define the same "
+        "function in the same scope; replace_function does not rename or move "
+        "one. Nothing was written."
+    )
 
 
 def _function_span(node, lines: list) -> tuple:
@@ -1058,7 +1092,10 @@ class FileIOToolsMixin:
             everything around it untouched. Because decorators are part of what
             is replaced, new_implementation must repeat any decorator the
             function should keep, and must carry the indentation of the
-            definition it replaces.
+            definition it replaces — a de-indented method would otherwise land
+            at module level, out of its class. The edit is refused if the
+            function no longer resolves at the same qualified name afterwards,
+            so this tool never renames or moves a definition.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -1163,6 +1200,19 @@ class FileIOToolsMixin:
                         "error": "Replacement would result in invalid syntax",
                         "syntax_errors": validation.get("errors", []),
                     }
+
+                # Parsing clean is not the same as landing in the right scope.
+                try:
+                    new_tree = ast.parse(modified_content)
+                except SyntaxError as e:
+                    return {
+                        "status": "error",
+                        "error": "Replacement would result in invalid syntax",
+                        "syntax_errors": [str(e)],
+                    }
+                misplaced = _misplaced_target(new_tree, function_name.strip())
+                if misplaced:
+                    return {"status": "error", "error": misplaced}
 
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:

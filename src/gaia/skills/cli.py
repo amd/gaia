@@ -532,7 +532,8 @@ def _handle_info(args: argparse.Namespace) -> int:
 
 def _handle_create(args: argparse.Namespace) -> int:
     parent = Path(args.directory) if args.directory else _manager().user_root
-    target = skill_directory(parent, args.name, source="create")
+    name = validated_skill_name(args.name, source="create")
+    target = skill_directory(parent, name, source="create")
 
     if target.exists() and not args.force:
         sys.stderr.write(
@@ -553,18 +554,18 @@ def _handle_create(args: argparse.Namespace) -> int:
         ]
 
     skill = Skill(
-        name=args.name,
+        name=name,
         description=args.description or _DEFAULT_DESCRIPTION,
         version="0.1.0",
         license="MIT",
         gaia=gaia_meta,
-        body=_scaffold_body(args.name, with_tools=args.with_tools),
+        body=_scaffold_body(name, with_tools=args.with_tools),
     )
     # Validate the scaffold through the real parser before writing it, so
     # 'gaia skill create' can never emit a SKILL.md that 'gaia skill info' rejects.
     from gaia.skills.format import parse_skill
 
-    parse_skill(skill.to_markdown(), source=f"<scaffold {args.name}>")
+    parse_skill(skill.to_markdown(), source=f"<scaffold {name}>")
 
     if target.exists() and args.force:
         shutil.rmtree(target)
@@ -573,8 +574,8 @@ def _handle_create(args: argparse.Namespace) -> int:
     if args.with_tools:
         (target / SKILL_TOOLS_FILENAME).write_text(_SCAFFOLD_TOOLS, encoding="utf-8")
 
-    print(f"✅ Created skill '{args.name}' at {target}")
-    print(f"   Edit {target / SKILL_FILENAME}, then: gaia skill info {args.name}")
+    print(f"✅ Created skill '{name}' at {target}")
+    print(f"   Edit {target / SKILL_FILENAME}, then: gaia skill info {name}")
     return EXIT_OK
 
 
