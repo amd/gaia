@@ -317,20 +317,34 @@ class TestGrantsSurviveTheTurnBoundary:
         # And it is still only that call.
         assert not nxt.call_is_granted("write_file", {"file_path": "/tmp/other"})
 
-    def test_attach_hands_over_an_unbounded_wait(self):
-        """A modal on screen must not expire under the person reading it."""
+    def test_attach_hands_over_a_long_wait_the_client_wins(self):
+        """A modal on screen must not expire under the person reading it — but
+        it must expire eventually.
+
+        This used to hand over ``None`` (wait forever), which is right up until
+        the client cannot answer: an agent parked on a question nobody can see
+        never ends its turn. The backstop must sit clear of the TUI's own
+        10-minute bound so a real answer is never pre-empted by it.
+        """
+        from gaia_agent.stdio import ORPHANED_CONFIRM_TIMEOUT_SECONDS
+
         from gaia.ui.sse_handler import SSEOutputHandler
 
         handler = SSEOutputHandler()
-        assert handler.confirm_timeout_seconds is not None
         PermissionState().attach(handler)
-        assert handler.confirm_timeout_seconds is None
+
+        assert handler.confirm_timeout_seconds == ORPHANED_CONFIRM_TIMEOUT_SECONDS
+        assert ORPHANED_CONFIRM_TIMEOUT_SECONDS > 10 * 60, (
+            "the backstop must outlast the TUI's own bound, or it steals the "
+            "decision the user was making"
+        )
 
 
 class TestStdinClosingEndsAParkedTurn:
-    """A confirmation waits for a person, so nothing else bounds it.
+    """A confirmation waits for a person, so only the orphan backstop bounds it.
 
-    That makes stdin closing the only other way the wait can end. The sentinel
+    Fifteen minutes of a held model slot is far too long to make a host that has
+    already exited pay, so stdin closing must end the wait too. The sentinel
     the pump queues on EOF sits BEHIND the running turn, so on its own it never
     reaches a turn parked on a prompt: the child outlived its parent, kept the
     model slot, and only a kill ended it.

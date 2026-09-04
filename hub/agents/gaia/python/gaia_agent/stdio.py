@@ -97,6 +97,16 @@ AUDIT_LEVEL = logging.INFO
 AUDIT_LOGGER_NAME = "gaia_agent.stdio.audit"
 audit = get_logger(AUDIT_LOGGER_NAME)
 
+#: Backstop for a confirmation whose client can no longer answer it.
+#:
+#: Deliberately longer than the TUI's own 10-minute bound
+#: (``components.DeliverableConfirmationTimeout``) so the client always wins the
+#: race and the user's real answer is never pre-empted by this. It only fires
+#: when nothing is coming: the TUI exited, or the control channel broke while
+#: the agent was parked. Without it that agent waits forever on a question no
+#: one can see.
+ORPHANED_CONFIRM_TIMEOUT_SECONDS = 15 * 60
+
 AGENT_ID = "gaia"
 
 #: Key that marks a stdin line as a control message rather than a query.
@@ -172,8 +182,12 @@ class PermissionState:
             handler.auto_approve_gated_tools = self._bypass
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
-            # so the wait is theirs to end — see confirm_tool_execution.
-            handler.confirm_timeout_seconds = None
+            # so the wait is theirs to end — see confirm_tool_execution. The
+            # TUI answers its own prompt long before this fires (its bound is
+            # 10 minutes); this is the backstop for the case where it cannot,
+            # because the client died or the control channel broke. Unbounded
+            # there leaves an agent parked on a question nobody can answer.
+            handler.confirm_timeout_seconds = ORPHANED_CONFIRM_TIMEOUT_SECONDS
             self._handler = handler
 
     def detach(self, handler: Any) -> None:
@@ -209,9 +223,10 @@ class PermissionState:
 
         stdin closing means the host is gone, but the sentinel that ends the run
         loop sits BEHIND the running turn in the query queue — so a turn parked
-        on a confirmation nobody can answer would keep the process alive forever,
-        holding the model slot. Cancelling unblocks the wait, which lets the turn
-        finish through its normal path and emit its one terminal event.
+        on a confirmation nobody can answer would hold the model slot until
+        ``ORPHANED_CONFIRM_TIMEOUT_SECONDS``, which is far too long to make an
+        already-exited host pay. Cancelling unblocks the wait, which lets the
+        turn finish through its normal path and emit its one terminal event.
         """
         with self._lock:
             handler = self._handler

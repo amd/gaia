@@ -251,10 +251,10 @@ func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
 	}
 }
 
-// A LIVE prompt offers all three outcomes and does not run a countdown under
-// the person reading it. This is the defect the whole change exists for: a
-// real question that silently answered itself after 30s.
-func TestLiveConfirmationOffersAlwaysAndDoesNotExpire(t *testing.T) {
+// A LIVE prompt offers all three outcomes and runs the long clock, not the
+// short one. This is the defect the whole change exists for: a real question
+// that silently answered itself after 30s.
+func TestLiveConfirmationOffersAlwaysAndABoundedClock(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command",
 		`Run 'run_shell_command' with command="pwd"?`, "").
 		WithLiveChannel("cid-1", "pwd")
@@ -264,18 +264,26 @@ func TestLiveConfirmationOffersAlwaysAndDoesNotExpire(t *testing.T) {
 		"y run once",
 		"a allow `pwd` this session",
 		"n/esc deny",
-		"waits for you",
+		"auto-denies in 10",
 		`command="pwd"`, // the payload the old prompt hid
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("live modal missing %q:\n%s", want, view)
 		}
 	}
+	// The short clock belongs to an undeliverable prompt. Advertising 30s on a
+	// live one is the defect the long bound exists to avoid: it steals a
+	// decision the user was in the middle of making.
 	if strings.Contains(view, "30s") {
-		t.Errorf("a live prompt must not advertise a countdown it does not run:\n%s", view)
+		t.Errorf("a live prompt must not advertise the short countdown:\n%s", view)
 	}
-	if !m.Deliverable() || m.ExpiresUnanswered() {
-		t.Error("a live prompt must be deliverable and must not expire")
+	if !m.Deliverable() {
+		t.Error("a live prompt must be deliverable")
+	}
+	// Every prompt is bounded — unbounded is a hang with no way out — so the
+	// live one differs only in how long it waits.
+	if m.timeout() != DeliverableConfirmationTimeout {
+		t.Errorf("live clock = %v, want %v", m.timeout(), DeliverableConfirmationTimeout)
 	}
 }
 
@@ -347,15 +355,35 @@ func TestTimeoutNeverApproves(t *testing.T) {
 		}
 	})
 
-	t.Run("live prompt ignores a timeout tick", func(t *testing.T) {
+	// A live prompt used to ignore the tick entirely and wait forever. It now
+	// waits far longer than a decision takes, and then denies — because a turn
+	// that can never end is not the safer failure. What must NOT change is the
+	// direction: expiry denies, never approves.
+	t.Run("live prompt expires on the long clock, and denies", func(t *testing.T) {
 		m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
 			WithLiveChannel("cid-1", "gh issue list")
 		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
-		if cmd != nil {
-			t.Error("a live prompt must not be resolved by a timeout")
+		if cmd == nil {
+			t.Fatal("a live prompt must still be bounded")
 		}
-		if !updated.Pending() {
-			t.Error("a live prompt must stay pending until the human answers")
+		msg := cmd().(ConfirmationDecidedMsg)
+		if msg.Approved || msg.Always || !msg.TimedOut {
+			t.Errorf("expiry must deny, never approve: %+v", msg)
+		}
+		if updated.State() != ConfirmationTimedOut {
+			t.Errorf("state = %v, want timed out", updated.State())
+		}
+	})
+
+	t.Run("the live clock is much longer than the undeliverable one", func(t *testing.T) {
+		live := NewConfirmationModel("r", "a", "s", "").WithLiveChannel("c", "")
+		dead := NewConfirmationModel("r", "a", "s", "")
+		if live.timeout() <= dead.timeout() {
+			t.Errorf("live %v must outlast undeliverable %v — a human is reading it",
+				live.timeout(), dead.timeout())
+		}
+		if dead.timeout() != ConfirmationTimeout {
+			t.Errorf("undeliverable clock changed: %v", dead.timeout())
 		}
 	})
 }

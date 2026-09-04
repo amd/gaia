@@ -186,6 +186,12 @@ type ChatModel struct {
 	questionViewLines int
 	questionViewWidth int
 
+	// confirmRows is how many rows View() may spend on the pinned confirmation,
+	// set by syncViewportHeight out of the same budget as the transcript. It is
+	// the modal's full height in every normal terminal, and less only when the
+	// screen is too short for both — see the clip in View().
+	confirmRows int
+
 	// confirmation is the pending needs_confirmation modal, if any. Non-nil
 	// means a destructive/external tool call is asking for approval — every
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
@@ -1702,10 +1708,6 @@ func (m *ChatModel) resize() {
 	inputH := m.composerRows() + 2
 	padding := 2
 
-	vpHeight := m.height - headerH - statusH - inputH - padding
-	if vpHeight < 1 {
-		vpHeight = 1
-	}
 	vpWidth := m.width
 	if vpWidth < 10 {
 		vpWidth = 10
@@ -1721,8 +1723,13 @@ func (m *ChatModel) resize() {
 		m.logPeakRows = 0
 	}
 	m.viewport.Width = vpWidth
-	m.viewport.Height = vpHeight
 	m.input.SetWidth(vpWidth - 2)
+	// Width first: the modal's height depends on how its summary wraps, and one
+	// measured at the wrong width reserves the wrong number of rows.
+	if m.confirmation != nil {
+		m.confirmation.SetWidth(m.cardWidthFor(vpWidth))
+	}
+	m.syncViewportHeight(headerH + statusH + inputH + padding)
 
 	// Markdown wraps to the same measure the answer is laid out at, or glamour
 	// hard-wraps at a different column than the panel and the block develops a
@@ -1731,9 +1738,8 @@ func (m *ChatModel) resize() {
 	if m.question != nil {
 		m.question.SetWidth(m.cardWidth())
 	}
-	if m.confirmation != nil {
-		m.confirmation.SetWidth(m.cardWidth())
-	}
+	// The confirmation was already sized above — its width had to be settled
+	// before its height could be reserved.
 	m.updateViewport()
 }
 
@@ -1745,7 +1751,53 @@ func (m ChatModel) afterScroll() ChatModel {
 	return m
 }
 
+// chatChromeRows is everything View() draws outside the transcript and the
+// pinned confirmation: header, status bar, the composer with its border, and
+// the two dividers.
+func (m ChatModel) chatChromeRows() int {
+	const headerH, statusH, padding = 1, 1, 2
+	return headerH + statusH + m.composerRows() + 2 + padding
+}
+
+// syncViewportHeight splits the rows left after *chrome* between the transcript
+// and the pinned confirmation.
+//
+// Called from updateViewport, not only from resize, so it is self-correcting:
+// every path that puts a confirmation up or takes one down redraws the
+// transcript, and none of them has to remember to give the rows back. The
+// version that only ran in resize() left the transcript permanently short
+// after the user answered a prompt.
+func (m *ChatModel) syncViewportHeight(chrome int) {
+	budget := m.height - chrome
+	if budget < 1 {
+		budget = 1
+	}
+
+	m.confirmRows = 0
+	if m.confirmation != nil {
+		m.confirmRows = lipgloss.Height(m.confirmation.View())
+		// The transcript keeps at least one row. Past that the modal is
+		// clipped rather than allowed to push the composer and status bar off
+		// the bottom — losing the row that says a decision is pending would
+		// recreate the very defect the pinning fixes.
+		if max := budget - 1; m.confirmRows > max {
+			m.confirmRows = max
+		}
+		if m.confirmRows < 0 {
+			m.confirmRows = 0
+		}
+	}
+
+	vpHeight := budget - m.confirmRows
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	m.viewport.Height = vpHeight
+}
+
 func (m *ChatModel) updateViewport() {
+	m.syncViewportHeight(m.chatChromeRows())
+
 	var sb strings.Builder
 
 	// Show welcome message if no messages yet
@@ -1786,10 +1838,17 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	if m.confirmation != nil {
-		sb.WriteString(m.confirmation.View())
-		sb.WriteString("\n")
-	}
+	// The confirmation modal is deliberately NOT written here. It is pinned
+	// outside the viewport by View(), for the same reason as the bypass
+	// banner: it must be in every frame and unscrollable.
+	//
+	// It used to live in this content, and the turn it blocks made that
+	// unrecoverable. A pending modal owns the keyboard (handleKey), so `end`,
+	// PgUp and the arrows all go to the modal instead of the viewport — once
+	// the transcript was long enough to push the modal below the fold, the
+	// user could neither see the question nor scroll to it. Measured from the
+	// user's seat: 442s of `● GAIA streaming` and no visible prompt,
+	// indistinguishable from a hang, ended only by Esc.
 
 	if m.question != nil {
 		// Recorded before writing it: questionRowAt (questionmouse.go) needs
@@ -1852,9 +1911,18 @@ func (m ChatModel) renderWelcome() string {
 // width wraps and the borders shear. It never exceeds the viewport itself —
 // a card wider than the window it lives in is the same shear by another route.
 func (m ChatModel) cardWidth() int {
+	return m.cardWidthFor(m.viewport.Width)
+}
+
+// cardWidthFor is cardWidth against a viewport width that is not on the model
+// yet. resize() has to measure the confirmation modal BEFORE it assigns
+// viewport.Width — the modal's height is what it is reserving room for — and
+// measuring at a different width than the frame renders at reserves the wrong
+// number of rows.
+func (m ChatModel) cardWidthFor(viewportWidth int) int {
 	w := m.width - 4
-	if w > m.viewport.Width && m.viewport.Width > 0 {
-		w = m.viewport.Width
+	if w > viewportWidth && viewportWidth > 0 {
+		w = viewportWidth
 	}
 	if w < 1 {
 		w = 1
@@ -2634,10 +2702,11 @@ func (m ChatModel) View() string {
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
 	statusBar := components.RenderStatusBar(components.StatusBarState{
-		AgentName: m.agentName,
-		Connected: m.connected,
-		Streaming: m.streaming,
-		Hint:      hint,
+		AgentName:        m.agentName,
+		Connected:        m.connected,
+		Streaming:        m.streaming,
+		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Hint:             hint,
 	}, m.width)
 
 	// The bypass banner sits OUTSIDE the viewport, directly under the header,
@@ -2650,7 +2719,15 @@ func (m ChatModel) View() string {
 	if banner := m.renderSelectBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
-	rows = append(rows, divider, vpView, divider, inputView, statusBar)
+	rows = append(rows, divider, vpView)
+	// Pinned between the transcript and the composer: the agent is parked on
+	// this question, so it belongs in every frame, above the input the user
+	// would otherwise be typing into. syncViewportHeight already took these
+	// rows out of the transcript's budget, so it displaces no chrome.
+	if m.confirmation != nil && m.confirmRows > 0 {
+		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
+	}
+	rows = append(rows, divider, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	// The "/" palette draws over everything the same way the help panel does
@@ -2666,6 +2743,27 @@ func (m ChatModel) View() string {
 	// Composited last so it sits over everything. Returns the base untouched
 	// when the panel is closed, and when a root model is drawing it instead.
 	return m.help.Render(base, m.width, m.height)
+}
+
+// clipConfirmation trims the modal to *rows*, keeping the head and the last
+// line.
+//
+// Only reachable on a terminal too short for the modal and a transcript
+// together. What survives is chosen rather than truncated: the head carries the
+// badge and the command being approved, and the final line is the one that says
+// which keys answer it. Dropping the middle loses the risk sentence, which is
+// the least of the three to lose — a prompt whose keys are off-screen is
+// unanswerable, and one whose command is off-screen is unreadable.
+func clipConfirmation(view string, rows int) string {
+	lines := strings.Split(view, "\n")
+	if rows <= 0 || len(lines) <= rows {
+		return view
+	}
+	if rows == 1 {
+		return lines[0]
+	}
+	kept := append([]string{}, lines[:rows-1]...)
+	return strings.Join(append(kept, lines[len(lines)-1]), "\n")
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy

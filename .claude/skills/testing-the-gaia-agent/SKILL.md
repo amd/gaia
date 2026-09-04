@@ -323,6 +323,35 @@ Answer `n` unless you actually want the issue filed. If you answer `y`, delete
 the issue afterwards — and note `gh issue close` is itself REFUSE, so that is a
 manual step on github.com.
 
+### Check the prompt with your eyes, not the event log
+
+**The event stream is not the screen, and only one of them is the product.** A
+gate can emit a perfectly-formed `needs_confirmation` that the user never sees:
+the modal used to live inside the scrollable transcript, so a long enough
+session pushed it below the fold — and because a pending modal owns the
+keyboard, `end` and PgUp could not scroll to it either. Measured cost: 442s of
+`● GAIA streaming`, no visible question, and the turn ended only because the
+tester pressed Esc. Every unit test passed the whole time.
+
+So capture the frame and read it:
+
+```bash
+python util/tui_driver.py screen      # the frame, as the terminal paints it
+```
+
+| check | pass |
+|---|---|
+| the command is on screen | `gh issue create --title …` appears verbatim |
+| it is answerable | `y run once · … · n/esc deny` on screen |
+| the status bar tells the truth | `● gaia waiting for your answer` — **not** `streaming` |
+| the prompt survives scrollback | run a long session first, then trigger a write; the prompt is still in the frame |
+| no contradiction | the status hint must not say `Esc cancel` while the modal says `esc deny` |
+
+A prompt on the model but not in the frame is the same defect as no prompt at
+all — worse than a hard refusal, because a refusal at least ends the turn.
+`tui/internal/ui/chat/confirmvisible_test.go` asserts these against the rendered
+frame; add to it rather than to a test that only inspects `m.confirmation`.
+
 ## Measuring streaming
 
 Sample on-screen character count during a turn. Rising = streaming; one jump at the
