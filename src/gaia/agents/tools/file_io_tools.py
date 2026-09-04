@@ -1088,24 +1088,17 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Replace one function definition in a Python file.
 
-            Replaces exactly the target definition and its decorators, leaving
-            everything around it untouched. Because decorators are part of what
-            is replaced, new_implementation must repeat any decorator the
-            function should keep, and must carry the indentation of the
-            definition it replaces — a de-indented method would otherwise land
-            at module level, out of its class. The edit is refused if the
-            function no longer resolves at the same qualified name afterwards,
-            so this tool never renames or moves a definition.
+            Replaces the definition and its decorators, leaving the code around
+            it untouched.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
 
             Args:
                 file_path: Path to the Python file
-                function_name: A module-level function name, or a qualified
-                    'Class.method' / 'outer.inner' name for a nested one. A bare
-                    name that only exists as a method is an error, not a guess.
-                new_implementation: Complete new definition, decorators included
+                function_name: Module-level name, or 'Class.method' for a nested one
+                new_implementation: Complete new definition — include any decorator
+                    it keeps, and match the indentation of the one it replaces
                 backup: Whether to create backup
 
             Returns:
