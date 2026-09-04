@@ -16,6 +16,121 @@ from typing import Any, Dict, Optional
 from gaia.agents.base.tools import tool
 
 
+class FunctionLookupError(Exception):
+    """``replace_function`` could not resolve the name to exactly one definition."""
+
+
+def _qualified_functions(tree: ast.Module) -> Dict[str, list]:
+    """Map every ``def`` in a module to its dotted qualified name.
+
+    ``foo`` for a module-level function, ``Runner.run`` for a method,
+    ``outer.helper`` for a nested one. Statements that do not open a scope
+    (``if``/``try``/``with``/``for``) are transparent, so a function guarded by
+    ``if TYPE_CHECKING:`` is still module-level.
+    """
+    found: Dict[str, list] = {}
+
+    def walk(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualname = f"{prefix}{child.name}"
+                found.setdefault(qualname, []).append(child)
+                walk(child, f"{qualname}.")
+            elif isinstance(child, ast.ClassDef):
+                walk(child, f"{prefix}{child.name}.")
+            else:
+                walk(child, prefix)
+
+    walk(tree, "")
+    return found
+
+
+def _resolve_function_node(tree: ast.Module, function_name: str):
+    """Find the one definition ``function_name`` names, or raise.
+
+    A bare name resolves against module-level functions only; a nested or
+    method-level definition must be named ``Class.method`` / ``outer.inner``.
+    Guessing is what let ``replace_function("run")`` rewrite the first ``run``
+    anywhere in the file.
+    """
+    name = (function_name or "").strip()
+    table = _qualified_functions(tree)
+    matches = table.get(name, [])
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        where = ", ".join(str(node.lineno) for node in matches)
+        raise FunctionLookupError(
+            f"'{name}' is defined more than once (lines {where}). Refusing to "
+            "guess which definition to replace — for an @overload stack or a "
+            "conditional definition, edit the file with edit_python_file instead."
+        )
+
+    if "." not in name:
+        nested = sorted(q for q in table if q.rsplit(".", 1)[-1] == name)
+        if nested:
+            options = ", ".join(repr(q) for q in nested)
+            raise FunctionLookupError(
+                f"No module-level function named '{name}'. It is defined as "
+                f"{options}. Pass the qualified name so the right definition is "
+                "replaced."
+            )
+
+    raise FunctionLookupError(f"Function '{function_name}' not found in file")
+
+
+def _misplaced_target(new_tree: ast.Module, qualname: str) -> Optional[str]:
+    """Why the rewritten module no longer defines ``qualname``; ``None`` if fine.
+
+    An exact span is not enough on its own: a de-indented method parses cleanly
+    at module level, so the syntax gate passes while the definition quietly
+    leaves its class. The qualified name encodes the scope, so resolving it again
+    in the rewritten tree checks placement, not just presence.
+    """
+    table = _qualified_functions(new_tree)
+    found = table.get(qualname, [])
+    if len(found) == 1:
+        return None
+
+    if len(found) > 1:
+        return (
+            f"The replacement defines '{qualname}' {len(found)} times; it must "
+            "define it exactly once."
+        )
+
+    basename = qualname.rsplit(".", 1)[-1]
+    moved = sorted(q for q in table if q.rsplit(".", 1)[-1] == basename)
+    if moved:
+        return (
+            f"The replacement moves '{qualname}' to "
+            f"{', '.join(repr(q) for q in moved)}. Indent new_implementation to "
+            f"match the definition it replaces — nothing was written."
+        )
+    return (
+        f"The replacement does not define '{qualname}'. It must define the same "
+        "function in the same scope; replace_function does not rename or move "
+        "one. Nothing was written."
+    )
+
+
+def _function_span(node, lines: list) -> tuple:
+    """0-based half-open ``(start, end)`` line span covering decorators + body.
+
+    Uses the AST's own end position. Scanning forward for the next same-indent
+    ``def``/``class`` swept up everything in between — module constants and the
+    next function's decorators — and deleted it.
+    """
+    start = node.lineno - 1
+    if node.decorator_list:
+        start = min(start, node.decorator_list[0].lineno - 1)
+        # PEP 614 parenthesized decorators put the '@' on its own line, above
+        # where the decorator expression starts.
+        while start > 0 and lines[start - 1].lstrip().startswith("@"):
+            start -= 1
+    return start, node.end_lineno
+
+
 class FileIOToolsMixin:
     """Mixin class providing file I/O tools for code agents.
 
@@ -971,15 +1086,19 @@ class FileIOToolsMixin:
             new_implementation: str,
             backup: bool = True,
         ) -> Dict[str, Any]:
-            """Replace a specific function in a Python file.
+            """Replace one function definition in a Python file.
+
+            Replaces the definition and its decorators, leaving the code around
+            it untouched.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
 
             Args:
                 file_path: Path to the Python file
-                function_name: Name of the function to replace
-                new_implementation: New function implementation
+                function_name: Module-level name, or 'Class.method' for a nested one
+                new_implementation: Complete new definition — include any decorator
+                    it keeps, and match the indentation of the one it replaces
                 backup: Whether to create backup
 
             Returns:
@@ -1033,38 +1152,13 @@ class FileIOToolsMixin:
                 except SyntaxError as e:
                     return {"status": "error", "error": f"File has syntax errors: {e}"}
 
-                # Find the function node
-                function_node = None
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if node.name == function_name:
-                            function_node = node
-                            break
+                try:
+                    function_node = _resolve_function_node(tree, function_name)
+                except FunctionLookupError as e:
+                    return {"status": "error", "error": str(e)}
 
-                if not function_node:
-                    return {
-                        "status": "error",
-                        "error": f"Function '{function_name}' not found in file",
-                    }
-
-                # Get line range of the function
                 lines = content.splitlines(keepends=True)
-                start_line = function_node.lineno - 1
-
-                # Find end of function (simplified - finds next def or class at same indent)
-                end_line = len(lines)
-                indent_level = len(lines[start_line]) - len(lines[start_line].lstrip())
-
-                for i in range(start_line + 1, len(lines)):
-                    line = lines[i]
-                    if line.strip() and not line.lstrip().startswith("#"):
-                        current_indent = len(line) - len(line.lstrip())
-                        if current_indent <= indent_level and line.strip():
-                            if line.lstrip().startswith(
-                                ("def ", "class ", "async def ")
-                            ):
-                                end_line = i
-                                break
+                start_line, end_line = _function_span(function_node, lines)
 
                 # Create backup via path_validator if available, else manual
                 backup_path = None
@@ -1078,7 +1172,9 @@ class FileIOToolsMixin:
 
                 # Replace the function
                 new_lines = (
-                    lines[:start_line] + [new_implementation + "\n"] + lines[end_line:]
+                    lines[:start_line]
+                    + [new_implementation.rstrip("\n") + "\n"]
+                    + lines[end_line:]
                 )
                 modified_content = "".join(new_lines)
 
@@ -1097,6 +1193,19 @@ class FileIOToolsMixin:
                         "error": "Replacement would result in invalid syntax",
                         "syntax_errors": validation.get("errors", []),
                     }
+
+                # Parsing clean is not the same as landing in the right scope.
+                try:
+                    new_tree = ast.parse(modified_content)
+                except SyntaxError as e:
+                    return {
+                        "status": "error",
+                        "error": "Replacement would result in invalid syntax",
+                        "syntax_errors": [str(e)],
+                    }
+                misplaced = _misplaced_target(new_tree, function_name.strip())
+                if misplaced:
+                    return {"status": "error", "error": misplaced}
 
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
