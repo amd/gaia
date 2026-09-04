@@ -1,19 +1,33 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Reproducible PyInstaller freeze for the GAIA flagship agent REST sidecar.
+Reproducible PyInstaller freeze for the GAIA flagship agent.
 
-Freezes ``packaging/server.py`` into a self-contained executable that boots the
-``/v1/gaia/*`` REST surface with NO Python interpreter on the target machine.
+Two DIFFERENT programs ship from this one package, and each needs its own
+binary. ``--target`` picks which:
+
+- ``--target sidecar`` (the default) freezes ``packaging/server.py`` as
+  ``gaia-agent``: the ``/v1/gaia/*`` REST surface the daemon supervises.
+- ``--target stdio`` freezes ``packaging/stdio_entry.py`` as
+  ``gaia-agent-stdio``: the stdin/stdout JSONL child the TUI spawns.
+
+The names differ so the two ``dist/`` outputs cannot collide — and because they
+are not interchangeable: the TUI spawns its child bare and scans stdout for JSON
+lines, so handed the sidecar it reads uvicorn's startup log instead (#3062).
 
 Usage (from a venv with the deps + pyinstaller installed)::
 
-    python hub/agents/gaia/python/packaging/freeze.py            # one-dir (default)
-    python hub/agents/gaia/python/packaging/freeze.py --onefile  # one-file
+    python .../freeze.py                            # sidecar, one-dir
+    python .../freeze.py --onefile                  # sidecar, one-file
+    python .../freeze.py --target stdio --onefile   # stdio, one-file
 
-Output:
-    one-dir:  hub/agents/gaia/python/packaging/dist/gaia-agent/gaia-agent[.exe]
-    one-file: hub/agents/gaia/python/packaging/dist/gaia-agent[.exe]
+Output (``<name>`` is the target's binary name above):
+    one-dir:  hub/agents/gaia/python/packaging/dist/<name>/<name>[.exe]
+    one-file: hub/agents/gaia/python/packaging/dist/<name>[.exe]
+
+Both targets are collected IDENTICALLY. They import the same agent, so the
+import graph is the same; a marginally larger binary is far cheaper than a
+string-import that only goes missing on one of them.
 
 Design notes / gotchas baked in (mirrors the email sidecar's freeze):
 - ``uvicorn`` loads its loops/protocols/lifespan impls by string import, so its
@@ -29,7 +43,7 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   runtime (see ``gaia_agent/agent.py``).
 - We deliberately do NOT ``--collect-submodules gaia``: the whole core package
   pulls every agent + RAG + torch and explodes the binary. Static analysis from
-  the sidecar entry pulls only the reachable core modules.
+  the entry module pulls only the reachable core modules.
 - The agent's import graph reaches ``gaia.chat.sdk``, whose static graph reaches
   the ML stack (torch, transformers, ...). All inference is Lemonade over HTTP
   and never runs in-process, so the ML stack is EXCLUDED to keep the binary lean.
@@ -43,11 +57,36 @@ import os
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ENTRY = HERE / "server.py"
-NAME = "gaia-agent"
+
+
+@dataclass(frozen=True)
+class Target:
+    """One freezable program: which file is the entry, what the binary is called."""
+
+    entry: Path
+    name: str
+    summary: str
+
+
+TARGETS = {
+    "sidecar": Target(
+        entry=HERE / "server.py",
+        name="gaia-agent",
+        summary="REST sidecar; serves /v1/gaia/* for the daemon",
+    ),
+    "stdio": Target(
+        entry=HERE / "stdio_entry.py",
+        name="gaia-agent-stdio",
+        summary="stdio JSONL child; one query per stdin line, for the TUI",
+    ),
+}
+#: Freezing the sidecar is what every existing caller means by "freeze".
+DEFAULT_TARGET = "sidecar"
+
 # Repo root: packaging/ -> python/ -> gaia/ -> agents/ -> hub/ -> <root>
 REPO_ROOT = HERE.parents[4]
 PKG_ROOT = REPO_ROOT / "hub" / "agents" / "gaia" / "python"
@@ -183,8 +222,35 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
     return add_data
 
 
-def build(onefile: bool = False, clean: bool = True) -> Path:
+def _exe_suffix() -> str:
+    return ".exe" if sys.platform == "win32" else ""
+
+
+def _clean_target_outputs(work: Path, dist: Path, name: str) -> None:
+    """Remove only THIS target's build/dist paths, never the whole tree.
+
+    The release job freezes both targets into the same ``dist/``, so wiping it
+    wholesale would delete the sibling binary that was just built.
+    """
+    shutil.rmtree(work / name, ignore_errors=True)
+    # onedir puts a directory here; onefile puts a file of the same stem.
+    shutil.rmtree(dist / name, ignore_errors=True)
+    onefile_exe = dist / (name + _exe_suffix())
+    if onefile_exe.is_file():
+        onefile_exe.unlink()
+
+
+def build(
+    onefile: bool = False, clean: bool = True, target: str = DEFAULT_TARGET
+) -> Path:
     import PyInstaller.__main__
+
+    spec = TARGETS[target]
+    if not spec.entry.is_file():
+        raise SystemExit(
+            f"freeze: the '{target}' entry is missing: {spec.entry}\n"
+            "PyInstaller has nothing to freeze. Restore the file and re-run."
+        )
 
     _verify_collect_targets()
     add_data = _resolve_add_data()
@@ -192,14 +258,14 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
     work = HERE / "build"
     dist = HERE / "dist"
     if clean:
-        for d in (work, dist):
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
+        _clean_target_outputs(work, dist, spec.name)
+
+    print(f"freeze: target '{target}' -> {spec.name} ({spec.summary})", flush=True)
 
     args = [
-        str(ENTRY),
+        str(spec.entry),
         "--name",
-        NAME,
+        spec.name,
         "--console",
         "--noconfirm",
         "--clean",
@@ -228,8 +294,9 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
     PyInstaller.__main__.run(args)
     elapsed = time.time() - t0
 
-    suffix = ".exe" if sys.platform == "win32" else ""
-    exe = dist / (NAME + suffix) if onefile else dist / NAME / (NAME + suffix)
+    name = spec.name
+    suffix = _exe_suffix()
+    exe = dist / (name + suffix) if onefile else dist / name / (name + suffix)
     print(f"\nBuild finished in {elapsed:.1f}s")
     print(f"Executable: {exe}")
     if exe.exists():
@@ -237,7 +304,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
             size = exe.stat().st_size
         else:
             size = sum(
-                p.stat().st_size for p in (dist / NAME).rglob("*") if p.is_file()
+                p.stat().st_size for p in (dist / name).rglob("*") if p.is_file()
             )
         print(
             f"Size: {size / 1e6:.1f} MB ({'one-file exe' if onefile else 'one-dir total'})"
@@ -248,12 +315,22 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Freeze the GAIA agent REST sidecar.")
+    parser = argparse.ArgumentParser(
+        description="Freeze a GAIA flagship agent binary.",
+        epilog="targets: "
+        + "; ".join(f"{key} = {spec.summary}" for key, spec in TARGETS.items()),
+    )
     parser.add_argument(
         "--onefile", action="store_true", help="Build a single-file executable."
     )
+    parser.add_argument(
+        "--target",
+        choices=sorted(TARGETS),
+        default=DEFAULT_TARGET,
+        help=f"Which program to freeze (default: {DEFAULT_TARGET}).",
+    )
     args = parser.parse_args(argv)
-    exe = build(onefile=args.onefile)
+    exe = build(onefile=args.onefile, target=args.target)
     return 0 if exe.exists() else 1
 
 

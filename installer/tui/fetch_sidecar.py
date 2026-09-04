@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Download the flagship `gaia-agent` sidecar and verify it against the committed lock.
+"""Download the flagship `gaia-agent` child and verify it against the committed lock.
 
 The terminal hub spawns `gaia-agent` as a child process, so an installer that
 ships only the TUI installs a front end with nothing behind it.
+
+Which of the flagship's two binaries this stages matters: `agents/gaia/` publishes
+BOTH the REST sidecar the daemon supervises and the stdin/stdout JSONL child the
+TUI spawns, and the native installers put what lands here on PATH as `gaia-agent`
+— exactly the name the TUI resolves. So it reads the lock's `stdio` lane. Staging
+the sidecar instead installs a program that binds a port and never answers stdin,
+feeding uvicorn's startup log to a JSON line scanner (#3062).
 
 Both the expected SHA-256 and the sidecar version come from the COMMITTED
 ``hub/agents/gaia/npm/binaries.lock.json``, never from the origin that served the
@@ -66,6 +73,10 @@ USER_AGENT = "gaia-installer-build/1.0"
 # The committed sidecar pin, relative to the repo root.
 BINARIES_LOCK = Path("hub/agents/gaia/npm/binaries.lock.json")
 
+# The lock lane to stage from. `stdio`, never `sidecar`: see the module docstring
+# — the installers put this on PATH under the name the TUI spawns.
+LOCK_COMPONENT = "stdio"
+
 # Allowlist a real digest rather than blocklist known placeholders, so a lock
 # left half-filled by a future generator cannot slip past as "not PENDING".
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -81,18 +92,18 @@ def _repo_root() -> Path:
 
 
 def _sidecar_lock() -> tuple[dict, Path]:
-    """The committed sidecar pin: version plus the per-platform digests."""
+    """The committed pin for the stdio child: version plus per-platform digests."""
     lock_path = _repo_root() / BINARIES_LOCK
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
-        sidecar = lock["components"]["sidecar"]
+        sidecar = lock["components"][LOCK_COMPONENT]
         if not isinstance(sidecar, dict):
-            raise TypeError("components.sidecar is not an object")
+            raise TypeError(f"components.{LOCK_COMPONENT} is not an object")
         return sidecar, lock_path
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
         raise SystemExit(
-            f"could not read the sidecar pin from {lock_path}: {e}\n"
-            f"It must contain components.sidecar with componentVersion and "
+            f"could not read the {LOCK_COMPONENT} pin from {lock_path}: {e}\n"
+            f"It must contain components.{LOCK_COMPONENT} with componentVersion and "
             f"platforms.<key>.sha256. Regenerate it with {LOCK_GENERATOR}."
         ) from e
 
@@ -112,7 +123,7 @@ def _expected_sha256(sidecar: dict, npm_key: str, lock_path: Path) -> str:
         # best-effort sidecar build was skipped, so the npm installer can say
         # "not published for this platform". Say the same thing here.
         raise NoSidecarForPlatform(
-            f"{lock_path} has no components.sidecar.platforms.{npm_key} entry, so the "
+            f"{lock_path} has no components.{LOCK_COMPONENT}.platforms.{npm_key} entry, so the "
             f"flagship agent publishes no sidecar for this platform."
         )
     sha = str(entry.get("sha256", ""))
@@ -256,7 +267,7 @@ def main() -> int:
     version = args.version or pinned
     if not version:
         raise SystemExit(
-            f"{lock_path} has no components.sidecar.componentVersion, so there is no "
+            f"{lock_path} has no components.{LOCK_COMPONENT}.componentVersion, so there is no "
             f"pinned sidecar version to fetch. Regenerate it with {LOCK_GENERATOR}."
         )
     if version != pinned:
@@ -285,7 +296,7 @@ def main() -> int:
     filename = str(entry.get("filename") or "")
     if not filename:
         raise SystemExit(
-            f"{lock_path} has no components.sidecar.platforms.{npm_key}.filename, so "
+            f"{lock_path} has no components.{LOCK_COMPONENT}.platforms.{npm_key}.filename, so "
             f"there is no artifact name to request from the hub. Regenerate the lock "
             f"with {LOCK_GENERATOR}."
         )

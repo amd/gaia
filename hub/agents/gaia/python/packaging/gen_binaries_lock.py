@@ -7,11 +7,16 @@ by the GAIA hub R2 catalog.
 The npm ``fetch`` CLI downloads each binary and verifies its SHA-256 against this
 lock -- the lock's hashes are the integrity gate the CLI enforces on download.
 
-Schema 3.0 (two lanes): this package ships TWO executables per platform, and
-they come from DIFFERENT hub lanes at DIFFERENT versions:
+Schema 3.0: this package ships THREE components, published across TWO hub lanes
+at DIFFERENT versions:
 
-* ``sidecar`` -- the frozen Python agent, published by this package's own
-  release into ``agents/gaia/<agentVersion>/``.
+* ``sidecar`` -- the frozen Python agent speaking REST, published by this
+  package's own release into ``agents/gaia/<agentVersion>/``.
+* ``stdio`` -- the SAME agent frozen against a stdio/JSONL entry point. This is
+  the transport the terminal UI spawns as a child process; the REST sidecar
+  ignores stdin and cannot serve it. Published into the SAME
+  ``agents/gaia/<agentVersion>/`` directory, so it shares the sidecar's version
+  and base URL and differs only in filename.
 * ``tui`` -- the Go terminal UI, which is the published ``terminal-hub``
   COMPONENT (``agents/terminal-hub/<tuiVersion>/``), built and published by the
   core release. This package consumes it; it does not build or republish it, so
@@ -25,6 +30,11 @@ Schema 2.0's single top-level ``baseUrl`` could not express two lanes::
       "agentVersion": "0.1.0",
       "components": {
         "sidecar": {
+          "componentVersion": "0.1.0",
+          "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+          "platforms": {"win32-x64": {filename, executable, sha256, size}, ...}
+        },
+        "stdio": {
           "componentVersion": "0.1.0",
           "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
           "platforms": {"win32-x64": {filename, executable, sha256, size}, ...}
@@ -50,15 +60,20 @@ single-platform local run does not wipe the others; the CI release passes every
 platform's meta and regenerates the whole lock.
 
 Platform keys are the npm side's ``${process.platform}-${process.arch}``
-(``win32-x64``), for both components. The terminal-hub lane spells its Windows
+(``win32-x64``), for every component. The terminal-hub lane spells its Windows
 artifacts ``win-x64`` / ``win-arm64``; that difference is carried by the entry's
 ``filename``, and ``TUI_ARTIFACT_NAMES`` below is the authority both sides are
 checked against -- a meta whose tui filename does not match is rejected, because
 nothing else in this pipeline would catch it before a user hits a 404.
 
+The gaia-lane names are checked the same way for a different reason: ``sidecar``
+and ``stdio`` are published into ONE directory, so swapping their filenames
+would still hash-verify at publish time and quietly hand the installer the wrong
+transport.
+
 NO silent fallback: an unknown component, an unsupported platform for that
-component, an unexpected tui artifact name, a missing/placeholder sha256, a base
-URL that is not http(s), or a base URL whose trailing segment disagrees with its
+component, an unexpected artifact name, a missing/placeholder sha256, a base URL
+that is not http(s), or a base URL whose trailing segment disagrees with its
 component's version raises loudly.
 """
 
@@ -69,11 +84,16 @@ import json
 import re
 from pathlib import Path
 
-# The sidecar is frozen by PyInstaller on the four platforms GAIA ships wheels
-# for; the Go TUI cross-compiles to two more.
+# Both frozen transports come off the same PyInstaller legs, on the four
+# platforms GAIA ships wheels for; the Go TUI cross-compiles to two more.
 SIDECAR_PLATFORMS = {"win32-x64", "darwin-arm64", "darwin-x64", "linux-x64"}
+STDIO_PLATFORMS = SIDECAR_PLATFORMS
 TUI_PLATFORMS = SIDECAR_PLATFORMS | {"linux-arm64", "win32-arm64"}
-COMPONENTS = {"sidecar": SIDECAR_PLATFORMS, "tui": TUI_PLATFORMS}
+COMPONENTS = {
+    "sidecar": SIDECAR_PLATFORMS,
+    "stdio": STDIO_PLATFORMS,
+    "tui": TUI_PLATFORMS,
+}
 
 # npm platform key -> the artifact terminal-hub publishes under
 # agents/terminal-hub/<version>/. Mirrors TUI_ARTIFACT_NAMES in
@@ -86,6 +106,27 @@ TUI_ARTIFACT_NAMES = {
     "darwin-x64": "gaia-darwin-x64",
     "linux-x64": "gaia-linux-x64",
     "linux-arm64": "gaia-linux-arm64",
+}
+
+# npm platform key -> the artifact THIS package's release publishes under
+# agents/gaia/<agentVersion>/. Mirrors the freeze matrix in
+# .github/workflows/release_agent_gaia.yml.
+SIDECAR_ARTIFACT_NAMES = {
+    "win32-x64": "gaia-agent-win32-x64.exe",
+    "darwin-arm64": "gaia-agent-darwin-arm64",
+    "darwin-x64": "gaia-agent-darwin-x64",
+    "linux-x64": "gaia-agent-linux-x64",
+}
+STDIO_ARTIFACT_NAMES = {
+    "win32-x64": "gaia-agent-stdio-win32-x64.exe",
+    "darwin-arm64": "gaia-agent-stdio-darwin-arm64",
+    "darwin-x64": "gaia-agent-stdio-darwin-x64",
+    "linux-x64": "gaia-agent-stdio-linux-x64",
+}
+ARTIFACT_NAMES = {
+    "sidecar": SIDECAR_ARTIFACT_NAMES,
+    "stdio": STDIO_ARTIFACT_NAMES,
+    "tui": TUI_ARTIFACT_NAMES,
 }
 
 SCHEMA_VERSION = "3.0"
@@ -139,6 +180,23 @@ def _load_metas(paths: list[Path]) -> dict[str, dict[str, dict]]:
                     "TUI_ARTIFACT_NAMES here AND in "
                     "hub/agents/gaia/npm/src/platform.ts."
                 )
+            # sidecar and stdio share one hub directory, so a crossed filename
+            # publishes and hash-verifies cleanly and only shows up as the TUI
+            # failing to speak to a REST binary (or vice versa) on a user's box.
+            if (
+                component in ("sidecar", "stdio")
+                and rec.get("filename") != ARTIFACT_NAMES[component][plat]
+            ):
+                raise SystemExit(
+                    f"error: {p} {component}/{plat} names artifact "
+                    f"{rec.get('filename')!r}, but this package publishes "
+                    f"{ARTIFACT_NAMES[component][plat]!r} for that platform. The "
+                    "sidecar and stdio transports live in the same "
+                    "agents/gaia/<version>/ directory, so a swapped name would "
+                    "hash-verify at publish time and hand the installer the wrong "
+                    "binary. Fix the meta, or update ARTIFACT_NAMES here AND the "
+                    "freeze matrix in .github/workflows/release_agent_gaia.yml."
+                )
             try:
                 merged.setdefault(component, {})[plat] = {
                     "filename": rec["filename"],
@@ -173,16 +231,18 @@ def _checked_base_url(raw: str, version: str, flag: str) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Regenerate the two-lane binaries.lock.json (schema 3.0)."
+        description="Regenerate the per-component binaries.lock.json (schema 3.0)."
     )
     parser.add_argument(
-        "--version", required=True, help="Agent (sidecar) version, e.g. 0.1.0."
+        "--version",
+        required=True,
+        help="Agent version — the sidecar's and the stdio binary's, e.g. 0.1.0.",
     )
     parser.add_argument(
         "--sidecar-base-url",
         required=True,
-        help="Public directory the sidecar's filenames are joined onto, e.g. "
-        "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+        help="Public directory the gaia-lane filenames (sidecar AND stdio) are "
+        "joined onto, e.g. https://hub.amd-gaia.ai/agents/gaia/0.1.0",
     )
     parser.add_argument(
         "--tui-version",
@@ -209,13 +269,15 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
+    gaia_lane_base = _checked_base_url(
+        args.sidecar_base_url, args.version, "--sidecar-base-url"
+    )
     lanes = {
-        "sidecar": (
-            args.version,
-            _checked_base_url(
-                args.sidecar_base_url, args.version, "--sidecar-base-url"
-            ),
-        ),
+        # sidecar and stdio are two freezes of the same agent published into one
+        # agents/gaia/<version>/ directory, so they share a version and base URL
+        # by construction rather than by two flags that could drift apart.
+        "sidecar": (args.version, gaia_lane_base),
+        "stdio": (args.version, gaia_lane_base),
         "tui": (
             args.tui_version,
             _checked_base_url(args.tui_base_url, args.tui_version, "--tui-base-url"),
@@ -278,6 +340,18 @@ def main(argv=None) -> int:
                     f"{rec.get('filename')!r}, but the terminal-hub lane publishes "
                     f"{TUI_ARTIFACT_NAMES[plat]!r}. This entry had no meta this run, "
                     "so it is a stale committed value -- fix it in the lock."
+                )
+            if (
+                component in ("sidecar", "stdio")
+                and rec.get("filename") != ARTIFACT_NAMES[component][plat]
+            ):
+                raise SystemExit(
+                    f"error: {args.lock} {component}/{plat} names artifact "
+                    f"{rec.get('filename')!r}, but this package publishes "
+                    f"{ARTIFACT_NAMES[component][plat]!r}. This entry had no meta "
+                    "this run, so it is a stale committed value -- fix it in the "
+                    "lock. The two transports share a hub directory, so nothing "
+                    "downstream would catch the swap."
                 )
 
     args.lock.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
