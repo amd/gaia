@@ -122,7 +122,10 @@ def _tunnel_host(app) -> Optional[str]:
     if tunnel is None or not getattr(tunnel, "active", False):
         return None
     url = (tunnel.get_status() or {}).get("url")
-    return _hostname(urlsplit(url).netloc) if url else None
+    # A tunnel can be flagged active a beat before its URL is minted.
+    if not isinstance(url, str) or not url:
+        return None
+    return _hostname(urlsplit(url).netloc)
 
 
 def is_allowed_host(host_header: str, app) -> bool:

@@ -39,6 +39,16 @@ def app():
     return create_app(db_path=":memory:")
 
 
+#: Route the guard tests fire at. ``POST /api/sessions`` writes only to the
+#: in-memory database this module's ``app`` fixture builds, and an empty body
+#: 422s before it writes at all -- so if the guard ever regresses, the test
+#: fails instead of doing something. The routes the review actually exploited
+#: (``/api/tunnel/start``, ``/api/memory/prune``) have real side effects on the
+#: developer's machine; ``test_high_value_routes_are_in_the_covered_set`` pins
+#: their coverage from the route table instead of firing at them.
+_INERT_ROUTE = "/api/sessions"
+
+
 # ── Raw ASGI driver ─────────────────────────────────────────────────────────
 
 
@@ -199,7 +209,7 @@ async def test_preflight_from_a_rented_ngrok_subdomain_is_rejected(stack, app):
         stack,
         app,
         "OPTIONS",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {
             "host": "127.0.0.1:4200",
             "origin": "https://someone-else.ngrok-free.app",
@@ -224,7 +234,7 @@ async def test_preflight_from_other_untrusted_origins_is_rejected(stack, app, or
         stack,
         app,
         "OPTIONS",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {
             "host": "127.0.0.1:4200",
             "origin": origin,
@@ -242,7 +252,7 @@ async def test_preflight_from_the_dev_origin_is_still_approved(stack, app):
         stack,
         app,
         "OPTIONS",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {
             "host": "127.0.0.1:4200",
             "origin": "http://localhost:5174",
@@ -260,10 +270,13 @@ _ATTACKER = {"host": "127.0.0.1:4200", "origin": "https://evil.example"}
 
 
 async def test_body_less_cross_origin_post_is_rejected(stack, app):
-    """C11's live proof, as a test: ``POST /api/tunnel/start`` took no body."""
-    status, headers, body = await _request(
-        stack, app, "POST", "/api/tunnel/start", _ATTACKER
-    )
+    """The shape that worked live: no body, so a plain form POST reached it.
+
+    ``POST /api/tunnel/start`` was the review's proof -- it returned 200 and
+    published the machine to the internet. Fired here at ``_INERT_ROUTE``,
+    which is body-less in exactly the same way and does nothing if it lands.
+    """
+    status, headers, body = await _request(stack, app, "POST", _INERT_ROUTE, _ATTACKER)
     assert status == 403
     assert b"Cross-origin" in body
     # A rejection must not be readable cross-origin either.
@@ -273,7 +286,7 @@ async def test_body_less_cross_origin_post_is_rejected(stack, app):
 async def test_cross_origin_post_is_rejected_even_with_the_header(stack, app):
     """Origin is checked independently, so a forged header is not enough."""
     status, _, body = await _request(
-        stack, app, "POST", "/api/memory/prune", {**_ATTACKER, "x-gaia-ui": "1"}
+        stack, app, "POST", _INERT_ROUTE, {**_ATTACKER, "x-gaia-ui": "1"}
     )
     assert status == 403
     assert b"Cross-origin" in body
@@ -285,7 +298,7 @@ async def test_same_origin_post_without_the_header_is_rejected(stack, app):
         stack,
         app,
         "POST",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {"host": "127.0.0.1:4200", "origin": "http://localhost:9999"},
     )
     assert status == 403
@@ -298,10 +311,10 @@ async def test_first_party_post_passes_the_guard(stack, app):
         stack,
         app,
         "POST",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {"host": "127.0.0.1:4200", "origin": "http://127.0.0.1:4200", "x-gaia-ui": "1"},
     )
-    assert status != 403
+    assert status == 422  # reached the handler; empty body is what it rejects
 
 
 async def test_opaque_origin_with_the_header_passes(stack, app):
@@ -310,10 +323,10 @@ async def test_opaque_origin_with_the_header_passes(stack, app):
         stack,
         app,
         "POST",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {"host": "127.0.0.1:4200", "origin": "null", "x-gaia-ui": "1"},
     )
-    assert status != 403
+    assert status == 422  # reached the handler; empty body is what it rejects
 
 
 async def test_non_browser_client_with_the_header_passes(stack, app):
@@ -322,10 +335,10 @@ async def test_non_browser_client_with_the_header_passes(stack, app):
         stack,
         app,
         "POST",
-        "/api/memory/prune",
+        _INERT_ROUTE,
         {"host": "127.0.0.1:4200", "x-gaia-ui": "1"},
     )
-    assert status != 403
+    assert status == 422  # reached the handler; empty body is what it rejects
 
 
 async def test_reads_are_not_blocked(stack, app):
