@@ -253,7 +253,7 @@ self-contradicting lifecycle docs.
 
 **Before creating new functionality:**
 1. Check if similar functionality exists in `src/gaia/agents/base/`
-2. Check existing mixins in agent packages (e.g., `hub/agents/chat/python/gaia_agent_chat/tools/`)
+2. Check the reusable tool mixins in `src/gaia/agents/tools/` (indexed by `KNOWN_TOOLS` in [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py))
 3. Extract shared logic into base classes or mixins when patterns repeat
 
 ### Code Comments — Short or Skip
@@ -377,7 +377,7 @@ python -m gaia.mcp.mcp_bridge
 
 **Changes that REQUIRE an eval run before merge:**
 
-- ChatAgent / DocumentQAAgent / FileIOAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
+- GaiaAgent / ChatAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
 - The base agent's `_compose_system_prompt`, prompt-assembly order, or `_format_tools_for_prompt`
 - Tool registration, tool docstrings, or the JSON tool schema sent to Lemonade
 - Error classification (`LemonadeError` subclasses, `_classify_chat_exception`, `_extract_lemonade_user_message`) or the agent-loop catchall
@@ -462,11 +462,22 @@ python -m pytest tests/ --hybrid   # Cloud + local testing
 
 ### Running GAIA
 ```bash
-lemonade-server serve              # Start LLM backend
+gaia init                          # Install Lemonade Server + models, and start it (first run)
 gaia llm "Hello"                   # Test LLM
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
 ```
+
+**Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
+CLI, so the binary does not exist on a current install. There is no portable command to
+substitute: how the server starts depends on the install (Windows tray, macOS app, Linux
+`systemctl --user start lemond`, legacy CLI). `gaia init` is the only thing in the tree
+that auto-starts the server; the normal runtime path (`LemonadeManager.ensure_ready`)
+merely *checks*, and errors out on a stopped server rather than launching one. When you
+need to print a start instruction, call `describe_start_hint()`
+([`src/gaia/llm/lemonade_launcher.py`](src/gaia/llm/lemonade_launcher.py)) instead of
+hard-coding a command — it resolves the installed tooling and never names a binary the
+host lacks.
 
 ### Agent UI Development
 ```bash
@@ -502,20 +513,26 @@ gaia/
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
+│   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
+│   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
 │   ├── governance/     # Governance / guardrails layer
+│   ├── hub/            # Agent Hub backend (catalog, install, package, publish)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
 │   ├── mcp/            # Model Context Protocol servers/clients
 │   ├── messaging/      # Messaging adapters (Telegram, …)
 │   ├── rag/            # Document retrieval (RAG)
+│   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
 │   ├── shell/          # Shell integration
+│   ├── sidecar/        # Shared building blocks for local agent sidecars
+│   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK
 │   ├── testing/        # Test utilities and fixtures
 │   ├── ui/             # Agent UI backend (FastAPI server, routers, SSE, database)
@@ -527,11 +544,15 @@ gaia/
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
+│   ├── installer/      # Installer / gaia init tests
 │   ├── stress/         # Stress/load tests
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
+├── hub/                # Agent Hub packages — agents/<id>/{npm,python}/, skills/, components/
+├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
 ├── scripts/            # Build, install, and launch scripts
+├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
 ├── docs/               # Documentation (MDX format)
 └── .github/workflows/  # CI/CD pipelines
 ```
@@ -614,10 +635,11 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
-- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
-- Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so exactly one `(model, ctx_size)` pair is ever resident.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
+- `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent explicitly uses it too.
+- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
+- **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
+- Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so the ctx size is fixed machine-wide; the NPU email model above is the only case where a second model id enters the picture.
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
 - Image generation (SD): `SDXL-Turbo`
 
 ## CLI Commands
@@ -637,7 +659,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 **Servers & infrastructure:**
 - `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
@@ -645,9 +667,10 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
+- `gaia lemonade embedded {start|stop|status|install|install-backend}` - GAIA's private, self-contained Lemonade instance (#3121)
 - `gaia install` - Install helper (e.g. Lemonade on first run)
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
-- `gaia config {get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
 - `gaia hub` - Browse, install, and uninstall agents from the Agent Hub
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
@@ -657,7 +680,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia stats` - Show statistics from the most recent run
 - `gaia memory` - Manage agent memory (onboarding bootstrap, status)
 - `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
-- `gaia agent {export|import}` - Manage custom agent bundles
+- `gaia agent {init|version|test|pack|publish|configure|health|status|login|export|import|install|list}` - Author and manage agents
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
@@ -686,7 +709,7 @@ agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and 
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`)
+- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`) was kept as its base class — see [Agent Implementations](#agent-implementations)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
