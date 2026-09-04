@@ -5,10 +5,10 @@ description: "The flagship GAIA agent is installable from the terminal hub — v
 
 # GAIA v0.23.1 Release Notes
 
-GAIA v0.23.1 is a patch release on top of v0.23.0. It makes the flagship GAIA agent actually installable. The agent has been published on the Agent Hub since 0.1.1, and the website tells you to download the terminal hub and run it — but v0.23.0's background service had no entry for the flagship agent, so `gaia install gaia` answered HTTP 404 and `gaia list` hid it entirely. The code that fixes this landed right after v0.23.0 shipped and had never been released.
+GAIA v0.23.1 is a patch release on top of v0.23.0. It makes the flagship GAIA agent actually installable. The agent has been published on the Agent Hub since 0.1.1, and the website tells you to download the terminal hub and run it — but v0.23.0's background service had no entry for the flagship agent, so `gaia hub install gaia --trust` answered HTTP 404 and `gaia hub list` hid it entirely. The code that fixes this landed right after v0.23.0 shipped and had never been released.
 
 **Why upgrade:**
-- **The flagship agent installs and runs** — `gaia install gaia` now downloads the agent and starts its sidecar. On v0.23.0 it fails with `'gaia' is published on the Agent Hub but this GAIA build cannot run it as a sidecar`, which is the exact path the website's onboarding walks you down.
+- **The flagship agent installs and runs** — `gaia hub install gaia --trust` now downloads the agent and starts its sidecar. On v0.23.0 it fails with `'gaia' is published on the Agent Hub but this GAIA build cannot run it as a sidecar`, which is the exact path the website's onboarding walks you down.
 
 ---
 
@@ -16,13 +16,21 @@ GAIA v0.23.1 is a patch release on top of v0.23.0. It makes the flagship GAIA ag
 
 - **Thirteen per-task agents were removed** (PR [#2995](https://github.com/amd/gaia/pull/2995)) — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship as separate agents. Their capability is the flagship agent's tool surface driven by a `SKILL.md` in `hub/skills/`, so adding a capability now means writing a skill rather than shipping an agent.
 
-  **If you install or launch one of these by id, that will now fail.** Use the flagship (`gaia install gaia`) and load the matching skill instead. This lands in a patch release because it arrived on main before the flagship-installability fix could be cut on its own; the two ship together.
+  **If you install or launch one of these by id, that will now fail.** Use the flagship (`gaia hub install gaia --trust`) and load the matching skill instead. This lands in a patch release because it arrived on main before the flagship-installability fix could be cut on its own; the two ship together.
+
+---
+
+## What's New
+
+### The flagship GAIA agent installs from the terminal hub
+
+`gaia hub install gaia --trust` downloads the flagship agent and starts its sidecar, and `gaia hub list` shows it in the catalog next to `email` — the path the website's onboarding walks you down, working end to end for the first time. Try it: `gaia hub list`.
 
 ---
 
 ## Bug Fixes
 
-- **`gaia install gaia` failed for every user who followed the website** (PR [#2932](https://github.com/amd/gaia/pull/2932)) — the daemon decides which agents are installable from `builtin_specs()`, and v0.23.0's copy listed only `email`. The terminal hub relayed that as `Hidden: gaia — published, but this GAIA build has no way to run them yet`, so the agent the website leads with could not be installed at all. The flagship agent's sidecar spec is now in a released build.
+- **`gaia hub install gaia --trust` failed for every user who followed the website** (PR [#2932](https://github.com/amd/gaia/pull/2932)) — the daemon decides which agents are installable from `builtin_specs()`, and v0.23.0's copy listed only `email`. The terminal hub relayed that as `Hidden: gaia — published, but this GAIA build has no way to run them yet`, so the agent the website leads with could not be installed at all. The flagship agent's sidecar spec is now in a released build.
 
 ---
 
