@@ -108,10 +108,10 @@ def _failure(action: str, exc: Exception) -> Dict[str, Any]:
 def _reject_bad_name(action: str, name: str) -> Dict[str, Any] | None:
     """Refuse anything that is not a bare skill name; ``None`` when it is fine.
 
-    ``remove_skill`` in the substrate does ``rmtree(root / name)`` with no
-    validation, so a model-supplied ``../documents`` deletes outside the skills
-    root. Validated against the canonical ``NAME_PATTERN`` rather than a
-    hand-rolled check, so the two can't drift.
+    The substrate validates the same names now (:mod:`gaia.skills.naming`); this
+    stays so the model gets a structured tool error naming the fix rather than a
+    raised exception. Validated against the canonical ``NAME_PATTERN`` rather
+    than a hand-rolled check, so the two can't drift.
     """
     from gaia.skills.format import NAME_PATTERN
 

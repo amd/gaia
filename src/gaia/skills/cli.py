@@ -52,6 +52,7 @@ from gaia.skills.migrate import (
     install_migrated,
     migrate_skill_dir,
 )
+from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
 
@@ -531,7 +532,7 @@ def _handle_info(args: argparse.Namespace) -> int:
 
 def _handle_create(args: argparse.Namespace) -> int:
     parent = Path(args.directory) if args.directory else _manager().user_root
-    target = parent / args.name
+    target = skill_directory(parent, args.name, source="create")
 
     if target.exists() and not args.force:
         sys.stderr.write(
@@ -584,8 +585,11 @@ def _handle_import(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
         skill = parse_skill_file(source_dir, check_directory_name=False)
-        name = args.name or skill.name
-        target = destination_root / name
+        # Without --name the name comes from the imported bundle's own SKILL.md,
+        # which nothing validated on the way in.
+        origin = "--name" if args.name else f"{source_dir / SKILL_FILENAME}"
+        name = validated_skill_name(args.name or skill.name, source=origin)
+        target = skill_directory(destination_root, name, source=origin)
 
         if target.exists():
             if not args.force:

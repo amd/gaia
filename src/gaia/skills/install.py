@@ -60,6 +60,7 @@ from gaia.skills.hub import (
 )
 from gaia.skills.lock import SOURCE_HUB, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
+from gaia.skills.naming import skill_directory
 from gaia.skills.permissions import refuse_unbridged_permissions
 from gaia.skills.signing import (
     SIGNATURE_FILENAME,
@@ -184,7 +185,7 @@ def install_skill(
     name, spec = parse_skill_ref(reference)
     resolver = manager if manager is not None else SkillManager()
     destination_root = resolver.user_root
-    target = destination_root / name
+    target = skill_directory(destination_root, name, source=f"install {reference!r}")
 
     lock = SkillLock.load(destination_root)
     previous = lock.get(name)
@@ -494,10 +495,12 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
     Raises:
         SkillNotFoundError: nothing of that name is installed in the user root.
         SkillInstallError: the skill exists but lives in a read-only root.
+        SkillValidationError: ``name`` is not a bare skill name — ``.``, ``..``
+            and absolute paths all resolve to a real directory outside the root.
     """
     resolver = manager if manager is not None else SkillManager()
     root = resolver.user_root
-    target = root / name
+    target = skill_directory(root, name, source=f"remove {name!r}")
 
     if not target.is_dir():
         discovered = resolver.discover().get(name)
