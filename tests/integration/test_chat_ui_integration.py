@@ -1167,38 +1167,34 @@ class TestCORSIntegration:
             "http://localhost:4200"
         )
 
-    def test_cors_allows_tunnel_origin(self, client):
-        """CORS allows the ngrok / devtunnels origins used for mobile access."""
-        origin = "https://gaia-test.ngrok-free.app"
-        resp = client.get("/api/health", headers={"Origin": origin})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == origin
+    def test_cors_rejects_shared_tunnel_namespace_origin(self, client):
+        """A tenant of a shared tunnel namespace is not a trusted origin.
+
+        ``*.ngrok-free.app`` and ``*.use.devtunnels.ms`` are self-service:
+        anyone can rent a subdomain, so trusting the namespace trusted every
+        attacker who signs up. It bought users nothing either -- the mobile
+        flow serves the SPA *from* the tunnel, so those requests are
+        same-origin and CORS never applies.
+        """
+        for origin in (
+            "https://gaia-test.ngrok-free.app",
+            "https://attacker.use.devtunnels.ms",
+        ):
+            resp = client.get("/api/health", headers={"Origin": origin})
+            assert "access-control-allow-origin" not in resp.headers, origin
 
     def test_cors_rejects_unknown_origin(self, client):
         """An origin outside the allowlist gets no allow-origin header.
 
         The server sends credentials (``allow_credentials=True``), so the
-        origin list is deliberately an allowlist -- localhost dev ports plus
-        the tunnel domains -- never a wildcard. A page on any other origin
-        must not be able to read authenticated responses, which the browser
-        enforces by the *absence* of ``access-control-allow-origin``.
+        origin list is deliberately an allowlist of localhost dev ports,
+        never a wildcard. A page on any other origin must not be able to
+        read authenticated responses, which the browser enforces by the
+        *absence* of ``access-control-allow-origin``.
         """
         resp = client.get(
             "/api/health",
             headers={"Origin": "http://some-other-origin.com"},
-        )
-        assert "access-control-allow-origin" not in resp.headers
-
-    def test_cors_rejects_tunnel_lookalike_origin(self, client):
-        """An attacker domain that merely *starts* with a tunnel host is refused.
-
-        The tunnel regex is unanchored and only safe because Starlette applies
-        it with ``fullmatch``. This pins that: a prefix-match implementation
-        would hand credentialed responses to ``*.ngrok-free.app.evil.com``.
-        """
-        resp = client.get(
-            "/api/health",
-            headers={"Origin": "https://gaia-test.ngrok-free.app.evil.com"},
         )
         assert "access-control-allow-origin" not in resp.headers
 
