@@ -399,6 +399,10 @@ gaia uninstall --purge --purge-lemonade --yes
 `--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
+<Note>
+`GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns: if it resolves to your home directory, a directory containing it, or a drive root, `gaia uninstall` refuses and exits `64` rather than deleting `$GAIA_HOME/documents` — which on Windows and macOS is your real `Documents` folder. `--purge` additionally requires an existing `$GAIA_HOME` to be named `.gaia` or to hold something GAIA created (`config.json`, `chat/`, `lemonade/`, `memory.db`, …), so it will not eat the `venv/` of a directory that just happens to be pointed at.
+</Note>
+
 ### Kill Command
 
 Stop running GAIA services.
@@ -412,7 +416,7 @@ gaia kill [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--lemonade` | flag | Kill Lemonade Server and child processes |
-| `--port` | integer | Kill process on specific port |
+| `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 
 **Examples:**
 
@@ -428,6 +432,10 @@ gaia kill --port 8080
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
+
+<Note>
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. `gaia api stop` uses the same targeting.
 </Note>
 
 ### Agent Command
