@@ -199,12 +199,17 @@ Edit any file by replacing content without validation.
 
 ### 8. replace_function
 
-Replace a specific function in a Python file.
+Replace one function definition in a Python file. The replaced span is the
+definition and its decorators, taken from the AST — nothing between it and the
+next definition is touched.
 
 **Parameters:**
 - `file_path` (str, required): Path to Python file
-- `function_name` (str, required): Name of function to replace
-- `new_implementation` (str, required): New function implementation
+- `function_name` (str, required): A module-level function name, or a qualified
+  `Class.method` / `outer.inner` name. A bare name that exists only as a method
+  is an error naming the qualified alternatives, not a guess.
+- `new_implementation` (str, required): The complete new definition, including
+  any decorator it should keep and the indentation of the definition it replaces
 - `backup` (bool, optional): Create backup (default: True)
 
 **Returns:**
