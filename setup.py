@@ -128,7 +128,12 @@ setup(
         "python-dotenv",
         "aiohttp",
         "rich",
-        "requests",
+        # 2.32.3 added HTTPAdapter.build_connection_pool_key_attributes, which
+        # PinnedIPAdapter overrides to set the TLS SNI while pinning the IP.
+        # 2.32.2 is specifically unusable: it routes through
+        # get_connection_with_tls_context but has no such hook, so the SNI
+        # would silently revert to the pinned IP.
+        "requests>=2.32.3",
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",

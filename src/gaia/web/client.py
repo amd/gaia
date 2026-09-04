@@ -100,49 +100,49 @@ REMOVE_TAGS = [
 class PinnedIPAdapter(HTTPAdapter):
     """HTTPAdapter that pins the resolved IP address for a hostname.
 
-    On ``send()``, the adapter resolves the request hostname once via
-    ``socket.getaddrinfo``, replaces the request URL netloc with the
-    resolved IP:port, and sets the ``Host`` header to the original
-    hostname.  The resolved IP is cached per ``(host, port)`` tuple so
-    subsequent requests to the same origin reuse the same IP — preventing
-    DNS-rebind attacks between ``WebClient.validate_url`` and the actual
-    TCP connect.
+        On ``send()``, the adapter resolves the request hostname once via
+        ``socket.getaddrinfo``, replaces the request URL netloc with the
+        resolved IP:port, and sets the ``Host`` header to the original
+        hostname.  The resolved IP is cached per ``(host, port)`` tuple so
+        subsequent requests to the same origin reuse the same IP — preventing
+        DNS-rebind attacks between ``WebClient.validate_url`` and the actual
+        TCP connect.
 
-    Crucially, the pinned IP is itself validated (``_assert_ip_allowed``)
-    before it is cached or connected to. ``validate_url`` runs a *separate*
-    pre-flight ``getaddrinfo``; an attacker controlling DNS could answer that
-    lookup with a public IP and answer the adapter's lookup with a private
-    one. Validating the exact address the adapter is about to dial closes
-    that residual rebind window for BOTH http and https.
+        Crucially, the pinned IP is itself validated (``_assert_ip_allowed``)
+        before it is cached or connected to. ``validate_url`` runs a *separate*
+        pre-flight ``getaddrinfo``; an attacker controlling DNS could answer that
+        lookup with a public IP and answer the adapter's lookup with a private
+        one. Validating the exact address the adapter is about to dial closes
+        that residual rebind window for BOTH http and https.
 
-    For HTTPS, the original hostname is encoded in the URL's userinfo
-    section (``originalhostname@pinnedip:port``) so that urllib3 creates
-    separate connection-pool keys per original hostname.  This avoids a
-    race where two threads requesting different hostnames that resolve to
-    the same IP would overwrite each other's ``assert_hostname`` on a
-    shared pool.
+        For HTTPS the connect address and the TLS identity are decoupled, so
+        pinning the IP does not break SNI-based virtual hosting (most of the
+        web). The original hostname is carried in the URL's userinfo section
+        (``originalhostname@pinnedip:port``) and
+        ``build_connection_pool_key_attributes`` — the extension point
+        ``requests`` documents for exactly this — turns it into two urllib3
+        pool arguments:
 
-    Residual HTTPS limitation (documented, not silently ignored):
-    Because ``requests`` derives the urllib3 pool host — and therefore the
-    TLS SNI ``server_hostname`` — from the request URL's hostname (which we
-    rewrote to the pinned IP), the ClientHello SNI is sent as the IP, not the
-    original hostname. ``assert_hostname`` still forces certificate-name
-    verification against the real hostname (so verification is NOT disabled
-    and we never trust a cert for the bare IP), but servers that rely on SNI
-    for virtual hosting (most CDNs / shared hosts) may return the wrong
-    certificate or reject the handshake, surfacing as a TLS error rather than
-    a silent downgrade. This affects whether legitimate HTTPS *succeeds* — it
-    does not weaken the SSRF block, which fires on the validated IP before any
-    bytes are sent. Fixing SNI cleanly requires a custom urllib3
-    ``PoolManager``/``HTTPSConnection`` that decouples ``server_hostname``
-    from the connect address; that is intentionally out of scope here in
-    favour of a correct, narrower guarantee.
+    ``server_hostname``, which
+        urllib3 uses both as the ClientHello SNI and as the name OpenSSL verifies
+        the certificate against, so a certificate valid only for the bare IP is
+        never accepted. It is a ``PoolKey`` field, so two hostnames that resolve
+        to the same IP get distinct connection pools rather than sharing one.
+
+        ``assert_hostname`` is deliberately NOT set: it would move name checking
+        out of the handshake into urllib3's post-hoc matcher by setting
+        ``check_hostname = False`` on the SSL context — which ``requests`` shares
+        process-wide on some versions, silently weakening every other caller.
+
+        The socket still connects to the validated, pinned IP: the URL host is
+        the IP, and ``server_hostname`` changes only what is *named* in the
+        handshake, never what is dialed. The SSRF block is unaffected — it fires
+        on the validated IP before any bytes are sent.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pinned_cache: Dict[Tuple[str, int], str] = {}
-        self._warned_https_sni = False
 
     def _resolve_first_ip(self, host: str, port: int) -> str:
         key = (host, port)
@@ -209,22 +209,9 @@ class PinnedIPAdapter(HTTPAdapter):
             url_ip = self._format_ip_for_url(pinned_ip)
 
             if parsed.scheme == "https":
-                # Encode original hostname in userinfo for unique pool keys.
-                # See class docstring: SNI is sent as the pinned IP, so
-                # SNI-vhosted servers may fail the handshake. Cert-name
-                # verification still binds to the real hostname.
-                if not getattr(self, "_warned_https_sni", False):
-                    log.warning(
-                        "PinnedIPAdapter: HTTPS request to %s is pinned to %s; "
-                        "TLS SNI will be sent as the IP. Servers using "
-                        "SNI-based virtual hosting may return the wrong "
-                        "certificate or reject the handshake. Certificate-name "
-                        "verification still validates against %s.",
-                        host,
-                        pinned_ip,
-                        host,
-                    )
-                    self._warned_https_sni = True
+                # Carry the original hostname in userinfo; it is read back in
+                # build_connection_pool_key_attributes to set the TLS SNI and
+                # the certificate-name assertion. Never sent on the wire.
                 new_netloc = f"{host}@{url_ip}:{port}"
             else:
                 new_netloc = f"{url_ip}:{port}"
@@ -244,24 +231,21 @@ class PinnedIPAdapter(HTTPAdapter):
 
         return super().send(request, **kwargs)
 
-    def get_connection(self, url, proxies=None):
-        clean_url, tls_hostname = self._strip_tls_host(url)
-        pool = super().get_connection(clean_url, proxies)
-        if tls_hostname:
-            pool.assert_hostname = tls_hostname
-        return pool
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        """Pin the connect address to the IP while keeping the TLS identity.
 
-    def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
-        original_url = request.url
-        clean_url, tls_hostname = self._strip_tls_host(original_url)
-        request.url = clean_url
-        pool = super().get_connection_with_tls_context(
-            request, verify, proxies=proxies, cert=cert
+        ``requests`` documents this as the hook for customising urllib3 pool
+        arguments. ``host_params["host"]`` is already the pinned IP (urlparse
+        drops the userinfo), so the only thing left is to name the real host
+        in TLS terms via ``server_hostname``.
+        """
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request, verify, cert
         )
-        request.url = original_url
-        if tls_hostname:
-            pool.assert_hostname = tls_hostname
-        return pool
+        _, tls_hostname = self._strip_tls_host(request.url)
+        if tls_hostname and host_params.get("scheme") == "https":
+            pool_kwargs["server_hostname"] = tls_hostname
+        return host_params, pool_kwargs
 
 
 class WebClient:

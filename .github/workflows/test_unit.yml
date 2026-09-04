@@ -169,6 +169,17 @@ jobs:
           echo ""
           pytest tests/integration/test_lemonade_release_assets.py -v --tb=short
 
+      - name: Run live web-fetch TLS test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Fetching CDN-fronted HTTPS hosts through WebClient ==="
+          echo "The IP-pinning adapter can pass every unit test and still fail"
+          echo "every real handshake; only a live TLS peer proves the SNI is"
+          echo "acceptable. Skips itself when the runner has no network."
+          echo ""
+          pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
+
       - name: Run embedded Lemonade checksum pinning test
         env:
           GAIA_MEMORY_DISABLED: "1"
