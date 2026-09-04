@@ -42,6 +42,54 @@ xattr -cr /Applications/GAIA.app
 
 Then double-click the app — it will open without the Gatekeeper dialog.
 
+## Antivirus flags a GAIA file as an infostealer {#av-false-positive}
+
+**Symptom**: Your antivirus quarantines a file under `.gaia/venv/…/gaia/skills/audit/`
+with a generic Python-malware name. The reported case is Bitdefender flagging
+
+```
+C:\Users\<user>\.gaia\venv\Lib\site-packages\gaia\skills\audit\__pycache__\code.cpython-312.pyc.2586770202400
+as Generic.PY.SordealStealer.A.27B8D72
+```
+
+**Cause**: A false positive on GAIA's own credential-stealer *detector*. `gaia/skills/audit/code.py`
+is the skill auditor — the code that inspects a third-party skill and refuses it if it reads
+your secrets. To do that it has to name what it is looking for: `~/.ssh`, `.aws/credentials`,
+`.git-credentials`, browser cookie stores, `base64.b64decode`. Compiled to bytecode, that list
+is indistinguishable from an infostealer's target list to a generic heuristic. The detector's
+vocabulary is matching a detector.
+
+The trailing number in the filename (`.pyc.2586770202400`) is CPython's atomic-write temp file —
+written on your machine the first time GAIA imports that module. The GAIA wheel ships no
+`__pycache__` at all, so a flagged `.pyc` is never a file you downloaded.
+
+**Verify it yourself** — this compares every installed file against the SHA-256 recorded in the
+wheel's manifest and prints anything that has been altered:
+
+```powershell
+# Windows
+& "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" -c "import base64,csv,hashlib,pathlib,sysconfig; site=pathlib.Path(sysconfig.get_paths()['purelib']); rec=next(site.glob('amd_gaia-*.dist-info/RECORD')); bad=[p for p,d,_ in csv.reader(rec.open(encoding='utf-8')) if d.startswith('sha256=') and (site/p).is_file() and base64.urlsafe_b64encode(hashlib.sha256((site/p).read_bytes()).digest()).rstrip(b'=').decode()!=d.split('=',1)[1]]; print('modified files:', bad or 'none')"
+```
+
+```bash
+# macOS / Linux
+~/.gaia/venv/bin/python -c "import base64,csv,hashlib,pathlib,sysconfig; site=pathlib.Path(sysconfig.get_paths()['purelib']); rec=next(site.glob('amd_gaia-*.dist-info/RECORD')); bad=[p for p,d,_ in csv.reader(rec.open(encoding='utf-8')) if d.startswith('sha256=') and (site/p).is_file() and base64.urlsafe_b64encode(hashlib.sha256((site/p).read_bytes()).digest()).rstrip(b'=').decode()!=d.split('=',1)[1]]; print('modified files:', bad or 'none')"
+```
+
+`modified files: none` means your install is byte-identical to the published wheel.
+
+**Fix**:
+
+1. Report the false positive to your antivirus vendor so the signature gets corrected for
+   everyone. Bitdefender takes submissions through its support portal; include the detection
+   name and the quarantined path.
+2. Nothing needs restoring — the quarantined file was a bytecode cache, and Python rebuilds it
+   on the next import. To stop the alert recurring, add an antivirus exclusion for `~/.gaia/`
+   (Windows: `%USERPROFILE%\.gaia\`).
+3. If the integrity check above lists any modified file, do **not** add an exclusion — reinstall
+   with `~/.gaia/venv/bin/pip install --force-reinstall amd-gaia` and
+   [open an issue](https://github.com/amd/gaia/issues/new).
+
 ## First-launch backend install fails
 
 The Electron app launches but the backend install fails with an error dialog. Common causes:
@@ -126,6 +174,8 @@ gaia-desktop
 **Symptom**: Install gets stuck or fails midway.
 
 **Fix**: Some antivirus products quarantine the `uv` binary or Python downloads. Add an exclusion for `~/.gaia/` and re-run the install.
+
+If instead your antivirus names a specific GAIA file as malware, see [Antivirus flags a GAIA file as an infostealer](#av-false-positive).
 
 ### Missing C++ build tools (Windows, rare)
 
