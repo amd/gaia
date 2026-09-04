@@ -666,6 +666,10 @@ function setupJumpList() {
  * Returns true if the backend is ready, false if the user chose to quit.
  */
 async function bootstrapBackend() {
+  const previousState = backendInstaller.getState();
+  const retryingGaiaInit =
+    previousState?.state === backendInstaller.STATES.FAILED &&
+    previousState.stage === backendInstaller.STAGES.GAIA_INIT;
   // Fast-path: if an install is obviously not needed (binary present and
   // version matches), skip the progress window entirely and go straight to
   // ensureBackend which will confirm readiness.
@@ -681,7 +685,11 @@ async function bootstrapBackend() {
     } catch {
       // ignore
     }
-    if (installedVersion && installedVersion === expectedVersion) {
+    if (
+      installedVersion &&
+      installedVersion === expectedVersion &&
+      !retryingGaiaInit
+    ) {
       console.log(
         `[main] GAIA backend already at ${installedVersion} — skipping bootstrap UI`
       );
