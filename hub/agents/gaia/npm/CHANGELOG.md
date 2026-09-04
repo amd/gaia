@@ -141,6 +141,13 @@ the terminal UI meant building it from source.
 
 ### Security
 
+- **A desktop notification can no longer run code.** On Windows, `notify_desktop`
+  rendered its message box by pasting the title and body into a PowerShell command
+  string, so a `'` in either — text the model picks, and prompt-injected content
+  can steer it — closed the string literal and the remainder ran as PowerShell.
+  The command is now a fixed script that reads both values from the child's
+  environment, and the tool now needs your approval before it runs, like the
+  other tools that spawn a process (SKILL.md §8).
 - **`resolveSidecarPath` / `resolveTuiPath` verify the binary before returning a
   path that gets spawned.** Both fed `spawn()` from a predictable cache path with
   no integrity check, so anything able to write `~/.gaia/agents/gaia/` got code
