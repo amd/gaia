@@ -29,17 +29,7 @@ class FileToolsMixin:
         """Register file operation tools."""
         from gaia.agents.base.tools import tool
 
-        @tool(
-            name="add_watch_directory",
-            description="Add a directory to monitor for new documents. Files will be automatically indexed when created or modified.",
-            parameters={
-                "directory": {
-                    "type": "str",
-                    "description": "Directory path to watch",
-                    "required": True,
-                }
-            },
-        )
+        @tool()
         def add_watch_directory(directory: str) -> Dict[str, Any]:
             """Add directory to watch list with path validation and auto-indexing."""
             try:

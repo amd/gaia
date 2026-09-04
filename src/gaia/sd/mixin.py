@@ -129,45 +129,10 @@ class SDToolsMixin:
 
         @tool(
             atomic=True,
-            name="generate_image",
             # Opt out of the global per-tool timeout: first use may download a
             # multi-GB SD model (the SD client allows up to 600s for that),
             # well past the default agent tool cap.
             timeout=900,
-            description="Generate an image from a text prompt using Stable Diffusion. "
-            "Returns the path to the saved image file.",
-            parameters={
-                "prompt": {
-                    "type": "str",
-                    "description": "Text description of the image to generate. Be detailed for best results.",
-                    "required": True,
-                },
-                "model": {
-                    "type": "str",
-                    "description": "SD model: SD-Turbo (fast, default), SDXL-Turbo (better), SDXL-Base-1.0 (photorealistic, slow), SD-1.5",
-                    "required": False,
-                },
-                "size": {
-                    "type": "str",
-                    "description": "Image dimensions: 512x512, 768x768, or 1024x1024",
-                    "required": False,
-                },
-                "steps": {
-                    "type": "int",
-                    "description": "Inference steps (4 recommended for Turbo models)",
-                    "required": False,
-                },
-                "cfg_scale": {
-                    "type": "float",
-                    "description": "CFG scale (1.0 for Turbo, 7.5 for Base)",
-                    "required": False,
-                },
-                "seed": {
-                    "type": "int",
-                    "description": "Random seed for reproducibility (optional)",
-                    "required": False,
-                },
-            },
         )
         def generate_image(
             prompt: str,
@@ -182,8 +147,6 @@ class SDToolsMixin:
 
         @tool(
             atomic=True,
-            name="list_sd_models",
-            description="List available Stable Diffusion models and their characteristics.",
         )
         def list_sd_models() -> Dict[str, Any]:
             """List available SD models."""
@@ -223,15 +186,6 @@ class SDToolsMixin:
 
         @tool(
             atomic=True,
-            name="get_generation_history",
-            description="Get the history of images generated in this session.",
-            parameters={
-                "limit": {
-                    "type": "int",
-                    "description": "Maximum number of generations to return (default: 10)",
-                    "required": False,
-                }
-            },
         )
         def get_generation_history(limit: int = 10) -> Dict[str, Any]:
             """Get recent generations from this session."""
