@@ -1,11 +1,16 @@
 """Telegram messaging adapter for GAIA.
 
-This is a minimal scaffolding for v0.18.2. It wires Telegram updates into
-the `AgentSDK` and streams responses back via message edits.
+Wires Telegram updates into the `AgentSDK` and streams responses back via
+message edits.
 
-Notes:
-- Security defaults (restricted tools) and per-user sessions must be enforced
-  by the caller creating AgentSDK instances with the appropriate config.
+Security posture:
+- A Telegram session is a plain `AgentSDK` — an LLM completion wrapper with no
+  tool loop. The tool loop lives in `gaia.agents.base.agent.Agent`, which this
+  adapter never constructs, so shell and file-write tools are unreachable from
+  a Telegram message. `tests/unit/test_telegram_tool_surface.py` pins that.
+- Every update handler is gated on an explicit allowlist of numeric Telegram
+  user IDs. There is no permissive default: an adapter cannot be constructed
+  without one.
 """
 
 from __future__ import annotations
@@ -34,17 +39,42 @@ def get_or_create_session(user_id: int) -> AgentSDK:
 
     This reuses AgentSDK instances to preserve conversation history and
     model warm-up. Simple in-memory store without persistence for now.
+
+    ``AgentSDK`` is deliberate, not incidental: it has no tool loop, so a
+    remote message cannot reach a shell or file-write tool. Swapping in an
+    ``Agent`` subclass here hands that surface to anyone on the allowlist.
     """
     with _SESSIONS_LOCK:
         if user_id in _USER_SESSIONS:
             return _USER_SESSIONS[user_id]
-        config = AgentConfig()  # Default config; callers may customize later
-        sdk = AgentSDK(config)
+        sdk = AgentSDK(AgentConfig())
         _USER_SESSIONS[user_id] = sdk
         return sdk
 
 
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+#: Text of the refusal. One string so the CLI and the exception agree.
+NO_ALLOWLIST_ERROR = (
+    "Telegram adapter refused to start: no allowed-users configured.\n"
+    "\n"
+    "A Telegram bot is reachable by anyone who finds it, so an empty "
+    "allowlist would expose your local agent to the whole platform.\n"
+    "Pass the numeric user IDs permitted to use it:\n"
+    "\n"
+    "  gaia telegram start --token <token> --allowed-users 11111111,22222222\n"
+    "\n"
+    "Find your own ID by messaging @userinfobot on Telegram.\n"
+    "Docs: https://amd-gaia.ai/docs/guides/telegram-adapter"
+)
+
+
+class TelegramAllowlistError(ValueError):
+    """The adapter was asked to run without an allowlist.
+
+    Subclasses ``ValueError`` so the CLI can catch this specific failure
+    rather than any ``ValueError`` raised while polling.
+    """
 
 
 def require_allowed(handler):
@@ -58,9 +88,17 @@ def require_allowed(handler):
     async def guarded(self, update, context):
         user = update.effective_user
         if not self._allowed(user.id):
-            log.warning("Refused Telegram message from unauthorized user %s", user.id)
+            log.warning(
+                "Refused Telegram message from unauthorized user %s "
+                "(handler=%s, allowlist holds %d id(s)) — add the id to "
+                "--allowed-users if this refusal is wrong",
+                user.id,
+                handler.__name__,
+                len(self.allowed_users),
+            )
             await update.message.reply_text(UNAUTHORIZED_REPLY)
             return None
+        log.debug("Authorized Telegram user %s for %s", user.id, handler.__name__)
         return await handler(self, update, context)
 
     guarded.__gaia_allowlist_guarded__ = True
@@ -69,13 +107,32 @@ def require_allowed(handler):
 
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
+        # Refused here rather than at start(): an adapter that cannot serve
+        # anyone should never exist, so no caller can reach a permissive one.
+        if not allowed_users:
+            raise TelegramAllowlistError(NO_ALLOWLIST_ERROR)
+        # A bare string would iterate into single characters and silently deny
+        # everyone, which reads as "the bot is broken" rather than "wrong type".
+        if isinstance(allowed_users, (str, bytes)):
+            raise TypeError(
+                "allowed_users must be a collection of int user IDs, got "
+                f"{type(allowed_users).__name__}. Pass {{11111111}}, not "
+                "'11111111'."
+            )
         self.token = token
-        self.allowed_users = allowed_users or set()
+        self.allowed_users = set(allowed_users)
         self.application = None
+        log.info(
+            "Telegram adapter configured with %d allowed user id(s)",
+            len(self.allowed_users),
+        )
 
     def _allowed(self, user_id: int) -> bool:
-        if not self.allowed_users:
-            return True
+        """Membership only — an empty allowlist admits nobody.
+
+        Defence in depth: ``__init__`` already refuses an empty allowlist, so
+        this only fires if one is emptied after construction.
+        """
         return user_id in self.allowed_users
 
     @require_allowed
@@ -348,6 +405,11 @@ def run_telegram(
     This builds the `Application`, registers handlers, and runs polling.
     Pass `background=True` to return control without blocking (caller must
     call `adapter.application.run_polling()` or `await adapter.application.initialize()`).
+
+    Raises:
+        TelegramAllowlistError: if `allowed_users` is empty or None. A bot with
+            no allowlist is reachable by every Telegram user, so it is refused
+            rather than started permissively.
     """
     adapter = TelegramAdapter(token=token, allowed_users=allowed_users)
     adapter.start(token=token, background=background)
