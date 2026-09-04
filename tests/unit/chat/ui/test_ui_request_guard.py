@@ -21,6 +21,8 @@ no sockets and exercises the same middleware.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.routing import APIRoute
 
@@ -103,41 +105,63 @@ def stack(app):
 # ── Route-table introspection ───────────────────────────────────────────────
 
 
-def _all_api_routes(router):
-    """Every ``APIRoute`` reachable from ``app``, materialising lazy includes.
+#: Methods that can change state.
+_MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-    FastAPI defers ``include_router`` into ``_IncludedRouter`` wrappers, so
-    a naive ``for r in app.routes`` finds a single route on this version --
-    which is exactly how a coverage test like this silently passes while
-    asserting nothing. ``test_route_walk_finds_the_whole_surface`` pins the
-    walk itself.
+
+def _all_api_routes(app):
+    """Every route reachable from ``app``, as ``{(path, methods)}``.
+
+    Deliberately free of ``fastapi.routing`` private imports. The shape of
+    ``app.routes`` differs by version: through 0.115 ``include_router``
+    copies routes in eagerly and they sit there as ``APIRoute``s, while
+    newer releases defer each include behind a lazy wrapper that
+    materialises its children through ``effective_candidates()``. Probing
+    for those methods by name covers both and simply finds nothing extra
+    on a version that has neither, instead of raising ``ImportError`` and
+    taking every test below down with it.
+
+    ``test_route_walk_finds_the_whole_surface`` and
+    ``test_walk_covers_everything_openapi_knows_about`` both fail loudly
+    if a future version breaks this walk, so it cannot degrade quietly
+    into checking nothing.
     """
-    from fastapi.routing import _EffectiveRouteContext, _IncludedRouter
-
     found = {}
 
-    def walk(routes):
+    def visit(routes):
         for route in routes:
-            if isinstance(route, _IncludedRouter):
-                walk(route.effective_candidates())
-                walk(route.effective_low_priority_routes())
-            elif isinstance(route, _EffectiveRouteContext):
-                if isinstance(route.original_route, APIRoute):
-                    found[(route.path, frozenset(route.methods))] = route
-            elif isinstance(route, APIRoute):
-                found[(route.path, frozenset(route.methods))] = route
+            materialised = False
+            for name in ("effective_candidates", "effective_low_priority_routes"):
+                method = getattr(route, name, None)
+                if callable(method):
+                    visit(method())
+                    materialised = True
+            if materialised:
+                continue
+            path, methods = getattr(route, "path", None), getattr(
+                route, "methods", None
+            )
+            if isinstance(route, APIRoute) or hasattr(route, "original_route"):
+                if path and methods:
+                    found[(path, frozenset(methods))] = route
+            elif hasattr(route, "routes"):
+                visit(route.routes)
 
-    walk(router.routes)
+    visit(app.routes)
     return found
 
 
+def _drop_convertors(path: str) -> str:
+    """``/x/{id:path}`` -> ``/x/{id}``, the form ``openapi()`` reports."""
+    return re.sub(r"\{([^}:]+):[^}]+\}", r"{\1}", path)
+
+
 def _mutating_paths(app):
-    mutating = {"POST", "PUT", "PATCH", "DELETE"}
     return sorted(
         {
             path
             for (path, methods), _ in _all_api_routes(app).items()
-            if methods & mutating
+            if methods & _MUTATING
         }
     )
 
@@ -146,6 +170,26 @@ def test_route_walk_finds_the_whole_surface(app):
     """Guard the guard: a walk that finds nothing would pass every test below."""
     assert len(_all_api_routes(app)) > 100
     assert len(_mutating_paths(app)) > 50
+
+
+def test_walk_covers_everything_openapi_knows_about(app):
+    """Cross-check the walk against FastAPI's own public route inventory.
+
+    ``app.openapi()`` is stable public API across every supported version.
+    It is not sufficient on its own -- a route with
+    ``include_in_schema=False`` never appears in it -- but if the walk ever
+    stops seeing a route the schema knows about, this says so instead of
+    letting the coverage test below pass on a shrunken set.
+    """
+    walked = {_drop_convertors(p) for p in _mutating_paths(app)}
+    from_schema = {
+        path
+        for path, ops in app.openapi().get("paths", {}).items()
+        if {m.upper() for m in ops} & _MUTATING
+        if path.startswith(("/api", "/v1"))
+    }
+    assert from_schema, "openapi() reported no mutating routes -- cross-check is inert"
+    assert from_schema <= walked, f"walk missed: {sorted(from_schema - walked)}"
 
 
 def test_every_mutating_route_is_covered_by_the_guard(app):
@@ -359,6 +403,31 @@ async def test_rebinding_host_is_rejected(stack, app):
     )
     assert status == 400
     assert b"Invalid Host" in body
+
+
+async def test_host_rejection_names_the_setting_that_fixes_it(stack, app):
+    """Someone reaching the UI by machine name needs the remedy, not just a 400.
+
+    CLAUDE.md: an actionable error says what failed, what to do, and where
+    to look.
+    """
+    _, _, body = await _request(
+        stack, app, "GET", "/api/health", {"host": "my-workstation:4200"}
+    )
+    detail = body.decode()
+    assert "my-workstation" in detail
+    assert security.ENV_ALLOWED_HOSTS in detail
+
+
+@pytest.mark.parametrize("host", ["::1", "[::1]:4200", "[2001:db8::1]:4200"])
+def test_ipv6_authority_is_parsed_whole(host):
+    """A bare IPv6 ``Host`` must not be split on its own colons.
+
+    Brackets are required by RFC 3986 so nothing correct sends the bare
+    form, but ``rsplit(":", 1)`` turned ``"::1"`` into ``":"`` -- which
+    failed the loopback check for a value that plainly is loopback.
+    """
+    assert security.is_allowed_host(host, None)
 
 
 @pytest.mark.parametrize(

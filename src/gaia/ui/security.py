@@ -96,6 +96,11 @@ def _hostname(authority: str) -> str:
         end = host.find("]")
         if end != -1:
             return host[1:end]
+    if host.count(":") > 1:
+        # Bare IPv6 with no brackets. RFC 3986 requires them, so nothing
+        # correct sends this -- but splitting on the last colon would turn
+        # "::1" into ":" and quietly fail the loopback check.
+        return host
     return host.rsplit(":", 1)[0] if ":" in host else host
 
 
@@ -232,7 +237,14 @@ class UIRequestGuardMiddleware:
                 path,
                 host_header,
             )
-            await _send_rejection(send, 400, "Invalid Host header")
+            await _send_rejection(
+                send,
+                400,
+                f"Invalid Host header: {host_header!r} is not a name this "
+                f"server answers to. Reach the Agent UI on localhost or its "
+                f"IP address, or set {ENV_ALLOWED_HOSTS} to a comma-separated "
+                f"list of hostnames to allow.",
+            )
             return
 
         if (
