@@ -43,7 +43,9 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime
+from datetime import time as dt_time
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -53,6 +55,7 @@ logger = get_logger(__name__)
 
 DEFAULT_BRIEFING_TIME = "08:00"
 DEFAULT_BRIEFING_MAX_MESSAGES = 25
+BRIEFING_STALE_AFTER_SECONDS = 24 * 60 * 60
 
 _TRUE_VALUES = frozenset({"1", "true", "yes"})
 _FALSE_VALUES = frozenset({"0", "false", "no", ""})
@@ -112,7 +115,9 @@ class BriefingScheduleConfig:
             )
 
     @classmethod
-    def from_env(cls, environ: Optional[Dict[str, str]] = None) -> "BriefingScheduleConfig":
+    def from_env(
+        cls, environ: Optional[Dict[str, str]] = None
+    ) -> "BriefingScheduleConfig":
         """Build the config from environment variables, validating eagerly.
 
         Unset variables take the documented defaults (disabled, 08:00, 25).
@@ -189,7 +194,35 @@ def persist_briefing(record: Dict[str, Any], path: Optional[Path] = None) -> Pat
     return dest
 
 
-def summarize_briefing(envelope: Dict[str, Any]) -> Dict[str, Any]:
+def briefing_age_seconds(
+    generated_at: Optional[str], *, now: Optional[datetime] = None
+) -> float:
+    """Return the non-negative age of a persisted UTC briefing timestamp."""
+    try:
+        parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as e:
+        raise BriefingUnavailableError(
+            f"Persisted briefing has invalid generated_at={generated_at!r}. "
+            "Delete the file and let the next scheduled run regenerate it."
+        ) from e
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    return max(0.0, (current - parsed).total_seconds())
+
+
+def _format_briefing_age(age_seconds: float) -> str:
+    """Format an age for the user-facing stale-cache warning."""
+    if age_seconds >= 2 * 24 * 60 * 60:
+        return f"{age_seconds / (24 * 60 * 60):.0f} days"
+    if age_seconds >= 2 * 60 * 60:
+        return f"{age_seconds / (60 * 60):.0f} hours"
+    return f"{max(1, age_seconds / 60):.0f} minutes"
+
+
+def summarize_briefing(
+    envelope: Dict[str, Any], *, cache_age_seconds: float = 0.0, stale: bool = False
+) -> Dict[str, Any]:
     """Deterministic, testable breakdown of a pre-scan envelope (#2525).
 
     ``get_briefing`` was returning the full ``email_pre_scan`` envelope but
@@ -226,6 +259,11 @@ def summarize_briefing(envelope: Dict[str, Any]) -> Dict[str, Any]:
             f"Nothing needs attention — {total_scanned} messages scanned, "
             "all informational."
         )
+    if stale:
+        headline = (
+            f"This briefing is {_format_briefing_age(cache_age_seconds)} old and "
+            f"may be out of date. {headline}"
+        )
 
     highlights = [
         {**item, "urgency": "urgent"} for item in envelope.get("urgent") or []
@@ -256,6 +294,8 @@ def summarize_briefing(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "headline": headline,
         "highlights": highlights,
         "preferences_applied": preferences_applied,
+        "cache_age_seconds": cache_age_seconds,
+        "stale": stale,
     }
 
 
@@ -292,7 +332,6 @@ def _resolve_briefing_backend() -> Any:
     a cron dispatcher) get a plain exception with the same actionable text.
     """
     from fastapi import HTTPException
-
     from gaia_agent_email.api_routes import get_prescan_backend
 
     try:
@@ -433,6 +472,7 @@ class BriefingScheduler:
 
 
 __all__ = [
+    "BRIEFING_STALE_AFTER_SECONDS",
     "BriefingConfigError",
     "BriefingScheduleConfig",
     "BriefingScheduler",
@@ -440,6 +480,7 @@ __all__ = [
     "ENV_ENABLED",
     "ENV_MAX_MESSAGES",
     "ENV_TIME",
+    "briefing_age_seconds",
     "briefing_path",
     "load_latest_briefing",
     "persist_briefing",

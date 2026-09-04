@@ -1170,6 +1170,11 @@
             "$ref": "#/components/schemas/EmailPreScanResult",
             "description": "The email_pre_scan envelope the scheduled run produced."
           },
+          "cache_age_seconds": {
+            "description": "Seconds since generated_at; measured when this response was read.",
+            "title": "Cache Age Seconds",
+            "type": "number"
+          },
           "generated_at": {
             "description": "UTC ISO-8601 timestamp of the scheduled run.",
             "title": "Generated At",
@@ -1180,10 +1185,17 @@
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
+          },
+          "stale": {
+            "description": "True when the briefing is at least 24 hours old; stale briefings are labeled, not regenerated or refused.",
+            "title": "Stale",
+            "type": "boolean"
           }
         },
         "required": [
           "generated_at",
+          "cache_age_seconds",
+          "stale",
           "briefing"
         ],
         "title": "EmailBriefingResponse",
