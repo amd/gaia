@@ -290,7 +290,9 @@ def test_set_config_replace_flag(client, monkeypatch):
 
 
 def test_set_config_requires_ui_header(client_no_ui_header):
-    resp = client_no_ui_header.post("/api/agents/demo/config", json={"config": {"a": 1}})
+    resp = client_no_ui_header.post(
+        "/api/agents/demo/config", json={"config": {"a": 1}}
+    )
     assert resp.status_code == 403
 
 
