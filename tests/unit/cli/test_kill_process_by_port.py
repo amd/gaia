@@ -19,12 +19,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from gaia.cli import (
-    _is_killable_process,
-    _listeners_on_port,
-    _parse_unix_netstat_listeners,
-    _parse_windows_netstat_listeners,
-    kill_process_by_port,
+from gaia.cli import kill_process_by_port
+from gaia.ports import (
+    is_killable_process,
+    listeners_on_port,
+    parse_unix_netstat_listeners,
+    parse_windows_netstat_listeners,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,27 +68,27 @@ udp        0      0 0.0.0.0:68              0.0.0.0:*                           
 class TestWindowsNetstatParsing:
     def test_port_80_does_not_match_an_8009_foreign_address(self):
         """':80' is a substring of ':8009' and of ':8080'."""
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 80) == []
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 80) == []
 
     def test_time_wait_row_is_not_a_listener(self):
         """The TIME_WAIT row above has local port 60122 and foreign port 80."""
-        pids = _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 60122)
+        pids = parse_windows_netstat_listeners(WINDOWS_NETSTAT, 60122)
         assert pids == [], "a TIME_WAIT socket owns no server to kill"
 
     def test_established_client_socket_is_not_a_listener(self):
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 51799) == []
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 443) == []
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 51799) == []
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 443) == []
 
     def test_exact_listening_port_is_matched(self):
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 8080) == [7100]
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 135) == [2540]
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 8080) == [7100]
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 135) == [2540]
 
     def test_ipv4_and_ipv6_rows_for_one_listener_dedupe_to_one_pid(self):
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 4200) == [9001]
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 4200) == [9001]
 
     def test_udp_row_is_ignored(self):
         """The UDP :4200 row has pid 5555 and must never be selected."""
-        assert 5555 not in _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 4200)
+        assert 5555 not in parse_windows_netstat_listeners(WINDOWS_NETSTAT, 4200)
 
     def test_localized_state_column_still_detects_a_listener(self):
         """netstat localizes 'LISTENING'; a zero foreign port identifies it anyway."""
@@ -96,16 +96,16 @@ class TestWindowsNetstatParsing:
             "  Proto  Lokale Adresse         Remoteadresse          Status    PID\n"
             "  TCP    0.0.0.0:4200           0.0.0.0:0              ABHÖREN   9001\n"
         )
-        assert _parse_windows_netstat_listeners(german, 4200) == [9001]
+        assert parse_windows_netstat_listeners(german, 4200) == [9001]
 
     def test_pid_zero_is_never_returned(self):
         idle = (
             "  TCP    0.0.0.0:4200           0.0.0.0:0              LISTENING       0\n"
         )
-        assert _parse_windows_netstat_listeners(idle, 4200) == []
+        assert parse_windows_netstat_listeners(idle, 4200) == []
 
     def test_header_and_blank_lines_are_ignored(self):
-        assert _parse_windows_netstat_listeners(WINDOWS_NETSTAT, 0) == []
+        assert parse_windows_netstat_listeners(WINDOWS_NETSTAT, 0) == []
 
 
 # ---------------------------------------------------------------------------
@@ -115,19 +115,19 @@ class TestWindowsNetstatParsing:
 
 class TestUnixNetstatParsing:
     def test_port_80_does_not_match_8009_or_8080(self):
-        assert _parse_unix_netstat_listeners(UNIX_NETSTAT, 80) == []
+        assert parse_unix_netstat_listeners(UNIX_NETSTAT, 80) == []
 
     def test_established_row_is_not_a_listener(self):
-        assert _parse_unix_netstat_listeners(UNIX_NETSTAT, 51799) == []
+        assert parse_unix_netstat_listeners(UNIX_NETSTAT, 51799) == []
 
     def test_listener_returns_pid_and_program_name(self):
-        assert _parse_unix_netstat_listeners(UNIX_NETSTAT, 4200) == [(9001, "python3")]
-        assert _parse_unix_netstat_listeners(UNIX_NETSTAT, 13305) == [
+        assert parse_unix_netstat_listeners(UNIX_NETSTAT, 4200) == [(9001, "python3")]
+        assert parse_unix_netstat_listeners(UNIX_NETSTAT, 13305) == [
             (4242, "lemonade-server")
         ]
 
     def test_udp_row_is_ignored(self):
-        assert _parse_unix_netstat_listeners(UNIX_NETSTAT, 68) == []
+        assert parse_unix_netstat_listeners(UNIX_NETSTAT, 68) == []
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +141,11 @@ class TestKillableProcessAllowlist:
         ["gaia.exe", "lemonade-server", "lemond", "python3", "python.exe", "node"],
     )
     def test_gaia_and_lemonade_processes_are_killable(self, name):
-        assert _is_killable_process(name)
+        assert is_killable_process(name)
 
     @pytest.mark.parametrize("name", ["svchost.exe", "chrome.exe", "nginx", "sshd", ""])
     def test_unrelated_processes_are_not_killable(self, name):
-        assert not _is_killable_process(name)
+        assert not is_killable_process(name)
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +155,8 @@ class TestKillableProcessAllowlist:
 
 class TestKillProcessByPort:
     def test_refuses_to_kill_a_process_that_is_not_ours(self, mocker):
-        mocker.patch(
-            "gaia.cli._listeners_on_port", return_value=[(2540, "svchost.exe")]
-        )
-        terminate = mocker.patch("gaia.cli._terminate_pid")
+        mocker.patch("gaia.cli.listeners_on_port", return_value=[(2540, "svchost.exe")])
+        terminate = mocker.patch("gaia.cli.terminate_pid")
 
         result = kill_process_by_port(135)
 
@@ -167,8 +165,8 @@ class TestKillProcessByPort:
         assert "Refusing to kill 2540 (svchost.exe)" in result["message"]
 
     def test_kills_a_gaia_listener(self, mocker):
-        mocker.patch("gaia.cli._listeners_on_port", return_value=[(9001, "python.exe")])
-        terminate = mocker.patch("gaia.cli._terminate_pid")
+        mocker.patch("gaia.cli.listeners_on_port", return_value=[(9001, "python.exe")])
+        terminate = mocker.patch("gaia.cli.terminate_pid")
 
         result = kill_process_by_port(4200)
 
@@ -177,8 +175,8 @@ class TestKillProcessByPort:
         assert "9001" in result["message"]
 
     def test_no_listener_reports_failure(self, mocker):
-        mocker.patch("gaia.cli._listeners_on_port", return_value=[])
-        terminate = mocker.patch("gaia.cli._terminate_pid")
+        mocker.patch("gaia.cli.listeners_on_port", return_value=[])
+        terminate = mocker.patch("gaia.cli.terminate_pid")
 
         result = kill_process_by_port(80)
 
@@ -187,7 +185,7 @@ class TestKillProcessByPort:
         assert "No process is listening on port 80" in result["message"]
 
     def test_invalid_port_is_rejected_before_any_lookup(self, mocker):
-        lookup = mocker.patch("gaia.cli._listeners_on_port")
+        lookup = mocker.patch("gaia.cli.listeners_on_port")
 
         result = kill_process_by_port("not-a-port")
 
@@ -197,7 +195,7 @@ class TestKillProcessByPort:
 
     def test_missing_tooling_is_reported_as_such_not_as_no_process(self, mocker):
         mocker.patch(
-            "gaia.cli._listeners_on_port",
+            "gaia.cli.listeners_on_port",
             side_effect=FileNotFoundError(2, "not found", "netstat"),
         )
 
@@ -212,11 +210,11 @@ class TestKillProcessByPort:
         mocker.patch("sys.platform", "win32")
         oem = b"  TCP    0.0.0.0:4200    0.0.0.0:0    \xc4BH\xd6REN    9001\n"
         mocker.patch(
-            "gaia.cli.subprocess.check_output",
+            "gaia.ports.subprocess.check_output",
             side_effect=lambda *a, **kw: oem.decode("utf-8", errors=kw["errors"]),
         )
-        mocker.patch("gaia.cli._process_image_name", return_value="python.exe")
-        terminate = mocker.patch("gaia.cli._terminate_pid")
+        mocker.patch("gaia.ports.process_image_name", return_value="python.exe")
+        terminate = mocker.patch("gaia.cli.terminate_pid")
 
         result = kill_process_by_port(4200)
 
@@ -229,9 +227,11 @@ class TestListenerLookupCallShape:
 
     def test_windows_netstat_decodes_leniently(self, mocker):
         mocker.patch("sys.platform", "win32")
-        check_output = mocker.patch("gaia.cli.subprocess.check_output", return_value="")
+        check_output = mocker.patch(
+            "gaia.ports.subprocess.check_output", return_value=""
+        )
 
-        _listeners_on_port(4200)
+        listeners_on_port(4200)
 
         args, kwargs = check_output.call_args
         assert args[0] == ["netstat", "-ano"]
@@ -242,12 +242,12 @@ class TestListenerLookupCallShape:
         kill -9 takes out the Agent UI backend and any client of the port."""
         mocker.patch("sys.platform", "linux")
         run = mocker.patch(
-            "gaia.cli.subprocess.run",
+            "gaia.ports.subprocess.run",
             return_value=SimpleNamespace(returncode=0, stdout="9001\n", stderr=""),
         )
-        mocker.patch("gaia.cli._process_image_name", return_value="python3")
+        mocker.patch("gaia.ports.process_image_name", return_value="python3")
 
-        assert _listeners_on_port(4200) == [(9001, "python3")]
+        assert listeners_on_port(4200) == [(9001, "python3")]
 
         argv = run.call_args[0][0]
         assert argv[:2] == ["lsof", "-nP"]
@@ -263,30 +263,30 @@ class TestListenerLookupCallShape:
         BSD syntax."""
         mocker.patch("sys.platform", "linux")
         mocker.patch(
-            "gaia.cli.subprocess.run",
+            "gaia.ports.subprocess.run",
             return_value=SimpleNamespace(returncode=1, stdout="", stderr=""),
         )
-        netstat = mocker.patch("gaia.cli.subprocess.check_output")
+        netstat = mocker.patch("gaia.ports.subprocess.check_output")
 
-        assert _listeners_on_port(4200) == []
+        assert listeners_on_port(4200) == []
         netstat.assert_not_called()
 
     def test_a_real_lsof_failure_is_not_swallowed(self, mocker):
         mocker.patch("sys.platform", "linux")
         mocker.patch(
-            "gaia.cli.subprocess.run",
+            "gaia.ports.subprocess.run",
             return_value=SimpleNamespace(returncode=127, stdout="", stderr="boom"),
         )
 
         with pytest.raises(subprocess.CalledProcessError):
-            _listeners_on_port(4200)
+            listeners_on_port(4200)
 
     def test_falls_back_to_netstat_when_lsof_is_missing(self, mocker):
         mocker.patch("sys.platform", "linux")
-        mocker.patch("gaia.cli.subprocess.run", side_effect=FileNotFoundError("lsof"))
+        mocker.patch("gaia.ports.subprocess.run", side_effect=FileNotFoundError("lsof"))
         netstat = mocker.patch(
-            "gaia.cli.subprocess.check_output", return_value=UNIX_NETSTAT
+            "gaia.ports.subprocess.check_output", return_value=UNIX_NETSTAT
         )
 
-        assert _listeners_on_port(13305) == [(4242, "lemonade-server")]
+        assert listeners_on_port(13305) == [(4242, "lemonade-server")]
         assert netstat.call_args[0][0] == ["netstat", "-tulpn"]
