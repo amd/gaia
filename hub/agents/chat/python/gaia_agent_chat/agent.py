@@ -63,6 +63,20 @@ from gaia.vlm.mixin import VLMToolsMixin
 # yet" and rebuilt on every access.
 _UNSET = object()
 
+# ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
+# through the child's environment, never as text inside ``-Command``. A "'" in
+# a model-supplied message would otherwise close the string literal and the
+# rest of the message would run as PowerShell. ``$env:`` reads are values, not
+# code, so ``NOTIFY_DESKTOP_PS_SCRIPT`` stays a constant no input can alter.
+NOTIFY_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
+NOTIFY_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+NOTIFY_DESKTOP_PS_SCRIPT = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "[System.Windows.Forms.MessageBox]::Show("
+    f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
+    f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
+)
+
 
 @dataclass
 class ChatAgentConfig:
@@ -1662,18 +1676,20 @@ No documents are currently indexed.
                     try:
                         import subprocess
 
-                        ps_cmd = (
-                            f"Add-Type -AssemblyName System.Windows.Forms; "
-                            f"[System.Windows.Forms.MessageBox]::Show('{message}', '{title}')"
-                        )
                         subprocess.Popen(
                             [
                                 "powershell",
+                                "-NoProfile",
                                 "-WindowStyle",
                                 "Hidden",
                                 "-Command",
-                                ps_cmd,
+                                NOTIFY_DESKTOP_PS_SCRIPT,
                             ],
+                            env={
+                                **os.environ,
+                                NOTIFY_MESSAGE_ENV_VAR: message,
+                                NOTIFY_TITLE_ENV_VAR: title,
+                            },
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
