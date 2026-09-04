@@ -12,7 +12,7 @@ import json
 import linecache
 import textwrap
 import traceback
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 # Paths to filter out (framework internals)
 FRAMEWORK_PATHS: Set[str] = {
@@ -24,6 +24,62 @@ FRAMEWORK_PATHS: Set[str] = {
     "gaia_agent_chat",
     "site-packages/",
 }
+
+
+class MissingHostAttributeError(RuntimeError):
+    """A tool mixin's host object never bound an attribute the mixin requires."""
+
+
+def missing_host_attr_message(
+    host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
+) -> str:
+    """Build the message used for a missing required host attribute.
+
+    Shared so every code path that reports this condition — whether it
+    raises (``require_host_attr``) or returns a structured error (a tool
+    that reports rather than raising) — uses identical wording.
+    """
+    return (
+        f"{type(host).__name__} registers {mixin_name}'s tools but never "
+        f"binds self.{attr_name}. {hint} See {doc_anchor} for a worked "
+        "example."
+    )
+
+
+def require_host_attr(
+    host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
+) -> Any:
+    """Read a host attribute a tool mixin depends on, failing loudly if unbound.
+
+    Tool mixins (``RAGToolsMixin``, ``FileIOToolsMixin``, ...) read state off
+    ``self`` that nothing sets for them — the host agent class is responsible
+    for binding it, usually before ``super().__init__()`` runs. A host that
+    forgets raises a bare ``AttributeError`` deep inside a tool body, which an
+    outer ``except Exception`` there would otherwise turn into a misleading
+    generic failure. This does the same single read (so a property like
+    ``ChatAgent.rag`` is invoked normally, not probed) but re-raises with a
+    message naming the host class, the attribute, and how to fix it.
+
+    Args:
+        host: The tool-mixin instance (``self`` from inside a tool function).
+        attr_name: Name of the required attribute (e.g. ``"rag"``).
+        mixin_name: Name of the mixin that requires it (for the message).
+        hint: One-line instruction on what to set the attribute to.
+        doc_anchor: Path (optionally with ``#anchor``) to a worked example.
+
+    Returns:
+        The attribute's value (may legitimately be ``None`` if the host set
+        it to ``None`` on purpose — only a truly unbound attribute raises).
+
+    Raises:
+        MissingHostAttributeError: If ``host`` never bound ``attr_name``.
+    """
+    try:
+        return getattr(host, attr_name)
+    except AttributeError as e:
+        raise MissingHostAttributeError(
+            missing_host_attr_message(host, attr_name, mixin_name, hint, doc_anchor)
+        ) from e
 
 
 def format_user_error(

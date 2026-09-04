@@ -58,12 +58,19 @@ is the reference implementation: it sets all five before calling
 [custom agent guide](/guides/custom-agent) shows the same pattern for a
 minimal example.
 
-This is enforced by convention today, not by the mixin — a host class that
-forgets one of these fails silently in the specific sense that the tool call
-still returns a response, just a "temporarily unavailable" fallback instead
-of an error a developer would notice. [#3316](https://github.com/amd/gaia/issues/3316)
-tracks making `_register_tools()` fail loudly at registration time instead of
-relying on documentation to catch this.
+Of the five, only `self.rag` is enforced at the point of use: `query_documents`
+and `query_specific_file` read it through a helper that raises a
+`MissingHostAttributeError` naming the host class, the attribute, and this
+section — instead of letting a bare `AttributeError` get swallowed into a
+"temporarily unavailable" fallback response. `None` remains a valid,
+intentional "RAG disabled" value and does not raise. The other four
+attributes (`indexed_files`, `max_chunks`, `current_session`,
+`session_manager`) are still enforced by convention, matching the reasoning
+in [#3316](https://github.com/amd/gaia/issues/3316): a construction-time
+check was considered and rejected — it would break the Builder's own
+generated agents, run before skill-injected tools exist, and require
+inspecting a process-global tool registry. See the issue for the full
+analysis.
 
 ---
 

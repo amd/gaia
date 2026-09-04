@@ -12,7 +12,21 @@ import re
 from pathlib import Path
 from typing import Any, Dict
 
+from gaia.agents.base.errors import require_host_attr
+
 logger = logging.getLogger(__name__)
+
+_RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
+_RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+
+
+def _require_rag(host: Any) -> Any:
+    """Read ``host.rag``, raising loudly if never bound.
+
+    ``None`` is a legitimate value (RAG intentionally disabled) — only a
+    truly unbound ``self.rag`` raises.
+    """
+    return require_host_attr(host, "rag", "RAGToolsMixin", _RAG_HINT, _RAG_DOC_ANCHOR)
 
 
 def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
@@ -94,9 +108,10 @@ class RAGToolsMixin:
             rather than generating the answer directly. This maintains proper
             integration with the agent's conversation flow.
             """
+            rag = _require_rag(self)
             try:
                 # Check if RAG is initialized and has documents
-                if not self.rag or not self.rag.index or len(self.rag.chunks) == 0:
+                if not rag or not rag.index or len(rag.chunks) == 0:
                     return {
                         "status": "no_documents",
                         "message": "No documents are currently indexed.",
@@ -135,7 +150,7 @@ class RAGToolsMixin:
                     try:
                         # Use RAG to retrieve chunks
                         # pylint: disable=protected-access
-                        chunks, scores = self.rag._retrieve_chunks(search_key)
+                        chunks, scores = rag._retrieve_chunks(search_key)
                         if chunks:
                             all_chunks.extend(chunks)
                             all_scores.extend(scores)
@@ -146,7 +161,7 @@ class RAGToolsMixin:
                                 chunk_global_indices = []
                                 for chunk in chunks[:5]:
                                     try:
-                                        idx = self.rag.chunks.index(chunk)
+                                        idx = rag.chunks.index(chunk)
                                         chunk_global_indices.append(idx)
                                     except ValueError:
                                         chunk_global_indices.append(-1)
@@ -227,7 +242,7 @@ class RAGToolsMixin:
 
                 if important_terms:
                     # Check each indexed chunk for keyword matches
-                    for chunk_idx, chunk_text in enumerate(self.rag.chunks):
+                    for chunk_idx, chunk_text in enumerate(rag.chunks):
                         chunk_lower = chunk_text.lower()
 
                         # Count matching terms in this chunk (whole word matching)
@@ -252,7 +267,7 @@ class RAGToolsMixin:
                                 all_scores.append(boost_score)
 
                                 # Get source file for this chunk
-                                source_file = self.rag.chunk_to_file.get(
+                                source_file = rag.chunk_to_file.get(
                                     chunk_idx, "Unknown"
                                 )
 
@@ -293,7 +308,7 @@ class RAGToolsMixin:
                     all_chunk_indices = []
                     for chunk in all_chunks:
                         try:
-                            idx = self.rag.chunks.index(chunk)
+                            idx = rag.chunks.index(chunk)
                             all_chunk_indices.append(idx)
                         except ValueError:
                             all_chunk_indices.append(
@@ -341,7 +356,7 @@ class RAGToolsMixin:
                     dedup_chunk_indices = []
                     for chunk_text, score in unique_chunks.values():
                         try:
-                            idx = self.rag.chunks.index(chunk_text)
+                            idx = rag.chunks.index(chunk_text)
                             dedup_chunk_indices.append(idx)
                         except ValueError:
                             dedup_chunk_indices.append("keyword_context")
@@ -354,7 +369,7 @@ class RAGToolsMixin:
 
                 # Adaptive max_chunks: use more chunks for larger documents
                 # With 32K context, we can afford to retrieve more chunks for better coverage
-                total_chunks = len(self.rag.chunks)
+                total_chunks = len(rag.chunks)
                 if total_chunks > 200:
                     adaptive_max = min(
                         25, self.max_chunks * 5
@@ -378,7 +393,7 @@ class RAGToolsMixin:
                 for chunk in top_chunks:
                     # Find this chunk's index in the global chunks list
                     try:
-                        idx = self.rag.chunks.index(chunk)
+                        idx = rag.chunks.index(chunk)
                         chunk_indices.append(idx)
                     except ValueError:
                         chunk_indices.append(-1)  # Not found
@@ -388,10 +403,10 @@ class RAGToolsMixin:
                 for i, chunk in enumerate(top_chunks):
                     # Resolve the source file path for this chunk
                     source_path = ""
-                    if hasattr(self.rag, "chunk_to_file"):
+                    if hasattr(rag, "chunk_to_file"):
                         ci = chunk_indices[i] if i < len(chunk_indices) else -1
                         if ci >= 0:
-                            raw = self.rag.chunk_to_file.get(ci, "")
+                            raw = rag.chunk_to_file.get(ci, "")
                             if raw:
                                 source_path = str(Path(raw).resolve())
 
@@ -403,7 +418,7 @@ class RAGToolsMixin:
                     _page = extract_page_from_chunk(
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
-                        self.rag.chunks,
+                        rag.chunks,
                     )
                     _entry = {
                         "chunk_id": i + 1,  # Sequential for display
@@ -524,8 +539,9 @@ class RAGToolsMixin:
 
             This is faster than query_documents because it searches only one file.
             """
+            rag = _require_rag(self)
             try:
-                if not self.rag:
+                if not rag:
                     return {
                         "status": "error",
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
@@ -552,7 +568,7 @@ class RAGToolsMixin:
                 norm_path = str(Path(file_path))
                 matching_files = [
                     f
-                    for f in self.rag.indexed_files
+                    for f in rag.indexed_files
                     if norm_path in str(f) or file_path in str(f)
                 ]
 
@@ -562,9 +578,7 @@ class RAGToolsMixin:
                     # Extract the basename and try an exact filename match.
                     basename = Path(file_path).name
                     matching_files = [
-                        f
-                        for f in self.rag.indexed_files
-                        if Path(str(f)).name == basename
+                        f for f in rag.indexed_files if Path(str(f)).name == basename
                     ]
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
@@ -583,7 +597,7 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result = self.rag.index_document(resolved)
+                            idx_result = rag.index_document(resolved)
                             if idx_result.get("success"):
                                 self.indexed_files.add(file_path)
                                 if (
@@ -608,7 +622,7 @@ class RAGToolsMixin:
                                 # stores the absolute path, not the relative one passed in.
                                 matching_files = [
                                     f
-                                    for f in self.rag.indexed_files
+                                    for f in rag.indexed_files
                                     if norm_path in str(f)
                                     or file_path in str(f)
                                     or str(resolved) in str(f)
@@ -683,7 +697,7 @@ class RAGToolsMixin:
                     try:
                         # Use the new per-file retrieval method
                         # pylint: disable=protected-access
-                        chunks, scores = self.rag._retrieve_chunks_from_file(
+                        chunks, scores = rag._retrieve_chunks_from_file(
                             search_key, str(target_file)
                         )
                         if chunks:
@@ -696,7 +710,7 @@ class RAGToolsMixin:
                                 chunk_global_indices = []
                                 for chunk in chunks[:5]:
                                     try:
-                                        idx = self.rag.chunks.index(chunk)
+                                        idx = rag.chunks.index(chunk)
                                         chunk_global_indices.append(idx)
                                     except ValueError:
                                         chunk_global_indices.append(-1)
@@ -749,8 +763,8 @@ class RAGToolsMixin:
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
                 if (
-                    str(target_file) in self.rag.file_metadata
-                    and "full_text" in self.rag.file_metadata[str(target_file)]
+                    str(target_file) in rag.file_metadata
+                    and "full_text" in rag.file_metadata[str(target_file)]
                 ):
                     query_lower = query.lower()
 
@@ -778,13 +792,13 @@ class RAGToolsMixin:
                         file_keyword_info = []
 
                         # Check each chunk from this file for keyword matches
-                        file_chunk_indices = self.rag.file_to_chunk_indices.get(
+                        file_chunk_indices = rag.file_to_chunk_indices.get(
                             str(target_file), []
                         )
 
                         for chunk_idx in file_chunk_indices:
-                            if chunk_idx < len(self.rag.chunks):
-                                chunk_text = self.rag.chunks[chunk_idx].lower()
+                            if chunk_idx < len(rag.chunks):
+                                chunk_text = rag.chunks[chunk_idx].lower()
 
                                 # Count matching terms in this chunk (whole word matching)
                                 matching_terms = []
@@ -807,7 +821,7 @@ class RAGToolsMixin:
                                     )  # Range: 0.6-0.8
 
                                     # Add this chunk with boosted score if not already in all_chunks
-                                    chunk_content = self.rag.chunks[chunk_idx]
+                                    chunk_content = rag.chunks[chunk_idx]
                                     if chunk_content not in all_chunks:
                                         all_chunks.append(chunk_content)
                                         all_scores.append(boost_score)
@@ -847,7 +861,7 @@ class RAGToolsMixin:
                     all_chunk_indices = []
                     for chunk in all_chunks:
                         try:
-                            idx = self.rag.chunks.index(chunk)
+                            idx = rag.chunks.index(chunk)
                             all_chunk_indices.append(idx)
                         except ValueError:
                             all_chunk_indices.append(
@@ -890,7 +904,7 @@ class RAGToolsMixin:
                     dedup_chunk_indices = []
                     for chunk_text, score in unique_chunks.values():
                         try:
-                            idx = self.rag.chunks.index(chunk_text)
+                            idx = rag.chunks.index(chunk_text)
                             dedup_chunk_indices.append(idx)
                         except ValueError:
                             dedup_chunk_indices.append("keyword_context")
@@ -902,7 +916,7 @@ class RAGToolsMixin:
 
                 # Adaptive max_chunks: use more chunks for larger documents
                 # With 32K context, we can afford to retrieve more chunks for better coverage
-                total_chunks = len(self.rag.chunks)
+                total_chunks = len(rag.chunks)
                 if total_chunks > 200:
                     adaptive_max = min(
                         25, self.max_chunks * 5
@@ -942,7 +956,7 @@ class RAGToolsMixin:
                 for chunk in top_chunks:
                     # Find this chunk's index in the global chunks list
                     try:
-                        idx = self.rag.chunks.index(chunk)
+                        idx = rag.chunks.index(chunk)
                         chunk_indices.append(idx)
                     except ValueError:
                         chunk_indices.append(-1)  # Not found
@@ -955,7 +969,7 @@ class RAGToolsMixin:
                     _page = extract_page_from_chunk(
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
-                        self.rag.chunks,
+                        rag.chunks,
                     )
                     _entry = {
                         "chunk_id": i + 1,
