@@ -28,12 +28,21 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import os
 import subprocess
 import time
 import webbrowser
 
 import pytest
 import requests
+
+# ── Agent UI request guard (gaia.ui.security) ───────────────────────────────
+# The backend rejects a request whose ``Host`` is a name it does not know, so
+# that a page on ``attacker.example`` cannot rebind DNS to loopback and drive
+# it. Starlette's TestClient sends ``Host: testserver``, so name it here once
+# rather than rewriting every TestClient's ``base_url``. The guard's own tests
+# exercise the rejection path directly and do not rely on this.
+os.environ.setdefault("GAIA_UI_ALLOWED_HOSTS", "testserver")
 
 _BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
 
@@ -452,6 +461,39 @@ def in_memory_keyring():
         keyring.set_keyring(previous)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _testclient_sends_ui_header():
+    """Make every ``TestClient`` carry ``X-Gaia-UI``, as real clients do.
+
+    ``gaia.ui.security.UIRequestGuardMiddleware`` refuses mutating
+    ``/api``/``/v1`` requests without it. Over a hundred call sites across
+    ~40 modules build their own ``TestClient``, so defaulting the header
+    here keeps the guard from turning all of them into header plumbing.
+
+    Tests that assert the guard *rejects* an unheadered request opt out by
+    popping the default — see ``ui_api_client`` below. A future negative
+    test that forgets fails loudly on its own 403 assertion rather than
+    passing for the wrong reason.
+    """
+    try:
+        from starlette.testclient import TestClient
+    except ImportError:
+        yield
+        return
+
+    original_init = TestClient.__init__
+
+    def _init_with_ui_header(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.headers.setdefault("x-gaia-ui", "1")
+
+    TestClient.__init__ = _init_with_ui_header
+    try:
+        yield
+    finally:
+        TestClient.__init__ = original_init
+
+
 @pytest.fixture
 def ui_api_client():
     """
@@ -463,6 +505,10 @@ def ui_api_client():
     on UI-server routes (see plan amendment A12).
 
     Skips the test if the [ui] extras are not installed.
+
+    Deliberately carries no ``X-Gaia-UI`` default: the connectors and
+    agents suites use this client to assert that an unheadered mutating
+    request is refused, so a per-call header is how a test here opts *in*.
     """
     try:
         from starlette.testclient import TestClient
@@ -473,4 +519,5 @@ def ui_api_client():
 
     app = create_app()
     with TestClient(app) as client:
+        client.headers.pop("x-gaia-ui", None)
         yield client

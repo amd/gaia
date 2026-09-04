@@ -83,6 +83,8 @@ from gaia.connectors.mcp_server import (
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.store import peek_connection, peek_provider_credentials
 
+from ..security import require_ui_header as _require_ui_header
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,16 +103,6 @@ forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
 # ─────────────────────────────────────────────────────────────────
 # CSRF guard (plan amendment A8)
 # ─────────────────────────────────────────────────────────────────
-
-
-def _require_ui_header(request: Request) -> None:
-    """Require ``X-Gaia-UI: 1`` header on mutating routes.
-
-    Custom request headers trigger a CORS preflight in browsers, so
-    drive-by form POSTs from malicious pages cannot forge this header.
-    """
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 def _require_mcp_server(connector_id: str) -> None:

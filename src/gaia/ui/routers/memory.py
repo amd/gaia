@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 # Single source of truth imported from the data layer so that all three
@@ -21,6 +21,7 @@ from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..security import require_ui_header as _require_ui_header
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,6 @@ def _log_server_error(context: str, exc: Exception) -> str:
     correlation_id = uuid.uuid4().hex[:8]
     logger.error("[memory router] %s (id=%s)", context, correlation_id, exc_info=exc)
     return correlation_id
-
-
-def _require_ui_header(request: Request) -> None:
-    """Require ``X-Gaia-UI: 1`` header as a lightweight CSRF guard."""
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 # Safe defaults returned when the data-layer lacks v2 methods.
