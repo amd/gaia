@@ -364,7 +364,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -382,7 +382,7 @@ gaia uninstall --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
 gaia uninstall --purge
 ```
 
@@ -396,7 +396,8 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
+`--purge` permanently deletes your chat history, uploaded documents, configuration,
+and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
 ### Kill Command
@@ -1540,6 +1541,7 @@ serving everything else.
 gaia lemonade embedded start      # download if needed, then run
 gaia lemonade embedded status
 gaia lemonade embedded stop
+gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
 Both the port and the API key change on every start, and requests without the key
@@ -1571,6 +1573,7 @@ file to point them at it. Automatic preference is coming with the startup wiring
 | `start` | Start the private instance, downloading the artifact if missing |
 | `stop` | Stop the private instance |
 | `status` | Show installed version, running port, and installed backends |
+| `uninstall` | Remove the private runtime and downloaded backends |
 | `install` | Download and unpack the artifact without starting it |
 | `install-backend SPEC` | Download an inference backend, e.g. `llamacpp:vulkan` |
 
@@ -1627,6 +1630,8 @@ are picked up immediately.
 <Note>
 `cache/` is deliberately shared across versions. Backends run from 141 MB to
 4.3 GB, so a Lemonade version bump re-downloads the 5 MB server, not the backends.
+`gaia uninstall --purge` and `gaia lemonade embedded uninstall` remove this
+directory, including those downloaded backends.
 </Note>
 
 After a Lemonade version bump, stop the old instance before starting the new one —

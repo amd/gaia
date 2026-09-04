@@ -37,6 +37,7 @@ class TestParsing:
             ["lemonade", "embedded", "start", "--timeout", "90"],
             ["lemonade", "embedded", "stop"],
             ["lemonade", "embedded", "status"],
+            ["lemonade", "embedded", "uninstall"],
             ["lemonade", "embedded", "install"],
             ["lemonade", "embedded", "install", "--force"],
             ["lemonade", "embedded", "install-backend", "llamacpp:vulkan"],
@@ -146,6 +147,32 @@ class TestDispatch:
             )
         assert exc.value.code == 1
         assert "Could not run embedded Lemonade" in capsys.readouterr().out
+
+    def test_uninstall_dispatches_to_the_manager(self, monkeypatch, capsys):
+        from gaia.cli import handle_lemonade_embedded_command
+
+        monkeypatch.setattr(
+            lemonade_embedded.EmbeddedLemonade,
+            "uninstall",
+            lambda self: True,
+        )
+        handle_lemonade_embedded_command(
+            _parser().parse_args(["lemonade", "embedded", "uninstall"])
+        )
+        assert "uninstalled" in capsys.readouterr().out
+
+    def test_uninstall_reports_when_nothing_is_installed(self, monkeypatch, capsys):
+        from gaia.cli import handle_lemonade_embedded_command
+
+        monkeypatch.setattr(
+            lemonade_embedded.EmbeddedLemonade,
+            "uninstall",
+            lambda self: False,
+        )
+        handle_lemonade_embedded_command(
+            _parser().parse_args(["lemonade", "embedded", "uninstall"])
+        )
+        assert "not installed" in capsys.readouterr().out
 
 
 class TestStatusOutput:
