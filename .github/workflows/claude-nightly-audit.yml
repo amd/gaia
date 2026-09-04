@@ -7,11 +7,30 @@
 # page, a code path with no test, a silent `except Exception: pass`, a cli.mdx that
 # drifted from the real flags) sits unnoticed until a user hits it. This workflow is
 # the missing proactive lens: a scheduled deep review that fans out one Claude job
-# per dimension, then files ONE ranked triage issue + per-finding child issues.
+# per dimension, then files ONE issue per DEFECT.
+#
+# NAMING: the filename, `name:`, and cron all say NIGHTLY, because it is nightly. The
+# `weekly-audit` LABEL keeps its name deliberately — it is a PROVENANCE label ("a
+# proactive Claude audit filed this"), shared with the genuinely-weekly
+# claude-weekly-doc-walkthrough.yml, so no cadence word fits it. Nothing depends on the
+# label's spelling any more: dedup reads the audit-key/audit-cluster markers and searches
+# the whole open backlog, not one label.
 #
 # HUMAN-GATED — NOT an auto-merge bot. The workflow produces *findings*, never
-# commits. To turn a child issue into a PR, a maintainer applies the `bug` label and
+# commits. To turn an issue into a PR, a maintainer applies the `bug` label and
 # the existing auto-fix job (claude.yml) takes over. No new PR-creation code here.
+#
+# ONE ISSUE PER DEFECT, NOT PER LOCATION. A defect spanning 39 files is ONE fix, so it
+# gets ONE issue listing 39 locations. Lenses key findings by ROOT CAUSE (`cluster_key`);
+# scripts/audit/prepare_synthesis.py merges every location of a cluster, then searches
+# the WHOLE open backlog — not just this workflow's own label — for an issue already
+# tracking it. Both halves are load-bearing: file-scoped keys turned one dead command
+# into 5 issues in a night, and label-scoped dedup made the 4-month-old #1077 invisible,
+# so the audit re-discovered it 14 times in a single run.
+#
+# NO RUN RECEIPTS. The per-run summary goes to $GITHUB_STEP_SUMMARY, never a new issue.
+# Filing a bookkeeping issue per run accumulated 19 of them in the tracker with nothing
+# actionable in any of them.
 #
 # MODES:
 #   normal (6 nights/wk) — reviews the last N days of merged work (window_days, default
@@ -37,8 +56,9 @@
 #                 invocation, not call validity (CLAUDE.md "#1655" boundary rule).
 #   features    — half-finished follow-ups, TODO-as-placeholder, gaps a recent feature implies.
 #
-# A synthesis job collects the four structured outputs, dedupes against already-open
-# `weekly-audit` issues via a stable per-finding key, ranks by severity, and files output.
+# A synthesis job collects the four structured outputs, runs them through the
+# deterministic dedup pass (scripts/audit/prepare_synthesis.py), and files one issue per
+# surviving defect.
 #
 # MODEL: claude-opus-5 (Claude Opus 5) — excellent for static review at half the token
 # burn of Fable ($5/$25 vs $10/$50 per MTok), and priced identically to the Opus 4.8 it
@@ -102,6 +122,14 @@ on:
         # 1, not 7: the schedule is nightly, so each run should audit the day that just
         # passed. Leaving this at 7 would re-audit the same week seven times over.
         default: "1"
+      dry_run:
+        # Files and comments NOTHING; writes what it WOULD have filed to the job summary.
+        # This is how you validate a dedup change against the real backlog without adding
+        # to it — the failure mode being guarded here is a bad dedup pass filing dozens of
+        # duplicates, which is expensive to undo and impossible to test any other way.
+        description: "Report what would be filed, without touching the tracker"
+        type: boolean
+        default: false
 
 # Least-privilege default. Only the synthesis job files issues, via its own
 # per-job `issues: write`. The dimension jobs are read-only.
@@ -111,7 +139,7 @@ permissions:
 # Never let two scheduled runs overlap — they would race-evict each other's model
 # slot and double-file issues. Not cancel-in-progress: let an in-flight run finish.
 concurrency:
-  group: claude-weekly-audit
+  group: claude-nightly-audit
   cancel-in-progress: false
 
 env:
@@ -289,11 +317,10 @@ jobs:
               mode, do NOT file a separate finding for every large module that merely lacks tests
               — that floods the tracker.** File separate findings only for untested RISK-BEARING
               logic: auth/token handling, a release or trust gate, flag/precedence dispatch,
-              error-to-exit mapping, or the #1655 mock-only pattern. Roll all the plain
-              "module X has no coverage" cases into ONE aggregate finding titled
-              "Untested modules (deep sweep)", listing them in `why`, with
-              `dedup_key` = `tests:aggregate:untested-modules`. In NORMAL mode, focus on
-              new/changed code paths from the scope file.
+              error-to-exit mapping, or the #1655 mock-only pattern. Give every plain
+              "module X has no coverage" case the shared `cluster_key`
+              `tests:aggregate-untested-modules` so they merge into one issue. In NORMAL
+              mode, focus on new/changed code paths from the scope file.
 
             ## Published hub agents — HOLD TO THE HIGHEST BAR
             Published agents are the project's shop window — an integrator installs them and
@@ -345,16 +372,42 @@ jobs:
                 "why": "one sentence: the concrete impact / what breaks",
                 "evidence": "a direct quote or `path:line` you READ that proves the claim — enough for a reviewer to verify without re-deriving. e.g. \"auditStore.ts:88 sets `rolledBack = true` with a `// TODO: call IPC` and no IPC call\"",
                 "auto_fixable": true | false,
+                "cluster_key": "${{ matrix.dimension }}:<root-cause-slug>",
                 "dedup_key": "${{ matrix.dimension }}:<repo-relative-path>:<symbol-or-section>"
               }
             ]}
             ```
 
-            The `dedup_key` MUST be `${{ matrix.dimension }}:<path>:<symbol>` — a stable
-            function/class name or doc heading, NEVER a line number (line numbers move and
-            would re-file the same finding every week). Line numbers may appear in `title`/`why`,
-            never in the key. **`title`, `path`/`symbol`, and `dedup_key` must all point at the
-            SAME file and symbol** — don't let the title name one file and the key another.
+            ### `cluster_key` — ONE KEY PER DEFECT. This is the most important field.
+            A defect is what a maintainer FIXES, not where they see it. If the same root
+            cause shows up in 39 files, that is **one** defect with 39 locations, and every
+            one of those 39 findings carries the **identical** `cluster_key`. Everything
+            sharing a key is merged into a single issue automatically, so you do not have
+            to hold back: emit one finding per LOCATION with the shared key, and let the
+            merge do the collapsing.
+
+            The key is a short slug naming the CAUSE, with no path in it:
+            - `docs:lemonade-server-serve-command-removed` — one dead command, cited in
+              163 places across 106 files. ONE key. (This really happened and became five
+              separate issues in one night because keys were file-scoped.)
+            - `docs:guide-prerequisites-missing-extras` — 14 guides, one omission. ONE key.
+              (This really happened too: 14 issues in one night, for a defect already
+              tracked as #1077 since May.)
+            - `correctness:silent-except-pass-in-ui-layer` — one banned pattern, many files.
+            Two findings get DIFFERENT keys only when they need different fixes. Same
+            symptom in one file and a genuinely unrelated cause elsewhere = two keys.
+
+            **Before you write the file, re-read your own findings and ask: how many
+            separate PRs would fix all of this?** That number is how many distinct
+            `cluster_key`s you should have. If you have 20 findings and one PR fixes 14 of
+            them, those 14 share a key — go back and make them share it.
+
+            ### `dedup_key` — the per-location key (unchanged)
+            `${{ matrix.dimension }}:<path>:<symbol>` — a stable function/class name or doc
+            heading, NEVER a line number (line numbers move and would re-file the same
+            finding every week). Line numbers may appear in `title`/`why`, never in a key.
+            It identifies the LOCATION; `cluster_key` identifies the DEFECT.
+
             `auto_fixable` = true only if the fix is locatable and small (~1-3 files, targeted,
             no design decision) so the `bug`→auto-fix path can land it; false if it needs a human
             (writing a test suite, a refactor, a design call).
@@ -401,9 +454,9 @@ jobs:
             fails the whole audit — partial findings written beat perfect findings lost.
 
             ## Security is out of scope — hand it off, do not file it here
-            If you notice a security weakness, do NOT file it in this audit's findings or the
-            public triage issue (that would disclose it). Security has a dedicated private-channel
-            workflow (claude-security-audit.yml). Leave it to that sweep.
+            If you notice a security weakness, do NOT put it in this audit's findings — they
+            become public issues, which would disclose it. Security has a dedicated
+            private-channel workflow (claude-security-audit.yml). Leave it to that sweep.
           claude_args: |
             --max-turns 45
             --model ${{ env.AUDIT_MODEL }}
@@ -419,9 +472,8 @@ jobs:
           # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
           if-no-files-found: error
 
-  # Collect the four dimension outputs, dedupe against open weekly-audit issues, rank,
-  # and file ONE parent triage issue + per-finding child issues. This is the only job
-  # with issues: write.
+  # Collect the four dimension outputs, run the DETERMINISTIC dedup pass over them, and
+  # file one issue per surviving defect. This is the only job with issues: write.
   synthesize:
     needs: [preflight, audit]
     # Re-assert the repo gate (custom `if` drops the needs-succeeded guard). !cancelled()
@@ -452,7 +504,7 @@ jobs:
           set -euo pipefail
           got=$(find audit-findings -name 'findings-*.json' | wc -l)
           if [ "$got" -lt "$EXPECTED_DIMENSIONS" ]; then
-            echo "::error title=Nightly audit::Only $got/$EXPECTED_DIMENSIONS dimensions produced findings files — the audit did not run. Not filing a triage issue off a partial sweep."
+            echo "::error title=Nightly audit::Only $got/$EXPECTED_DIMENSIONS dimensions produced findings files — the audit did not run. Not filing anything off a partial sweep."
             exit 1
           fi
           echo "All $got/$EXPECTED_DIMENSIONS dimensions reported in."
@@ -461,15 +513,51 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # `weekly-audit` is a PROVENANCE label, not a cadence one — it marks "a proactive
+          # Claude audit filed this" and is shared with the genuinely-weekly doc walkthrough.
           gh label create weekly-audit --color 5319e7 \
-            --description "Proactive weekly Claude audit finding" \
+            --description "Filed by a proactive Claude audit (nightly code audit or weekly doc walkthrough)" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
           # audit-wontfix permanently suppresses a finding — synthesis skips its key forever.
           gh label create audit-wontfix --color cccccc \
-            --description "Accepted debt — weekly audit will never re-file this finding" \
+            --description "Accepted debt — the audits will never re-file this finding" \
             2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
 
-      - name: Synthesize and file the triage issue
+      # THE dedup pass. Deterministic on purpose: asking a model to eyeball dedup across
+      # ~900 open issues is what produced a 2.35x duplication ratio. This step merges every
+      # location of a `cluster_key` into one defect and searches the WHOLE open backlog for
+      # an issue already tracking it, then hands the model a short worklist whose only open
+      # question is the semantic one ("is #1077 really this defect?").
+      - name: Dedupe findings into a synthesis worklist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/prepare_synthesis.py \
+            --findings-dir audit-findings \
+            --repo "${{ github.repository }}" \
+            --out synthesis-input.json \
+            --dossier synthesis-dossier.md
+          {
+            echo "## 🔁 Dedup pass"
+            echo ""
+            python3 -c "import json; c=json.load(open('synthesis-input.json'))['counts']; print(f\"{c['raw_findings']} raw findings → **{c['clusters']} distinct defects** ({c['new']} new, {c['already_filed']} already filed, {c['suppressed']} suppressed), searched {c['open_issues_searched']} open issues.\")"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A dry run is only prompt-enforced, and a mode that silently isn't dry is worse
+      # than no mode at all. Record the watermark now and check it afterwards.
+      - name: Record the issue watermark (dry run)
+        if: github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue list --repo "${{ github.repository }}" --state all --limit 1 \
+            --json number --jq '.[0].number // 0' > .issue-watermark
+          echo "Highest issue before synthesis: $(cat .issue-watermark)"
+
+      - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
         uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10  # v1.0.210
@@ -480,137 +568,163 @@ jobs:
           # See the dimension job's note — scheduled runs are actored by a bot.
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
-            You are the synthesis step of GAIA's nightly proactive audit. Four dimension jobs
-            (correctness, docs, tests, features) each wrote a findings JSON file.
-            Dedupe them against already-open findings, rank them, and file the output.
+            You are the synthesis step of GAIA's nightly proactive audit. A deterministic
+            pass has ALREADY collapsed the four dimension jobs' raw findings into distinct
+            defects and searched the whole open backlog for each one. Your job is the part
+            a script cannot do: verify the evidence, decide whether a defect is genuinely
+            new or already tracked, and write for a human.
 
             REPO: ${{ github.repository }}
             AUDIT MODE: ${{ needs.preflight.outputs.mode }}
+            DRY RUN: ${{ github.event.inputs.dry_run || 'false' }}
             RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             ## First actions
-            1. Read every `findings-*.json` under `audit-findings/` (each artifact is in its own
-               subdir, e.g. `audit-findings/findings-docs/findings-docs.json`). Missing or empty
-               files are fine — a dimension may have found nothing or crashed.
-            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone/format to write in.
-            3. Build the **already-filed** key set (findings not to re-file):
-               `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`
-               Each body carries a hidden `<!-- audit-key: KEY -->` marker — collect those KEYs.
-            4. Build the **suppressed-forever** key set (accepted debt):
-               `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`
-               Collect their `audit-key` KEYs too. These are permanently dismissed.
-            5. Find the **previous parent** to cross-link: parents are never auto-closed, so
-               there may now be SEVERAL currently-open issues whose title starts
-               `Nightly audit —` **or** the older `Weekly audit —` (this audit moved from a
-               weekly to a nightly cadence; match BOTH prefixes so the chain is not broken at
-               the changeover). Pick the MOST RECENTLY CREATED one (highest issue number)
-               across both. Note its number. Do NOT close it.
+            1. Read `synthesis-dossier.md` — your worklist. It has one section per NEW
+               defect, each with its locations and a ranked list of possibly-matching open
+               issues. Defects already filed or suppressed are listed at the bottom and are
+               **already handled — do not act on them at all**.
+            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone to write in.
+            3. `synthesis-input.json` has the same data structured, if you need a field the
+               dossier elides — including the full location list when one is truncated.
+            If the dossier reports malformed findings or that the lenses barely clustered,
+            say so in the run report: that is a lens-prompt bug a human needs to see.
+            You do NOT need to re-list issues or rebuild key sets — that is done. Spend your
+            turns reading cited code instead.
 
-            ## Dedup + verify (the single biggest quality risk)
-            Reduce the raw findings to the NEW, real set, in this order:
-            1. **Suppress + skip** any finding whose `dedup_key` is in the already-filed OR the
-               suppressed-forever set. Match the exact key string — never line numbers or prose.
-            2. **Cross-dimension dedup within THIS run:** if two findings from different dimensions
-               describe the same root cause (same file + symbol/area), keep the single most-severe
-               one, mention the other lens in its body, and file just ONE child. (A stubbed command
-               is often flagged by both `docs` and `correctness` — that's one issue, not two.)
-            3. **Evidence gate — YOU ARE THE ONLY FILTER.** The lenses are instructed to
-               report everything they ground in something they read, including items they
-               are unsure about, precisely so nothing is silently withheld upstream. That
-               makes this step load-bearing: expect more raw findings than the tracker
-               should receive, and cut hard.
-               - Drop any finding at ANY severity whose `evidence` is missing, or does not
-                 actually substantiate its `title`.
-               - For every 🔴/🟠 survivor, open the cited `path`/`symbol` and confirm the
-                 problem is really there before filing. A false 🔴 costs more trust than
-                 ten dropped 🟡s.
-               - Demote rather than delete when a finding is real but overstated: a 🟠
-                 whose impact you cannot substantiate becomes 🟡 (parent-only, no child).
-               - If a lens returns an implausible flood on one file/area, treat it as one
-                 finding about that area rather than filing each line.
-            If, after all of the above, there are ZERO new findings, post NOTHING and exit
-            cleanly — do not file a parent issue, and never close or comment on a prior parent.
+            ## For each NEW defect, choose exactly one of three outcomes
 
-            ## File per-finding CHILD issues — 🔴 high / 🟠 medium ONLY (non-security)
-            Open a child issue only for NEW, verified, non-security findings whose severity is
-            🔴 or 🟠. **🟡 (low) findings get NO child issue** — they are listed in the parent
-            only (they are nits and don't warrant tracker churn or one-click promotion). Open the
-            child WITHOUT any auto-fix trigger label (do NOT add `bug`). Write the body to a temp
-            file first, then
-            `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
-            Body format — follow CLAUDE.md → "How You Communicate": a human triages this, so
-            the title and opening line say what broke and who it hurts in plain words, and the
-            location / evidence / severity rows go in a collapsed `<details>` underneath.
-            Say each point once. The blank line after `</summary>` is REQUIRED or GitHub renders
-            the block as literal text. The audit-key marker is REQUIRED and drives the next
-            run's dedup:
+            ### (a) DROP it — the evidence gate
+            You are the only filter; the lenses deliberately over-report. Drop a defect when
+            its `evidence` is missing or does not actually substantiate its title. For every
+            🔴/🟠 survivor, open the cited path/symbol and confirm the problem is really
+            there before filing — a false 🔴 costs more trust than ten dropped 🟡s. Demote
+            rather than delete when a finding is real but overstated. **🟡 (low) defects are
+            never filed as issues** — they go in the job summary only.
+
+            ### (b) COMMENT on an existing issue — 🔴/🟠 only, check this BEFORE filing
+            The dossier lists candidate open issues per defect, drawn from the WHOLE backlog
+            — not just this audit's own label. **Open the top candidates and read them.** If
+            one already tracks this defect, comment on it instead of filing:
+            `gh issue comment <n> --repo ${{ github.repository }} --body-file <file>`
+            The comment adds only what is NEW — the extra locations this run found, or fresh
+            evidence — and never restates the issue. Include the marker line so future runs
+            match it by key: `<!-- audit-cluster: <cluster_key> -->`.
+            A candidate counts as a match when the same FIX would close both. The 4-month-old
+            #1077 ("Guide prerequisites missing across ~14 guides") is the canonical case:
+            the audit re-filed it 14 times in one night because it only searched its own
+            label. Err toward commenting — a comment on the wrong issue is trivially undone;
+            a duplicate issue is what created this backlog.
+
+            ### (c) FILE ONE issue — 🔴/🟠 only, non-security
+            Write the body to a temp file, then
+            `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
+            WITHOUT the `bug` label (humans gate every code change).
+
+            **One issue per DEFECT, listing every location.** A defect the dossier shows at
+            39 locations is ONE issue with 39 lines in it, never 39 issues. Its title names
+            the defect, never one file: "The documented Lemonade start command no longer
+            exists (163 places)", not "quickstart.mdx uses lemonade-server serve".
+
+            Body — follow CLAUDE.md → "How You Communicate": a human triages this, so the
+            opening line says what broke and who it hurts in plain words, and the mechanical
+            rows go in a collapsed `<details>`. The blank line after `</summary>` is REQUIRED
+            or GitHub renders the block as literal text. Both marker lines are REQUIRED —
+            they are what the next run dedupes against:
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
+            <one paragraph: what's wrong + the concrete impact, in plain words>
 
             <details>
-            <summary>🔍 Evidence and location</summary>
+            <summary>🔍 Evidence and locations</summary>
 
-            **Where:** `path` · `symbol`   (the finding carries no line number — do not invent one)
-            **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
-            **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
+            **Severity:** 🔴 high / 🟠 medium   **Lens:** <dimension(s)>
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+
+            | Where | Evidence |
+            |---|---|
+            | `path` · `symbol` | <that location's evidence> |
             </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will never
             re-file it. Applying `bug` instead hands it to the existing auto-fix job.
 
-            <!-- audit-key: <the finding's dedup_key> -->
+            <!-- audit-cluster: <cluster_key> -->
+            <!-- audit-key: <the first location's dedup_key> -->
             ```
-            Set the Auto-fixable line from the finding's `auto_fixable` field. Capture each child
-            issue number to reference from the parent.
+            List up to 20 locations in the table; if there are more, add a final row saying
+            how many were elided and where to grep. Set Auto-fixable from `auto_fixable`.
 
-            ## File ONE parent TRIAGE issue
-            Title: `Nightly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
-            Label it `weekly-audit`. **Emit a section for EVERY dimension that has at least one
-            finding, in this fixed order: Correctness, Features, Docs, Tests.** Group
-            each finding under the dimension IT declares in its JSON — NEVER re-bucket a
-            correctness finding under features (the `dimension` field is authoritative). Within a
-            section, order 🔴 → 🟠 → 🟡 and prefix each line with its severity emoji. 🔴/🟠 lines
-            link their child issue (`· #<n>`); 🟡 lines have no child (they live only here). Example:
+            ## Write the run report to `triage-report.md` — NOT to an issue
+            A following step appends this file to the run's job summary. **Do not file a
+            "Nightly audit — <run-id>" issue; that convention is gone** — 19 such bookkeeping
+            issues accumulated in the tracker with nothing actionable in any of them. The
+            old parent-chain bookkeeping is gone with it: do not cross-link a previous run's
+            issue, and never close one. (Commenting on a backlog issue that tracks a real
+            defect — outcome (b) above — is a different thing, and is encouraged.)
+
+            Write `triage-report.md` with a one-line tally then a section per dimension in
+            this fixed order — Correctness, Features, Docs, Tests — filing each defect under
+            the lens the dossier lists for it (its `lens/doc` line). A merged defect found by
+            two lenses goes under the more severe one's section, named once, never twice.
+            Order 🔴 → 🟠 → 🟡 within a section. 🟡 lines live here and nowhere else.
             ```
-            Proactive nightly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
-            to a PR by applying the `bug` label to its child issue. Severity: 🔴 high · 🟠 medium · 🟡 low.
+            ### Nightly audit — ${{ needs.preflight.outputs.mode }} mode
+            Filed: 3 new (🔴 1 · 🟠 2) · commented on existing: 2 · low (report-only): 4 · dropped on evidence: 6
 
-            ## Correctness (2)
-            - [ ] 🔴 `rollbackAction` flips rolledBack=true but never calls the IPC — a fake success · #<n>
-            - [ ] 🟠 `except Exception: pass` swallows the Lemonade timeout in `foo.py` · #<n>
-            ## Docs (1)
-            - [ ] 🟠 `gaia api status` documented in cli.mdx but the impl is a stub · #<n>
-            ## Tests (1)
-            - [ ] 🟡 `perf_analysis.py` has no coverage
+            #### Correctness
+            - 🔴 `rollbackAction` flips rolledBack=true but never calls the IPC — #<n>
+            - 🟡 `perf_analysis.py` swallows a KeyError (report-only, no issue)
+            #### Docs
+            - 🟠 Lemonade start command is dead in 163 places — commented on existing #<n>
             ```
-            Start the parent body with a one-line tally so trend is visible at a glance, e.g.
-            `New this run: 4 (🔴 1 · 🟠 3) · low (in-parent only): 2 · suppressed as dup/wontfix: 9`.
-            Security is not a dimension here (see claude-security-audit.yml) — do not emit a
-            security section, and if any dimension's findings JSON contains a security issue,
-            omit it rather than disclosing it in this public issue.
 
-            ## Cross-link the previous parent (NEVER close it)
-            After filing the new parent, comment on the previous parent you found in
-            First-actions step 5 so readers can follow the chain — but leave it OPEN:
-            `gh issue comment <prev-parent-#> --repo ${{ github.repository }} --body "Follow-up audit run filed as #<new-parent-#>. This issue stays OPEN until its findings are addressed — only a maintainer should close it."`
-            Child issues stay OPEN too — they are the actionable units. Parents now
-            accumulate across runs by design, so unaddressed findings stay visible: only a
-            human maintainer closes a parent, and only after its findings are addressed.
-            Never call `gh issue close` on a parent from this workflow.
+            ## If DRY RUN is true
+            Run NO `gh issue create` and NO `gh issue comment` — file and comment nothing.
+            Do everything else, and in `triage-report.md` write what you WOULD have done
+            (`would file:` / `would comment on #<n>:`) so the dedup pass can be validated
+            against the real backlog without adding to it.
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
-            - Do not open any PR and do not apply the `bug` label — humans gate every code change.
-            - Never close a parent triage issue — only a human maintainer closes one, after its
-              findings are addressed.
-            - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
-            - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>` —
-              those stay visible in the summary.
+            - Do not open any PR and do not apply the `bug` label.
+            - Never close any issue.
+            - Security is not a dimension here (see claude-security-audit.yml). If a findings
+              JSON contains a security issue, omit it rather than disclosing it publicly.
+            - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>`.
           claude_args: |
             --max-turns 32
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+
+      - name: Prove the dry run filed nothing
+        if: always() && github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          before=$(cat .issue-watermark)
+          created=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --limit 100 --json number --jq "[.[] | select(.number > $before) | .number] | join(\", \")")
+          if [ -n "$created" ]; then
+            echo "::error title=Dry run was not dry::The synthesis step created issue(s) $created despite dry_run=true. Close them, then fix the dry-run instruction in the prompt."
+            exit 1
+          fi
+          echo "✅ Dry run confirmed: no issue created above #$before."
+
+      # The run receipt. This replaces the per-run "Nightly audit — <run-id>" ISSUE that
+      # used to be filed: a CI run's bookkeeping belongs in the run, not the tracker.
+      # Deterministic, so the report survives a synthesis step that errored after writing it.
+      - name: Publish the triage report to the job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f triage-report.md ]; then
+            cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⚠️ No triage report" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The synthesis step wrote no \`triage-report.md\`. See the step status below." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Verify the audit filed output
         if: always()
