@@ -85,13 +85,26 @@ def test_matches_plain_requests(web_client):
     ), "WebClient failed where plain requests succeeded:\n" + "\n".join(regressions)
 
 
+def _assert_rejected(web_client, url):
+    """The fetch must fail with SSLError, or skip if the host is unreachable.
+
+    "badssl.com is down" and "certificate verification regressed" must not
+    look the same: only the second should turn a lane red.
+    """
+    try:
+        response = web_client.get(url, timeout=30)
+    except requests.exceptions.SSLError:
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        pytest.skip(f"{url} unreachable: {exc}")
+    pytest.fail(f"{url} was accepted (HTTP {response.status_code}) instead of rejected")
+
+
 def test_certificate_name_is_still_verified(web_client):
     """Pinning the IP must not disable certificate-name verification."""
-    with pytest.raises(requests.exceptions.SSLError):
-        web_client.get("https://wrong.host.badssl.com/", timeout=30)
+    _assert_rejected(web_client, "https://wrong.host.badssl.com/")
 
 
 def test_expired_certificate_is_still_rejected(web_client):
     """Chain verification is untouched by the SNI change."""
-    with pytest.raises(requests.exceptions.SSLError):
-        web_client.get("https://expired.badssl.com/", timeout=30)
+    _assert_rejected(web_client, "https://expired.badssl.com/")

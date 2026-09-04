@@ -495,3 +495,35 @@ def test_same_ip_different_hosts_get_separate_pools(monkeypatch):
     # Both still dial the same pinned IP.
     assert pools["alpha.example"].host == shared_ip
     assert pools["beta.example"].host == shared_ip
+
+
+def test_adapter_refuses_to_start_without_the_sni_hook(monkeypatch):
+    """An old requests must fail loudly, not silently revert to IP-as-SNI.
+
+    build_connection_pool_key_attributes arrived in requests 2.32.3. Without
+    it the override never runs and every HTTPS fetch names the pinned IP in
+    the handshake again — the exact bug the adapter exists to avoid. A pin in
+    setup.py only covers fresh installs, so the check has to be at runtime.
+    """
+    monkeypatch.delattr(
+        requests.adapters.HTTPAdapter,
+        "build_connection_pool_key_attributes",
+        raising=True,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        PinnedIPAdapter()
+
+    message = str(excinfo.value)
+    # The error has to name the requirement, the actual state, and the fix.
+    assert "2.32.3" in message
+    assert requests.__version__ in message
+    assert "pip install" in message
+
+
+def test_adapter_constructs_on_a_supported_requests():
+    """The guard is a capability check, so it passes on the pinned floor."""
+    assert hasattr(
+        requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"
+    ), "test environment predates requests 2.32.3"
+    assert PinnedIPAdapter() is not None

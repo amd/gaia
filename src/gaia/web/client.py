@@ -100,47 +100,57 @@ REMOVE_TAGS = [
 class PinnedIPAdapter(HTTPAdapter):
     """HTTPAdapter that pins the resolved IP address for a hostname.
 
-        On ``send()``, the adapter resolves the request hostname once via
-        ``socket.getaddrinfo``, replaces the request URL netloc with the
-        resolved IP:port, and sets the ``Host`` header to the original
-        hostname.  The resolved IP is cached per ``(host, port)`` tuple so
-        subsequent requests to the same origin reuse the same IP — preventing
-        DNS-rebind attacks between ``WebClient.validate_url`` and the actual
-        TCP connect.
+    On ``send()``, the adapter resolves the request hostname once via
+    ``socket.getaddrinfo``, replaces the request URL netloc with the
+    resolved IP:port, and sets the ``Host`` header to the original
+    hostname. The resolved IP is cached per ``(host, port)`` tuple so
+    subsequent requests to the same origin reuse the same IP — preventing
+    DNS-rebind attacks between ``WebClient.validate_url`` and the actual
+    TCP connect.
 
-        Crucially, the pinned IP is itself validated (``_assert_ip_allowed``)
-        before it is cached or connected to. ``validate_url`` runs a *separate*
-        pre-flight ``getaddrinfo``; an attacker controlling DNS could answer that
-        lookup with a public IP and answer the adapter's lookup with a private
-        one. Validating the exact address the adapter is about to dial closes
-        that residual rebind window for BOTH http and https.
+    Crucially, the pinned IP is itself validated (``_assert_ip_allowed``)
+    before it is cached or connected to. ``validate_url`` runs a *separate*
+    pre-flight ``getaddrinfo``; an attacker controlling DNS could answer that
+    lookup with a public IP and answer the adapter's lookup with a private
+    one. Validating the exact address the adapter is about to dial closes
+    that residual rebind window for BOTH http and https.
 
-        For HTTPS the connect address and the TLS identity are decoupled, so
-        pinning the IP does not break SNI-based virtual hosting (most of the
-        web). The original hostname is carried in the URL's userinfo section
-        (``originalhostname@pinnedip:port``) and
-        ``build_connection_pool_key_attributes`` — the extension point
-        ``requests`` documents for exactly this — turns it into two urllib3
-        pool arguments:
+    For HTTPS the connect address and the TLS identity are decoupled, so
+    pinning the IP does not break SNI-based virtual hosting (most of the
+    web). The original hostname is carried in the URL's userinfo section
+    (``originalhostname@pinnedip:port``) and
+    ``build_connection_pool_key_attributes`` — the extension point
+    ``requests`` documents for exactly this — turns it into
+    ``server_hostname``, which urllib3 uses both as the ClientHello SNI and
+    as the name OpenSSL verifies the certificate against, so a certificate
+    valid only for the bare IP is never accepted. It is a ``PoolKey`` field,
+    so two hostnames that resolve to the same IP get distinct connection
+    pools rather than sharing one.
 
-    ``server_hostname``, which
-        urllib3 uses both as the ClientHello SNI and as the name OpenSSL verifies
-        the certificate against, so a certificate valid only for the bare IP is
-        never accepted. It is a ``PoolKey`` field, so two hostnames that resolve
-        to the same IP get distinct connection pools rather than sharing one.
+    ``assert_hostname`` is deliberately NOT set: it would move name checking
+    out of the handshake into urllib3's post-hoc matcher by setting
+    ``check_hostname = False`` on the SSL context — which ``requests`` shares
+    process-wide on some versions, silently weakening every other caller.
 
-        ``assert_hostname`` is deliberately NOT set: it would move name checking
-        out of the handshake into urllib3's post-hoc matcher by setting
-        ``check_hostname = False`` on the SSL context — which ``requests`` shares
-        process-wide on some versions, silently weakening every other caller.
-
-        The socket still connects to the validated, pinned IP: the URL host is
-        the IP, and ``server_hostname`` changes only what is *named* in the
-        handshake, never what is dialed. The SSRF block is unaffected — it fires
-        on the validated IP before any bytes are sent.
+    The socket still connects to the validated, pinned IP: the URL host is
+    the IP, and ``server_hostname`` changes only what is *named* in the
+    handshake, never what is dialed. The SSRF block is unaffected — it fires
+    on the validated IP before any bytes are sent.
     """
 
     def __init__(self, *args, **kwargs):
+        # Without this hook the SNI override below is never called and TLS
+        # silently names the pinned IP again. A capability check rather than a
+        # version parse: requests 2.32.2 also routes through
+        # get_connection_with_tls_context without providing the hook.
+        if not hasattr(HTTPAdapter, "build_connection_pool_key_attributes"):
+            raise RuntimeError(
+                "PinnedIPAdapter needs requests>=2.32.3 to send the correct TLS "
+                f"SNI while pinning the IP, but requests {requests.__version__} "
+                "is installed. Without it every HTTPS fetch names the pinned IP "
+                "in the handshake and CDN-fronted hosts reject the connection. "
+                "Upgrade with: pip install --upgrade 'requests>=2.32.3'"
+            )
         super().__init__(*args, **kwargs)
         self._pinned_cache: Dict[Tuple[str, int], str] = {}
 
@@ -699,26 +709,27 @@ class WebClient:
     ) -> dict:
         """Download a file from URL to local disk.
 
-                Streams to disk to handle large files. Returns dict with
-                path, size, and content_type.
+        Streams to disk to handle large files. Returns dict with
+        path, size, and content_type.
 
         Refuses to overwrite an existing file: the destination is checked (and
-                handed to ``on_path_resolved`` for policy screening) *before* any bytes
-                are written, and the body is streamed to a sibling ``.part`` file that
-                is renamed into place only on success. The filename can come from an
-                attacker-controlled ``Content-Disposition`` header, so a failed policy
-                check must not have already clobbered the user's file. The check is
-                repeated immediately before the rename; a file created in that last
-                instant by another local process is still replaced.
+        handed to ``on_path_resolved`` for policy screening) *before* any bytes
+        are written, and the body is streamed to a sibling ``.part`` file that
+        is renamed into place only on success. The filename can come from an
+        attacker-controlled ``Content-Disposition`` header, so a failed policy
+        check must not have already clobbered the user's file. The check is
+        repeated immediately before the rename, leaving only the sub-microsecond
+        window between that check and ``os.replace`` in which a file created by
+        another local process would still be replaced.
 
-                Args:
-                    url: URL to download
-                    save_dir: Directory to save file in
-                    filename: Override filename (default: from URL/headers)
-                    max_size: Max file size in bytes (default: self._max_download_size)
-                    on_path_resolved: Optional callable invoked with the resolved
-                        destination ``Path`` before the file is created. Raise from it
-                        to refuse the download.
+        Args:
+            url: URL to download
+            save_dir: Directory to save file in
+            filename: Override filename (default: from URL/headers)
+            max_size: Max file size in bytes (default: self._max_download_size)
+            on_path_resolved: Optional callable invoked with the resolved
+                destination ``Path`` before the file is created. Raise from it
+                to refuse the download.
         """
         max_size = max_size or self._max_download_size
 
