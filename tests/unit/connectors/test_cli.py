@@ -376,14 +376,14 @@ class TestGrants:
             "google",
             "builtin:chat",
             "--scopes",
-            "gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.readonly",
         )
         assert rc == 0
 
         rc2, out2, _err2 = _run("connectors", "grants", "list", "google")
         assert rc2 == 0
         assert "builtin:chat" in out2
-        assert "gmail.readonly" in out2
+        assert "https://www.googleapis.com/auth/gmail.readonly" in out2
 
     def test_grants_revoke(self):
         _run(
@@ -393,7 +393,7 @@ class TestGrants:
             "google",
             "builtin:chat",
             "--scopes",
-            "gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.readonly",
         )
         rc, _out, _err = _run(
             "connectors", "grants", "revoke", "google", "builtin:chat"

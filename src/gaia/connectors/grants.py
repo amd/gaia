@@ -42,7 +42,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List
 
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, ScopeNotAllowedError
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,21 @@ def _save_grants_locked(data: Dict[str, Dict[str, List[str]]]) -> None:
         raise
 
 
+def resolve_spec(connector_id: str):
+    """Return the catalog ``ConnectorSpec`` for ``connector_id``.
+
+    Raises ``KeyError`` for an id the catalog does not publish. Importing the
+    catalog here (deferred — it imports the handlers, which import this module)
+    means every caller gets a populated REGISTRY without each entry point
+    having to remember, exactly as ``api._require_mcp_server_for_activation``
+    does for activations.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    return REGISTRY.get(connector_id)
+
+
 def grant_agent(connector_id: str, agent_id: str, scopes: List[str]) -> None:
     """
     Grant ``agent_id`` (already namespaced) the given scopes for ``connector_id``.
@@ -162,7 +177,23 @@ def grant_agent(connector_id: str, agent_id: str, scopes: List[str]) -> None:
     Overwrites any existing scopes for the same ``(connector_id, agent_id)`` pair.
     The full load-modify-save sequence is performed under the per-process
     write lock so concurrent grants from multiple threads don't lose updates.
+
+    Both authorization gates live HERE rather than at each call site, so the
+    Agent UI route, the CLI, and the SDK cannot drift apart (#915, #3247):
+
+    - an id the catalog does not publish raises ``KeyError`` — otherwise a
+      typo'd connector persists a phantom ledger key nothing will ever read;
+    - a scope outside ``spec.scope_ceiling()`` raises ``ScopeNotAllowedError``
+      — otherwise the ledger can be set to scopes the connector never
+      advertised, and ``check_agent_grant`` would then approve token requests
+      for them. This is the same ceiling ``flow._reject_scopes_outside_catalog``
+      applies to the OAuth authorize path.
     """
+    spec = resolve_spec(connector_id)
+    disallowed = sorted(set(scopes) - set(spec.scope_ceiling()))
+    if disallowed:
+        raise ScopeNotAllowedError(agent_id, connector_id, disallowed)
+
     with _write_lock:
         data = load_grants()
         data.setdefault(connector_id, {})[agent_id] = list(scopes)

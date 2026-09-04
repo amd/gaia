@@ -978,7 +978,21 @@ async def cancel_flow_endpoint(flow_id: str) -> Response:
 async def put_grant(
     connector_id: str, agent_id: str, body: GrantRequest
 ) -> Dict[str, Any]:
-    grant_agent(connector_id, agent_id, body.scopes)
+    """Write the per-agent grant ledger for ``(connector_id, agent_id)``.
+
+    ``grants.grant_agent`` owns both authorization gates — unknown connector
+    and out-of-ceiling scopes — so this route and the CLI cannot drift. Here we
+    only translate them: 404 for the unknown id, and the same 400
+    ``scope_not_allowed`` body the authorize route already returns.
+    """
+    try:
+        grant_agent(connector_id, agent_id, body.scopes)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        ) from e
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
     await _emitter.emit(
         "connector.grant.changed",
         {"connector_id": connector_id, "agent_id": agent_id, "scopes": body.scopes},

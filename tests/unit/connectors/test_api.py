@@ -160,12 +160,17 @@ class TestScopeCoverage:
 
 class TestPublicSurface:
     def test_grant_round_trip_via_public_api(self, google_provider):
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        # Full scope URLs: grant_agent enforces google's catalog ceiling
+        # (#915), so the short "gmail.readonly" shorthand is not grantable.
+        scope = "https://www.googleapis.com/auth/gmail.readonly"
+        grant_agent("google", "builtin:chat", [scope])
         listing = list_agent_grants("google")
-        assert listing["builtin:chat"] == ["gmail.readonly"]
+        assert listing["builtin:chat"] == [scope]
 
     def test_revoke_agent_grant_via_public_api(self, google_provider):
-        grant_agent("google", "builtin:chat", ["s"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.send"]
+        )
         revoke_agent_grant("google", "builtin:chat")
         assert list_agent_grants("google") == {}
 

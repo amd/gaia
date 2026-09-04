@@ -275,6 +275,39 @@ The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
 
+<Warning>
+**Credential access fails closed inside an agent turn.** The tool above passes
+no `agent_id`, and that is correct: the agent runtime binds your agent's
+identity to the current context and the credential call reads it from there.
+What changed is what happens when it *cannot* be read while a turn is running —
+the call is now refused with `AuthRequiredError` instead of falling through
+ungated.
+
+That matters when your tool hands work to something that does **not** inherit
+the context — a thread or process you start yourself, a background task queued
+for later, a callback fired from another runtime. Capture the id on the way in
+and pass it explicitly:
+
+```python
+from gaia.connectors import current_agent_id, get_access_token_sync
+
+@tool(description="Fetch in a worker thread")
+def _fetch(self) -> str:
+    agent_id = current_agent_id()          # captured in the tool body
+    def _work():
+        return get_access_token_sync(
+            provider="google",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            agent_id=agent_id,             # carried across the boundary
+        )
+    ...
+```
+
+Outside an agent turn — the CLI, a script, your own SDK embedding — there is no
+identity to resolve and no grant to check, which is the documented escape
+hatch. Pass `agent_id=` explicitly there if you want the grant enforced anyway.
+</Warning>
+
 If instead your agent loads MCP servers dynamically at runtime (from
 `~/.gaia/mcp_servers.json`) rather than declaring specific connectors, set
 `CONSUMES_MCP_SERVERS = True` so the Settings → Connectors "Active for"

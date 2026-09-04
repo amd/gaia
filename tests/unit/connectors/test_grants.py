@@ -33,6 +33,13 @@ from gaia.connectors.grants import (
     revoke_agent_grant,
 )
 
+# Real catalog scopes. ``grant_agent`` enforces the connector's own ceiling
+# (#915), so a synthetic S1 is no longer a grantable scope anywhere — these
+# ledger tests need three distinct scopes google actually advertises.
+S1 = "https://www.googleapis.com/auth/gmail.readonly"
+S2 = "https://www.googleapis.com/auth/gmail.send"
+S3 = "https://www.googleapis.com/auth/gmail.modify"
+
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
@@ -46,20 +53,20 @@ def _grants_path(home):
 
 class TestPathAndMode:
     def test_grant_creates_file_at_correct_path(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
+        grant_agent("google", "builtin:chat", [S1])
         path = _grants_path(fake_home)
         assert path.exists()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes only")
     def test_file_mode_0600(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
+        grant_agent("google", "builtin:chat", [S1])
         path = _grants_path(fake_home)
         mode = os.stat(path).st_mode & 0o777
         assert mode == 0o600
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes only")
     def test_parent_dir_mode_0700(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
+        grant_agent("google", "builtin:chat", [S1])
         path = _grants_path(fake_home)
         mode = os.stat(path.parent).st_mode & 0o777
         assert mode == 0o700
@@ -74,34 +81,34 @@ class TestPathAndMode:
 
 class TestRoundTrip:
     def test_grant_then_list(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1", "s2"])
+        grant_agent("google", "builtin:chat", [S1, S2])
         listing = list_agent_grants("google")
-        assert listing == {"builtin:chat": ["s1", "s2"]}
+        assert listing == {"builtin:chat": [S1, S2]}
 
     def test_two_agents_independent(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
-        grant_agent("google", "custom:abc:inbox", ["s2"])
+        grant_agent("google", "builtin:chat", [S1])
+        grant_agent("google", "custom:abc:inbox", [S2])
         listing = list_agent_grants("google")
         assert listing == {
-            "builtin:chat": ["s1"],
-            "custom:abc:inbox": ["s2"],
+            "builtin:chat": [S1],
+            "custom:abc:inbox": [S2],
         }
 
     def test_revoke_removes_only_target(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
-        grant_agent("google", "custom:abc:inbox", ["s2"])
+        grant_agent("google", "builtin:chat", [S1])
+        grant_agent("google", "custom:abc:inbox", [S2])
         revoke_agent_grant("google", "builtin:chat")
         listing = list_agent_grants("google")
-        assert listing == {"custom:abc:inbox": ["s2"]}
+        assert listing == {"custom:abc:inbox": [S2]}
 
     def test_revoke_unknown_is_idempotent(self, fake_home):
         revoke_agent_grant("google", "nonexistent")  # must not raise
 
     def test_grant_overwrites_prior_scopes(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
-        grant_agent("google", "builtin:chat", ["s2", "s3"])
+        grant_agent("google", "builtin:chat", [S1])
+        grant_agent("google", "builtin:chat", [S2, S3])
         listing = list_agent_grants("google")
-        assert listing == {"builtin:chat": ["s2", "s3"]}
+        assert listing == {"builtin:chat": [S2, S3]}
 
     def test_load_grants_empty_when_no_file(self, fake_home):
         assert load_grants() == {}
@@ -109,26 +116,26 @@ class TestRoundTrip:
 
 class TestCheckGrant:
     def test_no_grant_returns_false(self, fake_home):
-        assert check_agent_grant("google", "builtin:chat", ["s1"]) is False
+        assert check_agent_grant("google", "builtin:chat", [S1]) is False
 
     def test_exact_scope_match_returns_true(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
-        assert check_agent_grant("google", "builtin:chat", ["s1"]) is True
+        grant_agent("google", "builtin:chat", [S1])
+        assert check_agent_grant("google", "builtin:chat", [S1]) is True
 
     def test_superset_grant_covers_subset_required(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1", "s2"])
-        assert check_agent_grant("google", "builtin:chat", ["s1"]) is True
+        grant_agent("google", "builtin:chat", [S1, S2])
+        assert check_agent_grant("google", "builtin:chat", [S1]) is True
 
     def test_missing_one_scope_returns_false(self, fake_home):
-        grant_agent("google", "builtin:chat", ["s1"])
-        assert check_agent_grant("google", "builtin:chat", ["s1", "s2"]) is False
+        grant_agent("google", "builtin:chat", [S1])
+        assert check_agent_grant("google", "builtin:chat", [S1, S2]) is False
 
 
 class TestAtomicity:
     def test_atomic_replace_does_not_leave_tempfile(self, fake_home):
         # tempfile.mkstemp + os.replace must not leave any .grants_*.tmp
         # files in the connections dir after a successful write.
-        grant_agent("google", "builtin:chat", ["s1"])
+        grant_agent("google", "builtin:chat", [S1])
         connections_dir = _grants_path(fake_home).parent
         leftovers = [p.name for p in connections_dir.iterdir() if p.suffix == ".tmp"]
         assert leftovers == [], f"unexpected tempfile leftovers: {leftovers}"
@@ -178,17 +185,17 @@ class TestNamespacedAgentIds:
     (``builtin:chat`` vs ``custom:abc:chat``)."""
 
     def test_builtin_and_custom_with_same_aid_are_separate(self, fake_home):
-        grant_agent("google", "builtin:chat", ["builtin-scope"])
-        grant_agent("google", "custom:abc:chat", ["custom-scope"])
+        grant_agent("google", "builtin:chat", [S1])
+        grant_agent("google", "custom:abc:chat", [S2])
         listing = list_agent_grants("google")
         assert listing == {
-            "builtin:chat": ["builtin-scope"],
-            "custom:abc:chat": ["custom-scope"],
+            "builtin:chat": [S1],
+            "custom:abc:chat": [S2],
         }
 
     def test_revoke_one_does_not_affect_other(self, fake_home):
-        grant_agent("google", "builtin:chat", ["b"])
-        grant_agent("google", "custom:abc:chat", ["c"])
+        grant_agent("google", "builtin:chat", [S1])
+        grant_agent("google", "custom:abc:chat", [S2])
         revoke_agent_grant("google", "custom:abc:chat")
         listing = list_agent_grants("google")
         assert "builtin:chat" in listing
