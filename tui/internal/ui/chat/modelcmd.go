@@ -102,10 +102,18 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 		if where == "" {
 			where = "its configured address"
 		}
+		// No launch command here. `lemonade-server serve` was dropped in
+		// Lemonade 10.7 and the surviving forms differ per machine, so any
+		// literal is wrong for someone (CLAUDE.md, "Never hardcode how
+		// Lemonade is started"). The daemon owns the server now, so the real
+		// next step is the background service — and `gaia daemon status`
+		// exists on every machine, which is exactly the property the dead
+		// command lacked.
 		return "Cannot switch to local model `" + arg +
 			"`: the Lemonade server was not reachable at " + where + ". " +
-			"Start it with `lemonade-server serve`, or with /setup, and send this " +
-			"again — the retry re-checks. " + m.remoteAlternative() +
+			"GAIA normally starts it for you — check the background service with " +
+			"`gaia daemon status`, or use /setup, then send this again — the " +
+			"retry re-checks. " + m.remoteAlternative() +
 			" Nothing was switched — this session is still on " +
 			m.currentModelName() + "."
 	}

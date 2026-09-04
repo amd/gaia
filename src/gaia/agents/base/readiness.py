@@ -46,6 +46,29 @@ logger = get_logger(__name__)
 PROBE_CONNECT_TIMEOUT = 2.0
 PROBE_READ_TIMEOUT = 5.0
 
+
+def start_advice() -> str:
+    """How to get the local model server running, for a caller that found it down.
+
+    Never a hardcoded command. ``lemonade-server serve`` was dropped in
+    Lemonade 10.7 and errors on every modern install, and the three surviving
+    launch forms share no argv — so the manual fallback is resolved against
+    THIS machine by ``describe_start_hint`` (see CLAUDE.md, "Never hardcode how
+    Lemonade is started").
+
+    It leads with the automatic path because that is now the normal one: the
+    daemon starts and supervises the server, and a user reading this most
+    likely just needs the daemon running.
+    """
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    return (
+        "GAIA starts it automatically — run `gaia daemon start` if the "
+        f"background service is not running. Otherwise: "
+        f"{describe_start_hint().instruction}"
+    )
+
+
 # A model pull is a first-download of multi-GB weights — minutes, not seconds.
 # Generous read ceiling so a slow link does not abort a real download; the
 # connect leg stays short so an unreachable server still fails fast.
@@ -451,10 +474,9 @@ def compute_init_status(
             lemonade=backend,
             model=_model(False),
             hint=(
-                f"The local Lemonade Server is not reachable at {probe_base} — "
-                "start it with `lemonade-server serve` (or run `gaia init`), "
-                f"then retry. {agent_name} cannot install it: that is a host "
-                "prerequisite, not something an agent can bootstrap."
+                f"The local Lemonade Server is not reachable at {probe_base}. "
+                f"{start_advice()} {agent_name} cannot install it: that is a "
+                "host prerequisite, not something an agent can bootstrap."
             ),
         )
 
@@ -611,10 +633,7 @@ def unreachable_progress(
     to learn nothing happened.
     """
     yield f"✗ The local Lemonade Server is not reachable at {probe_base}.\n"
-    yield (
-        "✗ Start it with `lemonade-server serve` (or run `gaia init`), then "
-        "POST to this path again.\n"
-    )
+    yield f"✗ {start_advice()} Then POST to this path again.\n"
     yield (
         f"✗ {agent_name} can't install the backend itself — that's a host "
         "prerequisite.\n"

@@ -121,13 +121,11 @@ There are two ways to connect Google depending on how you use GAIA.
   </Tab>
 </Tabs>
 
-### 2. Confirm Lemonade is running
+### 2. Local inference
 
-```bash
-lemonade-server serve
-```
+Email-body inference runs on your local Lemonade instance, which `gaia daemon` starts and supervises — you don't launch it yourself. If Lemonade isn't installed yet, `gaia init` installs it and pulls the model.
 
-Email-body inference runs on your local Lemonade instance. The agent **rejects** any non-local LLM endpoint at startup — there is no path through configuration to route email content to a cloud LLM.
+The agent **rejects** any non-local LLM endpoint at startup — there is no path through configuration to route email content to a cloud LLM.
 
 ### 3. Start the agent
 

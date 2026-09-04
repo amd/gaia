@@ -250,8 +250,12 @@ def test_init_lemonade_down_returns_503_with_actionable_hint(client):
     assert body["ready"] is False
     assert body["lemonade"]["reachable"] is False
     # Hint names what failed AND what to do (CLAUDE.md fail-loudly rule).
+    # The next step, not a launch command: `lemonade-server serve` was pinned
+    # here and Lemonade 10.7 removed it, so the assertion kept a dead remedy
+    # looking verified. The manual fallback is resolved per machine, so there
+    # is no single launch string to assert.
     assert "not reachable" in body["hint"]
-    assert "lemonade-server serve" in body["hint"]
+    assert "gaia daemon start" in body["hint"]
     # Model is not probed once Lemonade is down — reported absent, not crashed.
     assert body["model"]["present"] is False
 
@@ -571,7 +575,7 @@ def test_provision_lemonade_down_returns_503_streamed_actionable(client):
     assert resp.headers["content-type"].startswith("text/plain")
     body = resp.text
     assert "not reachable" in body
-    assert "lemonade-server serve" in body
+    assert "gaia daemon start" in body
     # No pull is attempted when Lemonade is down — the sidecar can't install it.
     mock_pull.assert_not_called()
 

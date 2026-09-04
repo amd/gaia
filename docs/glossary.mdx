@@ -116,7 +116,7 @@ Generating a unique identifier for document content to detect when files have ch
 Maintaining important information when splitting text across chunks, ensuring coherent answers.
 
 ### Context Size
-The number of tokens allocated for LLM processing, configured via `--ctx-size` parameter when starting Lemonade Server. Larger values (e.g., 32768) allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
+The number of tokens allocated for LLM processing. GAIA pins it per device profile (65536 on GPU/CPU, 32768 on NPU) and applies it when the daemon starts Lemonade Server, so you don't set it yourself. Larger values allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
 
 ### Context Window
 The maximum number of tokens an LLM can process at once, including both input and output. Modern models range from 4K to 1M+ tokens.
@@ -263,7 +263,7 @@ A lightweight, high-quality text-to-speech engine used by GAIA for voice output 
 ## L
 
 ### Lemonade Server
-AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Start with `lemonade-server serve`. Required for most GAIA operations. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
+AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Required for most GAIA operations; `gaia daemon` starts and supervises it for you, so you rarely launch it yourself. Install it with `gaia init`. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
 
 ### LEMONADE_BASE_URL
 Environment variable specifying the address of the Lemonade Server (default `http://localhost:13305/api/v1`). The GAIA OpenAI-compatible API server runs on port 8080 — don't confuse the two.
