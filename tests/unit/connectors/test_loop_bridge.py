@@ -58,7 +58,7 @@ def seeded(google_provider):
         provider="google",
         account_email="alice@example.com",
         refresh_token="seed-rt",
-        scopes=["gmail.readonly"],
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         client_id_hash=google_provider.client_id_hash,
     )
     return google_provider
@@ -94,7 +94,9 @@ class TestNoLockBoundToOtherLoop:
         """Force two refreshes from worker threads — each expires the cache
         between calls.  Must succeed on both, no cross-loop RuntimeError."""
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
 
         errors: list[Exception] = []
         tokens: list[str] = []
@@ -103,7 +105,8 @@ class TestNoLockBoundToOtherLoop:
             with _agent_context("builtin:chat"):
                 try:
                     tok = get_access_token_sync(
-                        provider="google", scopes=["gmail.readonly"]
+                        provider="google",
+                        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                     )
                     tokens.append(tok)
                 except Exception as exc:
@@ -225,7 +228,9 @@ class TestContextvarPreserved:
         thread and can read the contextvar there.
         """
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
 
         observed_in_refresh: list[Optional[str]] = []
 
@@ -251,7 +256,8 @@ class TestContextvarPreserved:
                 with _agent_context("builtin:chat"):
                     try:
                         tok = get_access_token_sync(
-                            provider="google", scopes=["gmail.readonly"]
+                            provider="google",
+                            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                         )
                         results.append(tok)
                     except Exception as exc:

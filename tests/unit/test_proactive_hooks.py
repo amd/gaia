@@ -14,6 +14,8 @@ All tests use temp-file GoalStore — no real ~/.gaia directory touched.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.goal_store import Proposal
@@ -225,11 +227,48 @@ class TestRegression:
 
 
 class TestIdentityContext:
+    """``_agent_identity_context`` marks an agent turn, and binds an identity
+    to it when there is one.
 
-    def test_agent_identity_context_returns_none_for_no_ns_id(self):
+    It used to return ``None`` for an agent with no namespaced id, and
+    ``process_query`` then ran that turn outside any context at all. That is
+    precisely the state the connectors layer reads as "no agent — take the
+    ungated CLI path", so an unregistered agent got credentials without any
+    grant check (#915). The block is now entered either way: no identity
+    inside an agent turn means REFUSED, not unrestricted.
+    """
+
+    def test_no_ns_id_still_enters_an_agent_turn(self):
+        from gaia.connectors.context import agent_runtime_active, current_agent_id
+
         agent = _make_test_agent()
-        result = agent._agent_identity_context(None)
-        assert result is None
+        with agent._agent_identity_context(None):
+            # An agent turn is in progress...
+            assert agent_runtime_active() is True
+            # ...but it carries no identity to check a grant against.
+            assert current_agent_id() is None
+        assert agent_runtime_active() is False
+
+    def test_credential_access_inside_that_turn_is_refused(self, tmp_path, monkeypatch):
+        """The reason the block is entered at all. Before, this call returned a
+        token; the grant check never ran because there was no context to read.
+        """
+        import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+        from gaia.connectors.api import _authorize_access
+        from gaia.connectors.errors import AuthRequiredError
+
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        agent = _make_test_agent()
+
+        with agent._agent_identity_context(None):
+            with pytest.raises(AuthRequiredError) as exc:
+                _authorize_access(
+                    provider="google",
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                    agent_id=None,
+                    account_email="default",
+                )
+        assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
 
     def test_agent_identity_context_returns_cm_for_ns_id(self):
         agent = _make_test_agent()
@@ -238,6 +277,15 @@ class TestIdentityContext:
         # Should be a context manager (has __enter__ and __exit__)
         assert hasattr(result, "__enter__")
         assert hasattr(result, "__exit__")
+
+    def test_ns_id_is_readable_inside_the_block(self):
+        from gaia.connectors.context import agent_runtime_active, current_agent_id
+
+        agent = _make_test_agent()
+        with agent._agent_identity_context("agent:test-id"):
+            assert current_agent_id() == "agent:test-id"
+            assert agent_runtime_active() is True
+        assert current_agent_id() is None
 
 
 # ===========================================================================

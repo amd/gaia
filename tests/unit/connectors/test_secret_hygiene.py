@@ -164,7 +164,11 @@ class TestFiles:
         # carry tokens at all; this guards against regressions.)
         from gaia.connectors.grants import grant_agent
 
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google",
+            "builtin:chat",
+            ["https://www.googleapis.com/auth/gmail.readonly"],
+        )
         for path in tmp_path.rglob("*"):
             if path.is_file():
                 content = path.read_text(encoding="utf-8", errors="ignore")

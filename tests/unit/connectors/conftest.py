@@ -45,6 +45,33 @@ def make_fake_agent_registry(nsid: str, connector_id: str, scopes: list[str]):
     )
 
 
+@pytest.fixture
+def register_ephemeral_spec(monkeypatch):
+    """Publish a test-local ``ConnectorSpec`` in the catalog for one test.
+
+    ``grants.grant_agent`` resolves the catalog before writing (#915), so a
+    test that grants against a spec it constructed in-line has to publish it
+    first — an id nothing publishes is exactly the phantom-ledger-key case the
+    guard exists to reject.
+
+    A copy of the real registry is swapped in, so the ephemeral entry cannot
+    leak into another test through the process-level singleton.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY, ConnectorRegistry
+
+    fresh = ConnectorRegistry()
+    for spec in REGISTRY.all():
+        fresh.register(spec)
+    monkeypatch.setattr("gaia.connectors.registry.REGISTRY", fresh)
+
+    def _register(spec):
+        fresh.register(spec)
+        return spec
+
+    return _register
+
+
 @pytest.fixture(autouse=True)
 def _autouse_in_memory_keyring(in_memory_keyring):  # noqa: F811
     """

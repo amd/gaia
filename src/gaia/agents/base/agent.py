@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextvars
 import datetime
 import inspect
 import json
@@ -3176,7 +3177,15 @@ Do NOT wrap conversational replies in JSON.
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
 
-        worker = threading.Thread(target=_target, name=f"tool:{tool_name}", daemon=True)
+        # A new thread starts with an EMPTY context, so the agent-identity
+        # contextvar bound by process_query would be None inside every tool
+        # body — silently disabling the per-agent connector grant check
+        # (#915). Snapshot here, in the caller; copying inside _target would
+        # copy the worker's own empty context and change nothing.
+        ctx = contextvars.copy_context()
+        worker = threading.Thread(
+            target=lambda: ctx.run(_target), name=f"tool:{tool_name}", daemon=True
+        )
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
@@ -4390,13 +4399,18 @@ Do NOT wrap conversational replies in JSON.
 
         Shared identity binding so that both process_query and
         on_heartbeat can resolve per-agent grants via contextvars.
+
+        Entered even when ``ns_id`` is None (an agent with no namespaced
+        identity): the block still marks an agent turn, so a credential
+        request from inside it fails closed rather than taking the ungated
+        CLI path.
         """
         # `_agent_context` is intentionally PRIVATE (issue #915): imported via
         # the private path so a malicious tool body can't forge an agent
         # identity through the public gaia.connectors API.
         from gaia.connectors.context import _agent_context
 
-        return _agent_context(ns_id) if ns_id else None
+        return _agent_context(ns_id)
 
     def _active_mcp_servers(self, manager) -> List[str]:
         """Return MCP server names whose tools should be visible to this agent.
@@ -4460,11 +4474,8 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
-        identity_ctx = self._agent_identity_context(ns_id)
         try:
-            if identity_ctx is None:
-                return self._process_query_impl(user_input, max_steps, trace, filename)
-            with identity_ctx:
+            with self._agent_identity_context(ns_id):
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
