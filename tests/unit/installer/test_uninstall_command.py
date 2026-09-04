@@ -11,6 +11,9 @@ POSIX-style and Windows-style paths.
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
@@ -876,3 +879,475 @@ class TestLemonadePythonResolution:
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() is None
+
+
+# ---------------------------------------------------------------------------
+# GAIA home safety: a misconfigured GAIA_HOME must not become a deletion plan
+# ---------------------------------------------------------------------------
+
+
+class TestGaiaHomeSafetyGuard:
+    """``_safe_roots`` lists the GAIA home as an allowed root, so the
+    containment guard in ``_remove_path`` is vacuous when the home itself is
+    wrong. ``GAIA_HOME=$HOME`` turns ``--purge`` into ``$HOME/venv`` +
+    ``$HOME/documents`` — and ``documents`` resolves case-insensitively onto
+    the real ``Documents`` folder on Windows and APFS.
+    """
+
+    def test_gaia_home_at_user_home_refuses_purge_plan(self, fake_home, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(fake_home))
+        docs = fake_home / "Documents"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "thesis.docx").write_text("my life's work")
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="GAIA_HOME"):
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+            )
+
+        assert (docs / "thesis.docx").exists()
+
+    def test_gaia_home_at_user_home_refuses_venv_plan(self, fake_home, monkeypatch):
+        """Tier 2 deletes ``<home>/venv``, so it needs the same structural guard."""
+        monkeypatch.setenv("GAIA_HOME", str(fake_home))
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="home directory"):
+            uc.build_plan(
+                venv=True,
+                purge=False,
+                purge_lemonade=False,
+                purge_models=False,
+            )
+
+    def test_gaia_home_above_user_home_is_refused(self, fake_home, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(fake_home.parent))
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="home directory"):
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+            )
+
+    def test_gaia_home_at_filesystem_root_is_refused(self, fake_home, monkeypatch):
+        root = Path(fake_home.anchor or "/")
+        monkeypatch.setenv("GAIA_HOME", str(root))
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="root"):
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+            )
+
+    def test_purge_of_unmarked_directory_is_refused(self, fake_home, monkeypatch):
+        """A GAIA_HOME with no sign that GAIA owns it is not purgeable."""
+        somewhere = fake_home / "Documents"
+        somewhere.mkdir(parents=True, exist_ok=True)
+        (somewhere / "thesis.docx").write_text("my life's work")
+        monkeypatch.setenv("GAIA_HOME", str(somewhere))
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="does not look like"):
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+            )
+
+        assert (somewhere / "thesis.docx").exists()
+
+    def test_marker_file_makes_an_alternate_home_purgeable(
+        self, fake_home, monkeypatch
+    ):
+        alt = fake_home / "gaia-data"
+        alt.mkdir(parents=True, exist_ok=True)
+        (alt / "config.json").write_text("{}")
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+        )
+        # Compare against _gaia_home() rather than `alt`: GAIA_HOME is resolved,
+        # and pyfakefs anchors a rootless fake path onto the real drive letter.
+        assert uc._gaia_home() / "documents" in plan.unique_paths()
+
+    def test_lemonade_dir_marks_a_custom_gaia_home(self, fake_home, monkeypatch):
+        """``LemonadeEmbedded`` is the one component that honours GAIA_HOME, so
+        an alternate root it has used must stay purgeable."""
+        alt = fake_home / "gaia-data"
+        (alt / "lemonade").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+        )
+        assert uc._gaia_home() / "documents" in plan.unique_paths()
+
+    @pytest.mark.parametrize(
+        "tier,expected_flag",
+        [
+            (dict(venv=False, purge=True), "--purge"),
+            (dict(venv=True, purge=False), "--venv"),
+        ],
+    )
+    def test_a_venv_alone_is_not_proof_that_gaia_owns_the_directory(
+        self, fake_home, monkeypatch, tier, expected_flag
+    ):
+        """GAIA_HOME at a project checkout must not cost the user its venv.
+
+        Tier 2 needs this as much as Tier 3: ``--venv`` deletes
+        ``$GAIA_HOME/venv``, which IS the project's virtualenv.
+        """
+        project = fake_home / "myapp"
+        (project / "venv").mkdir(parents=True, exist_ok=True)
+        (project / "venv" / "pyvenv.cfg").write_text("home = /usr\n")
+        monkeypatch.setenv("GAIA_HOME", str(project))
+
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="does not look like") as exc:
+            uc.build_plan(purge_lemonade=False, purge_models=False, **tier)
+
+        assert expected_flag in str(exc.value)
+        assert (project / "venv" / "pyvenv.cfg").exists()
+
+    def test_venv_tier_refuses_an_unmarked_home_end_to_end(
+        self, fake_home, monkeypatch
+    ):
+        project = fake_home / "myapp"
+        (project / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+        (project / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("GAIA_HOME", str(project))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_USAGE, captured.text
+        assert "Refusing to --venv" in captured.text
+        assert (project / "venv" / "bin" / "python").exists()
+
+    def test_venv_tier_still_works_on_a_marked_custom_home(
+        self, fake_home, monkeypatch
+    ):
+        alt = fake_home / "gaia-data"
+        (alt / "lemonade").mkdir(parents=True, exist_ok=True)
+        (alt / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+        (alt / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (uc._gaia_home() / "venv").exists()
+
+    def test_venv_tier_still_works_on_the_default_home(self, fake_home, monkeypatch):
+        """The default ~/.gaia passes on name alone — no marker file needed."""
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        _seed_gaia_tree(fake_home)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), home=fake_home, printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (fake_home / ".gaia" / "venv").exists()
+        assert (fake_home / ".gaia" / "chat" / "history.db").exists(), "tier 2 only"
+
+    def test_a_gaia_home_that_does_not_exist_is_a_no_op_not_a_refusal(
+        self, fake_home, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(fake_home / "not-created-yet"))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, dry_run=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert "Refusing" not in captured.text
+
+    def test_default_dot_gaia_home_is_always_purgeable(self, fake_home, monkeypatch):
+        """The default location is ours by name — no marker file required."""
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        (fake_home / ".gaia").mkdir(parents=True, exist_ok=True)
+
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=fake_home,
+        )
+        assert fake_home / ".gaia" / "documents" in plan.unique_paths()
+
+    def test_run_reports_usage_exit_code_and_names_the_root(
+        self, fake_home, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(fake_home))
+        docs = fake_home / "Documents"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "thesis.docx").write_text("my life's work")
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_USAGE, captured.text
+        assert "Refusing to uninstall" in captured.text
+        assert str(fake_home) in captured.text
+        assert (docs / "thesis.docx").exists()
+
+    def test_dry_run_purge_is_refused_too(self, fake_home, monkeypatch):
+        """``--dry-run`` must not print a plan we would refuse to execute."""
+        monkeypatch.setenv("GAIA_HOME", str(fake_home))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, dry_run=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_USAGE, captured.text
+        assert "Would remove" not in captured.text
+
+    def test_plan_output_shows_the_resolved_gaia_home(self, fake_home, monkeypatch):
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        _seed_gaia_tree(fake_home)
+
+        captured = _Capture()
+        exit_code = uc.run(
+            _ns(purge=True, dry_run=True, yes=True), home=fake_home, printer=captured
+        )
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        resolved = (fake_home / ".gaia").resolve(strict=False)
+        assert f"GAIA home: {resolved}" in captured.text
+
+
+# ---------------------------------------------------------------------------
+# Symlinked / junctioned entries under ~/.gaia
+# ---------------------------------------------------------------------------
+
+
+class TestSymlinkedEntries:
+    """A relocated ``~/.gaia/documents`` used to abort the purge: the
+    containment guard resolved the link *target*, which lives outside the
+    allowed roots, and the RuntimeError escaped through ``execute_plan``
+    after ``venv`` and ``chat`` were already gone.
+    """
+
+    def test_symlinked_entry_removes_the_link_not_the_target(self, fake_home, fs):
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+        shutil.rmtree(gaia / "documents")
+
+        target = fake_home / "elsewhere" / "docs"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "keep.txt").write_text("keep me")
+        fs.create_symlink(gaia / "documents", target)
+
+        ok = uc._remove_path(
+            gaia / "documents", allowed_roots=uc._safe_roots(home=fake_home)
+        )
+
+        assert ok
+        assert not (gaia / "documents").is_symlink()
+        assert (target / "keep.txt").exists(), "the link target must survive"
+
+    def test_purge_with_a_symlinked_documents_completes(self, fake_home, fs):
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+        shutil.rmtree(gaia / "documents")
+        target = fake_home / "elsewhere" / "docs"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "keep.txt").write_text("keep me")
+        fs.create_symlink(gaia / "documents", target)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, yes=True), home=fake_home, printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (gaia / "venv").exists()
+        assert not (gaia / "electron-install.log").exists(), "purge ran to completion"
+        assert (target / "keep.txt").exists()
+
+    def test_containment_refusal_does_not_abort_the_rest_of_the_plan(self, fake_home):
+        """A refusal is reported and downgrades the exit code — it must not
+        raise through ``execute_plan`` and leave a half-deleted tree."""
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+        outside = fake_home / "not-gaia" / "important.txt"
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("do not delete me")
+
+        plan = uc.UninstallPlan()
+        plan.tiered_paths.append(("--purge", outside))
+        plan.tiered_paths.append(("--purge", gaia / "venv"))
+
+        captured = _Capture()
+        exit_code = uc.execute_plan(
+            plan, allowed_roots=uc._safe_roots(home=fake_home), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "outside allowed roots" in captured.text
+        assert outside.exists(), "the out-of-root path must be preserved"
+        assert not (gaia / "venv").exists(), "later paths must still be processed"
+
+
+# ---------------------------------------------------------------------------
+# Real Windows junctions (pyfakefs only models POSIX symlinks)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("win"), reason="junctions are Windows-only"
+)
+class TestWindowsJunctions:
+    """``Path.is_symlink()`` is False for a junction, and a junction is the
+    only way to relocate a directory on Windows without Developer Mode — so
+    this is the realistic shape of a relocated ``~/.gaia/documents``, and it
+    cannot be exercised through pyfakefs.
+    """
+
+    @staticmethod
+    def _make_junction(link: Path, target: Path) -> None:
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if not uc._is_link(link):
+            pytest.skip(f"could not create a junction: {result.stdout}{result.stderr}")
+
+    def test_is_link_detects_a_junction(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "link"
+        self._make_junction(link, target)
+
+        assert not link.is_symlink(), "precondition: is_symlink misses junctions"
+        assert uc._is_link(link)
+
+    def test_junctioned_documents_is_removed_without_touching_the_target(
+        self, tmp_path
+    ):
+        gaia = tmp_path / ".gaia"
+        gaia.mkdir()
+        target = tmp_path / "elsewhere" / "docs"
+        target.mkdir(parents=True)
+        (target / "keep.txt").write_text("keep me")
+        self._make_junction(gaia / "documents", target)
+
+        captured = _Capture()
+        ok = uc._remove_path(gaia / "documents", allowed_roots=[gaia], printer=captured)
+
+        assert ok, captured.text
+        assert not (gaia / "documents").exists()
+        assert (target / "keep.txt").exists(), "the junction target must survive"
+
+    def test_purge_completes_past_a_junctioned_documents(self, tmp_path, monkeypatch):
+        gaia = tmp_path / ".gaia"
+        (gaia / "venv").mkdir(parents=True)
+        (gaia / "chat").mkdir()
+        (gaia / "electron-install.log").write_text("install log")
+        target = tmp_path / "elsewhere" / "docs"
+        target.mkdir(parents=True)
+        (target / "keep.txt").write_text("keep me")
+        self._make_junction(gaia / "documents", target)
+        monkeypatch.setenv("GAIA_HOME", str(gaia))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (gaia / "venv").exists()
+        assert not (gaia / "documents").exists()
+        assert not (gaia / "electron-install.log").exists(), "purge ran to completion"
+        assert (target / "keep.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# The pre-3.12 junction-detection fallback
+# ---------------------------------------------------------------------------
+
+
+class TestLinkDetectionFallback:
+    """``os.path.isjunction`` is 3.12+, so on py3.10/3.11 ``_is_link`` takes a
+    reparse-tag fallback. Both of its inputs are absent on POSIX, and comparing
+    two missing attributes made every directory look like a link — ``_unlink_link``
+    then ``rmdir``'d a populated ``~/.gaia/venv`` and the whole purge failed.
+    These force the fallback on any interpreter so CI's 3.12+ lanes cover it too.
+    """
+
+    @pytest.fixture
+    def posix_pre_312(self, monkeypatch):
+        """Reproduce py3.10/3.11-on-POSIX regardless of the running interpreter:
+        no ``os.path.isjunction``, and no reparse-tag attributes on either side
+        of the comparison."""
+        monkeypatch.delattr("os.path.isjunction", raising=False)
+        monkeypatch.delattr("stat.IO_REPARSE_TAG_MOUNT_POINT", raising=False)
+        monkeypatch.setattr("sys.platform", "linux")
+
+        # A POSIX os.stat_result carries no st_reparse_tag. Without this the
+        # comparison still has a real 0 on one side and the bug hides.
+        real_lstat = Path.lstat
+
+        class _PosixStat:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def __getattr__(self, name):
+                if name == "st_reparse_tag":
+                    raise AttributeError(name)
+                return getattr(self._wrapped, name)
+
+        monkeypatch.setattr(
+            Path, "lstat", lambda self, *a, **kw: _PosixStat(real_lstat(self))
+        )
+
+    def test_plain_directory_is_not_a_link(self, posix_pre_312, tmp_path):
+        target = tmp_path / "venv"
+        (target / "bin").mkdir(parents=True)
+        (target / "bin" / "python").write_text("#!/bin/sh\n")
+
+        assert not uc._is_link(target)
+
+    def test_plain_file_is_not_a_link(self, posix_pre_312, tmp_path):
+        target = tmp_path / "gaia.log"
+        target.write_text("log line")
+
+        assert not uc._is_link(target)
+
+    def test_missing_path_is_not_a_link(self, posix_pre_312, tmp_path):
+        assert not uc._is_link(tmp_path / "never-created")
+
+    def test_purge_still_removes_a_populated_venv(self, posix_pre_312, tmp_path):
+        """The end-to-end symptom: exit 2 and 'Directory not empty'."""
+        gaia = tmp_path / ".gaia"
+        (gaia / "venv" / "bin").mkdir(parents=True)
+        (gaia / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        (gaia / "chat").mkdir()
+        (gaia / "chat" / "history.db").write_text("db")
+
+        captured = _Capture()
+        exit_code = uc.execute_plan(
+            uc.build_plan(
+                venv=False,
+                purge=True,
+                purge_lemonade=False,
+                purge_models=False,
+                home=tmp_path,
+            ),
+            allowed_roots=[gaia],
+            printer=captured,
+        )
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (gaia / "venv").exists()
+        assert not (gaia / "chat").exists()

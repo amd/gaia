@@ -30,6 +30,7 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
+from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
@@ -3537,7 +3538,8 @@ Let me know your answer!
             # would otherwise run next-step having killed nothing.
             print("❌ gaia kill needs a target:")
             print("     --lemonade        stop Lemonade Server (port 13305)")
-            print("     --port <number>   kill whatever is listening on <number>")
+            print("     --port <number>   kill the GAIA/Lemonade process")
+            print("                       listening on <number>")
             print(
                 "   Both target a port. A stray GAIA process that is not "
                 "holding a port must be killed by PID."
@@ -4434,117 +4436,67 @@ Let me know your answer!
 
 
 def kill_process_by_port(port):
-    """Find and kill a process running on a specific port."""
+    """Kill the GAIA/Lemonade process listening on ``port``.
+
+    Targeting rules live in :mod:`gaia.ports` so every "stop what's on this
+    port" path in GAIA shares one implementation.
+    """
     try:
         port = int(port)
     except (ValueError, TypeError):
         return {"success": False, "message": f"Invalid port number: {port!r}"}
-    try:
-        if sys.platform.startswith("win"):
-            # Windows implementation (filter netstat output in Python, no shell pipe)
-            output = subprocess.check_output(["netstat", "-ano"]).decode()
-            if output:
-                # Split output into lines and process each line
-                for line in output.strip().split("\n"):
-                    # Only process lines that contain the specific port
-                    if f":{port}" in line:
-                        parts = line.strip().split()
-                        # Get the last part which should be the PID
-                        try:
-                            pid = int(parts[-1])
-                            if pid > 0:  # Ensure we don't try to kill PID 0
-                                subprocess.run(
-                                    ["taskkill", "/PID", str(pid), "/F"],
-                                    shell=False,
-                                    check=True,
-                                )
-                                return {
-                                    "success": True,
-                                    "message": f"Killed process {pid} running on port {port}",
-                                }
-                        except (IndexError, ValueError):
-                            continue
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-        else:
-            # Linux/Unix implementation
-            try:
-                # Use lsof to find process using the port
-                output = (
-                    subprocess.check_output(["lsof", f"-ti:{port}"]).decode().strip()
-                )
-                if output:
-                    pids = output.split("\n")
-                    killed_pids = []
-                    for pid_str in pids:
-                        try:
-                            pid = int(pid_str.strip())
-                            if pid > 0:
-                                subprocess.run(
-                                    ["kill", "-9", str(pid)], shell=False, check=True
-                                )
-                                killed_pids.append(str(pid))
-                        except (ValueError, subprocess.CalledProcessError):
-                            continue
-                    if killed_pids:
-                        return {
-                            "success": True,
-                            "message": f"Killed process(es) {', '.join(killed_pids)} running on port {port}",
-                        }
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-            except subprocess.CalledProcessError:
-                # If lsof is not available, try netstat + ps approach
-                try:
-                    # Use netstat to find the port, then extract PID
-                    # (filter output in Python, no shell pipe)
-                    output = subprocess.check_output(["netstat", "-tulpn"]).decode()
-                    if output:
-                        for line in output.strip().split("\n"):
-                            if f":{port}" in line:
-                                parts = line.strip().split()
-                                # Look for PID/process_name pattern in the last column
-                                for part in parts:
-                                    if "/" in part:
-                                        try:
-                                            pid = int(part.split("/")[0])
-                                            if pid > 0:
-                                                subprocess.run(
-                                                    ["kill", "-9", str(pid)],
-                                                    shell=False,
-                                                    check=True,
-                                                )
-                                                return {
-                                                    "success": True,
-                                                    "message": f"Killed process {pid} running on port {port}",
-                                                }
-                                        except (
-                                            ValueError,
-                                            subprocess.CalledProcessError,
-                                        ):
-                                            continue
-                    return {
-                        "success": False,
-                        "message": f"Could not find valid PID for port {port}",
-                    }
-                except subprocess.CalledProcessError:
-                    return {
-                        "success": False,
-                        "message": f"No process found running on port {port} (lsof and netstat methods failed)",
-                    }
 
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except subprocess.CalledProcessError:
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except Exception as e:
+    try:
+        listeners = listeners_on_port(port)
+    except FileNotFoundError as e:
+        # Not "nothing is listening" — we could not look. Say which tool is missing.
         return {
             "success": False,
-            "message": f"Error killing process on port {port}: {str(e)}",
+            "message": (
+                f"Cannot inspect port {port}: {e.filename or 'the port-listing tool'} "
+                f"is not on PATH. Install lsof or net-tools, or stop the process "
+                f"by PID."
+            ),
         }
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"success": False, "message": f"Could not inspect port {port}: {e}"}
+
+    if not listeners:
+        return {"success": False, "message": f"No process is listening on port {port}"}
+
+    killed = []
+    refused = []
+    failed = []
+    for pid, name in listeners:
+        if not is_killable_process(name):
+            refused.append(f"{pid} ({name or 'unknown process'})")
+            continue
+        try:
+            terminate_pid(pid)
+            killed.append(str(pid))
+        except (subprocess.CalledProcessError, OSError) as e:
+            failed.append(f"{pid}: {e}")
+
+    if killed:
+        return {
+            "success": True,
+            "message": f"Killed process(es) {', '.join(killed)} listening on port {port}",
+        }
+
+    if refused:
+        return {
+            "success": False,
+            "message": (
+                f"Refusing to kill {', '.join(refused)} on port {port}: not a "
+                f"GAIA or Lemonade process. Stop it with its own tooling, or "
+                f"kill it by PID if that is really what you want."
+            ),
+        }
+
+    return {
+        "success": False,
+        "message": f"Failed to kill the process on port {port} ({'; '.join(failed)})",
+    }
 
 
 def handle_email_command(args):

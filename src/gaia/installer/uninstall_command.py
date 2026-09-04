@@ -34,7 +34,10 @@ Flags:
 
 Environment:
     * ``GAIA_HOME``  — override the location of ``~/.gaia`` (useful for
-      multi-user installs or alternate data roots).
+      multi-user installs or alternate data roots). Every tier that deletes
+      into it first checks that it is not the user's home directory, a
+      directory containing it, or a drive root, and that it carries some sign
+      GAIA owns it — see :func:`_assert_purgeable_home`.
     * ``HF_HOME``    — standard HuggingFace cache override, respected by
       ``--purge-hf-cache``.
 
@@ -43,7 +46,8 @@ Exit codes:
     * 1  — user aborted at the confirmation prompt, or refused a dangerous
            non-interactive ``--purge``
     * 2  — filesystem error (permission denied, unreadable path, ...)
-    * 64 — usage error (invalid flag combination). Matches BSD ``EX_USAGE``
+    * 64 — usage error (invalid flag combination, or a ``GAIA_HOME`` that
+           does not name a GAIA-owned directory). Matches BSD ``EX_USAGE``
            so NSIS / ``postrm`` can tell "bad invocation" from "I/O broken"
            and avoid reinstall retries.
 """
@@ -54,6 +58,7 @@ import argparse
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -170,12 +175,127 @@ def _safe_roots(home: Optional[Path] = None) -> List[Path]:
     Containment guard: any path ``_remove_path`` touches must resolve to a
     location inside one of these roots. Defence-in-depth against future
     regressions that could otherwise escalate to arbitrary deletion.
+
+    NOTE: the first root is the GAIA home itself, so this guard is only
+    meaningful once :func:`_assert_purgeable_home` has established that the
+    GAIA home is not the user's home directory or a drive root.
     """
     return [
         _gaia_home(home),
         _lemonade_models_dir(home),
         _huggingface_cache_dir(home),
     ]
+
+
+# ---------------------------------------------------------------------------
+# GAIA home safety
+# ---------------------------------------------------------------------------
+
+
+class UnsafeGaiaHomeError(RuntimeError):
+    """The resolved GAIA home is not a directory this command may delete into.
+
+    Raised before any plan is built, so a misconfigured ``GAIA_HOME`` can
+    never reach :func:`_remove_path`.
+    """
+
+
+# Entries only GAIA creates. At least one must exist before any tier deletes
+# anything, so pointing GAIA_HOME at an arbitrary directory (a project checkout
+# whose ``venv/`` we would eat, say) is refused instead of emptied.
+# ``venv`` is deliberately NOT a marker — it is the one deletion target that
+# routinely exists in directories we do not own, and both installers create
+# theirs at a hardcoded ``~/.gaia/venv`` regardless of GAIA_HOME. ``.gaia``-named
+# directories are accepted on name alone: that is the default location and it is
+# always ours, marker or not.
+GAIA_HOME_MARKERS = (
+    "config.json",
+    "gaia.log",
+    "logs",
+    "chat",
+    "memory.db",
+    "scratchpad.db",
+    "connectors",
+    "lemonade",
+    "electron-config.json",
+    "electron-install-state.json",
+    "electron-install.log",
+)
+
+
+def _assert_purgeable_home(
+    home: Optional[Path] = None, *, tier: str = "--purge"
+) -> Path:
+    """Return the resolved GAIA home, or raise if deleting into it is unsafe.
+
+    Two independent guards, because ``_safe_roots`` lists the GAIA home as
+    an allowed root and is therefore vacuous when that home is wrong:
+
+    1. **Structural** — the GAIA home may not be a filesystem/drive root, the
+       user's home directory, or any ancestor of it. ``GAIA_HOME=$HOME`` turns
+       the Tier-3 list into ``$HOME/venv`` + ``$HOME/documents``, and
+       ``documents`` resolves case-insensitively onto the real ``Documents``
+       on Windows and APFS.
+    2. **Identity** — the directory must look like GAIA's, not like somebody's
+       data folder. Both tiers are checked: ``--venv`` deletes
+       ``$GAIA_HOME/venv``, so guarding only ``--purge`` would still eat a
+       project checkout's virtualenv.
+
+    ``tier`` names the flag in the error so the message matches what the user
+    actually ran.
+
+    Raises:
+        UnsafeGaiaHomeError: with an actionable message naming ``GAIA_HOME``.
+    """
+    gaia_home = _gaia_home(home)
+    resolved = gaia_home.resolve(strict=False)
+    user_home = (home if home is not None else Path.home()).resolve(strict=False)
+
+    hint = (
+        f"GAIA_HOME is set to {os.environ['GAIA_HOME']!r}."
+        if os.environ.get("GAIA_HOME")
+        else "GAIA_HOME is not set, so this came from Path.home()."
+    )
+
+    if resolved == resolved.parent:
+        raise UnsafeGaiaHomeError(
+            f"Refusing to uninstall: the GAIA home resolves to the filesystem "
+            f"root {resolved}. {hint} Point GAIA_HOME at a dedicated GAIA data "
+            f"directory (the default is {user_home / '.gaia'})."
+        )
+
+    if resolved == user_home or user_home.is_relative_to(resolved):
+        raise UnsafeGaiaHomeError(
+            f"Refusing to uninstall: the GAIA home resolves to {resolved}, "
+            f"which is your home directory (or contains it). Purging it would "
+            f"delete {resolved / 'documents'} — on Windows and macOS that is "
+            f"your real Documents folder. {hint} Point GAIA_HOME at a dedicated "
+            f"GAIA data directory (the default is {user_home / '.gaia'})."
+        )
+
+    # A home that isn't there yet has nothing to delete, so an identity check on
+    # it would only produce a scary error for a harmless no-op.
+    if resolved.is_dir() and not _has_gaia_marker(resolved):
+        raise UnsafeGaiaHomeError(
+            f"Refusing to {tier} {resolved}: it does not look like a GAIA data "
+            f"directory. Expected the directory to be named '.gaia' or to "
+            f"contain one of: {', '.join(GAIA_HOME_MARKERS)}. {hint}"
+        )
+
+    return resolved
+
+
+def _has_gaia_marker(resolved_home: Path) -> bool:
+    """Whether ``resolved_home`` carries proof that GAIA owns it."""
+    if resolved_home.name == ".gaia":
+        return True
+    for marker in GAIA_HOME_MARKERS:
+        try:
+            if (resolved_home / marker).exists():
+                return True
+        except OSError:
+            continue
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +350,16 @@ def build_plan(
     Assumes validation has already happened (``--purge-lemonade`` /
     ``--purge-models`` / ``--purge-hf-cache`` must come with ``--purge``).
     ``--purge`` wins over ``--venv`` if both are passed.
+
+    Raises:
+        UnsafeGaiaHomeError: when a tier would delete inside a GAIA home that
+            is really the user's home directory, a drive root, or a directory
+            with no sign that GAIA owns it.
     """
     plan = UninstallPlan()
+
+    if purge or venv:
+        _assert_purgeable_home(home, tier="--purge" if purge else "--venv")
 
     if purge:
         for path in _purge_paths(home):
@@ -297,8 +425,13 @@ def _print_plan(
     plan: UninstallPlan,
     *,
     dry_run: bool,
+    gaia_home: Optional[Path] = None,
     printer: Callable[[str], None] = print,
 ) -> None:
+    # Show the resolved root before the paths: GAIA_HOME can move it, and the
+    # user must be able to see where the deletion will actually land.
+    if gaia_home is not None:
+        _print(f"GAIA home: {gaia_home}", printer=printer)
     header = "[dry-run] Would remove:" if dry_run else "The following will be removed:"
     _print(header, printer=printer)
     if plan.tiered_paths:
@@ -425,6 +558,42 @@ def _close_gaia_log_handlers(home: Optional[Path] = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_link(path: Path) -> bool:
+    """Whether ``path`` is a symlink or a Windows junction.
+
+    ``Path.is_symlink()`` is False for a junction, and a junction is the only
+    way to relocate a directory on Windows without Developer Mode.
+    """
+    if path.is_symlink():
+        return True
+    isjunction = getattr(os.path, "isjunction", None)  # 3.12+
+    if isjunction is not None:
+        return bool(isjunction(path))
+    if not sys.platform.startswith("win"):
+        # Junctions are a Windows concept; is_symlink() is the whole story.
+        return False
+    mount_point_tag = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
+    if mount_point_tag is None:
+        return False
+    try:
+        return getattr(path.lstat(), "st_reparse_tag", None) == mount_point_tag
+    except OSError:
+        return False
+
+
+def _unlink_link(path: Path) -> None:
+    """Delete a symlink / Windows junction itself, leaving its target alone."""
+    try:
+        path.unlink()
+    except OSError as unlink_error:
+        # A directory symlink or junction is a directory entry, so unlink()
+        # refuses it on Windows; rmdir removes the link without recursing.
+        try:
+            os.rmdir(path)
+        except OSError as rmdir_error:
+            raise rmdir_error from unlink_error
+
+
 def _remove_path(
     path: Path,
     *,
@@ -444,9 +613,21 @@ def _remove_path(
     """
     # Containment guard: resolve the candidate path and confirm it lives
     # inside at least one permitted root. We compare resolved paths on both
-    # sides so symlinks / relative segments can't sneak out.
+    # sides so relative segments can't sneak out.
     try:
-        resolved = path.resolve(strict=False)
+        is_link = _is_link(path)
+    except OSError as exc:
+        _print(f"  [error] could not stat {path}: {exc}", printer=printer)
+        return False
+
+    try:
+        if is_link:
+            # A link is deleted AS a link, never followed, so containment is
+            # checked on where the link lives — not where it points. Resolving
+            # the target here would refuse a relocated ~/.gaia/documents.
+            resolved = path.parent.resolve(strict=False) / path.name
+        else:
+            resolved = path.resolve(strict=False)
     except OSError as exc:
         _print(f"  [error] could not resolve {path}: {exc}", printer=printer)
         return False
@@ -474,7 +655,7 @@ def _remove_path(
         )
 
     try:
-        if not path.exists() and not path.is_symlink():
+        if not is_link and not path.exists():
             _print(f"  [skip] {path} (does not exist)", printer=printer)
             return True
     except OSError as exc:
@@ -482,7 +663,9 @@ def _remove_path(
         return False
 
     try:
-        if path.is_symlink() or path.is_file():
+        if is_link:
+            _unlink_link(path)
+        elif path.is_file():
             path.unlink()
         elif path.is_dir():
             shutil.rmtree(path)
@@ -651,25 +834,30 @@ def execute_plan(
     """Execute a plan and return the exit code.
 
     ``allowed_roots`` is forwarded to :func:`_remove_path` so every delete
-    is containment-checked against the GAIA-owned directories.
+    is containment-checked against the GAIA-owned directories. A refusal is
+    reported and downgrades the exit code to ``EXIT_FS_ERROR``; it must not
+    abort the run, or an earlier path being already deleted would leave a
+    half-uninstalled tree behind.
     """
     all_ok = True
 
-    for path in plan.unique_paths():
-        if not _remove_path(path, allowed_roots=allowed_roots, printer=printer):
+    def _remove(path: Path) -> None:
+        nonlocal all_ok
+        try:
+            if not _remove_path(path, allowed_roots=allowed_roots, printer=printer):
+                all_ok = False
+        except RuntimeError as exc:
+            _print(f"  [error] {exc}", printer=printer)
             all_ok = False
+
+    for path in plan.unique_paths():
+        _remove(path)
 
     if plan.purge_models_path is not None:
-        if not _remove_path(
-            plan.purge_models_path, allowed_roots=allowed_roots, printer=printer
-        ):
-            all_ok = False
+        _remove(plan.purge_models_path)
 
     if plan.purge_hf_cache_path is not None:
-        if not _remove_path(
-            plan.purge_hf_cache_path, allowed_roots=allowed_roots, printer=printer
-        ):
-            all_ok = False
+        _remove(plan.purge_hf_cache_path)
 
     if plan.purge_lemonade:
         _remove_lemonade(printer=printer)
@@ -768,14 +956,18 @@ def run(
         )
         return EXIT_ABORTED
 
-    plan = build_plan(
-        venv=venv,
-        purge=purge,
-        purge_lemonade=purge_lemonade,
-        purge_models=purge_models,
-        purge_hf_cache=purge_hf_cache,
-        home=home,
-    )
+    try:
+        plan = build_plan(
+            venv=venv,
+            purge=purge,
+            purge_lemonade=purge_lemonade,
+            purge_models=purge_models,
+            purge_hf_cache=purge_hf_cache,
+            home=home,
+        )
+    except UnsafeGaiaHomeError as exc:
+        _print(f"error: {exc}", printer=printer)
+        return EXIT_USAGE
 
     if plan.is_empty() and dry_run:
         _print("[dry-run] Nothing to do — no tier or extras selected.", printer=printer)
@@ -785,14 +977,20 @@ def run(
         _print_no_flags_help(printer=printer)
         return EXIT_OK
 
-    _print_plan(plan, dry_run=dry_run, printer=printer)
+    resolved_home = _gaia_home(home).resolve(strict=False)
+    _print_plan(plan, dry_run=dry_run, gaia_home=resolved_home, printer=printer)
 
     if dry_run:
         _print("[dry-run] No files were modified.", printer=printer)
         return EXIT_OK
 
     if not _should_skip_prompt(yes):
-        if not _confirm(input_fn=input_fn):
+        prompt = (
+            f"Permanently delete the above from {resolved_home}? [y/N]: "
+            if purge
+            else "Continue? [y/N]: "
+        )
+        if not _confirm(prompt, input_fn=input_fn):
             _print("Aborted. Nothing was removed.", printer=printer)
             return EXIT_ABORTED
 
