@@ -711,17 +711,30 @@ class WebClient:
         save_dir: str,
         filename: str = None,
         max_size: int = None,
+        on_path_resolved=None,
     ) -> dict:
         """Download a file from URL to local disk.
 
-        Streams to disk to handle large files. Returns dict with
-        path, size, and content_type.
+                Streams to disk to handle large files. Returns dict with
+                path, size, and content_type.
 
-        Args:
-            url: URL to download
-            save_dir: Directory to save file in
-            filename: Override filename (default: from URL/headers)
-            max_size: Max file size in bytes (default: self._max_download_size)
+        Refuses to overwrite an existing file: the destination is checked (and
+                handed to ``on_path_resolved`` for policy screening) *before* any bytes
+                are written, and the body is streamed to a sibling ``.part`` file that
+                is renamed into place only on success. The filename can come from an
+                attacker-controlled ``Content-Disposition`` header, so a failed policy
+                check must not have already clobbered the user's file. The check is
+                repeated immediately before the rename; a file created in that last
+                instant by another local process is still replaced.
+
+                Args:
+                    url: URL to download
+                    save_dir: Directory to save file in
+                    filename: Override filename (default: from URL/headers)
+                    max_size: Max file size in bytes (default: self._max_download_size)
+                    on_path_resolved: Optional callable invoked with the resolved
+                        destination ``Path`` before the file is created. Raise from it
+                        to refuse the download.
         """
         max_size = max_size or self._max_download_size
 
@@ -808,21 +821,65 @@ class WebClient:
         # access is fragile (future requests versions may clear them).
         content_type = response.headers.get("Content-Type", "unknown")
 
-        # Stream to disk
-        downloaded = 0
-        with open(save_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                downloaded += len(chunk)
-                if downloaded > max_size:
-                    f.close()
-                    save_path.unlink(missing_ok=True)
-                    response.close()
-                    raise ValueError(
-                        f"Download exceeded max size: {downloaded} bytes (max: {max_size})"
-                    )
-                f.write(chunk)
+        # Refuse to clobber an existing file. The name may come straight from
+        # a remote Content-Disposition header, so `report.pdf` from a hostile
+        # page must not be able to replace the user's own ~/Downloads/report.pdf.
+        if save_path.exists():
+            response.close()
+            raise ValueError(
+                f"Refusing to overwrite existing file: {save_path}. "
+                f"Pass an explicit filename= to download under a different name."
+            )
 
-        response.close()
+        # Policy screening happens before the file is created, not after —
+        # a blocked download must leave the filesystem untouched.
+        if on_path_resolved is not None:
+            try:
+                on_path_resolved(save_path)
+            except BaseException:
+                response.close()
+                raise
+
+        # Stream to a sibling .part file and rename into place, so an
+        # interrupted download never leaves a truncated file under the real
+        # name. Exclusive create means a concurrent download of the same name,
+        # or a .part left by a crashed one, fails loudly rather than having
+        # two writers interleave into one file.
+        part_path = save_path.with_name(save_path.name + ".part")
+        try:
+            part_file = open(part_path, "xb")
+        except FileExistsError:
+            response.close()
+            raise ValueError(
+                f"Cannot download to {save_path.name}: {part_path.name} already "
+                f"exists, so another download of this name is either in flight "
+                f"or was interrupted. Delete it, or pass a different filename=."
+            ) from None
+
+        # Only ever clean up the .part this call created — unlinking on any
+        # failure would delete a concurrent download's file.
+        downloaded = 0
+        try:
+            with part_file as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    downloaded += len(chunk)
+                    if downloaded > max_size:
+                        raise ValueError(
+                            f"Download exceeded max size: {downloaded} bytes "
+                            f"(max: {max_size})"
+                        )
+                    f.write(chunk)
+            if save_path.exists():
+                raise ValueError(
+                    f"Refusing to overwrite existing file: {save_path}. "
+                    f"It appeared while the download was in flight."
+                )
+            os.replace(part_path, save_path)
+        except BaseException:
+            part_path.unlink(missing_ok=True)
+            raise
+        finally:
+            response.close()
 
         return {
             "path": str(save_path),
