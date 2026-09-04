@@ -112,38 +112,6 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            # Look for workspace_info section
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-
-
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -307,11 +275,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
             status_code=404, detail=f"Model '{request.model}' not found"
         )
 
-    # Extract workspace root from messages (for converting relative paths to absolute)
-    workspace_root = extract_workspace_root(request.messages)
-    if _api_debug_enabled() and workspace_root:
-        logger.debug("📁 Extracted workspace root: %s", _REDACTED_LOG_VALUE)
-
     # Extract user query from messages (get last user message)
     user_message = next(
         (m.content for m in reversed(request.messages) if m.role == "user"), None
@@ -345,9 +308,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             logger.debug("🌊 Using STREAMING mode")
 
         return StreamingResponse(
-            create_sse_stream(
-                agent, user_message, request.model, workspace_root=workspace_root
-            ),
+            create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -360,8 +321,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
-        # Process query synchronously with workspace root
-        result = agent.process_query(user_message, workspace_root=workspace_root)
+        result = agent.process_query(user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -430,9 +390,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
 
-async def create_sse_stream(
-    agent, query: str, model: str, workspace_root: str = None
-) -> AsyncGenerator[str, None]:
+async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
     Create Server-Sent Events stream for chat completion.
 
@@ -443,7 +401,6 @@ async def create_sse_stream(
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
         model: Model ID
-        workspace_root: Optional workspace root path for absolute file paths
 
     Yields:
         SSE-formatted chunks with "data: " prefix
@@ -492,9 +449,7 @@ async def create_sse_stream(
 
     try:
         # Start processing in background
-        task = loop.run_in_executor(
-            None, lambda: agent.process_query(query, workspace_root=workspace_root)
-        )
+        task = loop.run_in_executor(None, lambda: agent.process_query(query))
 
         # Stream events as they are generated
         while not task.done():
