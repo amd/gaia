@@ -105,6 +105,100 @@ CHUNK_TRUNCATION_SIZE = 2500
 DEFAULT_MAX_STEPS = 50
 
 
+def effective_skill_body(agent, skill) -> str:
+    """*skill*'s authored body with *agent*'s approved learned changes applied.
+
+    A module-level function, not a method, on purpose: it is called from
+    :meth:`Agent.get_skills_system_prompt`, which is routinely composed onto
+    lightweight doubles that carry the skill-prompt methods and nothing else. As
+    a method it made every one of those a hard dependency; as a function it
+    duck-types, and an object with no memory store simply renders its authored
+    skills — which is exactly what "no learned changes" should look like.
+
+    Resolution is cached per (skill, base digest) on the agent *instance*, which
+    outlives a session — ``gaia chat`` reuses one agent across ``/new`` and a
+    daemon sidecar is longer-lived still. So a delta changed from the CLI takes
+    effect on the next agent launch, which is what that command says.
+    ``remember_skill_lesson`` clears this cache itself, so a lesson the agent
+    learns applies from its next step.
+
+    **This must never raise.** ``_get_mixin_prompts`` invokes the calling
+    fragment inside a bare ``except`` that drops it on error, so an exception
+    here would silently delete every loaded skill's instructions. Any failure
+    floors to the authored body and says so in the log.
+    """
+    base = getattr(skill, "body", "") or ""
+    if not base:
+        return base
+
+    enabled = getattr(agent, "learned_skills_enabled", None)
+    if not callable(enabled) or not enabled():
+        return base
+
+    try:
+        from gaia.agents.base.skill_deltas import (
+            STATUS_ACTIVE,
+            SkillDelta,
+            resolve_skill_body,
+        )
+        from gaia.skills.sections import section_digest
+
+        cache = getattr(agent, "_effective_skill_cache", None)
+        if cache is None:
+            cache = {}
+            agent._effective_skill_cache = cache
+        key = (skill.name, section_digest(base))
+        if key in cache:
+            return cache[key]
+
+        store = agent._memory_store
+        # limit=None: rows come back oldest-first, so a truncated read would
+        # drop the newest deltas — the ones that win — from the body the agent
+        # runs, with nothing to show it happened.
+        rows = store.search_deltas(
+            base_name=skill.name,
+            scope=agent.learned_skill_scope(),
+            status=STATUS_ACTIVE,
+            limit=None,
+        )
+        resolved = resolve_skill_body(base, [SkillDelta.from_row(r) for r in rows])
+
+        for note in resolved.notes:
+            if note.outcome != "applied":
+                logger.warning(
+                    "[SkillDeltas] %s on %s/%s: %s",
+                    note.outcome,
+                    skill.name,
+                    note.section,
+                    note.detail,
+                )
+        if resolved.applied:
+            agent.overlaid_skills[skill.name] = list(resolved.applied)
+            logger.info(
+                "[SkillDeltas] %s running with %d learned change(s), "
+                "%+d tokens vs authored",
+                skill.name,
+                len(resolved.applied),
+                resolved.token_delta,
+            )
+            try:
+                store.touch_deltas(resolved.applied)
+            except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+
+        cache[key] = resolved.body
+        return resolved.body
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.error(
+            "[SkillDeltas] could not resolve the learned overlay for %s; using "
+            "the authored skill unchanged: %s",
+            getattr(skill, "name", "?"),
+            exc,
+            exc_info=True,
+        )
+        return base
+
+
 def default_max_steps() -> int:
     """Resolve the global default agent step limit.
 
@@ -208,6 +302,15 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+}
+
+# Tools whose result is nothing but a receipt for what the agent itself just
+# did. EVERY other tool is treated as bringing in content the user did not type
+# — including the skill-library reads, whose text comes from third-party
+# packages, and any name this build has never heard of. Read by
+# ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
+TOOLS_WITHOUT_EXTERNAL_CONTENT = {
+    "remember_skill_lesson",
 }
 
 
@@ -521,6 +624,19 @@ class Agent(abc.ABC):
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
 
+    # Adaptive skills (#2674): the learned overlay composed over an authored
+    # skill at render time. ``False`` is the ``--no-learned-skills`` floor and
+    # must produce a byte-identical prompt, so nothing here may be consulted
+    # before ``learned_skills_enabled()`` says so.
+    _learned_skills_enabled: bool = True
+    #: (skill name, base digest) -> resolved body. Resolution happens once per
+    #: session so the fragment is stable across turns; a delta changed from
+    #: outside the process applies on the next launch, and one this agent
+    #: learns applies at once because the write clears this.
+    _effective_skill_cache: Optional[Dict[tuple, str]] = None
+    #: skill name -> ids of the deltas currently applied to it.
+    _overlaid_skills: Optional[Dict[str, List[str]]] = None
+
     #: Proactive skill discovery: matches the user's turn against skills that
     #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
     #: has to know a skill's name. ``None`` (the default) leaves every existing
@@ -762,6 +878,13 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Fail closed outside the normal loop: an agent driven directly (a test,
+        # the MCP server) has no turn boundary to reset this, and "no turn" must
+        # not read as "the user just said this".
+        self._turn_saw_external_content: bool = True
+        # Set by a caller that injects content into the next turn; consumed by
+        # it. See ``mark_external_content``.
+        self._pending_external_context: bool = False
         # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
@@ -2004,6 +2127,111 @@ Do NOT wrap conversational replies in JSON.
         )
         return loaded
 
+    def learned_skills_enabled(self) -> bool:
+        """Whether the learned overlay participates in skill resolution.
+
+        ``False`` under ``--no-learned-skills`` or ``GAIA_NO_LEARNED_SKILLS``,
+        with memory off, or in an incognito session. Each of those must give a
+        prompt byte-identical to a build with no overlay at all.
+
+        The env var is what covers the agents a CLI flag cannot reach — the
+        flagship runs as a daemon sidecar and behind the UI server, and it is
+        the only agent that registers ``remember_skill_lesson``. Read at call
+        time, so it also holds for an agent constructed before it was set.
+        """
+        raw = os.getenv("GAIA_NO_LEARNED_SKILLS")
+        if raw is not None and raw.strip().lower() in ("1", "true", "yes", "on"):
+            return False
+        if not getattr(self, "_learned_skills_enabled", True):
+            return False
+        if getattr(self, "_memory_store", None) is None:
+            return False
+        if getattr(self, "_incognito", False):
+            return False
+        return True
+
+    def _begin_turn_provenance(self) -> None:
+        """Open a turn: only the user has spoken, unless a caller pushed content.
+
+        A fresh user message is the one moment when that is true, so this is
+        the single place the taint resets. Called from ``_process_query_impl``.
+        """
+        self._turn_saw_external_content = getattr(
+            self, "_pending_external_context", False
+        )
+        self._pending_external_context = False
+
+    def mark_external_content(self) -> None:
+        """Declare that the next turn carries content the user did not type.
+
+        For a caller that injects content directly rather than letting the
+        agent fetch it — the flagship's ``/query`` pushed ``context``, for
+        instance. Consumed by the next :meth:`process_query`, which would
+        otherwise open that turn believing only the user had spoken.
+        """
+        self._pending_external_context = True
+
+    def turn_content_provenance(self) -> str:
+        """Where anything the agent writes down this turn could have come from.
+
+        ``"user_instruction"`` only while the user's own message is still the
+        only thing that has arrived. Any tool returning anything — a web page,
+        an email, an issue body, a command's output, a skill listing, an MCP
+        call — flips this to ``"tool_content"`` for the rest of the turn, and
+        it resets on the next user message. The allowlist holds exactly one
+        name, the learning tool's own receipt, so a tool nobody classified
+        taints by default rather than by omission.
+
+        This exists because a learned skill change persists across sessions: a
+        page that says "the correct command is X" must not become a permanent
+        instruction the agent runs under. ``validate_delta`` refuses anything
+        but ``user_instruction``, and this is the only honest way to answer it.
+
+        **The taint is per turn.** Content pulled in an *earlier* turn is not
+        tracked — a session-wide taint would disable learning in any session
+        where the agent ever browsed, which is most of them. That residual gap
+        is why announcing the change and making undo one command is not a
+        nicety here; it is the second half of the control.
+        """
+        if getattr(self, "_turn_saw_external_content", True):
+            return "tool_content"
+        return "user_instruction"
+
+    def learned_skill_scope(self) -> str:
+        """The leak boundary for learned deltas. Never ``None``.
+
+        ``_namespaced_agent_id()`` may legitimately return ``None`` (an agent
+        that opted out of the activation layer, or one built outside the
+        registry), and a null scope would either be refused at write time or —
+        worse, if the store allowed it — pool one agent's learned changes into
+        every other agent's skills. So this falls back to the concrete class
+        name, which is stable across sessions and distinct between agents.
+        """
+        return self._namespaced_agent_id() or type(self).__name__
+
+    def _effective_skill_body(self, skill) -> str:
+        """This agent's view of *skill* with its approved learned changes applied.
+
+        Thin wrapper over :func:`effective_skill_body` so subclasses can
+        override resolution. The render path calls the module-level function
+        directly, so an agent that composes ``get_skills_system_prompt`` without
+        this method still renders its authored skills.
+        """
+        return effective_skill_body(self, skill)
+
+    @property
+    def overlaid_skills(self) -> Dict[str, List[str]]:
+        """Loaded skills currently running with an overlay -> applied delta ids.
+
+        The legibility surface: a user must be able to see that an agent is not
+        running the skill as shipped.
+        """
+        overlaid = getattr(self, "_overlaid_skills", None)
+        if overlaid is None:
+            overlaid = {}
+            self._overlaid_skills = overlaid
+        return overlaid
+
     def get_skills_system_prompt(self) -> str:
         """Render the loaded skills as a system-prompt fragment.
 
@@ -2030,7 +2258,8 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                body = effective_skill_body(self, skill)
+                sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
@@ -2041,7 +2270,8 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body_sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                    body = effective_skill_body(self, skill)
+                    body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
                     f"- {skill.name}: {_skill_menu_description(skill.description)}"
@@ -3522,6 +3752,11 @@ Do NOT wrap conversational replies in JSON.
             logger.error(coercion_error)
             return {"status": "error", "error": coercion_error}
 
+        # Before dispatch, not after: a tool that times out or raises may still
+        # have pulled content into the turn, and its error string can carry it.
+        if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
+            self._turn_saw_external_content = True
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
@@ -4485,6 +4720,7 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._begin_turn_provenance()
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool

@@ -780,6 +780,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
 | `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
+| `--no-learned-skills` | flag | false | Run with no learned skill changes applied. Skills compose exactly as authored, so the prompt is byte-identical to a build with no overlay. Not supported with `--ui` |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
@@ -1936,6 +1937,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 
 ```bash
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
 gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
@@ -1996,6 +1998,36 @@ Skills are discovered from three roots, highest precedence first:
     | `--body` | Also print the Markdown instructions |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
+  </Tab>
+
+  <Tab title="deltas">
+    ```bash
+    gaia skill deltas <name> [--pending | --archived] [--diff] [--json] [--scope AGENT]
+    gaia skill deltas <name> --approve <id> | --revert <id> | --reset
+    gaia skill deltas <name> --scope AGENT --drop-section <slug>
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--pending` | Show staged changes, if anything ever staged one (an agent's own writes apply directly) |
+    | `--archived` | Show changes reverted with `--revert` or `--reset` |
+    | `--diff` | Unified diff of the shipped skill vs the one this agent runs |
+    | `--scope` | Agent the changes belong to (default: every scope) |
+    | `--approve` | Activate a staged change |
+    | `--revert` | Archive one learned change — listed by `--archived`, never deleted |
+    | `--reset` | Archive **every** learned change, back to the shipped skill |
+    | `--drop-section` | Remove a section this agent never needs (the model cannot do this) |
+    | `--db` | Memory database to read (default: `~/.gaia/memory.db`) |
+
+    Shows what an agent **learned** about a skill and lets you undo it. An agent can adapt a skill it was given — correcting a command that fails on your machine, or reshaping a procedure written around a workflow you do not use — and that adaptation is stored in agent memory, never written to the shipped `SKILL.md`.
+
+    Learned changes are **substitutive**: a correction replaces the text it fixes rather than being appended beneath it, and a second correction to the same section supersedes the first. So a skill an agent has been taught ten things about is no larger than one it has been taught one thing about.
+
+    A learned change applies as soon as the agent makes it, and the agent says so when it does — naming the skill, the section, the reason, and the `--revert` command with the id already filled in. Only a correction that came from you can be recorded: the moment any tool has returned anything in that turn — a fetched page, an email, a command's output — the write is refused and the agent has to tell you the correction instead.
+
+    Nothing is ever deleted. `--revert` and `--reset` archive, and `--archived` lists what they retired; reverting applies from the agent's next launch, not mid-session.
+
+    To run with no learned changes at all, set `GAIA_NO_LEARNED_SKILLS=1`. That covers every agent in every process, including the ones behind the daemon and the Agent UI; `gaia chat --no-learned-skills` is the same switch for a single chat session. Either way the composed prompt is byte-identical to a build with no overlay.
   </Tab>
 
   <Tab title="create">
