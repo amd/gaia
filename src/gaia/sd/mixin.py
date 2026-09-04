@@ -2,7 +2,7 @@
 SDToolsMixin - Stable Diffusion image generation tools for GAIA agents.
 
 Provides tools to generate images using the Lemonade Server SD endpoint.
-Supports 4 SD models: SD-Turbo (fast, default), SDXL-Turbo, SD-1.5, and
+Supports 4 SD models: SDXL-Turbo (the default), SD-Turbo (faster), SD-1.5, and
 SDXL-Base-1.0 (photorealistic) running on Ryzen AI.
 
 Example:
@@ -56,6 +56,12 @@ class SDToolsMixin:
         Constants SD_MODELS and SD_SIZES are duplicated from LemonadeClient for convenience.
         Primary source of truth is LemonadeClient, but having them here allows direct access
         via SDToolsMixin.SD_MODELS for better API ergonomics.
+
+        ``get_sd_system_prompt`` is opt-in. ChatAgent drops it so the ~5K-char
+        "expert image generation assistant" persona does not front-load every
+        turn; that guidance lives in the ``image-gen`` skill instead. A
+        standalone agent composing this mixin gets no SD prompt unless its own
+        ``_get_system_prompt`` returns one.
     """
 
     # Supported configurations (duplicated from LemonadeClient for API convenience)
@@ -144,7 +150,7 @@ class SDToolsMixin:
                 },
                 "model": {
                     "type": "str",
-                    "description": "SD model: SD-Turbo (fast, default), SDXL-Turbo (better), SDXL-Base-1.0 (photorealistic, slow), SD-1.5",
+                    "description": "SD model: SDXL-Turbo (default), SD-Turbo (faster, lower quality), SDXL-Base-1.0 (photorealistic, slow), SD-1.5. Omit to use the default.",
                     "required": False,
                 },
                 "size": {
@@ -191,7 +197,7 @@ class SDToolsMixin:
                 "models": [
                     {
                         "name": "SD-Turbo",
-                        "description": "Very fast, 512x512, 4 steps (default)",
+                        "description": "Very fast, 512x512, 4 steps",
                         "recommended_steps": 4,
                         "recommended_size": "512x512",
                         "speed": "~13s",
@@ -336,11 +342,11 @@ class SDToolsMixin:
                 if "already loaded" in str(e).lower():
                     logger.debug(f"Model already loaded: {model}")
                 else:
-                    # Connection error or other failure - return error
-                    error_msg = str(e)
-                    if "Connection" in error_msg or "connect" in error_msg.lower():
-                        error_msg = "Cannot connect to Lemonade Server. Is it running?"
-                    return {"status": "error", "error": error_msg}
+                    logger.error("Failed to load SD model %s: %s", model, e)
+                    return {
+                        "status": "error",
+                        "error": self._describe_client_error(e, model=model),
+                    }
 
             # Start progress for generation with timer (show_timer not supported by all consoles)
             if console and hasattr(console, "start_progress"):
@@ -434,14 +440,12 @@ class SDToolsMixin:
             if console and hasattr(console, "stop_progress"):
                 console.stop_progress()
 
-            error_msg = str(e)
-            if "Connection" in error_msg or "connect" in error_msg.lower():
-                error_msg = "Cannot connect to Lemonade Server. Is it running?"
+            error_msg = self._describe_client_error(e, model=model)
 
             if console and hasattr(console, "print_error"):
                 console.print_error(error_msg)
 
-            logger.error(error_msg)
+            logger.error("SD generation failed for %s: %s", model, e)
             return {"status": "error", "error": error_msg}
 
         except Exception as e:
@@ -455,6 +459,34 @@ class SDToolsMixin:
 
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
+
+    @staticmethod
+    def _describe_client_error(error: Exception, model: str) -> str:
+        """Turn a Lemonade client error into something the user can act on.
+
+        Order matters: a ``requests`` read-timeout carries "HTTPConnectionPool"
+        in its text, so a substring test for "connect" reports a live server as
+        unreachable and sends the user off to restart something that was fine.
+        Timeouts are checked first.
+        """
+        raw = str(error)
+        lowered = raw.lower()
+
+        if "timed out" in lowered or "timeout" in lowered:
+            return (
+                f"Timed out waiting for {model}; the server is running but did "
+                "not answer in time. First use of an SD model both downloads "
+                "and loads several GB. Pre-fetch it with `lemonade-server pull "
+                f"{model}`, confirm it loads with `lemonade-server load "
+                f"{model}`, then retry. ({raw})"
+            )
+        if "connection refused" in lowered or "failed to establish" in lowered:
+            return (
+                "Cannot reach Lemonade Server. Start it with "
+                "`lemonade-server serve`, or set LEMONADE_BASE_URL to a running "
+                f"server. ({raw})"
+            )
+        return f"Image generation failed for {model}: {raw}"
 
     def _estimate_generation_time(self, model: str, size: str) -> str:
         """

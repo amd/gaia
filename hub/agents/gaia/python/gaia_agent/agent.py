@@ -184,10 +184,12 @@ class GaiaAgentConfig(ChatAgentConfig):
     skill_discovery: bool = True
     skill_discovery_threshold: Optional[float] = None
 
-    # Image generation stays off: it pulls a second resident model, and evicting
-    # the chat model to draw a picture is not a trade a document agent should
-    # make silently.
-    enable_sd_tools: bool = False
+    # On for the flagship only. It does pull a second resident model and evict
+    # the chat model — a cost a document agent should not pay silently, so
+    # ChatAgent keeps it off — but this is the general-purpose surface, and off
+    # here means "draw me a picture" has no answer at all. The image-gen skill
+    # carries the eviction cost into the procedure.
+    enable_sd_tools: bool = True
 
     rag_documents: List[str] = field(default_factory=list)
 

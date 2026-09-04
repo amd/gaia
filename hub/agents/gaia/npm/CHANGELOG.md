@@ -14,6 +14,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Image generation, reachable out of the box.** "Draw me a red bicycle" now
+  generates a PNG with local Stable Diffusion and reports the path; previously
+  the tools existed behind a flag nothing turned on, so the agent just said it
+  couldn't. Adds `generate_image`, `list_sd_models`, and `get_generation_history`
+  (67 tools → 70) plus an `image_gen` bundle so per-turn selection can find them.
+  Generating swaps the resident model, so the next reply waits for the chat model
+  to reload. The `image-gen` starter skill covers prompt expansion and iterating
+  on the previous image.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
@@ -32,7 +40,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 26 of its 67 tools on any one call — a
+  profile.** The model is sent at most 26 of its 70 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.
