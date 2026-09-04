@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Received-invite grounding now respects provider calendar ownership (#2787).**
+  Calendar event tools preserve the provider's explicit organizer signal,
+  including the attendee-level fallback when ``organizer.self`` is omitted;
+  mixed sent/received claims remain guarded so self-organized events cannot be
+  mistaken for received invites.
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,

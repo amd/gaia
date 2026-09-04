@@ -843,15 +843,11 @@ def _attention_card_correction(cached: Dict[str, Any]) -> str:
 # Guard 6 — an invite claimed as sent/received/confirmed (#2766)
 # ---------------------------------------------------------------------------
 #
-# No tool in this package can currently confirm that a genuine calendar
-# invite was sent or received — detect_meeting_request is a text heuristic
-# for PROPOSALS, never a confirmation, and list_calendar_events /
-# detect_calendar_conflicts return real events but an event existing is not
-# evidence anyone emailed an invite for it (see calendar_tools' docstrings).
-# A completion-framed invite claim is therefore always ungrounded today,
-# with one exception: create_event_from_email's own mutation legitimately
-# sends calendar invites to its attendees, so a turn that actually called it
-# licenses the claim (mirrors guard 1's "grounded when a tool ran" shape).
+# No tool in this package can confirm that an invite was emailed, but a
+# calendar event whose provider data says ``organizer.self`` is false does
+# confirm that the user received an invitation to that event. Keep that
+# evidence narrow: it grounds a received-invite claim, not a claim that an
+# email was sent or that the user confirmed the invitation.
 
 _INVITE_CLAIM_RE = re.compile(
     r"\binvite[sd]?\b[^.!?]{0,40}\b(?:sent|received|confirmed)\b"
@@ -896,6 +892,30 @@ def _clause_around(text: str, start: int, end: int) -> str:
     return text[clause_start:clause_end]
 
 
+def _calendar_has_received_invite_evidence(
+    conversation: Optional[List[Dict[str, Any]]],
+) -> bool:
+    """Return whether this turn listed an event organized by someone else."""
+    collections = {
+        "list_calendar_events": "events",
+        "detect_calendar_conflicts": "conflicts",
+    }
+    for entry in _tool_entries(conversation):
+        collection_key = collections.get(entry.get("name"))
+        if collection_key is None:
+            continue
+        payload = _parse_tool_payload(entry.get("content"))
+        if payload is None:
+            continue
+        events = payload.get(collection_key) or []
+        if any(
+            isinstance(event, dict) and event.get("organizer_self") is False
+            for event in events
+        ):
+            return True
+    return False
+
+
 def find_ungrounded_invite_claim(
     final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
 ) -> Optional[str]:
@@ -915,6 +935,13 @@ def find_ungrounded_invite_claim(
     if _CLAUSE_NEGATION_RE.search(clause):
         return None
     if "create_event_from_email" in tools_called_this_turn(conversation):
+        return None
+    claim = match.group(0).lower()
+    if (
+        "received" in claim
+        and not re.search(r"\b(?:sent|confirmed)\b", claim)
+        and _calendar_has_received_invite_evidence(conversation)
+    ):
         return None
     return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
 

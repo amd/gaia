@@ -1,0 +1,28 @@
+{
+  "source": "calendar-event-reference",
+  "issue": 2787,
+  "events": [
+    {
+      "id": "received-invite-reference",
+      "summary": "Vendor review",
+      "start": {
+        "dateTime": "2026-08-13T14:00:00Z"
+      },
+      "end": {
+        "dateTime": "2026-08-13T15:00:00Z"
+      },
+      "organizer": {
+        "email": "vendor@example.com",
+        "self": false
+      },
+      "attendees": [
+        {
+          "email": "me@example.com",
+          "self": true,
+          "organizer": false,
+          "responseStatus": "accepted"
+        }
+      ]
+    }
+  ]
+}
