@@ -179,6 +179,49 @@ class Subcommand:
 
 
 @dataclass(frozen=True)
+class BinarySetup:
+    """How GAIA installs and authenticates one CLI **on the user's behalf**.
+
+    Data, not code. The setup engine (:mod:`gaia.skills.binary_setup`) reads
+    this and runs it; adding self-setup for a second CLI is another entry here,
+    never a new branch in the engine — the same acceptance test the invocation
+    table holds itself to.
+
+    Every command is a fixed ``argv`` list, never a shell string, and never
+    interpolates anything the model said. The model chooses *which binary* to
+    set up; it cannot choose what runs. That is the whole security story for
+    the install tier: there is no place for it to inject a command.
+
+    Attributes:
+        install_commands: ``{sys.platform prefix: argv}`` — the exact command
+            for each OS GAIA can install on. A platform absent from this map
+            has no automated install and is told so, with the manual URL.
+        install_docs_url: Where to install by hand. Named whenever the
+            automated path is unavailable or fails.
+        auth_status_argv: Argv (after the binary) that reports auth state as
+            JSON on stdout. Empty for a CLI that needs no authentication.
+        auth_login_argv: Argv that starts the browser device flow. Must be
+            runnable with **stdin closed** — an agent's child process has no
+            terminal, so a login that insists on one cannot be driven and is
+            not supported here.
+        auth_login_timeout_s: How long to wait for the user to finish in the
+            browser before giving up and saying so. Bounded on purpose: a
+            device code expires, so waiting forever only hides that it did.
+        required_scopes: The permissions the skills using this CLI actually
+            need. Requested at login and verified after — never widened
+            "just in case", because every extra scope is one the user's token
+            carries for everything else it does too.
+    """
+
+    install_commands: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    install_docs_url: str = ""
+    auth_status_argv: Sequence[str] = ()
+    auth_login_argv: Sequence[str] = ()
+    auth_login_timeout_s: float = 600.0
+    required_scopes: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class BinaryPolicy:
     """Everything core knows about one skill-declarable CLI.
 
@@ -196,6 +239,9 @@ class BinaryPolicy:
             ``<binary> [operands] [flags]`` with no subcommand step at all
             (``pytest tests/unit -k foo``, vs. ``gh issue list``). When set,
             every token in the invocation is validated against this one rule.
+        setup: How GAIA can install and authenticate this CLI for the user.
+            ``None`` means it cannot, and the user is told to do it by hand
+            rather than offered something that will not work.
     """
 
     binary: str
@@ -204,6 +250,7 @@ class BinaryPolicy:
     subcommands: Mapping[str, Subcommand] = field(default_factory=dict)
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
     positional: Subcommand | None = None
+    setup: BinarySetup | None = None
 
     def __post_init__(self) -> None:
         if bool(self.subcommands) == bool(self.positional is not None):
@@ -411,10 +458,78 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             # that carries it, which no per-call prompt makes visible.
             "label": _gh({"list"}, {"create", "edit"}),
             "search": _gh({"issues", "prs", "repos", "code", "commits"}),
-            # `status` only. `gh auth token` prints the credential.
-            "auth": _gh({"status"}),
+            # `status` only. `gh auth token` prints the credential — and so
+            # does `gh auth status --show-token`, which is why the flag is
+            # denied here rather than left to the action allowlist. Denying
+            # the subcommand's write verbs but not this flag would leave the
+            # credential reachable through the one auth action that IS allowed,
+            # at the tier that runs without asking.
+            "auth": Subcommand(
+                actions=frozenset({"status"}),
+                value_flags=_GH_COMMON_VALUE_FLAGS,
+                denied_flags=frozenset({"-t", "--show-token"}),
+                denied_flag_reasons={
+                    "-t": "it prints the account's access token, which is the "
+                    "credential itself rather than a fact about it. Use "
+                    "'gh auth status' on its own to see who is signed in",
+                    "--show-token": "it prints the account's access token, "
+                    "which is the credential itself rather than a fact about "
+                    "it. Use 'gh auth status' on its own to see who is signed in",
+                },
+            ),
             "api": _GH_API,
         },
+        setup=BinarySetup(
+            install_commands={
+                # Non-interactive flags are required, not tidiness: an agent's
+                # child has no terminal, so winget's agreement prompts would
+                # block forever rather than ask anyone.
+                "win32": (
+                    "winget",
+                    "install",
+                    "--id",
+                    "GitHub.cli",
+                    "--exact",
+                    "--source",
+                    "winget",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ),
+                "darwin": ("brew", "install", "gh"),
+                # Linux is deliberately absent. gh is not in the default Debian
+                # or Fedora repositories, so `apt install gh` installs nothing
+                # on a stock box, and the real path adds GitHub's apt/dnf repo
+                # — a root-level trust change that belongs to the user, not to
+                # an agent acting for them. Linux users get the URL instead.
+            },
+            install_docs_url="https://cli.github.com",
+            # --json makes gh report state as data. The text form is prose that
+            # changes between releases; parsing it is how a logged-in user gets
+            # told they are logged out.
+            auth_status_argv=("auth", "status", "--json", "hosts"),
+            # Verified to run with stdin closed: gh prints the one-time code and
+            # the device URL to stderr, then polls until the user finishes in a
+            # browser. --hostname is required non-interactively, and
+            # --git-protocol keeps it from asking a question nobody can answer.
+            auth_login_argv=(
+                "auth",
+                "login",
+                "--web",
+                "--hostname",
+                "github.com",
+                "--git-protocol",
+                "https",
+                "--scopes",
+                "repo,read:org",
+            ),
+            # `repo` covers reading and commenting on issues and PRs, including
+            # private repositories; `read:org` is what org-scoped reads need.
+            # Not `workflow`, not `gist`, not `delete_repo` — nothing the triage
+            # skill's own command table can reach. gh adds its own floor on top;
+            # verification checks that these are present, never that nothing
+            # else is, since the floor is gh's call and not a widening by GAIA.
+            required_scopes=frozenset({"repo", "read:org"}),
+        ),
     ),
     # `pytest` is NOT a read-only grant in the sense `gh` is — it EXECUTES the
     # project's own test code. That is the same trust boundary as the
@@ -621,12 +736,21 @@ def resolve_binary_policies(
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
         if require_installed and shutil.which(policy.binary) is None:
+            # Still a refusal — a half-loaded skill produces confident answers
+            # from no data. What changed is that it is no longer a dead end:
+            # the agent can install the CLI itself, so the message names that
+            # instead of handing the user a command and walking away.
+            remedy = (
+                f"Ask GAIA to set up {policy.binary} and it will install it for "
+                "you, after showing you the exact command and asking. "
+                if policy.setup is not None
+                else ""
+            )
             raise SkillPermissionError(
                 f"Skill '{skill_name}' needs the '{policy.binary}' command, which "
-                f"is not on PATH. {policy.summary} {policy.install_hint} "
+                f"is not on PATH. {policy.summary} {remedy}{policy.install_hint} "
                 "The skill is refused rather than loaded without the tool it "
-                "documents — a half-loaded skill produces confident answers from "
-                "no data."
+                "documents."
             )
         if policy not in policies:
             policies.append(policy)

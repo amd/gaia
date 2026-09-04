@@ -128,6 +128,20 @@ DOC_BUNDLES = [
         description="Run shell commands and query the system.",
     ),
     ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
+    ),
+    ToolBundle(
         name="clipboard",
         members=frozenset({"read_clipboard", "write_clipboard"}),
         description="Read from and write to the system clipboard.",
@@ -356,6 +370,20 @@ FULL_BUNDLES = [
             }
         ),
         description="Run shell commands and Python scripts, and query the system.",
+    ),
+    ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
     ),
     ToolBundle(
         name="clipboard",
