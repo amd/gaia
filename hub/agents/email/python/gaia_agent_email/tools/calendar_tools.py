@@ -914,6 +914,11 @@ def list_calendar_events_impl(
     backend expand recurring series from their first-ever instance (#2162).
     A bare date or naive datetime is coerced to UTC (#2517) — Google 400s on
     a date-only ``timeMin``/``timeMax``.
+
+    The result includes ``count`` for the number of events returned and
+    ``truncated`` when the provider reports another page. When ``truncated``
+    is true, the returned events are only the first page and must not be
+    presented as the complete calendar window.
     """
     if time_min is None and time_max is None:
         now_dt = now if now is not None else datetime.now(timezone.utc)
@@ -947,8 +952,9 @@ def list_calendar_events_impl(
                     "attendees": _extract_attendees(e),
                 }
             )
-        st["result_summary"] = {"count": len(events)}
-        return {"events": events}
+        truncated = bool(data.get("nextPageToken") or data.get("nextLink"))
+        st["result_summary"] = {"count": len(events), "truncated": truncated}
+        return {"events": events, "count": len(events), "truncated": truncated}
 
 
 def update_rsvp_impl(
@@ -1128,7 +1134,10 @@ class CalendarToolsMixin:
             ``attendees`` list; an empty list means say so, not guess. The
             ``organizer`` is who created the event, not evidence that anyone
             was sent or received an invite — never describe the organizer as
-            having "sent an invite"."""
+            having "sent an invite". The result includes ``count`` and a
+            ``truncated`` flag; when ``truncated`` is true, report that only
+            the first page was returned and never present it as the complete
+            calendar window."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(

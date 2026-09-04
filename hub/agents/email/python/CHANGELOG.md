@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The calendar view now reports provider pagination to callers (#2664).**
+  `GET /v1/email/calendar/events` includes the returned-page `count` and a
+  `truncated` flag, so the app's calendar view no longer presents a partial
+  busy window as complete.
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,

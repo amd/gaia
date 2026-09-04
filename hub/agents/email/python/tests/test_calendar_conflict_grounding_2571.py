@@ -123,6 +123,8 @@ def test_list_calendar_events_docstring_disclaims_conflict_determination(agent):
     desc = _TOOL_REGISTRY["list_calendar_events"]["description"]
     assert "does NOT determine whether they conflict" in desc
     assert "detect_calendar_conflicts" in desc
+    assert "truncated" in desc
+    assert "first page" in desc
 
 
 def test_detect_calendar_conflicts_docstring_mandates_calling_it(agent):

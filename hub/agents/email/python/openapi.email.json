@@ -722,6 +722,13 @@
         "additionalProperties": false,
         "description": "Result of GET /v1/email/calendar/events (read-only view).",
         "properties": {
+          "count": {
+            "default": 0,
+            "description": "Number of events returned in this page.",
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
           "events": {
             "description": "Matching events, ordered by start time.",
             "items": {
@@ -735,6 +742,12 @@
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "description": "True when the provider reported another page; the events list is not the complete calendar window.",
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "title": "CalendarEventsResponse",
