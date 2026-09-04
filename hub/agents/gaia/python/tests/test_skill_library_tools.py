@@ -458,8 +458,10 @@ def test_load_refuses_a_skill_that_asks_for_shell_execute(session):
 def test_disk_tools_refuse_a_name_that_is_a_path(session, tool_name, hostile):
     """A model-supplied name must never reach a filesystem join.
 
-    See ``test_the_substrate_deletes_outside_the_skills_root`` for why: the
-    delete underneath has no validation of its own.
+    The substrate validates these names too now (see the companion test below),
+    but this layer still owns the model-facing contract: ``load_skill`` resolves
+    through the manager and never reaches those joins, and a tool must answer
+    with a structured error rather than raise.
     """
     result = call(session, tool_name, name=hostile)
 
@@ -467,15 +469,16 @@ def test_disk_tools_refuse_a_name_that_is_a_path(session, tool_name, hostile):
     assert "not a skill name" in result["error"]
 
 
-def test_the_substrate_deletes_outside_the_skills_root(tmp_path):
-    """Documents the flaw the name check compensates for.
+def test_the_substrate_refuses_to_delete_outside_the_skills_root(tmp_path):
+    """The second line of defence, under the tool layer.
 
-    ``gaia.skills.install.remove_skill`` builds ``root / name`` and ``rmtree``s
-    it, so a traversing name deletes a directory outside the skills root and
-    reports success. Reachable from a chat turn the moment a tool passes the
-    model's string through — hence the guard above. If this test starts failing
-    because the substrate grew its own validation, drop ``_reject_bad_name``.
+    ``remove_skill`` used to build ``root / name`` and ``rmtree`` it unvalidated,
+    so a traversing name deleted a directory outside the skills root and reported
+    success. :mod:`gaia.skills.naming` now refuses the name at the join, which is
+    what makes the guard above defence in depth rather than the only thing
+    standing between a mistyped name and someone's files.
     """
+    from gaia.skills.errors import SkillValidationError
     from gaia.skills.install import remove_skill as _hub_remove
 
     root = tmp_path / "skills"
@@ -485,9 +488,10 @@ def test_the_substrate_deletes_outside_the_skills_root(tmp_path):
     (victim / "notes.txt").write_text("payroll", encoding="utf-8")
     manager = SkillManager(user_skills_root=root, include_claude_roots=False)
 
-    _hub_remove("../victim", manager=manager)
+    with pytest.raises(SkillValidationError):
+        _hub_remove("../victim", manager=manager)
 
-    assert not victim.exists()
+    assert (victim / "notes.txt").read_text(encoding="utf-8") == "payroll"
 
 
 def test_load_refuses_code_from_an_ungated_claude_import(session):
