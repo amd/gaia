@@ -995,24 +995,73 @@ class TestGaiaHomeSafetyGuard:
         )
         assert uc._gaia_home() / "documents" in plan.unique_paths()
 
+    @pytest.mark.parametrize(
+        "tier,expected_flag",
+        [
+            (dict(venv=False, purge=True), "--purge"),
+            (dict(venv=True, purge=False), "--venv"),
+        ],
+    )
     def test_a_venv_alone_is_not_proof_that_gaia_owns_the_directory(
-        self, fake_home, monkeypatch
+        self, fake_home, monkeypatch, tier, expected_flag
     ):
-        """GAIA_HOME at a project checkout must not cost the user its venv."""
+        """GAIA_HOME at a project checkout must not cost the user its venv.
+
+        Tier 2 needs this as much as Tier 3: ``--venv`` deletes
+        ``$GAIA_HOME/venv``, which IS the project's virtualenv.
+        """
         project = fake_home / "myapp"
         (project / "venv").mkdir(parents=True, exist_ok=True)
         (project / "venv" / "pyvenv.cfg").write_text("home = /usr\n")
         monkeypatch.setenv("GAIA_HOME", str(project))
 
-        with pytest.raises(uc.UnsafeGaiaHomeError, match="does not look like"):
-            uc.build_plan(
-                venv=False,
-                purge=True,
-                purge_lemonade=False,
-                purge_models=False,
-            )
+        with pytest.raises(uc.UnsafeGaiaHomeError, match="does not look like") as exc:
+            uc.build_plan(purge_lemonade=False, purge_models=False, **tier)
 
+        assert expected_flag in str(exc.value)
         assert (project / "venv" / "pyvenv.cfg").exists()
+
+    def test_venv_tier_refuses_an_unmarked_home_end_to_end(
+        self, fake_home, monkeypatch
+    ):
+        project = fake_home / "myapp"
+        (project / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+        (project / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("GAIA_HOME", str(project))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_USAGE, captured.text
+        assert "Refusing to --venv" in captured.text
+        assert (project / "venv" / "bin" / "python").exists()
+
+    def test_venv_tier_still_works_on_a_marked_custom_home(
+        self, fake_home, monkeypatch
+    ):
+        alt = fake_home / "gaia-data"
+        (alt / "lemonade").mkdir(parents=True, exist_ok=True)
+        (alt / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+        (alt / "venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (uc._gaia_home() / "venv").exists()
+
+    def test_venv_tier_still_works_on_the_default_home(self, fake_home, monkeypatch):
+        """The default ~/.gaia passes on name alone — no marker file needed."""
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        _seed_gaia_tree(fake_home)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=True), home=fake_home, printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (fake_home / ".gaia" / "venv").exists()
+        assert (fake_home / ".gaia" / "chat" / "history.db").exists(), "tier 2 only"
 
     def test_a_gaia_home_that_does_not_exist_is_a_no_op_not_a_refusal(
         self, fake_home, monkeypatch

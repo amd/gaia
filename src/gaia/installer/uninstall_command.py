@@ -34,7 +34,10 @@ Flags:
 
 Environment:
     * ``GAIA_HOME``  — override the location of ``~/.gaia`` (useful for
-      multi-user installs or alternate data roots).
+      multi-user installs or alternate data roots). Every tier that deletes
+      into it first checks that it is not the user's home directory, a
+      directory containing it, or a drive root, and that it carries some sign
+      GAIA owns it — see :func:`_assert_purgeable_home`.
     * ``HF_HOME``    — standard HuggingFace cache override, respected by
       ``--purge-hf-cache``.
 
@@ -197,13 +200,14 @@ class UnsafeGaiaHomeError(RuntimeError):
     """
 
 
-# Entries only GAIA creates. At least one must exist before ``--purge`` will
-# delete anything, so pointing GAIA_HOME at an arbitrary directory (a project
-# checkout whose ``venv/`` we would eat, say) is refused instead of purged.
-# ``venv`` is deliberately NOT a marker — it is the one purge target that
-# routinely exists in directories we do not own. ``.gaia``-named directories
-# are accepted on name alone: that is the default location and it is always
-# ours, marker or not.
+# Entries only GAIA creates. At least one must exist before any tier deletes
+# anything, so pointing GAIA_HOME at an arbitrary directory (a project checkout
+# whose ``venv/`` we would eat, say) is refused instead of emptied.
+# ``venv`` is deliberately NOT a marker — it is the one deletion target that
+# routinely exists in directories we do not own, and both installers create
+# theirs at a hardcoded ``~/.gaia/venv`` regardless of GAIA_HOME. ``.gaia``-named
+# directories are accepted on name alone: that is the default location and it is
+# always ours, marker or not.
 GAIA_HOME_MARKERS = (
     "config.json",
     "gaia.log",
@@ -220,7 +224,7 @@ GAIA_HOME_MARKERS = (
 
 
 def _assert_purgeable_home(
-    home: Optional[Path] = None, *, require_marker: bool = True
+    home: Optional[Path] = None, *, tier: str = "--purge"
 ) -> Path:
     """Return the resolved GAIA home, or raise if deleting into it is unsafe.
 
@@ -232,8 +236,13 @@ def _assert_purgeable_home(
        the Tier-3 list into ``$HOME/venv`` + ``$HOME/documents``, and
        ``documents`` resolves case-insensitively onto the real ``Documents``
        on Windows and APFS.
-    2. **Identity** (``require_marker``, Tier 3 only) — the directory must
-       look like GAIA's, not like somebody's data folder.
+    2. **Identity** — the directory must look like GAIA's, not like somebody's
+       data folder. Both tiers are checked: ``--venv`` deletes
+       ``$GAIA_HOME/venv``, so guarding only ``--purge`` would still eat a
+       project checkout's virtualenv.
+
+    ``tier`` names the flag in the error so the message matches what the user
+    actually ran.
 
     Raises:
         UnsafeGaiaHomeError: with an actionable message naming ``GAIA_HOME``.
@@ -264,11 +273,11 @@ def _assert_purgeable_home(
             f"GAIA data directory (the default is {user_home / '.gaia'})."
         )
 
-    # A home that isn't there yet has nothing to purge, so an identity check on
+    # A home that isn't there yet has nothing to delete, so an identity check on
     # it would only produce a scary error for a harmless no-op.
-    if require_marker and resolved.is_dir() and not _has_gaia_marker(resolved):
+    if resolved.is_dir() and not _has_gaia_marker(resolved):
         raise UnsafeGaiaHomeError(
-            f"Refusing to --purge {resolved}: it does not look like a GAIA data "
+            f"Refusing to {tier} {resolved}: it does not look like a GAIA data "
             f"directory. Expected the directory to be named '.gaia' or to "
             f"contain one of: {', '.join(GAIA_HOME_MARKERS)}. {hint}"
         )
@@ -344,13 +353,13 @@ def build_plan(
 
     Raises:
         UnsafeGaiaHomeError: when a tier would delete inside a GAIA home that
-            is really the user's home directory, a drive root, or (for
-            ``--purge``) a directory with no sign that GAIA owns it.
+            is really the user's home directory, a drive root, or a directory
+            with no sign that GAIA owns it.
     """
     plan = UninstallPlan()
 
     if purge or venv:
-        _assert_purgeable_home(home, require_marker=purge)
+        _assert_purgeable_home(home, tier="--purge" if purge else "--venv")
 
     if purge:
         for path in _purge_paths(home):

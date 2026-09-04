@@ -400,7 +400,10 @@ gaia uninstall --purge --purge-lemonade --yes
 </Warning>
 
 <Note>
-`GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns: if it resolves to your home directory, a directory containing it, or a drive root, `gaia uninstall` refuses and exits `64` rather than deleting `$GAIA_HOME/documents` — which on Windows and macOS is your real `Documents` folder. `--purge` additionally requires an existing `$GAIA_HOME` to be named `.gaia` or to hold something GAIA created (`config.json`, `chat/`, `lemonade/`, `memory.db`, …), so it will not eat the `venv/` of a directory that just happens to be pointed at.
+`GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns, and **both `--venv` and `--purge` check this** before deleting anything:
+
+- If it resolves to your home directory, a directory containing it, or a drive root, `gaia uninstall` refuses and exits `64` rather than deleting `$GAIA_HOME/documents` — which on Windows and macOS is your real `Documents` folder.
+- An existing `$GAIA_HOME` must also be named `.gaia` or hold something GAIA created (`config.json`, `chat/`, `lemonade/`, `memory.db`, …). A bare `venv/` does not count, so neither tier will eat the virtualenv of a project directory that `GAIA_HOME` happens to point at. A `$GAIA_HOME` that does not exist yet is a no-op, not an error.
 </Note>
 
 ### Kill Command
