@@ -65,7 +65,9 @@ def test_revoke_all_grants_for_unknown_id_is_noop(grants_in_tmp):
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
+async def test_mcp_server_disconnect_revokes_grants(
+    grants_in_tmp, tmp_path, register_ephemeral_spec
+):
     """
     End-to-end: configure → grant → disconnect → assert grants empty.
     Re-configure with the same id and assert grants are still empty
@@ -94,6 +96,9 @@ async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
             ),
         ),
     )
+    # Published in the catalog for this test: grant_agent resolves the
+    # connector before writing (#915).
+    register_ephemeral_spec(spec)
 
     # Redirect ~/.gaia for the mcp_server module too.
     monkey_home = tmp_path
@@ -123,7 +128,9 @@ async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_oauth_pkce_disconnect_revokes_grants(grants_in_tmp, monkeypatch):
+async def test_oauth_pkce_disconnect_revokes_grants(
+    grants_in_tmp, monkeypatch, register_ephemeral_spec
+):
     """OAuth-pkce disconnect must also wipe grants for the connector_id."""
     from gaia.connectors.oauth_pkce import OAuthPkceHandler
 
@@ -150,8 +157,14 @@ async def test_oauth_pkce_disconnect_revokes_grants(grants_in_tmp, monkeypatch):
         tier=1,
         type="oauth_pkce",
         description="ephemeral",
+        # An OAuth spec's ceiling IS its available_scopes, so it has to
+        # advertise the scope the test grants (#915).
+        available_scopes=("scope.read",),
         oauth_provider_ref="oauth-test",
     )
+    # Published in the catalog for this test: grant_agent resolves the
+    # connector before writing (#915).
+    register_ephemeral_spec(spec)
 
     grant_agent(spec.id, "agent-A", ["scope.read"])
     grant_agent(spec.id, "agent-B", ["scope.read"])

@@ -61,7 +61,15 @@ async def main():
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
     )
 
+    # A grant cannot exceed what the connector's catalog entry advertises: a
+    # scope outside `available_scopes` raises ScopeNotAllowedError, and an
+    # unknown connector id raises UnknownConnectorError (both subclass
+    # ConnectorsError). Revoking is never gated this way — taking access away
+    # always works, even for a connector that has left the catalog.
+
     # 3. Fetch a short-lived access token (refresh is automatic).
+    #    Always name the scopes you need: a call that names none is refused
+    #    rather than silently skipping the grant check.
     token = await conn.get_access_token(
         provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
@@ -206,6 +214,11 @@ gaia connectors grants grant google builtin:chat \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
+
+# `grant` exits 1 if the scope is outside the connector's available_scopes or
+# the connector id is not in the catalog — `gaia connectors list` shows the
+# ids, `gaia connectors list <id>` its scopes. `revoke` is never gated that
+# way: taking access away always works.
 
 # NOTE: the Agent UI grants on connect (#2117): POST
 # /api/connectors/{id}/authorize accepts grant_agents (namespaced agent

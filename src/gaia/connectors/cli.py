@@ -659,7 +659,10 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
 
 
 def _handle_grants(args: argparse.Namespace) -> int:
-    from gaia.connectors.errors import ScopeNotAllowedError
+    from gaia.connectors.errors import (
+        ScopeNotAllowedError,
+        UnknownConnectorError,
+    )
     from gaia.connectors.grants import (
         grant_agent,
         list_agent_grants,
@@ -680,14 +683,7 @@ def _handle_grants(args: argparse.Namespace) -> int:
         # route enforce one ceiling (#915).
         try:
             grant_agent(args.connector_id, args.agent_id, args.scopes)
-        except KeyError:
-            sys.stderr.write(
-                f"gaia connectors grants grant: unknown connector "
-                f"{args.connector_id!r}. Run 'gaia connectors list' to see "
-                "the available ids.\n"
-            )
-            return 1
-        except ScopeNotAllowedError as e:
+        except (ScopeNotAllowedError, UnknownConnectorError) as e:
             sys.stderr.write(f"gaia connectors grants grant: {e}\n")
             return 1
         sys.stdout.write(

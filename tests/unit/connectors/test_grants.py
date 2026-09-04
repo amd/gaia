@@ -143,21 +143,27 @@ class TestAtomicity:
     def test_concurrent_grants_do_not_corrupt(self, fake_home):
         # Run many grants concurrently from one event loop. The per-process
         # asyncio.Lock prevents interleaved writes from clobbering each other.
+        # Scopes cycle through google's real catalog entry — grant_agent
+        # enforces the connector's ceiling (#915), and what this test needs is
+        # 20 distinct AGENTS, not 20 distinct scopes.
+        import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+        from gaia.connectors.registry import REGISTRY
+
+        catalog_scopes = list(REGISTRY.get("google").available_scopes)
+        expected = {
+            f"agent_{i}": [catalog_scopes[i % len(catalog_scopes)]] for i in range(20)
+        }
+
         async def driver():
             await asyncio.gather(
                 *[
-                    asyncio.to_thread(
-                        grant_agent, "google", f"agent_{i}", [f"scope_{i}"]
-                    )
-                    for i in range(20)
+                    asyncio.to_thread(grant_agent, "google", agent_id, scopes)
+                    for agent_id, scopes in expected.items()
                 ]
             )
 
         asyncio.run(driver())
-        listing = list_agent_grants("google")
-        assert len(listing) == 20
-        for i in range(20):
-            assert listing[f"agent_{i}"] == [f"scope_{i}"]
+        assert list_agent_grants("google") == expected
 
 
 class TestCorruptedFileRecovery:

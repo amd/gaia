@@ -61,6 +61,7 @@ from gaia.connectors.errors import (
     ScopeMismatchError,
     ScopeNotAllowedError,
     UnknownAgentError,
+    UnknownConnectorError,
 )
 from gaia.connectors.events import set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
@@ -252,6 +253,14 @@ set_emitter(_emitter)
 
 
 def _raise_http_for(exc: ConnectorsError) -> HTTPException:
+    if isinstance(exc, UnknownConnectorError):
+        return HTTPException(
+            status_code=404,
+            detail={
+                "error": "unknown_connector",
+                "connector_id": exc.connector_id,
+            },
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
@@ -982,15 +991,13 @@ async def put_grant(
 
     ``grants.grant_agent`` owns both authorization gates — unknown connector
     and out-of-ceiling scopes — so this route and the CLI cannot drift. Here we
-    only translate them: 404 for the unknown id, and the same 400
-    ``scope_not_allowed`` body the authorize route already returns.
+    only translate them, via ``_raise_http_for``: 404 ``unknown_connector`` for
+    an id the catalog does not publish (matching ``_require_mcp_server`` two
+    routes down), and the same 400 ``scope_not_allowed`` body the authorize
+    route already returns.
     """
     try:
         grant_agent(connector_id, agent_id, body.scopes)
-    except KeyError as e:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown connector: {connector_id!r}"
-        ) from e
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
     await _emitter.emit(

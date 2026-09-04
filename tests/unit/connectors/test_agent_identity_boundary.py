@@ -25,14 +25,24 @@ control do nothing:
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.agents.base.agent import Agent
 from gaia.connectors.context import _agent_context, current_agent_id
-from gaia.connectors.errors import AuthRequiredError, ScopeNotAllowedError
-from gaia.connectors.grants import grant_agent, list_agent_grants
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ScopeNotAllowedError,
+    UnknownConnectorError,
+)
+from gaia.connectors.grants import (
+    grant_agent,
+    list_agent_grants,
+    revoke_agent_grant,
+    revoke_all_grants_for,
+)
 from gaia.connectors.registry import REGISTRY
 
 _NSID = "builtin:grant-boundary-probe"
@@ -131,7 +141,7 @@ class TestGrantScopeCeiling:
     def test_unknown_connector_id_is_rejected(self, tmp_path, monkeypatch):
         """A typo-d id used to return success and persist a phantom key."""
         monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-        with pytest.raises(KeyError):
+        with pytest.raises(UnknownConnectorError):
             grant_agent("gooogle", "installed:email", [_GMAIL_READ])
         assert list_agent_grants("gooogle") == {}
 
@@ -140,6 +150,59 @@ class TestGrantScopeCeiling:
         grant_agent("mcp-tavily", _NSID, ["use"])
         with pytest.raises(ScopeNotAllowedError):
             grant_agent("mcp-tavily", _NSID, ["use", "admin"])
+
+
+class TestRevokeIsNeverCatalogGated:
+    """Only WIDENING is gated. Taking authority away has to work even for a
+    connector the catalog no longer publishes — otherwise dropping a connector
+    from the catalog strands grants that can never be cleared, which is a
+    security regression pointing the other way.
+    """
+
+    @pytest.fixture
+    def stranded_grant(self, tmp_path, monkeypatch):
+        """A ledger row for a connector that is no longer in the catalog."""
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        grant_agent("mcp-tavily", _NSID, ["use"])
+        grant_agent("mcp-github", "builtin:chat", ["use"])
+
+        from gaia.connectors.registry import REGISTRY as _REAL
+        from gaia.connectors.registry import ConnectorRegistry
+
+        # Drop mcp-tavily from the catalog, keeping everything else.
+        shrunk = ConnectorRegistry()
+        for spec in _REAL.all():
+            if spec.id != "mcp-tavily":
+                shrunk.register(spec)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", shrunk)
+
+        with pytest.raises(UnknownConnectorError):
+            grant_agent("mcp-tavily", _NSID, ["use"])  # widening IS refused
+
+    def test_revoke_agent_grant_still_clears_it(self, stranded_grant):
+        revoke_agent_grant("mcp-tavily", _NSID)
+        assert list_agent_grants("mcp-tavily") == {}
+
+    def test_revoke_all_grants_for_still_clears_it(self, stranded_grant):
+        assert revoke_all_grants_for("mcp-tavily") == [_NSID]
+        assert list_agent_grants("mcp-tavily") == {}
+        # And an unrelated connector is untouched.
+        assert list_agent_grants("mcp-github") == {"builtin:chat": ["use"]}
+
+
+class TestUnknownConnectorIsStructured:
+    """A bare ``KeyError`` from the registry reaches HTTP as a 500 and a CLI as
+    a traceback. Grant writes raise a typed error every surface can translate.
+    """
+
+    def test_grant_agent_raises_the_typed_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        with pytest.raises(UnknownConnectorError) as exc:
+            grant_agent("gooogle", "builtin:chat", [_GMAIL_READ])
+        assert exc.value.connector_id == "gooogle"
+        assert "google" in exc.value.known_ids
+        # Actionable: names the id, the catalog, and the command to inspect it.
+        assert "gaia connectors list" in str(exc.value)
 
 
 class TestPutGrantRouteTranslation:
@@ -180,6 +243,119 @@ class TestPutGrantRouteTranslation:
         with pytest.raises(HTTPException) as exc:
             self._put("gooogle", "builtin:chat", [_GMAIL_READ])
         assert exc.value.status_code == 404
+        # Structured, not a bare string — a raw KeyError here would be a 500.
+        assert exc.value.detail == {
+            "error": "unknown_connector",
+            "connector_id": "gooogle",
+        }
+
+
+class TestEveryCredentialDoorIsGuarded:
+    """Both entry points into the credential layer, checked the same way.
+
+    ``handler.get_credential`` covers the MCP/dispatcher path;
+    ``api._authorize_access`` covers the OAuth token path
+    (``get_access_token`` / ``_with_expiry`` and their sync wrappers all
+    funnel through it). Fixing one and leaving the other is how a control
+    stays bypassable: an agent that simply names no scopes would satisfy
+    ``check_agent_grant`` vacuously and get a full-capability token.
+    """
+
+    def test_token_path_refuses_a_scope_less_request(self, tmp_path, monkeypatch):
+        from gaia.connectors.api import _authorize_access
+        from gaia.connectors.errors import ConfigurationError
+
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        with pytest.raises(ConfigurationError) as exc:
+            _authorize_access(
+                provider="google",
+                scopes=[],
+                agent_id="builtin:chat",
+                account_email="default",
+            )
+        assert "named no scopes" in str(exc.value)
+
+    def test_token_path_still_checks_a_named_scope(self, tmp_path, monkeypatch):
+        from gaia.connectors.api import _authorize_access
+
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        with pytest.raises(AuthRequiredError) as exc:
+            _authorize_access(
+                provider="google",
+                scopes=[_GMAIL_READ],
+                agent_id="builtin:chat",
+                account_email="default",
+            )
+        assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
+
+    def test_token_path_outside_a_turn_keeps_the_cli_escape_hatch(
+        self, tmp_path, monkeypatch
+    ):
+        """No agent id and no agent turn: the documented ungated path. It must
+        fail on the missing CONNECTION, never on the grant check."""
+        from gaia.connectors.api import _authorize_access
+
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "gaia.connectors.api.get_provider",
+            lambda p: SimpleNamespace(client_id_hash="h", tenant=None),
+        )
+        monkeypatch.setattr(
+            "gaia.connectors.api.load_connection", lambda *a, **kw: None
+        )
+        with pytest.raises(AuthRequiredError) as exc:
+            _authorize_access(
+                provider="google",
+                scopes=[],
+                agent_id=None,
+                account_email="default",
+            )
+        assert exc.value.reason is AuthRequiredError.Reason.NOT_CONNECTED
+
+    def test_token_path_fails_closed_with_no_identity_in_a_turn(
+        self, tmp_path, monkeypatch
+    ):
+        from gaia.connectors.api import _authorize_access
+
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        with _agent_context(None):
+            with pytest.raises(AuthRequiredError) as exc:
+                _authorize_access(
+                    provider="google",
+                    scopes=[_GMAIL_READ],
+                    agent_id=None,
+                    account_email="default",
+                )
+        assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
+        assert exc.value.agent_id is None
+
+    def test_identity_missing_error_does_not_tell_you_to_grant_nothing(self):
+        """ "Open Settings and grant it" is unfollowable when there is no agent
+        to grant TO — that branch names the dropped context instead."""
+        from gaia.connectors.formatting import format_connector_error
+
+        msg = format_connector_error(
+            AuthRequiredError(
+                AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+                provider="google",
+                agent_id=None,
+                missing_scopes=[_GMAIL_READ],
+            )
+        )
+        assert "AGENT_IDENTITY_MISSING" in msg
+        assert "Per-agent grants" not in msg
+        assert "agent_id=" in msg  # names the actual remedy
+
+        # A real agent still gets the grant-me instruction.
+        granted_msg = format_connector_error(
+            AuthRequiredError(
+                AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+                provider="google",
+                agent_id="builtin:chat",
+                missing_scopes=[_GMAIL_READ],
+            )
+        )
+        assert "Per-agent grants" in granted_msg
 
 
 # ---------------------------------------------------------------------------

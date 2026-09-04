@@ -798,13 +798,22 @@ class TestGrantsEndpoints:
         assert "installed:email" not in listing
 
     def test_put_grant_for_an_unknown_connector_is_404(self, ui_api_client):
-        """A typo'd id used to return 200 and persist a phantom ledger key."""
+        """A typo'd id used to return 200 and persist a phantom ledger key.
+
+        404 (not 400) matches ``_require_mcp_server`` two routes down, which
+        already answers an unknown connector id that way. The body is
+        structured — a bare registry ``KeyError`` here would surface as a 500.
+        """
         resp = ui_api_client.put(
             "/api/connectors/gooogle/grants/builtin:chat",
             json={"scopes": ["openid"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == {
+            "error": "unknown_connector",
+            "connector_id": "gooogle",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1078,7 @@ class TestActivationsEndpoints:
     def test_put_activation_with_no_grant_and_scopes_auto_grants(self, ui_api_client):
         resp = ui_api_client.put(
             "/api/connectors/mcp-test/activations/builtin:chat",
-            json={"scopes": ["use", "read"]},
+            json={"scopes": ["use"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 200
@@ -1078,7 +1087,33 @@ class TestActivationsEndpoints:
         assert body["active"] is True
         # Grant landed too.
         grants = ui_api_client.get("/api/connectors/mcp-test/grants").json()
-        assert grants == {"grants": {"builtin:chat": ["use", "read"]}}
+        assert grants == {"grants": {"builtin:chat": ["use"]}}
+
+    def test_put_activation_auto_grant_cannot_exceed_the_ceiling(self, ui_api_client):
+        """This route is the OTHER unceilinged ledger write (#915).
+
+        ``body.scopes`` went from the request straight into ``grant_agent``,
+        so activating an agent could mint a grant for a scope the connector
+        never advertised — the same hole as ``put_grant``, reached through the
+        activation door. ``mcp-test`` declares no ``available_scopes``, so its
+        ceiling is the implicit ``("use",)`` and ``read`` is outside it.
+
+        This test previously asserted the write SUCCEEDED, pinning the
+        vulnerable behaviour.
+        """
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={"scopes": ["use", "read"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"]["error"] == "scope_not_allowed"
+
+        # Neither ledger was touched — no grant, and no activation either.
+        grants = ui_api_client.get("/api/connectors/mcp-test/grants").json()
+        assert grants == {"grants": {}}
+        activations = ui_api_client.get("/api/connectors/mcp-test/activations").json()
+        assert activations == {"activations": {}}
 
     def test_put_activation_with_no_grant_and_no_scopes_is_400(self, ui_api_client):
         resp = ui_api_client.put(

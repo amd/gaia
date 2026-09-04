@@ -196,6 +196,20 @@ def _authorize_access(
             missing_scopes=list(scopes),
         )
 
+    if resolved_agent is not None and not scopes:
+        # ``check_agent_grant(provider, agent, [])`` is True vacuously, and the
+        # connection-coverage check below is vacuous too — so a scope-less
+        # request would return a FULL-capability token with the ledger never
+        # consulted. That is the whole bypass this control exists to close,
+        # reached by simply not saying what you want. Same guard
+        # ``handler.get_credential`` applies; this is the OAuth twin of it.
+        raise ConfigurationError(
+            f"get_access_token({provider!r}) named no scopes, so the per-agent "
+            f"grant for {resolved_agent!r} cannot be verified and no token will "
+            "be issued. Pass the scopes the caller actually needs, e.g. "
+            "scopes=['https://www.googleapis.com/auth/gmail.readonly']."
+        )
+
     # Eager check for per-agent grant — surface the error BEFORE any
     # network round-trip so the caller can prompt the user immediately.
     if resolved_agent is not None:
@@ -253,7 +267,12 @@ async def get_access_token(
     Agent-id resolution order (per AC8 explicit opt-out clause):
       1. Explicit ``agent_id`` kwarg, if non-None.
       2. Active contextvar (``current_agent_id()``), set by the agent runtime.
-      3. ``None``, which BYPASSES the per-agent grant check.
+      3. ``None``, which BYPASSES the per-agent grant check — but ONLY outside
+         an agent turn. Inside one, a missing identity is a dropped context,
+         not an opt-out, so the request is refused (#915).
+
+    An empty ``scopes`` list is refused whenever an agent id resolves: it would
+    satisfy the grant check vacuously and hand back a full-capability token.
 
     The contextvar path is the production path: ``Agent.process_query``
     enters ``_agent_context(self.namespaced_agent_id)`` before invoking
