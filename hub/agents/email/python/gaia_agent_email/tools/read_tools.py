@@ -1058,13 +1058,12 @@ def _apply_session_preferences(
     message is never urgent": a newsletter from a priority sender stays
     exactly as low-signal as its content says, and a genuinely urgent
     message from a muted sender stays exactly as urgent as its content
-    says. Both branches only tag ``preference_applied`` — today that tag
-    has no reader anywhere in this codebase (#2777); it does not reorder
-    or highlight anything in the rendered triage card. ``low_priority_senders``
+    says. Both branches tag ``preference_applied`` for the pre-scan ordering
+    path below; the tag does not change classification. ``low_priority_senders``
     separately has a real effect outside this function, in the autonomy
     loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
     raw set directly to auto-archive without confirmation. ``priority_senders``
-    has no reader anywhere outside this function.
+    is otherwise only used for pre-scan salience.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -1685,6 +1684,14 @@ def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
     return (-internal_date, _looks_automated(decision.get("from", "")))
 
 
+def _preference_sort_key(item: Mapping[str, Any]) -> int:
+    """Put preferred senders first and muted senders last, stably."""
+    return {
+        "priority_sender": 0,
+        "low_priority_sender": 2,
+    }.get(item.get("preference_applied"), 1)
+
+
 def _fetch_inbox_counts(gmail) -> Dict[str, Optional[int]]:
     """Exact INBOX message/unread counts via ONE ``labels().get`` call
     (#2584, extended #2638) — NOT ``list_messages``'s ``resultSizeEstimate``.
@@ -2024,9 +2031,9 @@ def pre_scan_inbox_impl(
     defaults, and a needs-review bucket for messages the heuristic was not
     confident about (#2584). A low-priority-sender match does not by
     itself route a message into suggested_archives (#2666) — only content
-    does. The ``preference_applied`` tag it carries instead has no reader
-    in this envelope today (#2777); it does not reorder or highlight
-    anything rendered here. The caller is expected to set ``kind`` in the
+    does. The ``preference_applied`` tag it carries is used only to order
+    each rendered section by sender salience (#2777); it does not change
+    classification. The caller is expected to set ``kind`` in the
     rendered output to ``email_pre_scan``
     so the chat surface can detect and render the structured card
     component.
@@ -2132,6 +2139,9 @@ def pre_scan_inbox_impl(
                 # first and always wins — see its own docstring).
                 "is_phishing": bool(r.get("is_phishing", False)),
                 "is_spam": bool(r.get("is_spam", False)),
+                # Internal salience marker; removed before the public card
+                # payload is validated, but retained to order capped sections.
+                "preference_applied": r.get("preference_applied"),
                 # Epoch-millis string, carried through so #2743's needs_you
                 # view can order oldest-first and compute age_seconds —
                 # never part of the public PreScanItem shape.
@@ -2236,9 +2246,21 @@ def pre_scan_inbox_impl(
                             "informational + session default 'archive'"
                             f" — {item.get('why', '')}"
                         ).rstrip(" —"),
+                        "preference_applied": item.get("preference_applied"),
                     }
                 )
             informational = []
+
+        # Session sender preferences affect salience, not classification:
+        # surface priority senders first and low-priority senders last within
+        # each attention section. Archive suggestions are a disposal list, so
+        # the safest candidates (low-priority senders) must come first and
+        # preferred senders last before the cap is applied. Stable sorting
+        # preserves the backend order for ties.
+        for section in (urgent, actionable, informational):
+            section.sort(key=_preference_sort_key)
+        suggested_archives.sort(key=_preference_sort_key, reverse=True)
+        needs_review.sort(key=_preference_sort_key)
 
         # #2743 redirect: waiting-on-you detections and persisted action
         # items carry no category bucket of their own — reuses
@@ -2283,7 +2305,11 @@ def pre_scan_inbox_impl(
             # ``internal_date`` is a needs_you-only working field (#2743) —
             # never part of the public PreScanItem shape (extra="forbid").
             return [
-                {k: v for k, v in item.items() if k != "internal_date"}
+                {
+                    k: v
+                    for k, v in item.items()
+                    if k not in ("internal_date", "preference_applied")
+                }
                 for item in items
             ]
 

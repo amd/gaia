@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,
@@ -162,6 +167,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
 - **A reply/draft/send action could report failure even though it actually
   succeeded, and a retry made things worse (#2902).** After a draft was
   created or a message sent, a separate local audit-log write (`state.db`,
@@ -441,6 +451,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
 - **A Gmail rate-limit no longer kills the whole scan (#2720, #2716).** Gmail
   enforces a per-user concurrent-request limit, and the metadata-first batch
   fetch (#2643) was oversized enough to reliably trip it — one 429'd
@@ -823,6 +838,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
 - **A batch-tool retry no longer gets killed mid-recovery by the streaming
   layer (#2515).** When the model called a batch tool with a spurious extra
   argument (e.g. `archive_message_batch` with a stray `mailbox` kwarg), the
