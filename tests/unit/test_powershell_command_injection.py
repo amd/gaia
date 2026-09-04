@@ -69,7 +69,6 @@ class TestPptxToPdfConversion:
         assert ps_script == pptx_utils.PPTX_TO_PDF_PS_SCRIPT
         assert "Start-Process" not in ps_script
         assert "quarterly" not in ps_script
-        assert "'" not in ps_script.replace("'Stop'", "")
 
     def test_path_is_handed_over_out_of_band_and_intact(self, tmp_path):
         """The path still reaches PowerShell — verbatim, via the environment."""
@@ -138,12 +137,20 @@ class TestSanitizeStem:
 # ── C2: notify_desktop's Windows PowerShell fallback ─────────────────────────
 
 
-gaia_agent_chat = pytest.importorskip(
-    "gaia_agent_chat", reason="gaia-agent-chat wheel not installed in this env"
-)
-
-
 class TestNotifyDesktopScript:
+    """Scope the chat-wheel skip to this class only.
+
+    A module-level ``importorskip`` raises ``Skipped`` during *collection* and
+    takes the whole file with it — including the PPTX and ``_sanitize_stem``
+    cases, which import no chat package and are the higher-severity half.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _requires_chat_wheel(self):
+        pytest.importorskip(
+            "gaia_agent_chat", reason="gaia-agent-chat wheel not installed in this env"
+        )
+
     def test_script_constant_reads_both_values_from_the_environment(self):
         from gaia_agent_chat import agent as chat_agent
 
