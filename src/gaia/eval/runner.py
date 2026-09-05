@@ -984,16 +984,26 @@ def run_scenario_subprocess(
         elapsed = time.time() - start
 
         if proc.returncode != 0:
+            # `--output-format json` puts the CLI's own error on stdout, so stderr
+            # is routinely empty here — capture both or the failure is unreadable.
+            detail = (
+                "\n".join(
+                    f"{name}: {text.strip()[:500]}"
+                    for name, text in (("stderr", proc.stderr), ("stdout", proc.stdout))
+                    if text and text.strip()
+                )
+                or f"no output on either stream (exit {proc.returncode})"
+            )
             print(
                 f"[ERROR] {scenario_id} — exit code {proc.returncode}", file=sys.stderr
             )
-            print(proc.stderr[:500], file=sys.stderr)
+            print(detail, file=sys.stderr)
             result = {
                 "scenario_id": scenario_id,
                 "status": "ERRORED",
                 "overall_score": None,
                 "turns": [],
-                "error": proc.stderr[:500],
+                "error": detail,
                 "elapsed_s": elapsed,
                 "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
             }
