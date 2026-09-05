@@ -677,3 +677,104 @@ def test_openai_tools_gate_counts_claude_as_tool_calling():
 
     agent._use_claude = False
     assert agent._openai_tools is None
+
+
+class TestToolNameSanitization:
+    """Skill tools are namespaced ``<skill>/<tool>`` — the ``/`` 400s the
+    Anthropic API (pattern ``^[a-zA-Z0-9_-]{1,128}$``), so names must be
+    sanitized outbound and restored on returned tool_use blocks."""
+
+    def _tools(self, *names):
+        return [
+            {
+                "type": "function",
+                "function": {"name": n, "description": "", "parameters": {}},
+            }
+            for n in names
+        ]
+
+    def test_slash_name_is_sanitized_and_mapped(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        converted = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
+        assert converted[0]["name"] == "rss-digest_fetch_rss"
+        assert p._restore_tool_name("rss-digest_fetch_rss") == "rss-digest/fetch_rss"
+
+    def test_valid_names_pass_through_untouched(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        converted = p._to_anthropic_tools(self._tools("read_file", "query-docs"))
+        assert [t["name"] for t in converted] == ["read_file", "query-docs"]
+        assert p._restore_tool_name("read_file") == "read_file"
+
+    def test_sanitization_collision_fails_loudly(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("a/b", "a.b"))
+
+    def test_sanitized_name_shadowing_a_builtin_is_refused(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        # `write/file` -> `write_file`, which is already a real builtin.
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write_file", "write/file"))
+
+    def test_order_does_not_hide_the_collision(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write/file", "write_file"))
+
+    def test_chat_round_trips_the_skill_name_end_to_end(self, fake_anthropic):
+        """The map is written while shaping the request and read while parsing
+        the response — the coupling a refactor would silently break."""
+        p = _provider(fake_anthropic)
+        p._client.messages.create.return_value = _response(
+            [_tool_use_block("toolu_5", "rss-digest_fetch_rss", {"url": "http://x"})],
+            stop_reason="tool_use",
+        )
+        envelope = json.loads(
+            p.chat(
+                [{"role": "user", "content": "digest it"}],
+                tools=self._tools("rss-digest/fetch_rss"),
+            )
+        )
+        # Anthropic saw the sanitized name; the agent gets the registered one.
+        sent = p._client.messages.create.call_args.kwargs["tools"]
+        assert [t["name"] for t in sent] == ["rss-digest_fetch_rss"]
+        (call,) = envelope[_NATIVE_TC_KEY]
+        assert call["function"]["name"] == "rss-digest/fetch_rss"
+
+    def test_stream_round_trips_the_skill_name_end_to_end(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        p._client.messages.create.return_value = iter(
+            [
+                SimpleNamespace(
+                    type="content_block_start",
+                    index=0,
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="toolu_6",
+                        name="rss-digest_fetch_rss",
+                        input={},
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(
+                        type="input_json_delta", partial_json='{"url": "http://x"}'
+                    ),
+                ),
+                SimpleNamespace(
+                    type="message_delta",
+                    delta=SimpleNamespace(stop_reason="tool_use"),
+                    usage=SimpleNamespace(output_tokens=3),
+                ),
+            ]
+        )
+        chunks = list(
+            p.chat(
+                [{"role": "user", "content": "digest it"}],
+                stream=True,
+                tools=self._tools("rss-digest/fetch_rss"),
+            )
+        )
+        (call,) = json.loads(chunks[-1])[_NATIVE_TC_KEY]
+        assert call["function"]["name"] == "rss-digest/fetch_rss"

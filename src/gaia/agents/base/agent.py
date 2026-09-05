@@ -3375,10 +3375,11 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Normalize common model name-construction errors before registry lookup:
-        # strip trailing "()" some models append, and convert hyphens to underscores
-        # (tool names are always snake_case; hyphens are never valid).
-        tool_name = tool_name.removesuffix("()").replace("-", "_")
+        # Exact name first — skill tools register with a literal hyphen
+        # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
+        tool_name = tool_name.removesuffix("()")
+        if tool_name not in self._tools_registry:
+            tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
