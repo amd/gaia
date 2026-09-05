@@ -124,8 +124,13 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="shell",
-        members=frozenset({"run_shell_command", "get_system_info"}),
-        description="Run shell commands and query the system.",
+        members=frozenset(
+            {"run_shell_command", "wait_for_condition", "get_system_info"}
+        ),
+        description=(
+            "Run shell commands, wait for a condition to become true, and "
+            "query the system."
+        ),
     ),
     ToolBundle(
         name="clipboard",
