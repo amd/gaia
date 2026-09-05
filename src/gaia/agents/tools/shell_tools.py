@@ -17,7 +17,12 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gaia.agents.tools.command_timeouts import MAX_COMMAND_TIMEOUT, resolve_timeout
+from gaia.agents.tools.command_timeouts import (
+    MAX_COMMAND_TIMEOUT,
+    TIMEOUT_CLASSES,
+    resolve_timeout,
+    terminate_process_tree,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +223,18 @@ _POLICY_GATED_SHELL_TOOL = "run_shell_command"
 #: apply and a refused predicate is refused before anyone is prompted. It is
 #: NOT grant-exempt: consent for a binary is not consent to poll with it.
 _WAIT_TOOL = "wait_for_condition"
+
+
+#: Output past this many characters is cut before it reaches the model.
+MAX_OUTPUT_CHARS = 10_000
+
+
+def _truncate(text: Optional[str], stream: str) -> str:
+    """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
+    text = text or ""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    return text[:MAX_OUTPUT_CHARS] + f"\n...output truncated ({stream})..."
 
 
 def skill_granted_binaries(host: Any) -> frozenset:
@@ -1074,12 +1091,21 @@ class ShellToolsMixin:
                 # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
                 # hits it. errors="replace" keeps a stray undecodable byte from
                 # costing the whole output.
+                #
+                # Popen, not subprocess.run, for one reason: on expiry run()
+                # kills only the process it launched and then re-enters
+                # communicate() with NO timeout, so a surviving grandchild
+                # holding the pipes hangs the call for as long as it lives. A
+                # verified 5s timeout took over two minutes and never returned.
+                # _terminate_process_tree kills the whole tree first, so the
+                # pipes close and the deadline means what it says.
                 start_time = time.monotonic()
                 try:
-                    result = subprocess.run(
+                    process = subprocess.Popen(  # pylint: disable=consider-using-with
                         exec_cmd,
                         cwd=cwd,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         # stdin is DEVNULL, never inherited. capture_output
                         # redirects stdout/stderr but leaves stdin alone, and
                         # this process's stdin is the agent transport's pipe —
@@ -1103,40 +1129,32 @@ class ShellToolsMixin:
                         stdin=subprocess.DEVNULL,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=timeout,
-                        check=False,
                         env=os.environ.copy(),
+                        # POSIX: its own session, so the kill reaches every
+                        # descendant. Windows gets the same reach via taskkill /T.
+                        start_new_session=os.name != "nt",
                         shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
                     )
+                    stdout_str, stderr_str = process.communicate(timeout=timeout)
+                    returncode = process.returncode
                     duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
                     self._record_command_execution()
-                except subprocess.TimeoutExpired as exc:
+                except subprocess.TimeoutExpired:
                     duration = time.monotonic() - start_time
-
-                    # Handle timeout gracefully
-                    stdout_str = ""
-                    stderr_str = ""
-                    if exc.stdout:
-                        stdout_str = (
-                            exc.stdout
-                            if isinstance(exc.stdout, str)
-                            else exc.stdout.decode("utf-8", errors="replace")
-                        )
-                    if exc.stderr:
-                        stderr_str = (
-                            exc.stderr
-                            if isinstance(exc.stderr, str)
-                            else exc.stderr.decode("utf-8", errors="replace")
-                        )
+                    stdout_str, stderr_str = terminate_process_tree(process)
+                    # Truncated here too: a command killed at 30 minutes has
+                    # printed far more than one killed at 30 seconds, and all of
+                    # it would otherwise go straight into the model's context.
+                    stdout_str = _truncate(stdout_str, "stdout")
+                    stderr_str = _truncate(stderr_str, "stderr")
 
                     return {
                         "status": "error",
                         "error": (
-                            f"Command timed out after {timeout} seconds: {command}. "
-                            f"That is the '{timeout_class}' class default; the "
-                            f"command was killed, so its work is incomplete."
+                            f"Command timed out after {timeout} seconds and was "
+                            f"killed, so its work is incomplete: {command}"
                         ),
                         "command": command,
                         "stdout": stdout_str,
@@ -1148,31 +1166,24 @@ class ShellToolsMixin:
                         "duration_seconds": duration,
                         "cwd": cwd,
                         "hint": (
-                            "Whatever the command printed before it was killed is in "
+                            f"It ran as a '{timeout_class}' command "
+                            f"({TIMEOUT_CLASSES[timeout_class].summary}, "
+                            f"{TIMEOUT_CLASSES[timeout_class].seconds}s by default). "
+                            "Whatever it printed before the kill is in "
                             "'stdout'/'stderr' above. Either narrow the command (one "
                             "test file rather than the whole suite) or re-run it with a "
                             f"larger timeout, up to {MAX_COMMAND_TIMEOUT}s."
                         ),
                     }
 
-                # Capture and truncate output if too long
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                truncated = False
-                max_output = 10_000
-
-                if len(stdout) > max_output:
-                    stdout = stdout[:max_output] + "\n...output truncated (stdout)..."
-                    truncated = True
-
-                if len(stderr) > max_output:
-                    stderr = stderr[:max_output] + "\n...output truncated (stderr)..."
-                    truncated = True
+                stdout = _truncate(stdout_str, "stdout")
+                stderr = _truncate(stderr_str, "stderr")
+                truncated = stdout != (stdout_str or "") or stderr != (stderr_str or "")
 
                 # Debug logging
                 if hasattr(self, "debug") and self.debug:
                     logger.info(
-                        f"Command completed in {duration:.2f}s with return code {result.returncode}"
+                        f"Command completed in {duration:.2f}s with return code {returncode}"
                     )
 
                 return {
@@ -1180,8 +1191,8 @@ class ShellToolsMixin:
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "return_code": result.returncode,
-                    "has_errors": result.returncode != 0,
+                    "return_code": returncode,
+                    "has_errors": returncode != 0,
                     "duration_seconds": duration,
                     "timeout": timeout,
                     "timeout_class": timeout_class,

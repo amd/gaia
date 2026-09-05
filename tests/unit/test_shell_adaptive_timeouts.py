@@ -21,6 +21,8 @@ import subprocess
 
 import pytest
 
+from gaia.agents.tools import shell_tools
+
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -62,11 +64,39 @@ def _shell_tools():
     return host, captured
 
 
-class _Completed:
+class _FakeProcess:
+    """A subprocess that returns what the test says, without running anything."""
+
+    pid = 4242
+
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+        self._stdout = stdout
+        self._stderr = stderr
+
+    def communicate(self, timeout=None):  # noqa: ARG002 - matches Popen
+        return self._stdout, self._stderr
+
+    def kill(self):
+        pass
+
+
+def _completes(returncode=0, stdout="", stderr="", seen=None):
+    """A Popen stand-in; records the timeout its communicate() was given."""
+
+    def popen(*_args, **_kwargs):
+        process = _FakeProcess(returncode, stdout, stderr)
+        if seen is not None:
+            original = process.communicate
+
+            def record(timeout=None):
+                seen["timeout"] = timeout
+                return original(timeout)
+
+            process.communicate = record
+        return process
+
+    return popen
 
 
 @pytest.fixture
@@ -199,11 +229,14 @@ class TestResolveTimeout:
 
 
 @pytest.mark.parametrize(
+    # Inert forms on purpose: this test stands the allowlist down, and an
+    # earlier draft whose Popen patch had drifted really did clone amd/gaia
+    # into the working tree.
     "command,expected_timeout,expected_class",
     [
-        ("pytest tests/unit", 900, "test"),
-        ("pip install -e .", 1800, "build"),
-        ("git clone https://github.com/amd/gaia", 300, "network"),
+        ("pytest --version", 900, "test"),
+        ("pip install --help", 1800, "build"),
+        ("git clone --help", 300, "network"),
         ("ls -la", 30, "default"),
     ],
 )
@@ -213,11 +246,7 @@ def test_each_class_reaches_subprocess_with_its_default(
     _, tools = _shell_tools()
     seen = {}
 
-    def fake_run(*_args, **kwargs):
-        seen["timeout"] = kwargs["timeout"]
-        return _Completed(stdout="ok")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _completes(stdout="ok", seen=seen))
 
     result = tools["run_shell_command"](command)
 
@@ -230,13 +259,9 @@ def test_an_explicit_timeout_still_overrides_the_class(monkeypatch, unrestricted
     _, tools = _shell_tools()
     seen = {}
 
-    def fake_run(*_args, **kwargs):
-        seen["timeout"] = kwargs["timeout"]
-        return _Completed()
+    monkeypatch.setattr(subprocess, "Popen", _completes(seen=seen))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    result = tools["run_shell_command"]("pytest tests/", timeout=60)
+    result = tools["run_shell_command"]("pytest --version", timeout=60)
 
     assert seen["timeout"] == 60
     assert result["timeout"] == 60
@@ -245,10 +270,7 @@ def test_an_explicit_timeout_still_overrides_the_class(monkeypatch, unrestricted
 def test_an_out_of_range_timeout_is_refused_with_an_actionable_error(monkeypatch):
     _, tools = _shell_tools()
 
-    def fake_run(*_args, **_kwargs):  # pragma: no cover - must not be reached
-        raise AssertionError("the command should never have run")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _never_runs("the command"))
 
     result = tools["run_shell_command"]("ls", timeout=MAX_COMMAND_TIMEOUT * 2)
 
@@ -262,19 +284,32 @@ def test_an_out_of_range_timeout_is_refused_with_an_actionable_error(monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def _timing_out(monkeypatch, stdout="partial out", stderr="partial err"):
-    def fake_run(*_args, **kwargs):
-        raise subprocess.TimeoutExpired(
-            cmd="ls", timeout=kwargs["timeout"], output=stdout, stderr=stderr
-        )
+def _never_runs(what):
+    def popen(*_args, **_kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError(f"{what} should never have executed")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    return popen
+
+
+def _timing_out(monkeypatch, stdout="partial out", stderr="partial err"):
+    """A command that blows its deadline, killed with output already buffered."""
+
+    class _Hangs(_FakeProcess):
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="ls", timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _Hangs())
+    # The real one taskkills a pid; here it only has to hand back what the
+    # command printed before the kill.
+    monkeypatch.setattr(
+        shell_tools, "terminate_process_tree", lambda process: (stdout, stderr)
+    )
 
 
 class TestNoRegression:
     def test_the_applied_timeout_comes_back_in_the_result(self, monkeypatch):
         _, tools = _shell_tools()
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Completed())
+        monkeypatch.setattr(subprocess, "Popen", _completes())
 
         assert tools["run_shell_command"]("ls", timeout=17)["timeout"] == 17
 
@@ -297,6 +332,18 @@ class TestNoRegression:
         assert result["stdout"] == "ran 3 tests"
         assert result["stderr"] == "still going"
 
+    def test_partial_output_is_capped_like_any_other(self, monkeypatch):
+        """A 30-minute command prints a lot more than a 30-second one."""
+        from gaia.agents.tools.shell_tools import MAX_OUTPUT_CHARS
+
+        _, tools = _shell_tools()
+        _timing_out(monkeypatch, stdout="x" * (MAX_OUTPUT_CHARS * 3))
+
+        result = tools["run_shell_command"]("ls", timeout=5)
+
+        assert len(result["stdout"]) < MAX_OUTPUT_CHARS * 2
+        assert "truncated" in result["stdout"]
+
     def test_the_timeout_error_says_what_to_do(self, monkeypatch):
         _, tools = _shell_tools()
         _timing_out(monkeypatch)
@@ -304,7 +351,9 @@ class TestNoRegression:
         error = tools["run_shell_command"]("ls", timeout=5)
 
         assert "timed out after 5 seconds" in error["error"]
-        assert "default" in error["error"]  # names the class it came from
+        assert "ls" in error["error"]
+        # The hint carries the next step: which class it ran as, and the ceiling.
+        assert "'default'" in error["hint"]
         assert str(MAX_COMMAND_TIMEOUT) in error["hint"]
 
 
@@ -316,7 +365,7 @@ class TestNoRegression:
 class TestWaitForCondition:
     def test_it_returns_as_soon_as_the_predicate_succeeds(self, monkeypatch):
         _, tools = _shell_tools()
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Completed(stdout="up"))
+        monkeypatch.setattr(subprocess, "Popen", _completes(stdout="up"))
 
         result = tools["wait_for_condition"]("ls build/output.bin", timeout=30)
 
@@ -328,7 +377,7 @@ class TestWaitForCondition:
     def test_the_deadline_expires_loudly(self, monkeypatch):
         _, tools = _shell_tools()
         monkeypatch.setattr(
-            subprocess, "run", lambda *a, **k: _Completed(returncode=1, stderr="no")
+            subprocess, "Popen", _completes(returncode=1, stderr="no")
         )
 
         result = tools["wait_for_condition"]("ls build/output.bin", timeout=1)
@@ -347,10 +396,7 @@ class TestWaitForCondition:
     def test_a_predicate_that_cannot_run_stops_the_wait_immediately(self, monkeypatch):
         _, tools = _shell_tools()
 
-        def fake_run(*_args, **_kwargs):  # pragma: no cover - must not be reached
-            raise AssertionError("a refused predicate should never execute")
-
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(subprocess, "Popen", _never_runs("a refused predicate"))
 
         result = tools["wait_for_condition"]("rm -rf /", timeout=600)
 
@@ -364,9 +410,7 @@ class TestWaitForCondition:
         host, tools = _shell_tools()
         host._cancel_event = threading.Event()
         host._cancel_event.set()
-        monkeypatch.setattr(
-            subprocess, "run", lambda *a, **k: _Completed(returncode=1)
-        )
+        monkeypatch.setattr(subprocess, "Popen", _completes(returncode=1))
 
         result = tools["wait_for_condition"]("ls nope", timeout=WAIT_MAX_TIMEOUT)
 
@@ -430,6 +474,41 @@ class TestWaitForCondition:
         )
 
         assert refusal is not None and refusal["status"] == "error"
+
+
+def test_a_blown_deadline_really_kills_the_process():
+    """A real process, a real kill, and the output it managed to print.
+
+    Not a mock: the reason the executor uses Popen at all is that
+    ``subprocess.run`` re-enters ``communicate()`` with no timeout after its
+    kill, so anything still holding the pipes hangs the call — a 5s deadline
+    measured at over two minutes on Windows. Only a live process proves the
+    deadline is now honoured.
+    """
+    import os
+    import sys
+    import time
+
+    from gaia.agents.tools.command_timeouts import terminate_process_tree
+
+    child = subprocess.Popen(  # pylint: disable=consider-using-with
+        [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(120)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name != "nt",
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        child.communicate(timeout=2)
+
+    started = time.monotonic()
+    stdout, _ = terminate_process_tree(child)
+
+    assert time.monotonic() - started < 15, "the kill did not return promptly"
+    assert child.poll() is not None, "the process outlived its own timeout"
+    assert "started" in stdout, "output printed before the kill was lost"
 
 
 class TestWhatTheModelIsTold:
