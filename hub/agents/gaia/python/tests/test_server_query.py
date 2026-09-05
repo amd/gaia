@@ -175,12 +175,63 @@ def test_the_request_body_cannot_ask_for_bypass(built):
     assert r.status_code == 422, r.text
 
 
+def _all_route_paths(router) -> set:
+    """Every path reachable under *router*, descending into sub-routers.
+
+    The route list is not flat on every FastAPI version: ``include_router`` can
+    leave an ``_IncludedRouter`` wrapper that carries ``.routes`` but no
+    ``.path``. Reading ``.path`` off each entry raises there, and skipping the
+    entries that lack one would walk right past the mounted API.
+    """
+    paths = set()
+    for route in getattr(router, "routes", ()):
+        path = getattr(route, "path", None)
+        if path is not None:
+            paths.add(path)
+        if hasattr(route, "routes"):
+            paths |= _all_route_paths(route)
+    return paths
+
+
 def test_the_http_transport_exposes_no_bypass_control():
     """The stdio control channel carries a bypass verb; HTTP has no equivalent
     route, and must not grow one without revisiting the reasoning above."""
-    paths = {route.path for route in server_mod.build_app().routes}
+    paths = _all_route_paths(server_mod.build_app())
+
+    # Guard the guard. This assertion is only worth anything if the walk
+    # actually reached the mounted routes — a version bump that changed the
+    # route tree again would otherwise leave it passing on an empty set.
+    assert "/v1/gaia/query" in paths, f"route walk found no API routes: {sorted(paths)}"
 
     assert not [p for p in paths if "bypass" in p.lower()]
+
+
+def test_the_route_walk_descends_into_included_routers():
+    """Covers the shape this repo's pinned FastAPI does not produce locally.
+
+    On the CI version, ``include_router`` leaves a wrapper carrying ``.routes``
+    and no ``.path``. Without a real one to test against, the walk is asserted
+    on a stand-in of that shape — otherwise the guard above would be a fix
+    nobody had run.
+    """
+
+    class _Leaf:
+        def __init__(self, path):
+            self.path = path
+
+    class _IncludedRouterLike:
+        """No .path, only .routes — what broke the flat comprehension."""
+
+        def __init__(self, routes):
+            self.routes = routes
+
+    class _App:
+        routes = [
+            _Leaf("/health"),
+            _IncludedRouterLike([_Leaf("/v1/gaia/query"), _Leaf("/v1/gaia/init")]),
+        ]
+
+    assert _all_route_paths(_App()) == {"/health", "/v1/gaia/query", "/v1/gaia/init"}
 
 
 # ---------------------------------------------------------------------------
