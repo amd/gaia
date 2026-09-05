@@ -351,11 +351,15 @@ FULL_BUNDLES = [
         members=frozenset(
             {
                 "run_shell_command",
+                "wait_for_condition",
                 "execute_python_file",
                 "get_system_info",
             }
         ),
-        description="Run shell commands and Python scripts, and query the system.",
+        description=(
+            "Run shell commands and Python scripts, wait for a condition to "
+            "become true, and query the system."
+        ),
     ),
     ToolBundle(
         name="clipboard",
