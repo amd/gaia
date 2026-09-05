@@ -279,6 +279,21 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+def _requote_for_posix(segments: list) -> str:
+    """Rebuild the command from its validated tokens, quoted for POSIX sh.
+
+    A session needs a shell — ``cd`` and ``export`` exist nowhere else — but
+    handing sh the raw string would newly let it expand what the checks above
+    read literally: ``~``, ``$VAR``, ``*``. ``cat ~/../secret`` is one token to
+    the path validator and a different file to the shell. Re-quoting the tokens
+    keeps the pipeline and gives the shell back exactly the argv it had before
+    there was a session.
+    """
+    return " | ".join(
+        " ".join(shlex.quote(token) for token in segment) for segment in segments
+    )
+
+
 def _split_pipeline(cmd_parts: list) -> list:
     """Split a shlex-split command on ``|`` into its non-empty segments."""
     segments: list = []
@@ -335,11 +350,12 @@ class ShellToolsMixin:
         """
         validator = getattr(self, "path_validator", None)
         if validator is not None:
-            return validator.is_path_allowed
-        checker = getattr(self, "_is_path_allowed", None)
-        if checker is not None:
-            return checker
-        return None
+            guard: Callable[[str], bool] = validator.is_path_allowed
+            return guard
+        checker: Optional[Callable[[str], bool]] = getattr(
+            self, "_is_path_allowed", None
+        )
+        return checker
 
     @property
     def shell_session(self) -> ShellSession:
@@ -1035,10 +1051,16 @@ class ShellToolsMixin:
                 )
 
                 session = self.shell_session
-                exec_command = command
-                if not lone_granted_segment and not session.posix_script:
-                    # cmd.exe: map Unix names to their built-ins when the
-                    # Git-for-Windows tools that provide them aren't on PATH.
+                if session.posix_script:
+                    exec_command = _requote_for_posix(segments)
+                else:
+                    # cmd.exe gets the ORIGINAL string: its quoting rules are not
+                    # shlex's, and re-quoting a PowerShell -Command body breaks
+                    # it. Unchanged from before the session existed.
+                    exec_command = command
+
+                    # Map Unix names to cmd built-ins when the Git-for-Windows
+                    # tools that provide them aren't on PATH.
                     _UNIX_TO_WIN = {
                         "ls": "dir",
                         "pwd": "cd",

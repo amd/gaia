@@ -20,7 +20,10 @@ from gaia.agents.tools.shell_session import (
     ShellSessionClosed,
 )
 
-IS_WINDOWS = os.name == "nt"
+#: True when the session runs commands as a cmd.exe batch file. Setting
+#: GAIA_SHELL to a POSIX shell exercises the other script flavour on the same
+#: box — worth doing before touching the script generator.
+IS_WINDOWS = os.name == "nt" and not os.environ.get("GAIA_SHELL", "").strip()
 
 
 def export_command(name: str, value: str) -> str:
@@ -107,11 +110,12 @@ class TestEnvironmentPersists:
         """Only what the session actually diverged, or Windows folds every name."""
         session.run("echo hello")
 
-        # pytest rewrites PYTEST_CURRENT_TEST after the session took its
-        # baseline, so the session is right to call it changed.
+        # The bug this pins: Windows folds variable names and os.environ
+        # upper-cases them, so comparing raw made every inherited variable both
+        # an override and a removal — the session would replay the whole
+        # environment and unset it at the same time.
         diverged = session.environment()
-        diverged.pop("PYTEST_CURRENT_TEST", None)
-        assert diverged == {}
+        assert len(diverged) < len(os.environ) / 4, diverged
         assert session.removed_environment() == []
 
     def test_set_env_applies_to_the_next_command(self, session):

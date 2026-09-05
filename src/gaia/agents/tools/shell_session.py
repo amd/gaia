@@ -58,7 +58,9 @@ logger = logging.getLogger(__name__)
 _ENV_MARKER = "---GAIA-ENV---"
 
 #: Variables every shell rewrites on its own. Replaying them would make the
-#: session drift a little further from the parent on every command.
+#: session drift a little further from the parent on every command. PATH is
+#: deliberately absent: it is what virtualenv activation changes, so a session
+#: that dropped it would activate a venv and then not use it.
 _VOLATILE_ENV_NAMES = frozenset(
     {
         "_",
@@ -234,7 +236,8 @@ def _terminate_tree(proc: "subprocess.Popen") -> None:
         proc.kill()
     else:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            # pylint: disable=no-member  # POSIX-only; the branch never runs on nt
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)  # type: ignore[attr-defined]
         except (ProcessLookupError, PermissionError) as exc:
             logger.warning("Could not kill process group for pid %s: %s", proc.pid, exc)
             proc.kill()
@@ -428,7 +431,7 @@ class ShellSession:
             )
         try:
             cwd = working_directory or self._state.cwd
-            result = self._spawn(argv, cwd, self.effective_env(), timeout, shell=False)
+            result = self._spawn(argv, cwd, self.effective_env(), timeout)
             result.cwd = self._state.cwd
             return result
         finally:
@@ -464,7 +467,7 @@ class ShellSession:
 
             # No cwd/env arguments: the script applies both inside the child, so
             # the calling process is never mutated and sessions cannot collide.
-            result = self._spawn(argv, None, None, timeout, shell=False)
+            result = self._spawn(argv, None, None, timeout)
             rejected = self._absorb_state(
                 self._read_state(state_file), absorb_cwd=working_directory is None
             )
@@ -621,11 +624,10 @@ class ShellSession:
 
     @staticmethod
     def _spawn(
-        argv,
+        argv: List[str],
         cwd: Optional[str],
         env: Optional[Dict[str, str]],
         timeout: float,
-        shell: bool,
     ) -> ShellResult:
         """Run *argv*, capping the wait and killing the whole tree on expiry.
 
@@ -636,25 +638,24 @@ class ShellSession:
         stdout: the command succeeded and its output was silently discarded.
         """
         start = time.monotonic()
-        popen_kwargs = {
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
+        with subprocess.Popen(  # nosec B603 - argv is a list, never shell-parsed
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             # stdin is DEVNULL, never inherited. This process's stdin is the
             # agent transport's pipe — held open and never written to — so a
             # child that reads it blocks forever on input that cannot arrive.
-            "stdin": subprocess.DEVNULL,
-            "cwd": cwd,
-            "env": env,
-            "encoding": "utf-8",
-            "errors": "replace",
-            "shell": shell,
-        }
-        if os.name != "nt":
-            # Its own process group, so a timeout can kill the command's
-            # children too rather than just the shell that started them.
-            popen_kwargs["start_new_session"] = True
-
-        with subprocess.Popen(argv, **popen_kwargs) as proc:  # nosec B603
+            stdin=subprocess.DEVNULL,
+            cwd=cwd,
+            env=env,
+            encoding="utf-8",
+            errors="replace",
+            # Its own process group on POSIX, so a timeout can kill the
+            # command's children too rather than just the shell that started
+            # them. Windows has no equivalent; _terminate_tree walks the
+            # parent-child tree with taskkill instead.
+            start_new_session=os.name != "nt",
+        ) as proc:
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
                 timed_out = False

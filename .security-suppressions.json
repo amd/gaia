@@ -6,9 +6,19 @@
     {"path": "src/gaia/hub/native_launcher.py", "rule": "S603", "justification": "native binary path is an installed hub artifact (operator-controlled); args are constructed, not shell"},
     {"path": "src/gaia/mcp/mcp_bridge.py", "rule": "B104", "justification": "binds 0.0.0.0 only on explicit caller opt-in (documented flag), never by default"},
     {
-      "path": "src/gaia/agents/tools/shell_tools.py",
-      "rule": "B602",
-      "justification": "Sandboxed shell tool. Every command (and each pipeline segment) is validated against a whitelist via _validate_command before execution; shell=True is enabled ONLY on Windows so cmd.exe can resolve built-ins (dir/cd/type) and pipes that Git-for-Windows tools rely on. Converting to args-list would break piped/whitelisted commands the tool exists to run."
+      "path": "src/gaia/agents/tools/shell_session.py",
+      "rule": "B404",
+      "justification": "Running shell commands is this module's purpose. The whitelist and path policy that decide what may run stay in shell_tools.py, and apply per pipeline segment before anything reaches here."
+    },
+    {
+      "path": "src/gaia/agents/tools/shell_session.py",
+      "rule": "B603",
+      "justification": "argv is always a constructed list, never shell-interpreted by Python. It names either the generated script this module wrote (which sources a command validated per segment by shell_tools.py) or a skill-granted binary, which is run as argv precisely so its arguments cannot act."
+    },
+    {
+      "path": "src/gaia/agents/tools/shell_session.py",
+      "rule": "B607",
+      "justification": "taskkill is a Windows system binary invoked by name with a pid from this module's own child. The alternative is orphaning the process tree a timed-out command started."
     }
   ]
 }
