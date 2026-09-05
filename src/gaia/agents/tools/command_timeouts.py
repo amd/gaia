@@ -305,11 +305,3 @@ def resolve_timeout(command: str, requested: Optional[int]) -> Tuple[int, str]:
             f"poll it with wait_for_condition, or split it into shorter steps."
         )
     return seconds, command_class.name
-
-
-def timeout_table() -> str:
-    """The class table as one line per class, for a tool description."""
-    return "; ".join(
-        f"{cls.name}={cls.seconds}s ({cls.summary})"
-        for cls in (TEST, BUILD, NETWORK, DEFAULT)
-    )
