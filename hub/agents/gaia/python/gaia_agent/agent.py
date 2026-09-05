@@ -49,6 +49,7 @@ from typing import ClassVar, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
+from gaia.agents.base.project_map import ProjectMapMixin, resolve_project_root
 from gaia.agents.base.skill_discovery import (
     DISCOVERY_THRESHOLD_ENV,
     SkillDiscovery,
@@ -204,11 +205,24 @@ class GaiaAgentConfig(ChatAgentConfig):
         default_factory=lambda: [str(Path.home())]
     )
 
+    # The project this task is about (#3379). ``None`` resolves through
+    # ``GAIA_PROJECT_ROOT``, then the working directory or the nearest
+    # repository above it — and stays ``None`` when neither is a repository,
+    # which is the common case for a sidecar launched from its package dir.
+    project_root: Optional[str] = None
 
-# Base agent first, tool mixins after — the repo's MRO convention for every
-# hub agent. Neither mixin overrides anything today; this order keeps a future
-# mixin method from silently winning over ChatAgent's.
-class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
+    # Build the semantic code index at task start when the project is a
+    # repository and has none. Off-switch: ``GAIA_PROJECT_MAP_AUTO_INDEX=0``,
+    # for a monorepo where a full embed pass is not worth it.
+    auto_index: bool = True
+
+
+# ``ProjectMapMixin`` is the one exception to "base agent first": it overrides
+# ``_on_task_start`` and calls ``super()``, and ``Agent``'s no-op default sits
+# ahead of every trailing mixin in the MRO — listed after ChatAgent it would
+# never run. Tool mixins keep their usual place at the back, where neither
+# overrides anything and a future method cannot silently win over ChatAgent's.
+class GaiaAgent(ProjectMapMixin, ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
@@ -264,12 +278,14 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         self.skill_loader = self._maybe_build_skill_loader()
         self._skill_discovery = self._maybe_build_skill_discovery()
         self.register_skill_library_tools()
-        # Same scope as allowed_paths, for the same reason that field rejects
-        # cwd: the daemon launches this sidecar with cwd = the package
-        # directory, so cwd would sandbox code search to the agent's own
-        # source tree — and index it by default.
+        # The project map's root when there is one, so "is the index built?"
+        # and "index it" both mean the repository the task is about. Falling
+        # back to allowed_paths for the same reason that field rejects cwd: the
+        # daemon launches this sidecar with cwd = the package directory, so cwd
+        # would sandbox code search to the agent's own source tree.
         allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
-        self._init_code_index_state(repo_path=allowed[0])
+        index_root = resolve_project_root(self.config.project_root) or allowed[0]
+        self._init_code_index_state(repo_path=index_root)
         self.register_code_index_tools()
         super()._register_tools()
 

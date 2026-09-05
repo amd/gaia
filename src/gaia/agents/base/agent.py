@@ -1248,6 +1248,17 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
+    def _on_task_start(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run at the top of every turn, before the prompt is composed.
+
+        Default: no-op. Mixins that orient the agent in its environment — the
+        project map (#3379) is the first — override this and must call
+        ``super()._on_task_start(user_input)``. Anything expensive belongs
+        behind a once-per-session guard inside the override, not here.
+        """
+
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Hook called when a tool is about to execute (after registry lookup).
 
@@ -4485,6 +4496,10 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+
+        # Orientation. Runs before the prompt is composed so anything it
+        # establishes is in the prompt on the turn that established it.
+        self._on_task_start(user_input)
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool
