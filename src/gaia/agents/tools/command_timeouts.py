@@ -30,9 +30,14 @@ class default. Four classes, no hidden heuristics, table below.
 An explicit ``timeout=`` argument always wins; this is only the default.
 """
 
+import logging
+import os
 import shlex
+import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 #: A timeout a caller may never exceed. Above this, ``run_shell_command``
 #: refuses rather than clamping — a silently shortened timeout is a command
@@ -305,3 +310,45 @@ def resolve_timeout(command: str, requested: Optional[int]) -> Tuple[int, str]:
             f"poll it with wait_for_condition, or split it into shorter steps."
         )
     return seconds, command_class.name
+
+
+#: How long the kill itself may take before the output is written off.
+_KILL_GRACE_SECONDS = 5.0
+
+
+def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
+    """Kill *process* and every descendant, then collect what it printed.
+
+    A timeout that does not reach the grandchildren is not a timeout: the child
+    dies, the grandchild keeps the pipes open, and the read blocks for as long
+    as it lives — a 5s deadline measured at over two minutes on Windows before
+    this existed.
+
+    Returns:
+        ``(stdout, stderr)`` buffered before the kill; empty strings if even the
+        post-kill read will not complete, which is logged rather than hidden.
+    """
+    try:
+        if os.name == "nt":
+            # taskkill /T is the only way to reach a cmd.exe's children.
+            subprocess.run(  # nosec B603 B607 - fixed argv, pid from our own Popen
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                check=False,
+                timeout=_KILL_GRACE_SECONDS,
+            )
+        else:
+            os.killpg(os.getpgid(process.pid), 9)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Already dead, or unreachable — the kill below is the backstop.
+        logger.warning("Could not kill the process tree for pid %s: %s", process.pid, exc)
+
+    process.kill()
+    try:
+        return process.communicate(timeout=_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "pid %s survived the kill; its partial output could not be read.",
+            process.pid,
+        )
+        return "", ""
