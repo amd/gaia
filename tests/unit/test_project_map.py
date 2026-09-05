@@ -9,8 +9,12 @@ invalidation on change, and the once-per-session ``index_codebase`` trigger.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import pathlib
+import re
+import threading
 
 import pytest
 
@@ -23,6 +27,7 @@ from gaia.agents.base.project_map import (
     build_project_map,
     clear_project_map_cache,
     detect_platform_quirks,
+    is_agent_own_source,
     is_code_repository,
     render_project_map,
     resolve_project_root,
@@ -166,9 +171,25 @@ def test_map_names_absent_commands_so_the_agent_does_not_try_them(repo, monkeypa
     monkeypatch.setenv("PATH", "")
     clear_project_map_cache()
     pm = build_project_map(repo)
-    assert pm.commands_present == []
-    assert set(pm.commands_absent) == set(DEV_TOOL_PROBES)
+    assert pm.tools_present == []
+    assert pm.shell_commands == []
+    assert set(pm.tools_absent) == set(DEV_TOOL_PROBES)
     assert "NOT installed" in render_project_map(pm)
+
+
+def test_shell_allowlist_is_not_conflated_with_what_is_installed(repo):
+    """Claiming run_shell_command accepts ``uv`` causes the very refusal
+    this map exists to prevent."""
+    from gaia.agents.tools.shell_tools import ALLOWED_COMMANDS
+
+    pm = build_project_map(repo)
+    assert set(pm.shell_commands) <= ALLOWED_COMMANDS
+    off_limits = set(pm.tools_present) - ALLOWED_COMMANDS
+    accepts = next(
+        (ln for ln in render_project_map(pm).splitlines() if "accepts:" in ln), ""
+    )
+    named = set(re.findall(r"[\w.-]+", accepts.partition(":")[2]))
+    assert not (named & off_limits)
 
 
 # ── the budget, on the 32K profile ────────────────────────────────────────
@@ -285,8 +306,13 @@ def test_no_root_outside_a_repository(tmp_path, monkeypatch):
 class _FakeSDK:
     def __init__(self, indexed: bool):
         self._indexed = indexed
+        self.status_calls = 0
+
+    def is_indexed(self):
+        return self._indexed
 
     def get_status(self):
+        self.status_calls += 1
         return {"indexed": self._indexed}
 
 
@@ -302,20 +328,19 @@ class _FakeAgent(ProjectMapMixin, _Base):
         self.config = type(
             "C", (), {"project_root": str(root), "auto_index": auto_index}
         )()
-        self._indexed = indexed
+        self.sdk = _FakeSDK(indexed)
         self.index_calls = []
         self._tools_registry = {
-            "index_codebase": {"function": lambda **kw: self.index_calls.append(kw)}
+            "index_codebase": {"function": lambda **kw: self.index_calls.append(kw)},
+            "run_shell_command": {"function": lambda **kw: None},
         }
 
     def _get_code_index_sdk(self):
-        return _FakeSDK(self._indexed)
+        return self.sdk
 
 
 def _join(agent):
     """Run the background index thread to completion."""
-    import threading
-
     for t in threading.enumerate():
         if t.name == "gaia-project-map-index":
             t.join(timeout=10)
@@ -343,7 +368,53 @@ def test_index_trigger_fires_for_an_unindexed_repository(repo):
     agent = _FakeAgent(repo, indexed=False)
     agent._on_task_start("do a thing")
     assert _join(agent) == [{}]
-    assert "building now in the background" in agent.get_project_map_system_prompt()
+
+
+def test_prompt_says_building_while_the_index_is_running(repo):
+    gate = threading.Event()
+    agent = _FakeAgent(repo, indexed=False)
+    agent._tools_registry["index_codebase"]["function"] = lambda **kw: gate.wait(10)
+    agent._on_task_start("do a thing")
+    try:
+        text = agent.get_project_map_system_prompt()
+    finally:
+        gate.set()
+        _join(agent)
+    assert "building now in the background" in text
+
+
+def test_prompt_reports_a_failed_index_instead_of_waiting_forever(repo):
+    """A dead background index must not read as "still building" all session."""
+
+    def _boom(**_kw):
+        raise RuntimeError("faiss exploded")
+
+    agent = _FakeAgent(repo, indexed=False)
+    agent._tools_registry["index_codebase"]["function"] = _boom
+    agent._on_task_start("do a thing")
+    _join(agent)
+    assert "build FAILED" in agent.get_project_map_system_prompt()
+
+
+def test_a_json_error_from_the_tool_counts_as_a_failure(repo, caplog):
+    """``index_codebase`` reports refusals as JSON, not by raising."""
+    agent = _FakeAgent(repo, indexed=False)
+    agent._tools_registry["index_codebase"]["function"] = lambda **kw: json.dumps(
+        {"error": "refused: home directory"}
+    )
+    with caplog.at_level("ERROR"):
+        agent._on_task_start("do a thing")
+        _join(agent)
+    assert "build FAILED" in agent.get_project_map_system_prompt()
+    assert any("refused: home directory" in r.getMessage() for r in caplog.records)
+
+
+def test_index_status_is_a_presence_check_not_a_metadata_parse(repo):
+    """``get_status`` parses every indexed chunk; the prompt renders every turn."""
+    agent = _FakeAgent(repo, indexed=True)
+    for _ in range(3):
+        agent.get_project_map_system_prompt()
+    assert agent.sdk.status_calls == 0
 
 
 def test_index_trigger_is_skipped_when_already_indexed(repo):
@@ -391,3 +462,93 @@ def test_background_index_failure_is_logged_not_swallowed(repo, caplog):
         agent._on_task_start("do a thing")
         _join(agent)
     assert any("faiss exploded" in r.getMessage() for r in caplog.records)
+
+
+# ── wiring, checked against the source ────────────────────────────────────
+#
+# ``gaia_agent`` resolves through an editable install that can point at a
+# different checkout, so importing ``GaiaAgent`` here would assert against the
+# wrong tree. These parse this repository's files instead.
+
+_REPO = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _bases_of(path: pathlib.Path, class_name: str) -> list:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return [b.id for b in node.bases if isinstance(b, ast.Name)]
+    raise AssertionError(f"class {class_name!r} not found in {path}")
+
+
+def test_project_map_mixin_precedes_the_base_agent_in_gaia_agent():
+    """Listed after ChatAgent, ``Agent``'s no-op hook would shadow the override."""
+    bases = _bases_of(
+        _REPO / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "agent.py",
+        "GaiaAgent",
+    )
+    assert bases[0] == "ProjectMapMixin"
+    assert "ChatAgent" in bases[1:]
+
+
+def test_base_agent_calls_the_task_start_hook_before_composing_the_prompt():
+    src = (_REPO / "src" / "gaia" / "agents" / "base" / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(src)
+    impl = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_process_query_impl"
+    )
+    called = [
+        n.func.attr
+        for n in ast.walk(impl)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    ]
+    assert "_on_task_start" in called
+    assert called.index("_on_task_start") < called.index("_refresh_active_tool_filter")
+
+
+def test_base_agent_hook_is_a_no_op_so_agents_without_the_mixin_are_unaffected():
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._on_task_start(object(), "anything") is None
+
+
+def test_the_agents_own_source_tree_is_never_the_project(monkeypatch):
+    """The dev-mode sidecar's cwd is the GAIA checkout — not the user's work."""
+    import gaia
+
+    gaia_repo = pathlib.Path(gaia.__file__).resolve().parents[2]
+    assert is_agent_own_source(gaia_repo)
+    assert is_code_repository(gaia_repo), "precondition: it looks like a project"
+
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(gaia_repo)
+    assert resolve_project_root() is None
+
+
+def test_an_explicit_root_may_point_at_gaia_itself(monkeypatch):
+    """Working on GAIA is legitimate — it just has to be asked for."""
+    import gaia
+
+    gaia_repo = pathlib.Path(gaia.__file__).resolve().parents[2]
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    assert resolve_project_root(str(gaia_repo)) == str(gaia_repo)
+
+
+def test_shell_commands_are_omitted_for_an_agent_without_the_shell_tool(repo):
+    text = render_project_map(build_project_map(repo), has_shell_tool=False)
+    assert "run_shell_command" not in text
+    assert "NOT installed" in text
+
+
+def test_a_wrong_base_order_fails_at_class_definition():
+    """Silent otherwise: the prompt fragment renders either way."""
+    from gaia.agents.base.agent import Agent
+
+    with pytest.raises(TypeError, match="ProjectMapMixin after Agent"):
+
+        class _Wrong(Agent, ProjectMapMixin):
+            pass

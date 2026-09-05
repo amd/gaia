@@ -93,7 +93,8 @@
                   {
                     "group": "Developer Tools",
                     "pages": [
-                      "guides/code-index"
+                      "guides/code-index",
+                      "guides/project-map"
                     ]
                   },
                   {
