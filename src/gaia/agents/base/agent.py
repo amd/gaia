@@ -612,6 +612,9 @@ class Agent(abc.ABC):
             "get_memory_system_prompt",  # changes on any remember()/forget()
             "get_skills_system_prompt",  # per-turn body selection (#2848)
             "get_recalled_skills_system_prompt",  # per-turn procedural recall
+            # Mostly static, but the index line flips as a background index
+            # lands and the shape line changes if the project does (#3379).
+            "get_project_map_system_prompt",
         }
     )
 

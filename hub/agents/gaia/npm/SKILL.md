@@ -413,7 +413,32 @@ packaged sidecar (its CLI accepts only `--host` and `--port`), and an undeclared
 name raises naming the valid sets rather than falling back to a default. Beyond
 `gaia-voice`, do not design around a skill being on by default.
 
-## 11. Ports
+## 11. The project map — two things it costs you
+
+When the agent's working directory is a code repository, every task starts with
+a **project map** in the system prompt: the root, the directory shape, the
+likely entry points, which commands are installed, and the three platform
+differences that change command syntax. It exists so the agent stops burning
+round trips on "no such file" and "command not found".
+
+Two consequences an integrator needs to plan for:
+
+- **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
+  (1.8% of the NPU profile's 32K window), not a typical value — budget it
+  alongside `gaia-voice`'s 676.
+- **A background embedding pass on first contact with a new repository.** If
+  the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
+  map starts one in a background thread so semantic search is ready when it is
+  needed. On a large monorepo that is minutes of local embedding.
+  `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns it off.
+
+The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
+specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
+`GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
+a VCS checkout nor holds a recognised manifest gets **no map** — that is the
+designed answer, not a failure.
+
+## 12. Ports
 
 | Service | Port |
 |---|---|
@@ -425,7 +450,7 @@ Port **4001 is reserved repo-wide**: `spawnSidecar` throws a `RangeError` and
 speaks for the user's documents and memory and has no business on a LAN
 interface.
 
-## 12. Running in a server or long-lived app
+## 13. Running in a server or long-lived app
 
 - **`fetchAll` / `fetchBinary` are a build step**, not per request — network plus
   a full SHA-256 hash of a large artifact. Run once at install time.

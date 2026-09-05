@@ -1,0 +1,153 @@
+---
+title: "Project Map"
+description: "The orientation pass the agent runs at task start, so it stops guessing paths and commands."
+icon: "map"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/project_map.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/project_map.py)
+</Info>
+
+Without a project map the agent opens every task blind. It guesses directory
+names, guesses which programs are installed, and guesses which shell it is
+talking to — and every wrong guess costs a full round trip to learn something
+one orientation pass establishes once.
+
+The [GAIA agent](/guides/gaia) now runs that pass at the start of every task and
+puts the result in its system prompt.
+
+## What it contains
+
+```text
+==== PROJECT MAP ====
+Root: C:\Users\me\Work\gaia
+Code repository: yes (pyproject.toml, setup.py, package.json)
+
+Platform (these three change the commands you write):
+- Path separator: \
+- Paths with spaces: wrap in double quotes: "C:\Program Files\app"
+- Shell dialect: cmd.exe
+
+Directories:
+- docs/  (assets, deployment, guides, integrations)
+- hub/  (agents, components, skills)
+- src/  (gaia, vscode)
+- tests/  (electron, fixtures, integration, mcp, unit)
+
+Entry points: Makefile, src/cli.py, npm run build
+
+NOT installed, do not invoke: cargo, gradle, java, mvn, rustc
+run_shell_command accepts: cat, date, diff, find, git, grep, head, ls, …
+Installed but run_shell_command refuses them — use a tool, not the shell:
+cmake, curl, docker, go, node, npm, pip, python, uv
+
+Code index: not built — call index_codebase to enable semantic code search
+```
+
+| Section | Where it comes from |
+|---------|---------------------|
+| Root, repository status | The `is_code_repository` predicate below |
+| Platform | `detect_platform_quirks()` — exactly three fields, see [Platform quirks](#platform-quirks) |
+| Directories | Two levels deep, build output and vendored dependencies skipped |
+| Entry points | A closed list of well-known files, plus `npm run` targets from `package.json` |
+| Commands | `probe_binaries()` — the same PATH probe that backs [day-0 memory](/guides/memory), crossed with the shell tool's own allowlist |
+| Code index | [`CodeIndexSDK.is_indexed()`](/guides/code-index) — a presence check, so it is cheap enough to run on every render |
+
+## The token budget
+
+**600 tokens.** That is 1.8% of the NPU profile's 32,768-token window
+(`NPU_CTX_SIZE`) and 0.9% of the GPU profile's 65,536. It is sized against the
+smaller window on purpose — a budget that only holds on 64K is not a budget.
+
+Measured with GAIA's shared estimator (`count_tokens` — cl100k, or a character
+ratio when tiktoken is absent), so it bounds the map to within that estimator's
+error of the model's own count rather than to the exact token.
+
+`render_project_map()` enforces it on every render. Sections are emitted in
+priority order and the directory listing carries its own sub-cap, so on a
+2,000-directory monorepo the platform quirks and the command list still survive
+while the tree is what gets trimmed.
+
+## Which directories count as a code repository
+
+The predicate is testable, not a judgement call. **`is_code_repository(path)` is
+true when a version-control directory or a recognised manifest sits at the
+root** — non-recursive, so a home directory full of repositories is not itself
+one.
+
+<AccordionGroup>
+  <Accordion title="Version-control directories">
+    `.git`, `.hg`, `.svn`
+  </Accordion>
+  <Accordion title="Recognised manifests">
+    `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`,
+    `package.json`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`,
+    `build.gradle.kts`, `CMakeLists.txt`, `Makefile`, `Gemfile`,
+    `composer.json`
+  </Accordion>
+</AccordionGroup>
+
+## Platform quirks
+
+Three, and only three — the differences that change the *text* of a command the
+model emits. A contributor can check the list off:
+
+1. **Path separator** — `\` on Windows, `/` elsewhere.
+2. **Path quoting for spaces** — double quotes on Windows, single quotes on POSIX.
+3. **Shell dialect** — `cmd.exe` or PowerShell on Windows; `$SHELL`'s basename otherwise.
+
+## Automatic code indexing
+
+When the root is a code repository and no [code index](/guides/code-index)
+exists, the map calls `index_codebase` in a background thread and says so in the
+prompt, so the model knows to grep until it lands. It fires at most once per
+session.
+
+Turn it off on a monorepo where a full embedding pass is not worth it:
+
+```bash
+export GAIA_PROJECT_MAP_AUTO_INDEX=0
+```
+
+## Choosing the root
+
+Resolution order:
+
+1. `project_root` on `GaiaAgentConfig`
+2. the `GAIA_PROJECT_ROOT` environment variable
+3. the working directory, or the nearest repository up to four levels above it
+
+A working directory that resolves to **GAIA's own source tree** is rejected — in
+dev mode the agent sidecar is launched from the GAIA checkout, and mapping (and
+auto-indexing) its own source is never what the user asked for. An explicitly
+configured root is exempt: pointing GAIA at GAIA is fine when you mean it.
+
+If none of those is a repository the agent gets **no map at all**. That is the
+right answer, not a degraded one — an agent answering questions from a home
+directory is not in a project, and a map of `~` would spend tokens describing
+nothing.
+
+```bash
+export GAIA_PROJECT_ROOT=/home/me/Work/my-service
+```
+
+A `GAIA_PROJECT_ROOT` that does not exist raises at startup rather than being
+quietly ignored.
+
+## Caching
+
+The map is built once per root and reused. It is rebuilt when a fingerprint over
+four things changes: the top-level directory listing, every manifest's size and
+mtime, the VCS head, and `PATH`. Between changes, repeated queries reuse one
+walk.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Code Index" icon="magnifying-glass-code" href="/guides/code-index">
+    The semantic index the map triggers.
+  </Card>
+  <Card title="Memory" icon="brain" href="/guides/memory">
+    Day-0 system facts, from the same binary probe.
+  </Card>
+</CardGroup>

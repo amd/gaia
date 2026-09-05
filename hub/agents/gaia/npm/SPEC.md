@@ -289,6 +289,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
 persists past that single turn, and the agent is not told otherwise.
 
+A retained session also carries a **project map** — up to 600 prompt tokens of
+directory shape, entry points, installed commands and platform quirks, present
+whenever the agent's working directory resolves to a code repository (a VCS
+directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
+picks the project when the working directory is not it. If that repository has
+no code index, the first turn starts one in a background thread;
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. Neither affects the wire
+contract — they change what the agent knows and what the first turn costs.
+
 A second `/query` for a `session_id` that already has a turn in flight gets
 `409 Conflict` — cancel the running turn or wait for it, then retry. A
 `/query` that needs a **new** session while every retained slot is busy and

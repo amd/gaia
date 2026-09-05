@@ -49,7 +49,7 @@ from typing import ClassVar, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-from gaia.agents.base.project_map import ProjectMapMixin, resolve_project_root
+from gaia.agents.base.project_map import ProjectMapMixin
 from gaia.agents.base.skill_discovery import (
     DISCOVERY_THRESHOLD_ENV,
     SkillDiscovery,
@@ -284,7 +284,9 @@ class GaiaAgent(ProjectMapMixin, ChatAgent, SkillLibraryToolsMixin, CodeIndexToo
         # daemon launches this sidecar with cwd = the package directory, so cwd
         # would sandbox code search to the agent's own source tree.
         allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
-        index_root = resolve_project_root(self.config.project_root) or allowed[0]
+        # Through the mixin, so both read the one cached resolution and can
+        # never end up describing two different trees.
+        index_root = self._project_map_root() or allowed[0]
         self._init_code_index_state(repo_path=index_root)
         self.register_code_index_tools()
         super()._register_tools()
