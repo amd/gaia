@@ -94,6 +94,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import strip_verification_scope
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
@@ -1229,7 +1230,12 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
-        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+        if (
+            isinstance(result, dict)
+            # The loop appends a verification-scope line after finalize_answer
+            # (#3376); compare the answer text itself.
+            and strip_verification_scope(result.get("result")) != self._grounded_answer
+        ):
             # Normally finalize_answer already grounded this text before the
             # loop emitted it. This covers the branches that never reach that
             # call — the loop setting an actionable answer on an internal error
