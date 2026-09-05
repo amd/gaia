@@ -17,11 +17,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gaia.agents.tools.command_timeouts import (
-    MAX_COMMAND_TIMEOUT,
-    resolve_timeout,
-    timeout_table,
-)
+from gaia.agents.tools.command_timeouts import MAX_COMMAND_TIMEOUT, resolve_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -806,9 +802,7 @@ class ShellToolsMixin:
                 "navigation (pwd), and system information. "
                 'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
                 'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported. "
-                "The timeout adapts to what the command is, so leave it unset unless you "
-                f"know better: {timeout_table()}."
+                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
             ),
             parameters={
                 "command": {
@@ -824,9 +818,8 @@ class ShellToolsMixin:
                 "timeout": {
                     "type": "int",
                     "description": (
-                        "Timeout in seconds. Omit it to get the default for this kind of "
-                        f"command ({timeout_table()}); the applied value and its class come "
-                        f"back in the result. Maximum {MAX_COMMAND_TIMEOUT}."
+                        "Timeout in seconds. Omit it for the default that suits this "
+                        f"kind of command. Maximum {MAX_COMMAND_TIMEOUT}."
                     ),
                     "required": False,
                 },
@@ -835,19 +828,31 @@ class ShellToolsMixin:
         def run_shell_command(
             command: str,
             working_directory: Optional[str] = None,
-            timeout: Optional[int] = None,
+            # Annotated int, not Optional[int]: the registry infers the JSON
+            # schema type from this annotation and renders anything it cannot
+            # read as a string, so Optional[int] would tell a tool-calling model
+            # to send "60". None still means "use the class default".
+            timeout: int = None,
         ) -> Dict[str, Any]:
-            """
-            Execute a shell command and return the output.
+            """Execute a shell command. Leave timeout unset: it defaults to what the command needs — 900s for test runners, 1800s for builds and installs, 300s for git/network calls, 30s for everything else.
+
+            The class table leads because the prompt renders a tool by the FIRST
+            LINE of its docstring; anything below is seen only by models using
+            native tool calls. ``test_the_docstring_states_every_class`` keeps
+            that line honest when the table changes.
 
             Args:
                 command: Shell command to execute
                 working_directory: Directory to run command in
-                timeout: Maximum execution time in seconds. None picks the
-                    default for the command's class (see ``command_timeouts``).
+                timeout: Maximum execution time in seconds. Omit it for the
+                    class default above. Above the 3600s ceiling it is refused,
+                    not clamped.
 
             Returns:
-                Dictionary with status, output, and error information
+                Dictionary with status, output, and error information. The
+                applied timeout and the class it came from are in ``timeout``
+                and ``timeout_class``; a command killed at the limit carries
+                ``timed_out`` plus whatever it printed first.
             """
             try:
                 try:
@@ -1243,11 +1248,18 @@ class ShellToolsMixin:
             timeout: int = WAIT_DEFAULT_TIMEOUT,
             poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
         ) -> Dict[str, Any]:
-            """Block until *command* exits 0, or until the deadline passes.
+            """Wait until a shell command succeeds, instead of sleeping and re-checking: give it a command that exits 0 once the thing you are waiting for is ready (a file written, a server answering, a run finished) and it polls every 5s until then, giving up at 120s by default and 600s at most.
 
             One agent step covers the whole wait. The polling happens inside
             this call against a monotonic deadline, so the loop's step budget is
             spent on work rather than on re-asking whether the thing is ready.
+
+            Args:
+                command: The predicate — exits 0 once the condition holds,
+                    non-zero until then. Same allowlist as run_shell_command.
+                working_directory: Directory to run the predicate in
+                timeout: Give up after this many seconds (max 600)
+                poll_interval: Seconds between checks (5-60)
 
             Returns:
                 A result dict carrying ``condition_met``, how many probes ran and
