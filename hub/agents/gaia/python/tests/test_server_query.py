@@ -146,6 +146,44 @@ def _wait_until(predicate, timeout=5.0):
 
 
 # ---------------------------------------------------------------------------
+# Bypass permissions never reach this transport (#3373)
+#
+# Bypass lifts the shell guardrails as well as the confirmation prompt, so an
+# HTTP-reachable agent running under it is remote code execution rather than a
+# relaxed permission model. It is a stdio affordance — one local parent on a
+# private pipe — and must stay one.
+# ---------------------------------------------------------------------------
+
+
+def test_a_query_runs_with_the_shell_gates_on(built):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    assert agents[0].console is not None
+    assert agents[0].console.bypass_permissions is False
+
+
+def test_the_request_body_cannot_ask_for_bypass(built):
+    """extra='forbid' is what makes this unreachable; pin it, so adding a
+    bypass field fails here instead of shipping."""
+    client, _agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(bypass_permissions=True))
+
+    assert r.status_code == 422, r.text
+
+
+def test_the_http_transport_exposes_no_bypass_control():
+    """The stdio control channel carries a bypass verb; HTTP has no equivalent
+    route, and must not grow one without revisiting the reasoning above."""
+    paths = {route.path for route in server_mod.build_app().routes}
+
+    assert not [p for p in paths if "bypass" in p.lower()]
+
+
+# ---------------------------------------------------------------------------
 # One-shot teardown
 # ---------------------------------------------------------------------------
 
