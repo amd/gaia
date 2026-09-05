@@ -1,0 +1,208 @@
+---
+title: "Email Eval — Node Frontend"
+description: "Drive the existing email evals through the npm email agent's sidecar client to get an internal read on the shipped surface, without publishing a second score"
+icon: "gauge"
+---
+
+# Email Eval — Node Frontend
+
+> **Date:** 2026-08-12
+>
+> **Status:** Planning (0% implemented)
+>
+> **Agent:** `@amd-gaia/agent-email` ([`hub/agents/email/npm/`](https://github.com/amd/gaia/tree/main/hub/agents/email/npm))
+>
+> **Related plans:** [Email Triage Agent](/plans/email-triage-agent) (parent), [Email Agent Packaging](/plans/email-agent-packaging)
+
+---
+
+## Goal, and the one thing this is not
+
+**Goal:** get an internal read on how good the Node email agent actually is, by running
+the committed email corpus through the sidecar over the same HTTP surface an npm
+consumer uses.
+
+**Not a goal — and this is load-bearing:** publishing. No `SCORECARD.md` edit, no
+`EVALUATION.md` number change, no npm release, no CI gate. This produces a number *we*
+look at to decide what to do next. See [Publishing guardrails](#publishing-guardrails)
+for why that separation has to be enforced mechanically rather than remembered.
+
+## Why bother — the gap this closes
+
+The Python eval imports Python **source**. The npm package's published claims
+(84.53 within-one-bucket) describe the **frozen PyInstaller binary**. Nothing today
+tests the artifact that actually ships.
+
+A PyInstaller freeze bug, a contract-schema drift between `types.ts` and `contract.py`,
+a broken bearer-token path, or a missing model would all pass Python CI green and break
+every npm consumer on first call. That blind spot is the entire justification for this
+work — the accuracy number is almost a side effect.
+
+## What is reachable over HTTP today
+
+The good news is that the headline metric needs **no sidecar changes at all**.
+
+`POST /v1/email/triage/batch` accepts 1–100 **inline** `SingleEmailInput` items. It
+requires no mailbox connector, and its response carries everything the deterministic
+triage scorer needs:
+
+| Response field | Feeds metric |
+|---|---|
+| `category` | category accuracy, within-one-bucket, urgent/personal recall |
+| `is_spam` / `is_phishing` | spam precision, phishing detection |
+| `action_items` | action-item P/R/F1 |
+| `suggested_action` | suggested-action agreement |
+
+The corpus is already committed and needs no regeneration —
+`tests/fixtures/email/vendor_corpus_seed.jsonl` holds the bodies, and
+`tests/fixtures/email/ground_truth.json` holds labels keyed by message id. A Node
+harness reads both directly; no Python in the scoring loop.
+
+**No LLM judge is required** for any of the above. Triage scoring is exact-label
+matching against ground truth.
+
+## The parity trap — read before trusting any number
+
+The Python benchmark and the HTTP surface are **not the same code path**. Treating the
+resulting numbers as comparable is the most likely way this effort produces a wrong
+conclusion.
+
+| | Python eval (today) | Node via sidecar |
+|---|---|---|
+| Entry | `agent.process_query("Call triage_inbox for up to N…")` | `POST /v1/email/triage/batch` |
+| Internal path | agent loop → `triage_inbox` tool → mailbox backend | `EmailTriageService.triage_request` on inline payload |
+| Also exercises | inbox fetch, attention cache, memory/preferences, body normalization, `GAIA_EMAIL_TRIAGE_MAX_MESSAGES` ceiling | none of it |
+| Corpus seam | `EmailAgentConfig(gmail_backend=FakeGmailBackend(mbox))` — **an in-process Python object** | inline in the request body |
+
+They share classification internals (`EmailTriageService`), but they are different
+entry points with different context assembly.
+
+**Consequences to hold onto:**
+
+1. The Node number **will not equal 84.53**, and a delta is not automatically a bug —
+   it may just be the missing loop context. Do not "fix" the harness until it matches.
+2. The agent-loop path is **unreachable from Node today**. `gmail_backend` is a
+   constructor argument, and `gaia-agent-email serve` has no flag to inject a fixture
+   mailbox. Anything mailbox-backed — `prescan`/briefing, `search`, follow-ups,
+   `triage_inbox` — is out of reach until Phase B below.
+3. Therefore Phase A measures the **batch-API contract path**, and must be labelled that
+   way in every artifact it emits.
+
+## Phase A — internal read (the actual ask)
+
+Target: a number on the screen, fast. Estimated ~2–3 days.
+
+**Location:** `hub/agents/email/npm/eval/` — excluded from the published package (see
+[guardrails](#publishing-guardrails)).
+
+**Pieces:**
+
+1. **Corpus loader** — read `vendor_corpus_seed.jsonl` + `ground_truth.json` from the
+   repo, map each row to a `SingleEmailInput`. Fail loudly on an id present in one file
+   and absent from the other; a silently-dropped row inflates accuracy.
+2. **Batch driver** — chunk to ≤100 items (`MAX_BATCH_SIZE`), drive through the existing
+   typed `EmailClient.triageBatch()`. Per-item errors are already isolated by the
+   endpoint; count them as an explicit `ERRORED` bucket rather than letting them vanish.
+3. **Deterministic scorer** — port the metric math from `src/gaia/eval/quality_metrics.py`:
+   category accuracy, within-one-bucket (ordinal `URGENT > NEEDS_RESPONSE > FYI >
+   PROMOTIONAL`), urgent recall, personal recall, FP/FN rates, spam precision. Read the
+   bars from the **existing** `tests/fixtures/email/quality_gate_thresholds.json` — do
+   not fork a second copy of the thresholds.
+4. **Runner** — `npm run eval`, writing `eval-out/node-scorecard.json` plus a
+   human-readable console summary (headline metric, per-category breakdown, top
+   confusions, error count).
+5. **Logging** — request/response capture behind `DEBUG`, and every failed item logged
+   with its id, expected label, and actual label. Debugging a bad number without the
+   per-item trail is the main way this becomes a time sink.
+
+**Explicitly out of Phase A:** judge-scored dimensions (drafting, briefing), performance
+metrics (TTFT/TPS are already better measured Python-side), CI wiring, docs updates.
+
+### Running it locally
+
+The npm package's `binaries.lock.json` currently has **all-`PENDING` sha256
+placeholders**, so `fetchBinary()` correctly refuses to produce a binary. Phase A must
+therefore drive a **dev-mode sidecar** via `connectSidecar()` rather than
+`startSidecar()`:
+
+```bash
+# Terminal 1 — Lemonade (canonical discovery port is 13305, NOT 8000)
+lemonade-server serve
+
+# Terminal 2 — email sidecar from source
+GAIA_EMAIL_AGENT_MODE=dev PYTHONPATH=$(pwd)/src \
+  python -m gaia_agent_email.server serve --dev --port 8131
+
+# Terminal 3 — the eval
+cd hub/agents/email/npm && npm run eval
+```
+
+Two environment gotchas that will otherwise cost an afternoon:
+
+- **Lemonade is on `13305`**, not the `8765`/`8000` some docs imply.
+- `gaia-agent-email` may be editable-installed into a *different worktree*; set
+  `PYTHONPATH` explicitly or the eval silently measures the wrong checkout.
+- Port **4001 is reserved** — the server already rejects it at startup, so nothing to do
+  beyond not choosing it.
+
+Because this runs against a dev sidecar built from source, Phase A does **not** yet close
+the frozen-binary blind spot that motivates the work. It closes the *contract-surface*
+blind spot. The freeze gap only closes once real binaries publish and the same harness is
+pointed at `startSidecar()` — a one-line change, deliberately designed for.
+
+## Phase B — fixture-mailbox seam (only if Phase A justifies it)
+
+Deferred by default. Estimated ~2 days if pulled in.
+
+Add a dev-gated `--fixture-mailbox <path>` flag (plus env equivalent) to
+`gaia-agent-email serve` that wires `FakeGmailBackend` into `EmailAgentConfig`. That
+single seam makes the agent-loop path, `prescan`/briefing, `search`, and follow-ups all
+drivable over HTTP — at which point Node reproduces the *same* metric as Python, and a
+divergence between the two becomes a precise signal that the shipped surface drifted from
+source.
+
+It must be loudly dev-gated and impossible to activate in a shipped sidecar; a fixture
+mailbox silently active in production would serve fabricated email as real. Gate it on
+the same `--dev` posture that already prints the caller-token-off banner, and refuse the
+flag outright when the process looks like a frozen binary.
+
+## Phase C — judge-scored dimensions (not scheduled)
+
+Drafting and briefing quality need an Anthropic judge. If these are ever wanted in Node,
+the cheaper path is: Node emits transcripts, and the existing
+`eval_drafting_report.py` / `eval_briefing_report.py` score them. One judge
+implementation, not two. Reimplementing judge prompts in TypeScript would fork the
+scoring rubric — the same drift hazard as forking the thresholds.
+
+## Publishing guardrails
+
+The whole point is an internal read, so the separation is enforced in code, not by
+memory:
+
+- `eval/` is added to `.npmignore` (or omitted from `package.json` `files`) so it never
+  ships to consumers.
+- The output file is `node-scorecard.json`, a distinct name from the published
+  `SCORECARD.md`, and its JSON carries an explicit
+  `"surface": "batch-api-contract-path"` field plus a `"published": false` marker.
+- No edits to `SCORECARD.md`, `EVALUATION.md`, `README.md`, or `SPEC.md` in this work.
+
+That last one matters more than it looks: the eval claim is repeated across **all four**
+of those files. If a Node-derived number is ever promoted to published status, all four
+have to change in the same commit or the package ships self-contradicting documentation.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Node number read as comparable to 84.53 | Distinct metric name + `surface` field in output; parity table above stated in the runner's console header |
+| Thresholds forked into TypeScript, then drift | Read `quality_gate_thresholds.json` at runtime; never transcribe the values |
+| Dev sidecar measures the wrong worktree | Explicit `PYTHONPATH`; runner logs the resolved agent version + source path at startup |
+| Corpus/ground-truth id mismatch silently shrinks the denominator | Fail loudly on any unmatched id; report scored-item count next to the headline |
+| Phase A mistaken for closing the frozen-binary gap | Stated explicitly above; revisit when `binaries.lock.json` has real hashes |
+
+## Open question
+
+Whether the batch-API contract path is the metric we *want* long term. For npm consumers
+it is arguably more honest than the agent-loop number, because it is the surface they
+actually call. Phase A gives us the data to decide that, which is the point of doing it
+before committing to Phase B.

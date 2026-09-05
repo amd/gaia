@@ -1,0 +1,1057 @@
+---
+title: "GitHub Agent"
+description: "Consolidated scope for the GAIA GitHub Agent: event-driven CI bot + maintainer pull tooling across Agent UI / TUI / CI / service surfaces (milestone #43)."
+icon: "github"
+---
+
+# GAIA GitHub Agent — Scope
+
+**Status:** Draft scope · **Owner:** @kovtcharov-amd · **Date:** 2026-07-27
+
+A single GAIA agent (`gaia-agent-github`) that performs the AI-driven repository tasks
+`amd/gaia` currently runs as bespoke Claude GitHub Actions — PR review, PR re-review, issue
+triage, issue/PR conversation, auto-fix, release notes, PR postmortems, and the proactive
+weekly audit — plus the new capabilities Jeremy and Kalin want (PR triage, issue triage,
+issue review). (The auth canary is a 2-line liveness probe, not agent work; the live
+doc-walkthrough is repo-specific and deferred — both are out of scope, see §2.) It **consolidates
+the pre-existing milestone [#43 "GitHub Agent"](https://github.com/amd/gaia/milestone/43)** and its
+15 issues (the maintainer-side pull tooling) with this event-driven-bot half into one agent (§13).
+It ships as an installable package that drops into any repo's GitHub workflows
+with **one config file and one workflow file**, and it runs the same way on GitHub-hosted CI,
+a self-hosted runner, or as a standing webhook service (the shape `lemonade-sdk/repo-manager`
+already deploys).
+
+> **This revision incorporates two things the first draft only gestured at:** (1) GAIA's
+> **Agent Skills** work — milestone [#60](https://github.com/amd/gaia/milestone/60), format
+> locked (#691), Phase-1 loader planned (#888) — so the agent's behaviours are authored as
+> portable `SKILL.md` files, not hardcoded prompts (§8); and (2) an actual source analysis of
+> [`lemonade-sdk/repo-manager`](https://github.com/lemonade-sdk/repo-manager), which turns out
+> to be **already skill-driven** (agentskills.io `SKILL.md` + bundled scripts, run through Pi),
+> so its skills are directly loadable by GAIA and its orchestration code is concrete evidence
+> for the framework argument (§8.3–8.4).
+
+> **Plain English.** Today `amd/gaia` has ~1,600 lines of hand-written YAML across five Claude
+> workflow files that call the raw Claude Code action with giant inline prompts. It works, but
+> every prompt, every security guard, and every retry is copy-pasted and repo-specific. This
+> scope replaces that with a *packaged agent*: the prompts, tools, safety rails, and retry logic
+> live inside a versioned, tested Python package, and a repo turns the whole thing on by adding a
+> short config file. Upgrades are a version bump, not a YAML rewrite. And because it's a real GAIA
+> agent, it gets the reliability machinery (timeouts, fail-loud errors, loop-breaking, a
+> regression eval) that a hand-written prompt doesn't have.
+
+---
+
+## 1. Why an agent instead of more workflow YAML
+
+The current design is a set of prompts glued to `anthropics/claude-code-action` by YAML. That
+has three structural problems this scope fixes:
+
+1. **No reuse across repos.** `lemonade`, `repo-manager`, and `gaia` each need their own copy of
+   the 1,600-line prompt/YAML corpus. A packaged agent is `pip install` + config.
+2. **No runtime safety net.** The raw action runs Claude with `Bash` and a credential in scope
+   and trusts the model to behave. A GAIA agent wraps every action in a bounded loop with
+   per-tool timeouts, fail-loud structured errors, loop/dedup breakers, and typed tool calls
+   (see §6) — the difference between "works while watched" and "safe unattended at scale."
+3. **No regression signal.** Prompt tweaks ship on vibes today. A GAIA agent carries an eval
+   harness (§7) that turns real, already-labeled workflow history into a pass/fail tripwire — no
+   synthetic data required.
+
+> **Plain English.** The pitch to a skeptic is *not* "our prompt is smarter than yours." A
+> hand-written prompt is a fine spec. The value is everything *around* the prompt: it can't hang,
+> it won't double-post (once the GitHub write tools are wired into the base agent's existing
+> dedup/timeout machinery — §6), it fails with a clear error instead of silently, it's the same
+> code in every repo, and when you change a prompt you find out in seconds whether you broke
+> something — instead of three weeks later in production.
+
+---
+
+## 2. Capability catalog — everything it must do
+
+Mapped from the five current Claude workflows (`docs/reference/claude-ci-workflows.md`) plus the
+Jeremy/Kalin list. Each capability becomes a **task mode** of the one agent (§4), selected by the
+triggering event.
+
+| # | Capability | Trigger today | Source | Notes |
+|---|-----------|---------------|--------|-------|
+| 1 | **PR review** (full, deep) | PR opened/reopened/ready | `claude.yml` pr-review | Two-part output (visible summary + collapsed technical), security escalation, suggestion blocks |
+| 2 | **PR re-review** (light, delta) | push to PR (`synchronize`) | `claude.yml` pr-rereview | Flags only *new* regressions; silent otherwise |
+| 3 | **PR triage** *(new)* | PR opened | Jeremy/Kalin | Label, size, area routing, reviewer suggestion, "needs tests/docs" flags |
+| 4 | **Issue triage** *(new)* | issue opened | Jeremy/Kalin | Label (bug/feature/question/dup), severity, area, dedup-search, ask-for-repro |
+| 5 | **Issue review** *(new)* | issue opened / labeled | Jeremy/Kalin | Deeper "is this actionable / is root cause locatable" assessment |
+| 6 | **Issue & PR conversation** | new issue, `@agent` mention | `claude.yml` issue-handler + pr-comment | Conversational Q&A; docs-aware |
+| 7 | **Auto-fix** | `bug` label added | `claude.yml` auto-fix | Branch → fix → validate (lint+unit) → PR (draft if unvalidatable) → comment |
+| 8 | **Release notes** | release tag published | `claude.yml` release-notes | Generate notes + MDX, bump version, update nav |
+| 9 | **PR postmortem** | PR merged | repo-manager (existing) | Retrospective analysis of merged work |
+| 10 | **Proactive audit** | weekly/monthly cron | `claude-weekly-audit.yml` | 5-dimension fan-out → ranked triage issues, human-gated, dedup keys |
+| 11 | **Live doc walkthrough** | weekly cron | `claude-weekly-doc-walkthrough.yml` | Runs the product for real on a self-hosted runner (out of scope v1 — see §11) |
+| 12 | **Auth/health canary** | monthly cron | `claude-auth-canary.yml` | Cheap liveness probe; opens issue if auth broken |
+
+> **Plain English.** Think of it as one worker that knows how to do a dozen repo chores. Which
+> chore it does is decided by what just happened on GitHub: a new PR → review it; a push → quick
+> re-check; a new issue → triage and answer it; a `bug` label → try to fix it; a merge → write the
+> postmortem; a Monday → sweep the whole repo for rot. Same worker, same install, twelve jobs.
+
+---
+
+## 3. High-level architecture
+
+```
+  ┌──────────────────────────── Usage surfaces (§9) ────────────────────────────┐
+  │ INTERACTIVE                                    HEADLESS                       │
+  │  Agent UI (browser) ─┐                          CI workflow.yml ─┐           │
+  │  Go TUI (gaia-tui) ──┤─▶ daemon /api/chat/send  Webhook service ─┤─▶ gaia-   │
+  │                       │   → registry.create_agent  Local CLI ─────┘  github  │
+  └───────────────────────┼──────────────────────────────────────────┼──────────┘
+                          └───────────────┬──────────────────────────┘
+                          all converge on  │  agent.process_query(...)
+                                           ▼
+                    ┌─────────────────────────────────────────────┐
+                    │      GaiaGitHubAgent (Agent subclass)        │
+                    │  · task modes (review / triage / fix / …)    │
+                    │  · skills (SKILL.md, §8) + GitHub @tools     │
+                    │  · policy layer (dry-run, write-gating §3.3) │
+                    └───────────────────┬─────────────────────────┘
+                                        │  base Agent runtime
+                    ┌───────────────────┼─────────────────────────┐
+                    ▼                   ▼                         ▼
+          bounded agent loop     LLM provider(s)          GitHub REST API
+          timeouts / fail-loud   Lemonade / Claude /      (GITHUB_TOKEN or
+          dedup / structured     OpenAI via factory       PAT connector)
+          output (§6)            + escalation (§5)
+```
+
+The two interactive surfaces reach the agent through the **daemon** (never the legacy `gaia` CLI);
+the headless surfaces reach it through the **`gaia-github` single-shot CLI**. Both endpoints call
+the identical `process_query` — see §9 for the full surface-by-surface scope.
+
+The agent is a normal `Agent` subclass (`src/gaia/agents/base/agent.py`) — it inherits the whole
+reliability runtime for free (§6) and adds three things: **GitHub tools**, **task modes**, and a
+**write-policy layer**.
+
+### 3.1 The agent class
+
+`GaiaGitHubAgent(ApiAgent, Agent)` with `AGENT_ID = "github"`, shipped at
+`hub/agents/github/python/gaia_agent_github/agent.py`. It composes a new `github` tool mixin
+(§3.2) and selects a **task mode** at `process_query` time from the event context.
+
+> ⚠️ **See §14.1 (authoritative):** packaged/run as a **daemon HTTP sidecar** (the email pattern),
+> not an in-process wheel. The class + tools + modes below are unchanged; only the process boundary
+> moves out-of-process, and the sidecar wraps `process_query` behind `POST /v1/github/agent/query`.
+
+### 3.2 GitHub tool mixin (`GitHubToolsMixin`)
+
+GAIA ships **zero** GitHub tools today — this is the main net-new code. A thin `@tool` layer over
+GitHub REST (via `httpx`), registered in `KNOWN_TOOLS` (`src/gaia/agents/registry.py`) as
+`github` so any agent can reuse it. Auth token comes from the environment (`GITHUB_TOKEN` in CI)
+or the `mcp-github` PAT connector (service/local mode — see §9). Tools split into read and write,
+with every write gated by the policy layer (§3.3):
+
+- **Read:** `get_pr_diff`, `get_pr_files`, `list_pr_comments`, `get_issue`, `search_issues`,
+  `get_commit_history`, `compare_refs`, `read_repo_file`.
+- **Write (policy-gated):** `post_pr_review`, `post_issue_comment`, `reply_to_review_comment`,
+  `add_labels`, `remove_labels`, `assign_reviewers`, `create_branch`, `commit_files`,
+  `open_pr`, `edit_release`.
+
+> **Plain English.** Right now the workflows let Claude shell out to the `gh` CLI to do all this.
+> That works but it's unstructured — the model builds a raw command as text. Turning each action
+> into a typed tool (`add_labels(["bug"])` instead of a free-text `gh` string) means the framework
+> can validate it, time it out, refuse it under policy, and stop it from firing twice. It's the
+> same actions, but on rails.
+
+### 3.3 Write-policy layer
+
+The base agent **auto-approves** tool confirmations when running unattended
+(`console.py:225`). For an agent with destructive GitHub tools that is unsafe by default, so the
+GitHub agent adds an explicit policy gate around every write tool:
+
+- **`dry_run`** — writes are logged, not executed (default for a first rollout in a new repo).
+- **`allow` / `deny` per tool** — e.g. allow `post_pr_review` + `add_labels`, deny `commit_files`
+  until a repo opts in to auto-fix.
+- **Human-gate mirror** — the audit's "findings only, never commits; a human applies `bug` to
+  trigger a fix" rule (from `claude-weekly-audit.yml`) is encoded here, not re-implemented per repo.
+
+---
+
+## 4. Task modes
+
+Each capability in §2 is a **mode**: a system-prompt fragment + an allowed-tool set + a policy
+profile. The mode is chosen from the GitHub event, so the *same* agent process handles any event.
+
+```python
+# illustrative — not final API
+MODES = {
+    "pr_review":     Mode(prompt=PR_REVIEW, tools=READ + ["post_pr_review"],       policy="comment_only"),
+    "pr_rereview":   Mode(prompt=PR_REREVIEW, tools=READ + ["post_pr_review"],     policy="comment_only_silent_default"),
+    "pr_triage":     Mode(prompt=PR_TRIAGE, tools=READ + ["add_labels","assign_reviewers"], policy="label_only"),
+    "issue_triage":  Mode(prompt=ISSUE_TRIAGE, tools=READ + ["add_labels","post_issue_comment"], policy="label_and_comment"),
+    "issue_review":  Mode(prompt=ISSUE_REVIEW, tools=READ + ["post_issue_comment"], policy="comment_only"),
+    "converse":      Mode(prompt=CONVERSE, tools=READ + ["post_issue_comment","reply_to_review_comment"], policy="comment_only"),
+    "auto_fix":      Mode(prompt=AUTO_FIX, tools=READ + WRITE_CODE,               policy="branch_pr_gated"),
+    "release_notes": Mode(prompt=RELEASE_NOTES, tools=READ + ["commit_files","edit_release"], policy="release_gated"),
+    "postmortem":    Mode(prompt=POSTMORTEM, tools=READ + ["post_issue_comment"], policy="comment_only"),
+    "audit":         Mode(prompt=AUDIT, tools=READ_ONLY,                          policy="findings_only"),
+}
+```
+
+The prompts are **ported from the existing workflows** (they are already battle-tested and encode
+the two-part output format, the untrusted-input rules, the security-escalation protocol, the nit
+caps). The port moves them out of YAML into the package as prompt fragments, so they are versioned,
+diffable, and eval-tested — and shared across repos instead of copy-pasted.
+
+> **Plain English.** We are not throwing away the good prompts we already have — they took a lot of
+> tuning. We are lifting them out of the giant YAML files and into the agent package, where they can
+> be tested and reused. A mode is just "which prompt + which tools + what it's allowed to write."
+
+### 4.1 Choosing the mode — event-driven vs. eventless surfaces
+
+Two resolution paths, because the surfaces differ:
+
+- **Event-driven (CI / webhook):** the GitHub event *is* the selector — `pull_request_target
+  opened → pr_review`, `issues opened → issue_triage`, `bug label → auto_fix`. Deterministic; no
+  LLM needed to pick the mode.
+- **Eventless (Agent UI / TUI / `gaia-github "<nl>"`):** there is **no event** — the agent must
+  turn free text ("review PR 123 in amd/gaia") into `(mode, params)`. This needs an
+  **intent-classification front-half**, modeled on the existing `RoutingAgent`
+  (`hub/agents/routing/python/gaia_agent_routing/agent.py` — an LLM pass inside `process_query`
+  that maps NL → a target). The explicit CLI form (`gaia-github run pr-review --pr 123`) bypasses
+  it for scripts.
+
+> ⚠️ **This was a real gap in the first draft** — it assumed "mode from the event" everywhere, but
+> the interactive surfaces have no event. The NL→mode classifier is required work for §9.2/9.3, not
+> free.
+
+---
+
+## 5. LLM provider & escalation
+
+The agent talks to the LLM through GAIA's provider factory (`src/gaia/llm/factory.py`), so the
+same code runs on any GAIA LLM provider (Lemonade / Claude / OpenAI) without change:
+
+- **CI mode (GitHub-hosted runner):** Claude via `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or
+  `ANTHROPIC_API_KEY`, matching today's auth. No local model — GitHub runners have no NPU.
+- **Self-hosted / service mode:** local Lemonade (NPU/GPU) for cheap high-volume triage, escalate
+  the genuinely hard cases (deep review, auto-fix) to Claude.
+
+**Escalation** is not built today; the clean seam (from the LLM analysis) is a new
+`EscalatingProvider(LLMClient)` composite registered in the factory: it *is* an `LLMClient`, so no
+call sites change. It runs the cheap model, inspects a confidence/complexity signal, and re-calls
+the strong model only when needed.
+
+> **Plain English.** On GitHub's own runners there's no AMD chip, so it uses Claude in the cloud
+> like today. But when it runs on Kalin's own hardware or the repo-manager server, it can do the
+> cheap, high-volume work (labeling issues, first-pass triage) on the local Ryzen AI model and only
+> pay for Claude on the hard stuff (a deep review, writing a fix). That's a real cost and privacy
+> lever the current all-cloud setup can't offer — and it's the natural argument for running this on
+> Lemonade hardware.
+
+> ⚠️ **Honest gap.** The provider abstraction supports this cleanly, but the escalation composite
+> and a cross-provider tool-call normalization (Lemonade returns native tool-calls as a
+> sentinel-keyed JSON string; Claude/OpenAI return plain text) are net-new work. Text-only
+> escalation is easy; tool-calling escalation needs the normalization layer.
+
+> ⚠️ **Subscription rate-limit budgeting (do not skip).** The current workflows hand-tune around a
+> hard constraint this spec must inherit: all Claude jobs draw on **one Max-subscription OAuth
+> token with a rolling 5-hour rate limit**. `claude-weekly-audit.yml` runs its five dimensions at
+> `max-parallel: 1` *specifically* to stay under it. A packaged agent fanning out review + triage +
+> audit across *multiple repos* on one token will hit that ceiling and silently start failing runs.
+> So the CI surface (§9.5) needs a **subscription-aware serialization / budget** (concurrency cap,
+> per-repo throttle, or a billed-key fallback — Open Decision #1), and the config must expose it.
+> Local-model triage (§5) is the main pressure valve: keep cheap high-volume work off the shared
+> Claude quota.
+
+---
+
+## 6. Reliability foundations (inherited from the base Agent)
+
+These are the concrete reasons a packaged agent beats a raw prompt for unattended work. All exist
+in `src/gaia/agents/base/agent.py` today:
+
+- **Bounded, self-terminating loop** — step-capped (`DEFAULT_MAX_STEPS`, env-tunable) and it
+  **never blocks on `input()` off a TTY**, so a CI run stops instead of hanging.
+- **Per-tool hard timeout** — every tool runs in a daemon thread under a 180s (tunable) timeout
+  (`_call_tool_bounded` → `ToolExecutionTimeout`). A flaky GitHub API call can't wedge the run.
+- **Fail-loud structured errors** — tool exceptions return structured error objects (never
+  swallowed), backend errors are classified, and the run reports a full trace.
+- **Loop & duplicate-action breakers** — consecutive-repeat detection with an honest failure
+  summary, plus input-based mutation dedup so a label/comment/PR action can't fire twice. The
+  mutation set is email-centric today and **must be extended** with the GitHub write tools.
+- **Bounded, no-hidden-retry recovery** — one context-overflow retry, no blind retry loops
+  (matches the "no silent fallbacks" rule).
+
+> **Plain English.** This is the "it won't do something dumb at 3am" layer. It can't run forever,
+> it can't get stuck on a hung network call, it doesn't hide errors, and it won't post the same
+> comment five times because it looped. A hand-written prompt in a YAML file has none of this — you
+> get it for free by building on the agent base class.
+
+> ⚠️ **Honest gaps to close (from the code analysis):** (a) the base does argument *presence*
+> checks but not type/enum validation — validate inside each GitHub tool body; (b) run `status`
+> flips to `"failed"` on *any* recovered error, so success gating must inspect error *types*, not
+> `status`; (c) extend the mutation-dedup set; (d) add the write-policy deny layer (§3.3) since the
+> base auto-approves unattended.
+
+---
+
+## 7. Quality: the eval harness as a regression tripwire
+
+This is the direct answer to "measure health via vibes." GAIA's `gaia eval agent` framework
+(`src/gaia/eval/`) needs **no synthetic data** and runs on a **handful of hand-labeled scenarios**:
+
+- A scenario is one YAML file; ground truth can be a plain-English `success_criteria` string
+  ("PASS if labeled `bug` and routed to backend; FAIL if labeled `enhancement`").
+- `--compare` diffs two scorecards and **exits non-zero on any regression** → drops straight into
+  CI as a gate on prompt changes.
+- `--capture-session` turns a *real* conversation into a scenario — the opposite of synthetic.
+- `--fix` runs a Claude loop that tunes the prompt until the eval passes, with a guard that blocks
+  fixes which regress other scenarios.
+- The judge's score is recomputed deterministically, so it can't hallucinate a pass.
+
+**Kalin already has the data:** the merged-PR postmortems and existing Claude-workflow history are
+real, labeled examples — exactly the input this wants. No synthetic generation anywhere.
+
+> **Plain English.** The worry with "just write a Skill and eyeball it" is that once you have five
+> skills, tweaking one silently breaks another and you won't notice until a user does. The eval is
+> a cheap safety net: you write a dozen real examples with the answer you expect, and one command
+> tells you — in seconds — whether a prompt change made anything worse. It uses your real PR/issue
+> history, not made-up data.
+
+> ⚠️ **Honest gap.** The eval runner currently drives agents through the *Agent-UI backend over
+> MCP*. The GitHub agent has a different interface (GitHub events), so a transport adapter is needed
+> so the runner can drive it directly — **budget this as medium** (the runner is structurally
+> coupled to a UI-MCP session; see §13.7), not the "small" the first draft implied.
+
+---
+
+## 8. Skills — the authoring layer (grounds on milestone #60 + repo-manager)
+
+The agent's behaviours (review, triage, postmortem, announce) are authored as **portable
+`SKILL.md` files**, not hardcoded Python prompts. This is not greenfield invention — it sits on
+GAIA's in-flight Agent Skills work and mirrors how `repo-manager` already works.
+
+### 8.1 What already exists (milestone #60)
+
+| Piece | Issue | Status | What it gives us |
+|-------|-------|--------|------------------|
+| `SKILL.md` format (agentskills.io base + `metadata.gaia`) | #691 | **locked** | The on-disk contract — the *same format Claude Code / repo-manager use* |
+| Phase-1 runtime loader (`gaia.skills`, discovery, `gaia skill` CLI, `<skill>/<tool>` namespacing) | **#888** | **not started — critical path** | Load an authored `SKILL.md` into an agent at runtime |
+| Reference consumer: email agent bundled skills + **`skill_sets:`** (per-context, mutually-exclusive skill bundles) | #2466 | planned, blocked on #888 | The pattern for per-repo / per-mode capability selection |
+| Procedural memory / auto-synthesis | #887/#1451 | **shipped, separate corpus** | Learned skills from the agent's own runs — do **not** unify with authored skills |
+
+**The load-bearing constraints from #888 that this spec must respect:**
+- v1 discovery = three roots (agent-bundled `skills/<name>/`, `~/.gaia/skills/`, `.claude/skills/`
+  read-only). We use the **agent-bundled** root to ship the GitHub agent's default skills.
+- v1 permissions are **connector-bridged only** (`network`/`mcp`). Local-capability permissions
+  (`filesystem`/`shell`/…) are **refused with a clear error**, not sandboxed. So the GitHub
+  agent's *write actions stay in typed Python `@tool`s* (§3.2) — skills carry the *procedure*,
+  tools carry the *action*. This division is exactly what the milestone intends.
+
+> **Plain English.** GAIA is already building the machinery to load hand-written skill files —
+> the format is finalized and the loader is the next thing on the skills roadmap. We don't build
+> a skill system; we become its second showcase (after the email agent). Each of the agent's jobs
+> becomes a small Markdown file a human can read and edit, and a repo can override one without
+> touching code.
+
+### 8.2 The GitHub agent as the second reference consumer
+
+Ship the task modes (§4) as bundled skills at `hub/agents/github/python/skills/<mode>/SKILL.md`,
+and use #2466's `skill_sets:` to select per context:
+
+```yaml
+# gaia-agent.yaml (excerpt) — reuses the #2466 skill_sets mechanism
+skills:              # always on
+  - github-common
+skill_sets:
+  review:   { skills: [pr-review, pr-rereview] }
+  triage:   { skills: [pr-triage, issue-triage, issue-review] }
+  release:  { skills: [release-review, release-announcement, postmortem] }
+```
+
+Per-repo override then means dropping a `SKILL.md` in a **trusted base-ref path** (never the PR
+working tree — §10) to replace or extend a default skill. That is the "dead simple integration"
+promise (§9) expressed through the skill layer, and it is Jeremy's exact authoring model.
+
+### 8.3 repo-manager, analyzed — it is already an agentskills.io runner
+
+Source read of [`lemonade-sdk/repo-manager`](https://github.com/lemonade-sdk/repo-manager)
+(`repo_manager/cli.py`, `skills/*/SKILL.md`). Its architecture:
+
+- **A deterministic Python CLI + SQLite orchestrator** that shells out to **Pi**:
+  `pi --mode json --skill <path>/SKILL.md` with the prompt on stdin, streaming JSON events
+  (`cli.py:189`). The skill writes a JSON/Markdown **artifact to a caller-supplied path**; the
+  CLI reads it back and stores parsed fields to SQLite (`store_commit_review`, `cli.py:707`).
+- **Three hand-authored agentskills.io skills** with bundled `gh`/`git` bash `scripts/`:
+  `commit-review`, `release-review`, `release-announcement` — each a `SKILL.md` frontmatter
+  (`name`/`description`) + body + JSON output contract.
+- **SQLite = source of truth; GitHub issues = sync target** (checklist issue with checkboxes,
+  release-notes + announcement issues); a **static dashboard published to GitHub Pages**; a
+  cross-machine **`pull` merge** for onboarding.
+- Maintainer-in-the-loop: it stores only the *proposed* announcement and feeds maintainer issue
+  comments back into regeneration.
+
+**These three skills map 1:1 onto our task modes** — the *frontmatter* is portable, but the
+**bodies are not drop-in runnable**:
+
+| repo-manager skill | GAIA GitHub agent mode (§4) |
+|--------------------|------------------------------|
+| `commit-review` | `postmortem` |
+| `release-review` | `release-review` (new) |
+| `release-announcement` | `release_notes` / announce |
+
+> ⚠️ **Correction (verified — supersedes any "load unchanged" claim).** repo-manager's skills do
+> their real work through **bundled `gh`/`git` bash `scripts/`**. Two facts break a drop-in:
+> (1) a bare agentskills.io `SKILL.md` (no `metadata.gaia`) loads **instruction-only** — no tools,
+> no permissions — so the scripts that touch GitHub have no execution path; and (2) **#888 Phase 1
+> doesn't bridge or even refuse `shell`/`filesystem` — that's Phase 2** (`skill-format.mdx`),
+> unbuilt. So real parity requires: the `GitHubToolsMixin` (§3.2) exists, **each skill body is
+> re-pointed from bash scripts to those typed tools**, and #888 has landed. It is a *body rewrite*,
+> not a copy — budget it as such. The win that survives: the *procedure* text and the format are
+> portable, and the switch pitch (§8.4) still holds.
+
+### 8.4 The framework argument, now evidenced from Jeremy's own code
+
+repo-manager hand-builds in Python exactly the reliability GAIA's base agent + eval provide as
+primitives. This is the concrete "framework vs. barebones-agent-plus-skills" case, against real code:
+
+| What repo-manager hand-codes | Why (Pi output is untyped) | GAIA primitive that subsumes it |
+|------------------------------|----------------------------|---------------------------------|
+| `extract_todo_list` + `TODO_LIST_KEY_HINTS` — liberal key-matching because "Pi does not reliably emit the documented keys" (`cli.py:479`) | Untyped free-text output | **Typed `@tool` / structured-output schema** — the shape is validated, so this whole class of parsing code disappears |
+| `normalize_release_review_data` recomputes the verdict from the to-do list so the model can't contradict itself (`cli.py:549`) | Can't trust the LLM's own verdict | Same pattern GAIA's **eval judge** uses (deterministic score recompute) — and a `@tool` returns already-validated data |
+| `announce` validation + **3× auto-retry** with resumable pending feedback | No built-in retry loop | **Agent structured-output retry** + eval **`--fix`** loop |
+| False-green regex guards ("empty to-do list but prose says 'blocker'", `cli.py:578`) | No error classification | **Fail-loud** structured errors + the reliability layer (§6) |
+| Rubric-versioned re-review; artifact→SQLite; issue sync | Bespoke orchestration | GAIA **service mode** (§9.4) + the eval **`--compare`** regression gate (§7) |
+
+> **Plain English.** repo-manager is genuinely good engineering — but a big share of its code
+> exists only to babysit an untyped agent: guessing which key the answer landed under, recomputing
+> the verdict so the model can't lie about it, retrying three times when the output is malformed.
+> A GAIA agent gets those for free from typed tools, structured output, and the eval loop. That's
+> the switch pitch in one line: *keep your skills, delete the babysitting code.*
+
+### 8.5 Integration path with repo-manager (the "deploy it anyway" offer)
+
+Two concrete options, in increasing ambition — both let Jeremy keep his orchestrator and skills:
+
+1. **GAIA as the skill engine (drop-in for Pi).** Replace `pi --mode json --skill X` with the
+   GAIA GitHub agent loading skill `X`. repo-manager's CLI, SQLite, issue-sync, and Pages
+   dashboard are unchanged; only the inference engine swaps — now with the §6 reliability runtime
+   and local-model/escalation (§5). Lowest-friction; proves parity fast.
+2. **GAIA service mode absorbs the orchestrator (§9.4).** The GitHub agent's webhook service
+   provides the artifact-store + issue-sync + dashboard equivalents natively, and repo-manager's
+   skills run on it directly. Higher ambition; the endpoint of "I may just deploy that in my gaia
+   repo anyway."
+
+> ⚠️ **Honest dependency.** Everything in §8 rides on **#888 landing**. Until it does, the GitHub
+> agent ships its mode prompts as in-package fragments (§4) behind a thin interim loader, authored
+> in the `SKILL.md` shape so the switch to the real loader is a no-op. The `skill_sets` selection
+> (§8.2) additionally depends on #2466. Don't claim skill portability before #888 is merged.
+
+## 9. Usage surfaces — as easy as Pi
+
+This is the core UX requirement: the agent must be equally usable **(A) interactively via the
+Agent UI and the Go TUI** and **(B) as a one-liner in a repo's `workflow.yml`**. Both must be as
+frictionless as Pi (`/skill:commit-review OWNER/REPO SHA` interactively; `repo-manager
+review-commit SHA` in scripts).
+
+### 9.1 One core, five surfaces (the design invariant)
+
+There is exactly **one** agent implementation. Every surface converges on the same
+`agent.process_query(...)` call; only the shell that wraps it differs. Nothing is
+surface-specific except the adapter that turns an event/keystroke into a query and the sink that
+carries the output.
+
+| Surface | Reaches the agent via | Output sink | Auth |
+|---------|----------------------|-------------|------|
+| **Agent UI** (browser) | daemon `POST /api/chat/send` → `registry.create_agent` → `process_query` | SSE events (`SSEOutputHandler`) | `mcp-github` PAT connector (per-agent grant) |
+| **Go TUI** (`gaia-tui`) | daemon HTTP/SSE *(target)* or subprocess JSONL *(today)* | terminal render of the same events | same connector |
+| **CI `workflow.yml`** | reusable action → `gaia-github` single-shot CLI → `process_query` | posts comment/label/PR via GitHub tools | `GITHUB_TOKEN` |
+| **Local CLI / service** | `gaia-github "<nl>"` · webhook → dispatch | stdout / GitHub API | PAT connector / `GITHUB_TOKEN` |
+| **Chat app** (Slack/Teams, opt · §9.8) | outbound: `sinks.py` POST · inbound: messaging adapter → `process_query` | channel message / threaded reply | webhook (out) · bot/app token (in) |
+
+> **Plain English.** Build the brain once; give it many mouths. Whether a request arrives from a
+> browser click, a terminal, a CI event, or a webhook, it runs the *same* code and behaves the
+> same way. That's what keeps "works in the UI" and "works in CI" from drifting into two agents.
+
+### 9.2 Interactive — Agent UI (browser, through the daemon)
+
+**This surface is nearly free** given how the daemon already exposes agents. Ship
+`gaia-agent-github` as a wheel with a `gaia.agent` entry point (an `Agent` subclass or
+`build_registration()`), and:
+
+- It is **auto-discovered** — `registry.discover()` scans the `gaia.agent` entry-point group, no
+  allowlist — and appears in `GET /api/agents` as a selectable card.
+- A session created with `agent_type: "github"` is instantiated per turn via
+  `registry.create_agent("github", …)` through the generic dispatch branch in `_chat_helpers.py`
+  — the same path `browse`/`analyze`/`jira` already use. No UI-specific code.
+- Tool calls, steps, thinking, and the final answer stream to the UI through `SSEOutputHandler`
+  automatically (`tool_start` / `tool_result` / `answer` events); cancel and re-attach work for free.
+- Ship hub card metadata (name, icon, category, and `conversation_starters` like *"Review PR #123
+  in amd/gaia"*, *"Triage the new issues"*) so the card is self-explanatory.
+
+**Interactive write-gating comes built in.** A destructive tool raises the SSE `permission_request`
+event, which the UI answers via `POST /api/chat/confirm-tool` — so in the UI a write (post review,
+add label, open PR) *asks the user*, while in CI the same tool is governed by the policy layer
+(§3.3). Same tool, surface-appropriate gate.
+
+**UX target:** pick the GitHub Agent card → type *"review PR 123 in amd/gaia"* → watch the tools
+stream → approve the post. That is the Pi `/skill:` experience, in the browser.
+
+### 9.3 Interactive — Go TUI (`gaia-tui`)
+
+> ⚠️ **Updated by §14.2:** the email pattern is HTTP/SSE, so path (b) `--json-events` is dropped —
+> do the shared daemon→SSE `AgentClient` in the TUI (path a), which is the only pattern-faithful
+> route and lights up email in the TUI too. No sidecar (email included) runs in the TUI today.
+
+**Honest current-state gap.** The TUI today does **not** talk HTTP to the daemon: it spawns agent
+*binaries* as subprocesses and reads newline-delimited JSON from stdout (`SubprocessClient`). Its
+`AgentClient` interface anticipates an "API (SSE) mode," but **that client doesn't exist yet** —
+the Python agents in its catalog are placeholders marked *"need API client mode"*; only the C++
+bash agent is launchable. So neither the GitHub agent nor any Python agent works in the TUI today.
+
+Two paths make the GitHub agent work there:
+
+- **(a) Preferred — add the daemon HTTP/SSE client to the TUI (shared infra).** Implement the
+  missing `AgentClient` against the daemon's `POST /api/chat/send` SSE stream. Once it lands,
+  **every** daemon-registered agent — GitHub included — works in the TUI with zero per-agent code,
+  and the TUI stops shelling out (matching the target architecture: daemon backend + two HTTP
+  front-ends). This is the right fix and it unblocks all Python agents, not just this one.
+- **(b) Interim bridge — a new `--json-events` subprocess emitter (verified: cheaper than a rewrite,
+  but NOT free today).** The good news, confirmed against the code: the TUI parser's 13 event types
+  are **snake_case and already identical** to what `SSEOutputHandler` emits (`tool_start`,
+  `tool_args`, `tool_result`, `step`, `thinking`, `plan`, `chunk`, `answer`, `agent_error` —
+  `tui/internal/event/types.go`, `src/gaia/ui/sse_handler.py`). **No schema/case translation is
+  needed.** The gap is plumbing, and it is real: `src/gaia/agents/base/server.py` has `--pipe`
+  (final **plain-text** answer only) and **no `--json-events` mode**, and `SSEOutputHandler` writes
+  to an in-process queue for HTTP, not to stdout. So path (b) requires: (i) a new `--json-events`
+  entry that reads one query line from stdin (`subprocess.go` sends `query\n`), runs the agent with
+  an `SSEOutputHandler`, and drains its queue to stdout as one JSON object per line; (ii) a terminal
+  `answer`/`done` line (the TUI ends a turn on `answer`/`agent_error`/`done` — the current `None`
+  queue sentinel is not JSON); (iii) **auto-deny/background mode for `permission_request` /
+  `user_input_request`** (the TUI parser doesn't recognize them and would hang the agent waiting on
+  a frontend that isn't there); plus a TUI catalog entry with a resolvable `BinaryPath` (`gaia-github
+  --json-events`).
+
+**Recommendation:** do (a) — it's the architecture the memory/roadmap already commits to and it's
+strictly more valuable. Path (b) is a viable stopgap **because the event vocabulary already lines
+up** — but it is a small new emitter + auto-confirm shim, not a config flag; don't promise "works
+today" until that shim ships. Either way the agent core is unchanged; this is TUI-side plumbing.
+
+### 9.4 Service / webhook mode (repo-manager parity)
+
+For Kalin's existing `lemonade-server.ai/repo-manager` deployment, the same agent runs as a
+long-lived webhook service: GitHub App/webhook → event → same task-mode dispatch → same tools.
+This reuses the `mcp-github` connector **for the token only** (`get_credential_sync` vends
+`GITHUB_TOKEN`; we do *not* run its bundled MCP server) — keyring-stored, per-agent grants — instead
+of the CI `GITHUB_TOKEN`. **No agent logic changes** between any surface — only the shell and the
+auth source differ.
+
+> ⚠️ **Concurrency gap.** `Agent.process_query` is **synchronous/blocking**. The daemon surfaces
+> already serialize per session (per-session lock + global semaphore in the chat router), and CI is
+> one process per job — both fine. But a webhook service fielding bursts of events must add its own
+> **thread/process pool with a bounded worker count** (each agent instance ≈ 50–100 MB + model
+> context), or events queue head-of-line behind a slow review. Size it like the messaging plan's
+> `max_concurrent_sessions`; don't assume the single-process model scales to a busy repo.
+
+### 9.5 CI — the `workflow.yml` surface (as easy as Pi's CI)
+
+Ship a **reusable workflow** `amd/gaia/.github/workflows/gaia-github-agent.yml` (and/or a
+composite/Docker action `amd/gaia-github-agent@v1`) that generalizes what `claude-run.yml` does:
+
+1. Installs the wheel (`pip install gaia-agent-github`).
+2. Reads a single repo config file (`.github/gaia-github-agent.yml`) **from the base ref** (the
+   same fork-safety trick `claude-run.yml` uses for the review rubric — §10).
+3. Maps the triggering event → task mode and builds context (diff, issue body, …).
+4. Invokes the **`gaia-github` single-shot CLI** (§9.6) — the *same* entry the local/CLI surface
+   uses — and posts the result via the GitHub tools.
+
+A consumer repo's **entire** integration is one thin workflow file:
+
+```yaml
+# .github/workflows/gaia.yml  — the whole integration
+name: GAIA GitHub Agent
+on:
+  pull_request_target: { types: [opened, reopened, ready_for_review, synchronize] }
+  issues:              { types: [opened, labeled, reopened] }
+  issue_comment:       { types: [created] }
+jobs:
+  gaia:
+    uses: amd/gaia/.github/workflows/gaia-github-agent.yml@v1
+    secrets: inherit
+```
+
+…plus a short config that toggles capabilities and models:
+
+```yaml
+# .github/gaia-github-agent.yml  — the whole policy
+capabilities:
+  pr_review:    { enabled: true,  model: claude-opus-4-8 }
+  pr_rereview:  { enabled: true,  model: claude-sonnet-4-6 }
+  pr_triage:    { enabled: true,  model: local }     # cheap model on self-hosted
+  issue_triage: { enabled: true,  model: local }
+  auto_fix:     { enabled: true,  policy: draft_pr_only }
+  audit:        { enabled: true,  schedule: "0 6 * * 1" }
+escalation:
+  from: local
+  to:   claude-opus-4-8
+  when: low_confidence
+security:
+  fork_prs: review_only          # never run fork code; never write on fork events
+  escalate_security_to: "@kovtcharov-amd"
+```
+
+### 9.6 The `gaia-github` CLI single-shot (the shared primitive)
+
+The wheel ships a `gaia-github` console entry following the proven hub-agent pattern (`gaia-code`):
+a single positional query mapped straight to `process_query`, so it works both headless (CI) and
+by hand:
+
+```bash
+gaia-github "review PR 123 in amd/gaia"        # natural language → process_query
+gaia-github run pr-review --pr 123 --repo amd/gaia   # explicit mode, for CI
+gaia-github init                               # scaffold workflow.yml + config into a repo
+gaia-github --json-events                      # subprocess mode for the TUI (§9.3 path b)
+```
+
+> **Naming (resolved).** Everything is the **`gaia-github` console script**, never a `gaia github`
+> subparser — the Python `gaia` CLI is legacy/being phased out, and the Go TUI binary is *also*
+> named `gaia`, so a `gaia github` subcommand would collide. One `console_scripts` entry
+> (`gaia-github`), several verbs.
+
+The reusable action (§9.5) calls exactly this CLI; the daemon calls `process_query` directly. **One
+code path, five surfaces.** `gaia-github init` is the one-command onboarding (writes both files in
+§9.5), so a repo goes from zero to reviewed PRs without hand-copying YAML.
+
+### 9.7 "As easy as Pi" — side by side
+
+| Task | Pi / repo-manager | GAIA GitHub agent |
+|------|-------------------|-------------------|
+| Install | `pi install …` | `pip install gaia-agent-github` (or `gaia hub install github`) |
+| Interactive, one job | `/skill:commit-review owner/repo SHA` | select the card → *"review PR 123 in amd/gaia"* (UI/TUI) |
+| Scripted / CI | `repo-manager review-commit SHA` | `uses: amd/gaia/.github/workflows/gaia-github-agent.yml@v1` + config |
+| Local one-off | `repo-manager …` | `gaia-github "review PR 123 in amd/gaia"` |
+| Add a capability | author a new `skills/<name>/SKILL.md` | author a new `skills/<name>/SKILL.md` (§8) — identical |
+
+> **Plain English.** Four ways in, one brain. In the app or the terminal you pick the GitHub Agent
+> and talk to it in plain English, approving any write it wants to make. In CI you add ~10 lines of
+> YAML and a short config file — done. Turning a capability on or swapping a model is a one-line
+> config edit; adding a new capability is writing one Markdown skill file — the *same* file whether
+> you run it interactively or in CI. That is the bar: no harder than Pi, in more places.
+
+### 9.8 Chat-app surfaces (Slack / Teams / Discord) — optional, split by cost
+
+A chat-app integration is just **another shell** under the §9.1 invariant (a message →
+`process_query` → a reply), so the agent core needs no changes. But it splits into two halves with
+very different cost and value — and it rides GAIA's broader messaging work, not GitHub-agent code.
+
+> ⚠️ **Reality check on GAIA messaging (verified).** Do not assume messaging is a solved
+> foundation. The **only** shipped code is (1) the `schedule/sinks.py` outbound helper (a plain
+> `requests.post`, real and used by `gaia schedule`) and (2) a **Telegram adapter that is
+> Phase-0 *scaffold*, not working support** — its own docstring says "minimal scaffolding for
+> v0.18.2," its optional extra is never installed in CI, and its lone unit test passes *even when
+> the dependency is missing and the adapter is non-functional* (asserts an attribute exists, never
+> connects or routes a message). It's documented in `docs/guides/telegram-adapter.mdx` as if
+> supported — that claim is overstated. Treat Telegram as prototype, not precedent; the inbound
+> messaging framework is genuinely greenfield.
+
+**(a) Outbound notification — cheap, high value, do first.** Post review summaries, triage
+verdicts, weekly-audit digests, and **release announcements** to a channel. This reuses the one
+genuinely-real piece — the outbound dispatch in `src/gaia/schedule/sinks.py` (the `_to_telegram`
+`requests.post` pattern, wired into `gaia schedule` with tests); adding `_to_slack` (incoming
+webhook) and `_to_teams` (connector-card / workflow webhook) is a small, self-contained change in
+the same shape. In the repo config it's one block:
+
+```yaml
+notify:
+  slack:  { webhook: "${SLACK_WEBHOOK}",  on: [pr_review, audit, release_notes] }
+  teams:  { webhook: "${TEAMS_WEBHOOK}",  on: [release_notes] }
+```
+
+> **This directly generalizes what repo-manager already does** — its `release-announcement` skill
+> writes Discord markdown that a maintainer posts. The GitHub agent *produces* that announcement
+> (§8.3) and can *deliver* it in the same run, collapsing two steps into one.
+
+**(b) Inbound interactive — `@gaia review PR 123` from a channel — separate track.** This is a real
+usage surface (message → `process_query` → threaded reply), but there is **no reusable messaging
+framework today**: the Telegram adapter is scaffold-grade (see the reality check above), and the
+`MessagingAdapter` ABC / `MessageRouter` / `SessionManager` are **planned, not built** (messaging
+plan, #635, P2). So inbound means building that shared framework first *or* a bespoke
+~500–800-line/platform adapter — not something the
+GitHub agent should carry alone.
+
+**Honest constraints (from the analysis):**
+- **Teams is the hardest and isn't in the plan.** Its Bot Framework inbound needs a **public
+  webhook URL**, which conflicts with GAIA's local-first model. **Slack Socket Mode needs no public
+  URL** — so Slack is the better first inbound target; Teams inbound realistically wants the service
+  mode (§9.4) or a tunnel. (Teams *outbound* via a workflow/incoming webhook is fine and cheap.)
+- **Auth:** no Slack/Teams connector exists yet (Slack = bot + app token for Socket Mode; Teams
+  could later ride the existing Microsoft/Graph connector). Tokens via env/connector, never config.
+- **Target the daemon, not the legacy `gaia telegram` PID-file process** — new adapters should be
+  daemon-integrated per the go-forward architecture.
+- **Untrusted input:** a channel message is external input — apply the §10 posture (restricted
+  default tools, channel/user allow-lists, confirm-first writes via platform buttons, rate limits).
+
+**Recommendation:** ship **(a) outbound now** — it's small, reuses `sinks.py`, and delivers the
+repo-manager-style announcement end-to-end. Treat **(b) inbound** as a fast-follow that lands with
+the shared messaging framework (#635), **Slack (Socket Mode) before Teams**. Neither is v1-critical
+for the GitHub agent; the Agent UI / TUI / CI surfaces (§9.2–9.6) are the ones that must ship first.
+
+---
+
+## 10. Security model (carried over, not reinvented)
+
+The current workflows encode hard-won fork-safety lessons. The agent and its reusable action must
+preserve every one — this is non-negotiable and is a big part of why a *shared, reviewed* package
+beats per-repo YAML that can drift:
+
+- **Never execute PR code.** Read the diff, post comments; no `pip/npm install`, no build, no
+  running checked-out code. (`claude.yml` header rule.)
+- **Untrusted input is data, not instructions.** Diffs, issue/PR bodies, and any working-tree
+  `REVIEW.md`/`CLAUDE.md` on a fork are attacker-controlled — the agent treats them as content and
+  flags injection attempts. Policy/config is read **only from the base ref**.
+- **Fork PRs run under base-repo permissions** (`pull_request_target`) with least-privilege scopes
+  and **review-only** writes; code-writing modes (auto-fix) never run on fork events.
+- **Secret scrubbing** in any subprocess; credentials never echoed.
+- **Security findings stay private** — never post exploit detail publicly; count + run-log pointer
+  + `@kovtcharov-amd` tag, mirroring the audit's protocol.
+- **Human-gated writes** — the audit files findings only; a maintainer applies `bug` to trigger a
+  fix; branch protection + mandatory review bound the auto-fix blast radius.
+
+> **Plain English.** A bot that reads pull requests from strangers and holds a credential is a
+> juicy target. The current workflows have carefully-tuned guardrails against that (don't run the
+> stranger's code, treat their text as untrusted, keep security findings private, require a human
+> to approve any code change). Packaging *helps* here: those guardrails get written once, reviewed
+> once, and reused — instead of being re-typed (and subtly weakened) in every repo's YAML.
+
+---
+
+## 11. Phasing
+
+| Phase | Deliverable | Capabilities |
+|-------|-------------|--------------|
+| **0** | `GitHubToolsMixin` + `GaiaGitHubAgent` skeleton + `gaia-github` single-shot CLI (§9.6); mode prompts authored as `SKILL.md` behind a thin interim loader; run one mode locally against a real repo via PAT | read tools + `issue_triage` (dry-run) |
+| **1** | Reusable action + config schema + base-ref config load + write-policy layer | `pr_review`, `pr_rereview`, `issue_triage`, `pr_triage`, `converse` |
+| **1-UI** | **Agent UI surface (§9.2):** ship the `gaia.agent` entry point + hub card metadata (icon, category, conversation_starters) → auto-appears, runs via the generic registry branch, streams over SSE, interactive write-approval via `permission_request` | interactive use in the browser |
+| **2** | Eval transport adapter + seed scenarios from real history (incl. repo-manager's data); wire `--compare` CI gate | quality gate on all Phase-1 prompts |
+| **3** | `auto_fix`, `release_notes`, `postmortem`, `audit` (findings-only); load repo-manager's `commit-review`/`release-review`/`release-announcement` skills | full parity with `claude.yml` + weekly audit + repo-manager |
+| **3-TUI** | **Go TUI surface (§9.3):** preferred — add the daemon HTTP/SSE `AgentClient` to `gaia-tui` (shared infra, unblocks all Python agents); bridge — `--json-events` `AgentServer` pipe + catalog entry | interactive use in the terminal |
+| **4** | `EscalatingProvider` + service/webhook mode + `gaia-github init` scaffolder | local-triage/cloud-escalate; repo-manager parity |
+| **skills** | Swap the interim loader for the real `gaia.skills` loader (#888) + `skill_sets` (#2466); enables per-repo skill override + portability | *gated on #888 / #2466 landing* |
+| **notify** | **Outbound chat-app notifications (§9.8a):** add `_to_slack`/`_to_teams` to `sinks.py` + a `notify:` config block; deliver review/audit/announcement to a channel | reuses `schedule/sinks.py`; small |
+| **later** | Inbound chat-app surface (§9.8b, Slack Socket Mode → Teams) — rides the shared messaging framework (#635); Live doc-walkthrough mode (self-hosted runner) | capabilities #11 + chat inbound |
+
+> **Plain English.** Prove it on the cheapest, safest task first (label issues, in dry-run, on one
+> repo), with the eval net in place before we trust it to write anything. Then widen to reviews and
+> triage, then to fixes and release notes, then to the cost-saving local-model path and the
+> always-on server. The skills work runs on its own track (#888) and slots in without reworking the
+> agent — we author in the skill shape from day one. Each phase is independently useful and reversible.
+
+---
+
+## 12. Open decisions
+
+1. **Auth in CI:** rely on the same `CLAUDE_CODE_OAUTH_TOKEN` subscription model as today, or a
+   billed API key? (Affects the escalation cost story.)
+2. **GitHub App vs PAT for service mode:** a GitHub App gives finer-grained, per-repo, revocable
+   permissions than a PAT — worth it for a multi-repo deployment, more setup up front.
+3. **Where does the shared package live** — inside `amd/gaia` hub (`hub/agents/github/`) or its own
+   repo so `lemonade`/`repo-manager` can consume it without depending on all of GAIA?
+4. **Postmortem/audit overlap:** repo-manager's existing postmortems vs. GAIA's weekly audit —
+   merge into one proactive mode or keep distinct (postmortem = per-merge retrospective, audit =
+   whole-repo sweep)?
+5. **Tool layer:** thin `httpx` GitHub REST tools (full control, we own coverage) vs. leaning on
+   the upstream GitHub MCP server (less code, coverage outside our control). Recommend REST for the
+   write path, MCP optional for exotic reads.
+6. **repo-manager integration depth (§8.5):** drop-in Pi replacement (fast parity, keep his
+   orchestrator) vs. GAIA service mode absorbing the SQLite/issue-sync/Pages orchestrator. The
+   drop-in is the right *first* step regardless — it's the cheapest way to prove parity on his data.
+7. **Interim loader vs. wait for #888:** ship Phase 0–3 now with a thin in-package loader authored
+   in the `SKILL.md` shape (recommended — unblocks the agent), or gate the whole agent on the #888
+   loader landing? Recommend not blocking; the switch is designed to be a no-op.
+8. **Sequencing with the email reference (#2466):** the email agent is #888's first consumer and
+   owns the `skill_sets` mechanism. Do we wait for it to land `skill_sets`, or co-develop it so the
+   GitHub agent is the second consumer in the same cycle?
+9. **TUI enablement (§9.3):** invest in the shared daemon HTTP/SSE `AgentClient` for `gaia-tui`
+   (fixes the TUI for *every* Python agent, aligns with the "no shell-out" target) vs. a new
+   per-agent `--json-events` subprocess emitter (a small shim — the event vocabulary already matches
+   `SSEOutputHandler`, but it must be written + auto-deny confirmations; **it does not work today**).
+   Recommend the shared client — bigger, cross-team; confirm ownership. Neither exists yet, so **the
+   TUI surface (G9) is not shippable until one lands** — the MVP (§13.4) ships on CLI + Agent UI.
+10. **Interactive auth:** the daemon surfaces (UI/TUI) authenticate GitHub via the `mcp-github` PAT
+    connector, but that's a **classic PAT, not a GitHub App** (no fine-grained/OAuth today). Is a
+    PAT acceptable for interactive local use, or do we need the App path (decision #2) first?
+11. **Chat-app surface (§9.8):** confirm outbound-first (reuse `sinks.py`) and whether inbound is
+    worth pulling the shared messaging framework (#635, currently P2/unbuilt) forward, or left as a
+    fast-follow. Slack (Socket Mode, no public URL) before Teams (needs webhooks / service mode)?
+    Note Teams isn't in the current messaging plan — adding it is net-new scope on that track.
+12. **API client design (§13.2, reconciles #1123):** typed `httpx` `@tool`s for the write/act path
+    (required for the base agent's dedup/timeout/policy/validation) vs. `gh`-CLI shell-out (existing
+    #1123) for bulk reads. **RESOLVED (2026-07): both** — typed `@tool`s for the write/act path,
+    `gh`/REST for bulk reads. #1123 to be updated accordingly; typed write tools tracked in G1.
+
+---
+
+## 13. Consolidation with milestone #43 (the existing GitHub Agent)
+
+**Milestone [#43 "GitHub Agent"](https://github.com/amd/gaia/milestone/43) already exists** with 15
+issues (#1123–#1137) and a referenced plan doc `docs/plans/github-agent.mdx` that **is not in the
+repo** (dangling reference). This spec **converges into #43**, not a new milestone.
+
+### 13.1 The two halves are complementary, not competing
+
+| | Existing #43 (issues #1123–1137) | This spec |
+|---|---|---|
+| Framing | Maintainer-side **pull tool** — "help the human review faster" | Event-driven **CI bot** — "act on GitHub" + interactive surfaces |
+| Verbs | rank, brief, digest, cluster, analyze (read/analyze) | review, triage, comment, label, fix, announce (**write-back**) |
+| Trigger | `gaia-github <cmd>` + background poller | GitHub event / `@mention` / UI/TUI chat |
+| Examples | review *queue*, re-review *briefing*, community dashboard, upstream intel, Q&A | post a *full review*, auto-fix a bug, proactive audit issues |
+
+They share a foundation (API client, hub packaging, SQLite store, profile config, MCP surface) and
+are **one agent with many surfaces** (§9). Convergence = keep the 15, add the write-back + surfaces
+gaps, and reconcile the overlaps below.
+
+### 13.2 Reconciliation of overlaps (edits/comments on existing issues — not new issues)
+
+- **#1123 API client (`gh` CLI + REST fallback)** vs this spec's **typed `httpx` `@tool` mixin.**
+  Decision needed (Open Decision #12): the **write/act path needs typed tools** (the base agent's
+  dedup / timeout / policy / validation only work on typed `@tool`s, not free-text `gh` strings —
+  §3.2, §6); `gh`-CLI/bulk-REST is fine for the **read/analyze** path (#1124/#1130). Recommend:
+  typed tools for writes, `gh`/REST for bulk reads; update #1123 to say both.
+- **#1126 hub packaging** — path is written `hub/agents/python/github/` (segments reversed); the
+  real convention is **`hub/agents/github/python/`**. Also add the `gaia.agent` entry point (UI
+  auto-discovery, §9.2) and the NL single-shot + `init` (§9.6). Edit #1126.
+- **#1135 MCP surface**, **#1133 situational Q&A**, **#1136 ambient autonomy** overlap this spec's
+  surfaces / converse / audit. Keep them; cross-reference so they aren't rebuilt (converse =
+  respond *on an issue/PR*; #1133 = *repo-state* Q&A — genuinely distinct).
+
+### 13.3 Gap issues to create under #43 (the write-back + surfaces half)
+
+Proposed NEW issues (conventional-commit titles). None duplicate #1123–1137.
+
+| Key | Title | Deps | Tier |
+|-----|-------|------|------|
+| G1 | `feat(github): typed write tools + write-policy layer (dry_run/allow-deny/human-gate)` | #1123 | core |
+| G2 | `fix(agent): extend mutation-dedup + error-type success-gating for GitHub writes` | G1 | core |
+| G3 | `feat(github): triage modes — issue_triage + pr_triage (label/route, dry-run first)` | #1123, G1 | **MVP** |
+| G4 | `feat(github): review modes — pr_review + pr_rereview (two-part output, security escalation, suggestions)` | G1 | core |
+| G5 | `feat(github): converse + issue_review modes (@mention Q&A, actionability)` | G1 | core |
+| G6 | `feat(github): auto_fix mode (bug label → branch → lint+unit → draft PR)` | G1, G4 | later |
+| G7 | `feat(github): proactive audit mode (findings-only, human-gated)` | G1 | later |
+| G8 | `feat(ci): reusable gaia-github-agent.yml + base-ref config + fork-safety + rate-limit budget` | G3/G4 | core |
+| G9 | `feat(github): interactive surfaces — Agent UI card + NL→mode classifier + gaia-github NL CLI + TUI` | #1126 | core |
+| G10 | `feat(github): security model & fork-safety carry-over (untrusted input, base-ref policy, no-code-exec, private security findings)` | G8 | core |
+| G11 | `feat(eval): GitHub-agent eval tripwire — transport adapter + seed scenarios + --compare CI gate` | G3/G4 | core |
+| G12 | `feat(github): skills track — modes as SKILL.md + skill_sets + port repo-manager skill bodies to typed tools` | G4/G7, **#888**, **#2466** | later (infra-gated) |
+
+**Created (2026-07, all in milestone #43):** G1 #2552 · G2 #2553 · G3 #2554 (MVP) · G4 #2555 ·
+G5 #2556 · G6 #2557 · G7 #2558 · G8 #2559 · G9 #2560 · G10 #2561 · G11 #2562 · G12 #2563.
+Existing reconciled: #1123 (typed-writes note), #1126 (hub-path fix + UI entry point).
+
+Deferred (mention, don't create yet): `EscalatingProvider` (local→Claude), outbound chat notify
+(`_to_slack`/`_to_teams`, §9.8a), inbound chat (**#635**), live doc-walkthrough (§2 #11).
+
+### 13.4 MVP — the smallest slice that delivers value
+
+> ⚠️ **Superseded by §14.4:** the handoff MVP flagship is **PR Review** end-to-end via the sidecar.
+> `issue_triage` (below) remains the cheapest *fallback* MVP if we de-risk writes first.
+
+**G3 `issue_triage` in dry-run, on one repo.** It's net-new (Jeremy/Kalin asked for it), the
+cheapest/safest (label/route, no code execution), dry-run = zero write risk, and its dependency
+chain is minimal and **entirely in-milestone**: #1123 (read client) → G1 (write tools + dry-run
+policy) → G3 — all net-new but self-contained. **It needs no unbuilt GAIA-core infra** (no
+#888/#2466/#635, no eval adapter, no escalation, no TUI client): it runs today via the `gaia-github`
+CLI (§9.6) and the Agent UI (§9.2, "nearly free"). The TUI surface (G9) is *not* on the MVP path —
+it depends on the TUI-side work in §9.3. Ship G3, watch it in dry-run, then flip writes on.
+
+### 13.5 Testing (the #1655 boundary rule — required, was missing)
+
+- **Unit:** each GitHub `@tool` asserts the *shape of the outgoing REST call* (path, required
+  fields, allowed value combos) — not just "the client was called." Mocking `requests`/`httpx`
+  proves invocation, never validity.
+- **Integration:** a `require_github` fixture (mirroring `require_lemonade`) exercises the read
+  tools against a real repo (public, read-only) so the contract is verified once for real.
+- **Eval (G11):** hand-labeled scenarios from real workflow/postmortem history + `--compare` as a
+  CI gate on any prompt/skill change (LLM-affecting → eval required per CLAUDE.md).
+- **Cold-start:** run each mode from empty state (no cache, no prior review) — the hidden-state
+  masking rule.
+
+### 13.6 Coexistence with `claude.yml` (de-risk the cutover — was missing)
+
+Do **not** delete the 1,600 lines of battle-tested `claude.yml` on day one. Per capability:
+**shadow → compare → cut over.** Run the new mode alongside the existing job (posting to a scratch
+label or a dry-run channel), diff the outputs on real PRs/issues via G11's eval, and only then
+disable the corresponding `claude.yml` job. `pr_review` is the highest-value first cutover;
+`auto_fix` is the last (highest blast radius). Keep the auth-canary until the agent has its own
+health signal.
+
+### 13.7 Dependency-risk summary (the honest one-look view)
+
+Most of the *interesting* capability is gated on infra owned by other tracks. A reader should see
+this in one place, not scattered:
+
+| This agent needs | State | Blocks | Fallback |
+|------------------|-------|--------|----------|
+| #888 skills loader | **unbuilt** (Phase 1 not started) | G12, per-repo skill override, repo-manager port | interim in-package loader (§8) |
+| #2466 `skill_sets` | **unbuilt** | G12 per-context selection | single skill set |
+| TUI HTTP/SSE client | **unbuilt** (`tui/` is subprocess-only) | TUI surface (G9, path a) | path b: new `--json-events` stdout shim (event vocab already matches `SSEOutputHandler` — no schema mapping — but must add the emitter + auto-deny confirmations; §9.3) |
+| `EscalatingProvider` | **unbuilt** | local→Claude escalation | pick one model per capability |
+| eval transport adapter | **unbuilt** (runner is Agent-UI-MCP-coupled) | G11 | manual spot-check (weaker) |
+| #635 messaging framework | **unbuilt** | inbound chat (§9.8b) | outbound-only notify |
+
+**MVP (G3) depends on none of these.** Everything in the "core" tier except G9's TUI path and G11's
+adapter is buildable today on shipped GAIA.
+
+---
+
+## 14. 2026-07 re-scope — email-sidecar packaging, Pi parity, MVP & phases
+
+This section is **authoritative** and supersedes the packaging framing in §3.1/§9.2, the TUI framing
+in §9.3, and the MVP/phasing in §11/§13.4 where they differ. Two inputs drove it: (1) the decision
+to package/run the agent **exactly like the email agent**, and (2) the full Pi/Lemonade
+Quality-Assurance working-group scope this agent must reach parity with (and beat).
+
+### 14.1 Packaging = daemon HTTP sidecar (the verified email pattern)
+
+The email agent is **not** an in-process wheel — it's a **daemon-supervised HTTP sidecar** (verified
+against `hub/agents/email/`, `src/gaia/daemon/sidecars/`, `src/gaia/ui/`). The GitHub agent copies it:
+
+| Piece | Path | Requirement |
+|-------|------|-------------|
+| Sidecar server | `hub/agents/github/python/gaia_agent_github/server.py` | `build_app()` → `GET /health` (`{"status":"ok","service":"gaia-agent-github"}`), `GET /version` (`{apiVersion,agentVersion}`), token-gated `POST /v1/github/agent/query` (SSE), `/session`, `/cancel`, `/confirm-tool` |
+| Agent + tools | `.../gaia_agent_github/agent.py` + `tools/` | `GaiaGitHubAgent` + typed GitHub `@tool`s (§3.2) |
+| Freeze shim | `.../packaging/server.py` | re-export `app`/`main`; **no `__init__.py`** (loads as top-level `server`) |
+| Manifest | `.../gaia-agent.yaml` | `id: github`, `language: python`, `npm_package`, `interfaces`, `requirements.platforms` |
+| npm client + binary | `hub/agents/github/npm/{package.json,binaries.lock.json,src/}` | `bin: agent-github`; per-platform frozen-binary manifest |
+| **Daemon registration** | `src/gaia/daemon/sidecars/spec.py` `builtin_specs()` | **the ONE mandatory core change** — add a `"github"` `AgentSidecarSpec` (`service_id="gaia-agent-github"`, token env vars, `mode_env_var="GAIA_GITHUB_AGENT_MODE"`, `dev_src_dir`, and — for GitHub OAuth — `forward_providers=("github",)`). Manager/registry/relay/routes/install are already generic. |
+| Agent UI dispatch | `src/gaia/ui/_chat_helpers.py` | add `"github"` to `_SIDECAR_AGENT_TYPES` + a `_dispatch_github_query` (generalize `_dispatch_email_query`; `email_sidecar/daemon_client.py` is already `agent_id`-keyed) |
+| Install / picker | `src/gaia/hub/installer.py`, `routers/agents.py` | **no change** — `install("github")`, `fetch_binary`, and `_installed_sidecar_agents` are generic once the spec + `.installed` sentinel exist |
+
+Dev mode (Jeremy's handoff): `GAIA_GITHUB_AGENT_MODE=dev` on the daemon runs the sidecar from source
+via uvicorn — no binary publish needed to test (mirrors `GAIA_EMAIL_AGENT_MODE=dev`).
+
+> **Plain English.** We build the GitHub agent as its own little web service that the GAIA daemon
+> starts, supervises, and proxies to — the same shape as the email agent. The only change to GAIA's
+> core to "plug it in" is one entry in a registry file; the daemon already knows how to launch,
+> health-check, token-secure, and route to a sidecar. To run it from source for testing, set one
+> env var.
+
+> ⚠️ **Supersedes §3.1/§9.2.** Earlier text described an in-process wheel auto-discovered via a
+> `gaia.agent` entry point + the generic `_chat_helpers` branch. That path *works*, but the chosen
+> pattern is the **sidecar** (isolation, own model lifecycle, install-as-binary, OAuth forwarding —
+> exactly why email is a sidecar). The typed tools, task modes, policy layer, and reliability
+> arguments (§3–§7) are unchanged; only the process/packaging boundary moves out-of-process.
+
+### 14.2 TUI reality (honest) — the email pattern doesn't run in the TUI *yet*
+
+Verified: **no sidecar agent — email included — is reachable from the Go TUI today.** The TUI's only
+launch path is a stdin/stdout **JSONL subprocess** (`tui/internal/ui/root/model.go` → `SubprocessClient`);
+the email catalog entry has no `BinaryPath` and is non-launchable; the npm client is HTTP/SSE, not
+JSONL. So "run via the TUI like email" is a **pending capability for email too**. The correct,
+shared fix (recipe option 1): add an **HTTP/SSE `AgentClient`** to `tui/internal/client/` that
+ensures the sidecar (`POST /daemon/v1/agents/github/ensure`), POSTs `/v1/github/agent/query` through
+the daemon relay, and maps the SSE contract → the TUI's `event.*` types. **This one addition lights
+up every sidecar agent in the TUI (email + github).**
+
+> ⚠️ **Supersedes §9.3.** The `--json-events` subprocess shim (old path b) is *not* the email
+> pattern — email is HTTP/SSE. Drop it; do the shared TUI→daemon SSE client instead (it's the same
+> §9.3 path a, now confirmed as the only pattern-faithful route, and it fixes email in the TUI too).
+> Own this as shared TUI infra (milestone #45 / #55), not github-only work.
+
+### 14.3 Pi parity capability map (what we must match, then beat)
+
+From the QA working-group scope. Mapped to GAIA capabilities/issues; ✅ = maps to an existing/created
+issue, ➕ = new.
+
+**PR Review Agent** (runs in CI, Lemonade-backed):
+- Alignment vs `contribute.md` + `philosophy.md` ➕ · docs coverage vs `documentation.md` ➕ (both fold into `pr_review`, G4 #2555)
+- Major-new-scope → require 2nd core-maintainer review ➕
+- Breaking API/UX change → must be documented **and** core-maintainer-approved ➕ (gate)
+- Reviewer suggestion from the maintainer table in `contribute.md` ➕ (shared maintainer-table parser)
+
+**Issue Review Agent:**
+- Duplicate detection ✅ #1134 (issue clustering)
+- Hot issues → Discord `#dev` notification ➕ (Discord integration)
+- Relevance: still-valid / resolved-in-release / obsoleted ➕
+- "Goodness" (reproducible, clear, philosophy-aligned) + auto-reply guidance + Discord redirect ➕ (extends `issue_triage` G3 #2554 / `issue_review` G5 #2556)
+- Auto-assign good issues to maintainers per the table + Discord `#dev` tag ➕ (maintainer-table parser + Discord)
+
+**Adjacent working-group tracks** (related, not the agent's core — note, don't rebuild here):
+- Performance Regression Suite → a perf DB + CI system; the agent can *read* it (an "upstream/perf intelligence" mode like #1132), but the DB/CI is separate infra.
+- CI Enhancements (runner filtering, Radeon emulation, GPU pool) → CI infra, out of agent scope.
+- Release Process (date-based versioning, auto release branches, release-notes copy injection) → maps to release-prep #1128 + `release_notes`; branch/versioning automation is CI infra.
+- Community Dashboard (Discord activity alerts) → #1129 + the Discord integration.
+
+**New foundations the parity scope forces:**
+1. ➕ **Discord integration** (connector + notify to `#dev`) — the common thread across hot-issues, auto-assign, community alerts. (Pi uses Discord; supersedes the Slack/Teams framing in §9.8 as the *first* chat target.)
+2. ➕ **Maintainer-table parser** (`contribute.md`) — powers reviewer suggestion + auto-assign.
+
+### 14.4 MVP — the end-to-end pipeline to hand Jeremy
+
+**Goal:** one capability, *fully wired end-to-end* on lemonade — installable/runnable by Jeremy,
+posting a real result — not feature-complete. **Flagship = PR Review** (the working-group's #1, runs
+in CI, self-contained). MVP PR review does a *subset* well and is **comment/dry-run only** (safe):
+read the PR diff + `contribute.md`/`philosophy.md`/`documentation.md` + the maintainer table → post a
+review that flags alignment/doc gaps and suggests reviewers.
+
+**The full pipeline the MVP must light up (this is "end-to-end"):**
+1. Sidecar package (§14.1) — `server.py` + `agent.py` + a few read tools (`get_pr_diff`, `read_repo_file`) + `post_pr_review` (dry-run default).
+2. Daemon `builtin_specs()` entry for `github`.
+3. Agent UI dispatch branch (`_dispatch_github_query`) → runnable in the browser.
+4. CI reusable workflow (`gaia-github-agent.yml`) on `pull_request` → posts the review.
+5. `GAIA_GITHUB_AGENT_MODE=dev` so Jeremy runs it from source against lemonade.
+6. Eval tripwire seeded with a few real lemonade PRs (so prompt changes are gated from day one).
+
+**What Jeremy can do on handoff:** run it in dev mode, open a lemonade PR, see a posted (or dry-run)
+PR review with reviewer suggestions — in CI **and** in the Agent UI. TUI is explicitly a fast-follow
+(needs §14.2). This is the "runs end-to-end, not feature-complete" bar.
+
+> ⚠️ **Supersedes §13.4.** The earlier MVP was `issue_triage` dry-run (cheapest). Per the handoff
+> goal, the flagship MVP is **PR Review** end-to-end — but `issue_triage` remains the cheapest
+> *fallback* MVP if we want to de-risk writes first. (Decision surfaced below.)
+
+### 14.5 Phases (layer on the MVP)
+
+| Phase | Theme | Contents |
+|-------|-------|----------|
+| **MVP** | PR Review, end-to-end | sidecar + daemon spec + UI dispatch + CI + `pr_review` subset (doc-alignment + reviewer suggestion), dry-run; eval seeded |
+| **P1** | PR Review complete + re-review | scope→2nd-review, breaking-change gate, `pr_rereview`; security/fork-safety carry-over (G10); write-policy live (G1/G5) |
+| **P2** | Issue Review | `issue_triage`/`issue_review` (goodness + auto-guidance), duplicate detection (#1134), relevance/resolved/obsoleted |
+| **P3** | Discord + maintainer-table automation | Discord `#dev` hot-issue notify, auto-assign from maintainer table + Discord tag, community-activity alerts (#1129) |
+| **P4** | Release + proactive | release-prep/notes (#1128), proactive audit (G7), digest/poller (#1130/#1131), perf-intelligence read |
+| **TUI** | Shared surface | daemon→SSE `AgentClient` in `gaia-tui` (§14.2) — lights up email + github |
+| **Skills** | Milestone **#60** (separate) | if it lands first, author modes as `SKILL.md` from the start (G12); else interim in-package |
+
+### 14.6 Skills = milestone #60 (separate; may go first)
+
+Skills (`SKILL.md` loader #888, `skill_sets` #2466) live in **milestone #60**, not #43. If #60 lands
+first, the MVP authors its `pr_review` behaviour directly as a bundled `SKILL.md` (G12 pattern) and
+we get per-repo override for free; otherwise the MVP ships the prompt in-package and G12 swaps it
+later — a no-op switch (§8). Either way the sidecar/daemon/CI pipeline is independent of #60.
+
+### 14.7 Issue-set delta for this re-scope
+
+Existing G1–G12 (#2552–2563) and #1123–1137 mostly stand. Deltas:
+- **Edit** #1126 (packaging) → sidecar package (email pattern), not wheel.
+- **Edit/retarget** G9 #2560 → Agent-UI sidecar dispatch + the shared TUI SSE client (§14.2).
+- **New (➕):** daemon `builtin_specs()` registration · sidecar server (FastAPI health/version/query-SSE) · PR-review doc-alignment dimensions · reviewer-suggestion + auto-assign (maintainer-table parser) · PR scope + breaking-change gate · issue relevance/goodness/auto-guidance · Discord integration (notify #dev + hot-issue + community alerts).
+- **Reuse:** #1134 (dedupe), #1128 (release), #1129 (community), #1132 (perf-intelligence read).
+
+---
+
+## Appendix — file map
+
+| Concern | Where |
+|--------|-------|
+| Agent class | `hub/agents/github/python/gaia_agent_github/agent.py` (new) |
+| GitHub tools | `src/gaia/agents/tools/github_tools.py` (new) + register in `src/gaia/agents/registry.py` `KNOWN_TOOLS` |
+| Single-shot CLI | `gaia_agent_github/cli.py` (new, `gaia-github` console entry; positional query → `process_query`) |
+| Reusable action | `.github/workflows/gaia-github-agent.yml` (new) |
+| Consumer config | `.github/gaia-github-agent.yml` (per repo) |
+| Agent UI exposure | reuses `src/gaia/ui/routers/agents.py` + `_chat_helpers.py` generic branch + `sse_handler.py` — **no new UI code**; agent just ships hub card metadata |
+| Go TUI client (new) | `tui/internal/client/` — add an HTTP/SSE `AgentClient` against the daemon (§9.3 path a); or `--json-events` bridge via `src/gaia/agents/base/server.py` (path b) |
+| Chat-app outbound (§9.8a) | `src/gaia/schedule/sinks.py` — add `_to_slack`/`_to_teams` alongside `_to_telegram`; `notify:` block in the repo config |
+| Chat-app inbound (§9.8b) | shared messaging framework `src/gaia/messaging/` (`MessagingAdapter` ABC — **#635, planned/unbuilt**); Slack Socket Mode adapter, daemon-integrated |
+| Bundled skills | `hub/agents/github/python/skills/<mode>/SKILL.md` (+ optional `scripts/`) — authored in the agentskills.io shape (from `claude.yml`, `claude-weekly-audit.yml`, and repo-manager's skills) |
+| Skills loader (dependency) | `src/gaia/skills/` (`format.py`, `manager.py`) — **#888, not yet built**; interim in-package loader until then |
+| `skill_sets` selection (dependency) | base `Agent` + `gaia-agent.yaml` — **#2466, not yet built** |
+| Provider/escalation | `src/gaia/llm/providers/escalating.py` (new) + `factory.py` |
+| Eval scenarios | `eval/scenarios/github_*/` + transport adapter in `src/gaia/eval/` |
+| Base runtime (reused) | `src/gaia/agents/base/agent.py`, `tools.py`, `errors.py`, `console.py` |
+| Connector (service mode) | `src/gaia/connectors/catalog/mcp_servers.py` (`mcp-github`, existing) |
+| repo-manager reference | [`lemonade-sdk/repo-manager`](https://github.com/lemonade-sdk/repo-manager) — `repo_manager/cli.py`, `skills/{commit-review,release-review,release-announcement}/SKILL.md` |

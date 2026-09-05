@@ -277,7 +277,7 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 # Private working reports — analysis, competitive research, benchmark logs.
 # These are internal notes, not project documentation, and several were
 # published to a public fork and a public PR before this rule existed. They
-# live outside the repo now (../gaia-private-reports/). Project docs belong in
+# live outside the repo now (~/Work/gaia-private/). Project docs belong in
 # docs/ and are reviewed like any other change; anything matching these
 # patterns is assumed to be private working material.
 /BENCHMARK_ANALYSIS.md
@@ -298,3 +298,13 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /context.md
 /savings.md
 /labels.txt
+
+# Local working scratch. Same rule as the private-reports block above: these are
+# agent-run artifacts and datasets, not project material, and `git add -A` would
+# otherwise commit a mailbox corpus. The material itself lives in
+# ~/Work/gaia-private/{plans,presentations,audits,recovered,datasets}.
+/email-dataset/
+/audit_reports/
+/.playwright-mcp/
+/*.png
+/*.pdf
