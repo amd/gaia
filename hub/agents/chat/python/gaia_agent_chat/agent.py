@@ -2346,9 +2346,9 @@ No documents are currently indexed.
     def __del__(self):
         """Cleanup when agent is destroyed.
 
-        Releases watchdog observers, HTTP session, and the two SQLite
-        connections owned by this agent. ``__del__`` is best-effort — Python
-        doesn't guarantee it fires on interpreter shutdown — but explicit
+        Releases watchdog observers, HTTP session, the shell session, and the
+        two SQLite connections owned by this agent. ``__del__`` is best-effort —
+        Python doesn't guarantee it fires on interpreter shutdown — but explicit
         close() makes tests deterministic (WAL journals released, file handles
         closed) and avoids leaking Session/connection objects in long-running
         services like the Agent UI backend.
@@ -2372,3 +2372,7 @@ No documents are currently indexed.
                 self._scratchpad.close_db()
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
+        try:
+            self.close_shell_session()
+        except Exception as e:
+            logger.error(f"Error closing the shell session during cleanup: {e}")
