@@ -1097,7 +1097,7 @@ class ShellToolsMixin:
                 # communicate() with NO timeout, so a surviving grandchild
                 # holding the pipes hangs the call for as long as it lives. A
                 # verified 5s timeout took over two minutes and never returned.
-                # _terminate_process_tree kills the whole tree first, so the
+                # terminate_process_tree kills the whole tree first, so the
                 # pipes close and the deadline means what it says.
                 start_time = time.monotonic()
                 try:
