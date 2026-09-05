@@ -364,9 +364,7 @@ class TestWaitForCondition:
         host, tools = _shell_tools()
         host._cancel_event = threading.Event()
         host._cancel_event.set()
-        monkeypatch.setattr(
-            subprocess, "run", lambda *a, **k: _Completed(returncode=1)
-        )
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Completed(returncode=1))
 
         result = tools["wait_for_condition"]("ls nope", timeout=WAIT_MAX_TIMEOUT)
 
