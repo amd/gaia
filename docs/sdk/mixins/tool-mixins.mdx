@@ -122,7 +122,14 @@ class MyAgent(Agent, ShellToolsMixin):
         self.register_shell_tools()
         # Registers:
         # - run_shell_command(command, working_directory=None, timeout=30)
+        # - get_shell_state()
+        # - set_shell_variable(name, value)
+        # - reset_shell_session()
 ```
+
+Commands share one shell session per agent, so a `cd` or a variable set in one
+call is still in effect for the next. `get_shell_state` reads that state back,
+and `reset_shell_session` returns it to where it started.
 
 ---
 
