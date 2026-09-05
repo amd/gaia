@@ -50,6 +50,13 @@ const serverPathEnv = "LEMONADE_SERVER_PATH"
 // row searchable.
 const lemonadeRowLabel = "Lemonade"
 
+// modelRowLabel names the weights this agent needs.
+//
+// Not "AI model": on a screen whose other rows are also AI, that names the
+// category rather than the thing, and it gives a user staring at a multi-GB
+// download no word they can search for. "Language model" is what it is.
+const modelRowLabel = "Language model"
+
 // lemonadeDocs is where the run instructions for every platform live.
 const lemonadeDocs = "https://lemonade-server.ai/docs/guide/"
 

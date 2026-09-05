@@ -250,7 +250,7 @@ def test_mismatch_after_stop_does_not_silently_reattach_the_stale_manager(
     import gaia.daemon.sidecars.registry as registry_mod
     from gaia.daemon.sidecars.errors import ModeConflictError
 
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: False)
 
     reg = _registry()
     reg.ensure("toy-dev", mode="dev", dev_src_dir=str(_CHECKOUT_A))

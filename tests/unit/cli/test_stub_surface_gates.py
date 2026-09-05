@@ -109,6 +109,33 @@ class TestApiStatus:
         handle_api_command(Namespace(subcommand="status", host="127.0.0.1", port=8123))
         checker.assert_called_once_with("127.0.0.1", 8123)
 
+    def test_stop_reports_success_when_a_process_was_killed(self, mocker, capsys):
+        killer = mocker.patch(
+            "gaia.cli.kill_process_by_port",
+            return_value={"success": True, "message": "killed"},
+        )
+
+        handle_api_command(Namespace(subcommand="stop", host="localhost", port=8080))
+
+        killer.assert_called_once_with(8080)
+        assert "✅ API server stopped" in capsys.readouterr().out
+
+    def test_stop_returns_nonzero_when_no_process_was_found(self, mocker, capsys):
+        mocker.patch(
+            "gaia.cli.kill_process_by_port",
+            return_value={"success": False, "message": "No process found"},
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            handle_api_command(
+                Namespace(subcommand="stop", host="localhost", port=8080)
+            )
+
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "❌ No process found" in out
+        assert "✅ API server stopped" not in out
+
 
 # ---------------------------------------------------------------------------
 # #2009 — reserved eval flags removed from the parser

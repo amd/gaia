@@ -11,6 +11,7 @@ This file (conftest.py) is a special pytest file that provides:
 See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-sharing-fixtures-across-multiple-files
 
 Current fixtures:
+- _block_real_browser_launch: Session-autouse guard so no test can open a real browser
 - api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
@@ -29,9 +30,39 @@ be automatically available to all test files.
 
 import subprocess
 import time
+import webbrowser
 
 import pytest
 import requests
+
+_BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_browser_launch():
+    """Make it impossible for the suite to open the developer's real browser.
+
+    A per-test ``monkeypatch.setattr("webbrowser.open", ...)`` is not enough:
+    ``connectors.flow.start_authorization`` launches the browser from a
+    fire-and-forget ``asyncio.ensure_future`` task that resolves
+    ``webbrowser.open`` when it runs, which can be after the patch was torn
+    down. Session scope means the restored value is always this stub, so the
+    race can only ever reach a no-op.
+    """
+    saved = {name: getattr(webbrowser, name) for name in _BROWSER_LAUNCHERS}
+
+    def _blocked(url, *_args, **_kwargs):
+        raise RuntimeError(
+            f"A test tried to open a real browser at {url!r}. Patch the "
+            "launcher in the test (monkeypatch.setattr('webbrowser.open', ...)) "
+            "or stub the code path that calls it."
+        )
+
+    for name in _BROWSER_LAUNCHERS:
+        setattr(webbrowser, name, _blocked)
+    yield
+    for name, original in saved.items():
+        setattr(webbrowser, name, original)
 
 
 @pytest.fixture(scope="session", autouse=True)

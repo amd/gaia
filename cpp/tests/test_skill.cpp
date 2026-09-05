@@ -124,47 +124,52 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Conformance corpus
+// Skill corpora
 //
-// Discovered from disk rather than hardcoded, so a new GAIA-authored corpus is
-// picked up without editing a list.
+// Two corpora sit under tests/fixtures/ with opposite contracts. Both are
+// discovered from disk, so a new fixture joins a suite without editing a list.
 //
-// A corpus carrying PROVENANCE.md is EXCLUDED. Those are verbatim third-party
-// skills kept byte-for-byte as migrator input, and their own PROVENANCE.md
-// says so: "including invalid or nonstandard frontmatter - that irregularity
-// is the point of the fixture." Holding them to the GAIA conformance contract
-// asserts the opposite of what they exist to prove, and the only way to make
-// them pass is to edit files that file forbids editing.
+//   skills/           GAIA-format conformance. Every file must parse,
+//                     validate, and round-trip.
+//   <vendor>_skills/  Real third-party SKILL.md files copied byte-for-byte from
+//                     published repos — malformed and nonstandard ones
+//                     included, on purpose (see their PROVENANCE.md). These are
+//                     migration *input*, not GAIA skills, so "it parses" is not
+//                     a property they have. What must hold is that the parser
+//                     reaches a verdict on every one of them.
 // ---------------------------------------------------------------------------
 
-bool isSkillCorpusDir(const std::string& name) {
+std::vector<std::string> skillsIn(const fs::path& corpus) {
+    std::vector<std::string> skills;
+    std::error_code ec;
+    for (const auto& skill : fs::directory_iterator(corpus, ec)) {
+        if (!skill.is_directory()) continue;
+        if (fs::exists(skill.path() / gaia::SKILL_FILENAME)) {
+            skills.push_back(skill.path().string());
+        }
+    }
+    std::sort(skills.begin(), skills.end());
+    return skills;
+}
+
+std::vector<std::string> discoverCorpus() {
+    return skillsIn(fs::path(GAIA_REPO_FIXTURES_DIR) / "skills");
+}
+
+bool isForeignCorpusDir(const std::string& name) {
     static const std::string kSuffix = "_skills";
-    if (name == "skills") return true;
     return name.size() > kSuffix.size() &&
            name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0;
 }
 
-// Verbatim third-party content, identified by the file that records where each
-// skill was fetched from.
-bool isVendorCorpus(const fs::path& corpus) {
-    std::error_code ec;
-    return fs::exists(corpus / "PROVENANCE.md", ec);
-}
-
-std::vector<std::string> discoverCorpus() {
+std::vector<std::string> discoverForeignCorpus() {
     std::vector<std::string> skills;
     std::error_code ec;
     const fs::path fixtures(GAIA_REPO_FIXTURES_DIR);
     for (const auto& corpus : fs::directory_iterator(fixtures, ec)) {
         if (!corpus.is_directory()) continue;
-        if (!isSkillCorpusDir(corpus.path().filename().string())) continue;
-        if (isVendorCorpus(corpus.path())) continue;
-        for (const auto& skill : fs::directory_iterator(corpus.path(), ec)) {
-            if (!skill.is_directory()) continue;
-            if (fs::exists(skill.path() / gaia::SKILL_FILENAME)) {
-                skills.push_back(skill.path().string());
-            }
-        }
+        if (!isForeignCorpusDir(corpus.path().filename().string())) continue;
+        for (auto& skill : skillsIn(corpus.path())) skills.push_back(std::move(skill));
     }
     std::sort(skills.begin(), skills.end());
     return skills;
@@ -410,7 +415,7 @@ TEST(SkillFailure, NullKeyIsRefusedRatherThanBecomingTheEmptyKey) {
 }
 
 // ---------------------------------------------------------------------------
-// Conformance corpus — every skill on disk parses and round-trips
+// Conformance corpus — every GAIA skill on disk parses and round-trips
 // ---------------------------------------------------------------------------
 
 class SkillCorpus : public ::testing::TestWithParam<std::string> {};
@@ -437,14 +442,76 @@ INSTANTIATE_TEST_SUITE_P(Fixtures, SkillCorpus, ::testing::ValuesIn(discoverCorp
 TEST(SkillCorpusDiscovery, FindsTheOnDiskCorpus) {
     // Guards the discovery itself: an empty corpus would make every
     // parameterized case above vacuously pass.
-    const auto skills = discoverCorpus();
-    EXPECT_GE(skills.size(), 6u);
-    // And guards the other direction: vendor fixtures are verbatim third-party
-    // migrator input whose nonstandard frontmatter is the point, so pulling
-    // them in asserts the opposite of what they exist to prove.
-    for (const auto& path : skills) {
-        EXPECT_EQ(path.find("openclaw_skills"), std::string::npos)
-            << path << " is vendor migrator input, not a GAIA-conformant skill";
+    EXPECT_GE(discoverCorpus().size(), 6u);
+}
+
+// ---------------------------------------------------------------------------
+// Third-party corpus — the parser reaches a verdict on real published skills
+//
+// Mirrors test_skills_migrate.py::test_real_openclaw_skill_migrates_or_reports_why:
+// a foreign SKILL.md either loads cleanly or is refused for a stated reason.
+// Anything else — a crash, or a half-parsed skill that silently drops what the
+// author declared — is the failure this suite exists to catch.
+// ---------------------------------------------------------------------------
+
+class ForeignSkillCorpus : public ::testing::TestWithParam<std::string> {};
+
+TEST_P(ForeignSkillCorpus, ParsesCleanlyOrRefusesActionably) {
+    // Directory-name enforcement is off: these fixtures are re-homed under
+    // disambiguating names (two upstreams each publish a `1password`), so the
+    // directory is ours and the frontmatter is theirs. They are allowed to
+    // differ here, and only here — SkillFailure.NameDirectoryMismatch covers
+    // the rule itself.
+    Skill skill;
+    try {
+        skill = gaia::parseSkillFile(GetParam(), "", false, /*checkDirectoryName=*/false);
+    } catch (const SkillValidationError& exc) {
+        const std::string message = exc.what();
+        EXPECT_THAT(message, HasSubstr(GetParam()));         // what failed, and where
+        EXPECT_THAT(message, HasSubstr(gaia::FORMAT_DOCS_URL));  // where to look next
+        return;
+    }
+    EXPECT_FALSE(skill.name.empty());
+    EXPECT_FALSE(skill.description.empty());
+    EXPECT_EQ(gaia::parseSkill(gaia::toMarkdown(skill)), skill);
+}
+
+INSTANTIATE_TEST_SUITE_P(Fixtures, ForeignSkillCorpus,
+                         ::testing::ValuesIn(discoverForeignCorpus()), corpusTestName);
+
+TEST(SkillCorpusDiscovery, FindsTheThirdPartyCorpus) {
+    // tests/fixtures/openclaw_skills/ ships 26; a checkout that lost them would
+    // make every case above vacuously pass.
+    EXPECT_GE(discoverForeignCorpus().size(), 10u);
+}
+
+TEST(SkillCorpusDiscovery, TheThirdPartyCorpusExercisesBothVerdicts) {
+    // "Reaches a verdict" is satisfied by refusing all 26, so pin the split:
+    // most real published skills must still load, and at least one must still
+    // be refused or the suite has stopped testing the refusal path. Mirrors
+    // test_skills_migrate.py, which likewise refuses to let the corpus drift
+    // into all-pass or all-fail.
+    size_t parsed = 0, refused = 0;
+    for (const std::string& path : discoverForeignCorpus()) {
+        try {
+            gaia::parseSkillFile(path, "", false, /*checkDirectoryName=*/false);
+            ++parsed;
+        } catch (const SkillValidationError&) {
+            ++refused;
+        }
+    }
+    EXPECT_GE(refused, 1u) << "corpus no longer exercises refusal — re-pin a fixture";
+    EXPECT_GT(parsed, 2 * refused) << "the parser regressed on real-world skills";
+}
+
+TEST(SkillCorpusDiscovery, TheTwoCorporaDoNotOverlap) {
+    // The conformance suite must never silently absorb third-party fixtures —
+    // that is what turned the gate red when the openclaw corpus landed.
+    const std::vector<std::string> gaiaSkills = discoverCorpus();
+    for (const std::string& foreign : discoverForeignCorpus()) {
+        EXPECT_EQ(std::find(gaiaSkills.begin(), gaiaSkills.end(), foreign),
+                  gaiaSkills.end())
+            << foreign << " is in both corpora";
     }
 }
 

@@ -123,6 +123,17 @@ class CompatibilityError(InstallError):
     """The current machine does not satisfy the agent's requirements."""
 
 
+class UnsupportedPlatformError(InstallError):
+    """The hub publishes this agent, but not a build for this platform.
+
+    Distinct from a generic ``InstallError`` so a caller can tell "there is
+    nothing here for this machine" (survivable — the agent simply is not
+    available) from "the install was attempted and failed" (loud). Without
+    the distinction, `gaia init` either hard-fails on every platform the
+    flagship has no build for, or swallows real install failures.
+    """
+
+
 class InstallInProgressError(InstallError):
     """An install for this agent id is already running (maps to HTTP 409)."""
 
@@ -678,7 +689,7 @@ def _resolve_version(
         match = _select_platform_artifact(binary_like, effective_key)
         if match is None:
             available = ", ".join(sorted(a.get("filename", "?") for a in binary_like))
-            raise InstallError(
+            raise UnsupportedPlatformError(
                 f"No published artifact for version '{version}' of "
                 f"'{agent_id}' matches this platform ('{effective_key}'). "
                 f"Available: {available}."

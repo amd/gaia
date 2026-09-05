@@ -49,6 +49,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
@@ -213,6 +214,21 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
     return "default"
 
 
+def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
+    """Reject OAuth scopes outside the connector catalog ceiling (#2736).
+
+    The imports stay local because the catalog loads OAuth providers which
+    eventually import this flow module.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connector_spec = REGISTRY.get(provider_id)
+    disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
+    if disallowed:
+        raise ScopeNotAllowedError(None, provider_id, disallowed)
+
+
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
@@ -260,6 +276,8 @@ async def start_authorization(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # Both CLI and Agent UI browser flows converge here.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -436,8 +454,8 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     return web.Response(text=_SUCCESS_HTML, content_type="text/html")
 
 
-async def _commit_grants(flow: _PendingFlow) -> None:
-    """Write the per-agent grants requested at ``start_authorization`` time.
+async def _commit_grants(flow: _PendingFlow, granted_scopes: Iterable[str]) -> None:
+    """Write per-agent grants limited to the scopes the token exchange granted.
 
     Called only after the connection is persisted. Each grant is written
     through the same ledger the CLI/SDK/Settings panel use, so it is
@@ -449,40 +467,76 @@ async def _commit_grants(flow: _PendingFlow) -> None:
     Connecting-without-granting is the bug this flow exists to prevent, so a
     grant failure must not be swallowed.
     """
-    if not flow.grant_agents:
+    await _commit_grants_for_provider(
+        flow.provider_id, flow.grant_agents, granted_scopes
+    )
+
+
+async def _commit_grants_for_provider(
+    provider_id: str,
+    grant_agents: Optional[Mapping[str, Iterable[str]]],
+    granted_scopes: Iterable[str],
+) -> None:
+    """Commit effective per-agent grants for either OAuth flow entry point."""
+    if not grant_agents:
         return
 
     # Local import mirrors the lazy-keyring contract in connectors/__init__.py
     # and keeps flow.py's module-load dependency graph unchanged.
     from gaia.connectors.grants import grant_agent
 
-    for agent_id, agent_scopes in flow.grant_agents.items():
+    granted_scope_set = set(granted_scopes)
+    for agent_id, agent_scopes in grant_agents.items():
+        requested_scopes = list(agent_scopes)
+        effective_scopes = [
+            scope for scope in requested_scopes if scope in granted_scope_set
+        ]
+        if not effective_scopes:
+            raise GrantAfterConnectError(
+                provider_id,
+                agent_id,
+                reason=(
+                    "the provider granted none of the scopes this agent asked "
+                    f"for ({' '.join(requested_scopes)}). The connection was "
+                    "saved; re-run connect and approve them on the consent "
+                    "screen."
+                ),
+            )
+        if len(effective_scopes) != len(requested_scopes):
+            logger.warning(
+                "flow: narrowed grant connector_id=%s agent_id=%s requested=%d "
+                "granted=%d — the user declined some scopes at consent",
+                provider_id,
+                agent_id,
+                len(requested_scopes),
+                len(effective_scopes),
+            )
         try:
-            grant_agent(flow.provider_id, agent_id, list(agent_scopes))
+            grant_agent(provider_id, agent_id, effective_scopes)
         except Exception as e:
             raise GrantAfterConnectError(
-                flow.provider_id,
+                provider_id,
                 agent_id,
                 reason=(
                     f"{e}. The connection was saved; grant the agent manually "
                     f"from Settings → Connectors, or via `gaia connectors "
-                    f"grants grant {flow.provider_id} {agent_id} --scopes "
-                    f"{' '.join(agent_scopes)}`"
+                    f"grants grant {provider_id} {agent_id} --scopes "
+                    f"{' '.join(effective_scopes)}`"
                 ),
             ) from e
         await emit(
             "connector.grant.changed",
             {
-                "connector_id": flow.provider_id,
+                "connector_id": provider_id,
                 "agent_id": agent_id,
-                "scopes": list(agent_scopes),
+                "scopes": effective_scopes,
             },
         )
         logger.info(
             "flow: granted connector_id=%s agent_id=%s scopes=%d on connect",
-            flow.provider_id,
+            provider_id,
             agent_id,
-            len(agent_scopes),
+            len(effective_scopes),
         )
 
 
@@ -493,17 +547,24 @@ def _resolve_granted_scopes(
 
     Per RFC 6749 §5.1 the token endpoint returns ``scope`` only when the
     granted set differs from what was requested; its absence means "as
-    requested." Google's granular-consent screen lets a user untick Calendar
-    while approving Gmail, so trusting the request unconditionally (what this
-    code did before) records a connection that lies about carrying scopes the
-    user declined — every downstream coverage check then passes against a
-    fabricated record instead of catching the shortfall here, loudly, with an
-    actionable message.
+    requested." An explicitly empty ``scope`` therefore means that none of the
+    requested scopes were granted. Google's granular-consent screen lets a user
+    untick Calendar while approving Gmail, so trusting the request
+    unconditionally (what this code did before) records a connection that lies
+    about carrying scopes the user declined — every downstream coverage check
+    then passes against a fabricated record instead of catching the shortfall
+    here, loudly, with an actionable message.
     """
-    raw = payload.get("scope") or ""
-    returned = raw.split()
-    if not returned:
+    if "scope" not in payload:
         return list(requested)
+    raw = payload.get("scope")
+    if not isinstance(raw, str):
+        logger.warning(
+            "flow: token response contained a non-string scope; treating it "
+            "as no granted scopes"
+        )
+        return []
+    returned = raw.split()
     requested_set = set(requested)
     return [s for s in returned if s in requested_set]
 
@@ -574,7 +635,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     # email agent access without a follow-up CLI grant. Fail loudly — a
     # connection that persisted but whose grant could not be written is the
     # exact silent half-success the connect flow must not produce.
-    await _commit_grants(flow)
+    await _commit_grants(flow, granted_scopes)
 
     # Google's token endpoint does not return a ``connected_at`` field
     # (RFC 6749 has no such concept) — record the local wall-clock at
@@ -637,6 +698,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -714,6 +776,9 @@ async def poll_device_flow(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # An SDK caller can reach poll_ without going through start_, and these
+    # scopes are what save_connection records.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)
@@ -786,22 +851,7 @@ async def poll_device_flow(
         account_type=account_type,
     )
 
-    if grant_agents:
-        from gaia.connectors.grants import grant_agent
-
-        for agent_id, agent_scopes in grant_agents.items():
-            try:
-                grant_agent(provider_id, agent_id, list(agent_scopes))
-            except Exception as e:
-                raise GrantAfterConnectError(
-                    provider_id,
-                    agent_id,
-                    reason=(
-                        f"{e}. Grant it manually with `gaia connectors grants "
-                        f"grant {provider_id} {agent_id} --scopes "
-                        f"{' '.join(agent_scopes)}`"
-                    ),
-                ) from e
+    await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 
     await emit(
         "connector.oauth.completed",

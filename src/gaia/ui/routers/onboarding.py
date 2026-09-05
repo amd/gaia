@@ -52,6 +52,7 @@ _RECOMMENDED_MODEL = "Gemma-4-E4B-it-GGUF"
 _RECOMMENDED_DISK_GB = 6.0
 # RAM below which the recommended model is likely to swap/fail to load.
 _RECOMMENDED_MEMORY_GB = 8.0
+_LEMONADE_SYSTEM_INFO_ERROR = "Lemonade system-info query failed"
 
 _INIT_MARKER = Path.home() / ".gaia" / "chat" / "initialized"
 
@@ -64,7 +65,8 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     """Best-effort NPU/GPU probe via Lemonade's ``/system-info``.
 
     Returns ``{"lemonade_running": bool, "npu_detected": Optional[bool],
-    "gpu_name": Optional[str], "gpu_vram_gb": Optional[float]}``. A ``None`` for
+    "gpu_name": Optional[str], "gpu_vram_gb": Optional[float],
+    "lemonade_error": Optional[str]}``. A ``None`` for
     a device means we could not determine it (Lemonade down, or it did not
     report that device) — the caller turns that into a "couldn't verify"
     warning rather than assuming the hardware is present. A ``None`` GPU name
@@ -81,6 +83,7 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
         "npu_detected": None,
         "gpu_name": None,
         "gpu_vram_gb": None,
+        "lemonade_error": None,
     }
     try:
         import httpx  # pylint: disable=import-outside-toplevel
@@ -90,6 +93,7 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base_url}/system-info", headers=auth)
             if resp.status_code != 200:
+                result["lemonade_error"] = _LEMONADE_SYSTEM_INFO_ERROR
                 return result
             result["lemonade_running"] = True
             devices = resp.json().get("devices", {})
@@ -106,8 +110,13 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
                         result["npu_detected"] = True
             if result["npu_detected"] is None and npu_seen:
                 result["npu_detected"] = False
+    except httpx.ConnectError as exc:
+        # A refused connection is a confirmed "not running" result, not an
+        # ambiguous probe failure. Keep the existing not-running/unknown copy.
+        logger.debug("onboarding: Lemonade is not running: %s", exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.debug("onboarding: lemonade device probe failed: %s", exc)
+        result["lemonade_error"] = _LEMONADE_SYSTEM_INFO_ERROR
     return result
 
 
@@ -135,6 +144,7 @@ class PreflightReport(BaseModel):
     gpu_name: Optional[str] = None
     gpu_vram_gb: Optional[float] = None
     lemonade_running: bool = False
+    lemonade_error: Optional[str] = None
     tier: str = "unknown"
     recommended_profile: str = "chat"
     recommended_model: str = _RECOMMENDED_MODEL
@@ -191,6 +201,7 @@ async def onboarding_preflight() -> PreflightReport:
         install_dir=Path.home() / ".gaia",
         detected_npu=npu_detected,
         detected_gpu_vram_gb=gpu_vram,
+        npu_probe_error=devices.get("lemonade_error"),
         # No agent has been chosen yet during first-run setup — frame the warnings
         # around the recommended model, not "This agent" (#2396).
         subject="The recommended model",
@@ -207,6 +218,7 @@ async def onboarding_preflight() -> PreflightReport:
         gpu_name=devices["gpu_name"],
         gpu_vram_gb=gpu_vram,
         lemonade_running=devices["lemonade_running"],
+        lemonade_error=devices.get("lemonade_error"),
         tier=_classify_tier(ram_gb, npu_detected),
         recommended_profile="chat",
         recommended_model=_RECOMMENDED_MODEL,

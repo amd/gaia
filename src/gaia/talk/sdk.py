@@ -242,6 +242,14 @@ class TalkSDK:
 
             # Create voice processor that uses AgentSDK for responses
             async def voice_processor(text: str):
+                # Keep the documented voice command out of the conversation.
+                # The history belongs to TalkSDK's AgentSDK, not AudioClient's
+                # provider client, so handle it at this boundary.
+                if text.lower().strip().rstrip(".!?") == "restart":
+                    self.clear_history()
+                    print("Conversation history cleared.")
+                    return
+
                 # Call user callback if provided
                 if on_voice_input:
                     on_voice_input(text)
@@ -355,11 +363,16 @@ class TalkSDK:
             True if RAG was successfully enabled
         """
         try:
-            self.chat_sdk.enable_rag(documents=documents, **rag_kwargs)
-            self.log.info(
-                f"RAG enabled with {len(documents) if documents else 0} documents"
-            )
-            return True
+            enabled = bool(self.chat_sdk.enable_rag(documents=documents, **rag_kwargs))
+            if enabled:
+                self.log.info(
+                    f"RAG enabled with {len(documents) if documents else 0} documents"
+                )
+            else:
+                self.log.warning(
+                    "RAG enabled but one or more documents failed to index"
+                )
+            return enabled
         except ImportError:
             self.log.warning(
                 'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'

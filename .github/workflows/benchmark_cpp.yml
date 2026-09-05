@@ -43,6 +43,7 @@ jobs:
         with:
           path: cpp/build-bench/_deps
           key: fetchcontent-bench-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-bench-${{ matrix.os }}-
 
       # Restore baseline from last main-branch run (prefix match gets latest)
       - name: Restore benchmark baseline
