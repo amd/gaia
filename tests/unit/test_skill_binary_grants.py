@@ -1290,25 +1290,70 @@ def _captured_shell_tool(host):
 
 
 def _run_capturing_subprocess(host, command):
-    """Run *command* through the tool, intercepting the subprocess call."""
-    import subprocess as subprocess_module
+    """Run *command* through the tool, intercepting the spawn.
 
-    import gaia.agents.tools.shell_tools as shell_module
+    The seam is ``shell_session``'s ``Popen``, not ``shell_tools``' ``run``:
+    execution moved into the persistent session, and patching the old location
+    stopped intercepting anything at all — which fails loudly here rather than
+    silently letting these argv-vs-shell assertions pass against a real spawn.
+    """
+    import gaia.agents.tools.shell_session as session_module
 
     seen = {}
-    real_run = shell_module.subprocess.run
+    real_popen = session_module.subprocess.Popen
 
-    def fake_run(args, **kwargs):
+    class _FakeProc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_popen(args, **kwargs):
         seen["args"] = args
         seen["shell"] = kwargs.get("shell", False)
-        return subprocess_module.CompletedProcess(args, 0, "", "")
+        return _FakeProc()
 
-    shell_module.subprocess.run = fake_run
+    session_module.subprocess.Popen = fake_popen
     try:
         _captured_shell_tool(host)(command=command)
     finally:
-        shell_module.subprocess.run = real_run
+        session_module.subprocess.Popen = real_popen
+    assert (
+        seen
+    ), "the spawn seam was never reached — this helper is patching the wrong module"
     return seen
+
+
+def _went_to_a_shell(call) -> bool:
+    """True when the command text was handed to a shell for interpretation.
+
+    Two shapes count, and the distinction that matters is not which one:
+
+    * ``Popen(..., shell=True)`` — the pre-session path.
+    * the spawned program is itself a shell (the session runs ``cmd.exe /d /c
+      <script>`` or ``/bin/sh <script>``), which is the session path.
+
+    What must NOT count is the granted-CLI path, where the program is the CLI
+    itself and the arguments arrive as a list — that is the whole point of the
+    exemption, and it is asserted separately.
+    """
+    if call.get("shell"):
+        return True
+    args = call.get("args") or []
+    program = (args[0] if isinstance(args, list) else str(args)).lower()
+    return program.endswith(("cmd.exe", "/sh", "/bash", "sh", "bash"))
 
 
 def test_a_granted_cli_is_handed_argv_not_a_shell_string():
@@ -1331,17 +1376,24 @@ def test_an_env_var_in_a_granted_write_reaches_the_process_unexpanded():
 
 
 def test_an_ungranted_command_keeps_the_shell_path():
-    """The exemption is for granted CLIs only. `pwd`/`ls` still need cmd.exe on
-    Windows to resolve built-ins, and this change must not touch them."""
+    """The exemption is for granted CLIs only. `pwd`/`ls` still need a shell to
+    resolve built-ins, and this change must not touch them.
+
+    The persistent session (#3380) now owns that shell, so the property is no
+    longer visible as ``Popen(shell=True)`` on this call — it is that the text
+    reaches a shell for interpretation rather than being handed over as an argv
+    list the way a granted CLI is.
+    """
     call = _run_capturing_subprocess(_Gated(), "pwd")
-    assert call["shell"] is (os.name == "nt")
+    assert _went_to_a_shell(call), call
 
 
 def test_a_pipeline_is_not_run_as_argv():
-    """`cmd_parts` has dropped the `|`, so an argv run of a pipeline would
-    silently concatenate two commands into one. Only a lone segment qualifies."""
+    """An argv run of a pipeline would silently concatenate two commands into
+    one, because the ``|`` is not an argument. Only a lone segment qualifies for
+    the granted-CLI argv path; a pipeline must reach a shell."""
     call = _run_capturing_subprocess(_Gated("gh"), "gh issue list | head -5")
-    assert call["shell"] is (os.name == "nt")
+    assert _went_to_a_shell(call), call
 
 
 def test_pytest_has_no_write_tier():

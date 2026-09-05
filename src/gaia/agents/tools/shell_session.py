@@ -76,6 +76,20 @@ _VOLATILE_ENV_NAMES = frozenset(
         "CMDCMDLINE",
         "CMDEXTVERSION",
         "__GAIA_RC",
+        # A POSIX shell exports these itself on startup, so they show up as a
+        # divergence the agent never asked for. Reporting them would tell the
+        # model it had changed the environment when it had only run a command.
+        "COLUMNS",
+        "LINES",
+        "AWKPATH",
+        "IFS",
+        "OPTIND",
+        "OPTARG",
+        "PPID",
+        "BASHOPTS",
+        "SHELLOPTS",
+        "BASH_VERSION",
+        "BASH_SUBSHELL",
     }
 )
 
