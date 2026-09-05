@@ -336,8 +336,24 @@ class ShellSession:
         There is no resident child to kill — every command is waited on or
         killed (with its process group) inside :meth:`run`. What is left is the
         session's temp directory, which this removes.
+
+        A command still running past its tool timeout (#2600) is holding files
+        in that directory, so the removal is handed to it rather than pulled out
+        from under it.
         """
         self._closed = True
+        if self._lock.acquire(blocking=False):
+            try:
+                self._discard_temp_dir()
+            finally:
+                self._lock.release()
+        else:
+            logger.info(
+                "Shell session closed while a command was still running; its temp "
+                "directory is removed when that command finishes."
+            )
+
+    def _discard_temp_dir(self) -> None:
         temp_dir, self._temp_dir = self._temp_dir, None
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -461,6 +477,9 @@ class ShellSession:
                     os.remove(path)
                 except OSError as exc:
                     logger.warning("Could not remove temp file %s: %s", path, exc)
+            if self._closed:
+                # Closed while this command was running; it is ours to clean up.
+                self._discard_temp_dir()
 
     def _ensure_temp_dir(self) -> str:
         if self._temp_dir is None or not os.path.isdir(self._temp_dir):

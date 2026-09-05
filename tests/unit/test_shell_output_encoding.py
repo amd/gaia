@@ -76,6 +76,20 @@ def test_output_with_non_locale_bytes_survives(tmp_path):
     assert "café" in result["stdout"]
 
 
+def _spawn_kwargs(monkeypatch) -> dict:
+    """The kwargs the executor hands the child process for `echo hello`."""
+    seen = {}
+    real_popen = subprocess.Popen
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    _shell_tool()(command="echo hello")
+    return seen
+
+
 def test_executor_decodes_utf8_not_the_locale(monkeypatch):
     """Pin the call itself, so a future edit cannot quietly restore text=True.
 
@@ -83,15 +97,7 @@ def test_executor_decodes_utf8_not_the_locale(monkeypatch):
     invisible in the result: the regression looks like a command that returned
     nothing, on every platform whose locale codec happens to be strict.
     """
-    seen = {}
-    real_run = subprocess.run
-
-    def spy(*args, **kwargs):
-        seen.update(kwargs)
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", spy)
-    _shell_tool()(command="echo hello")
+    seen = _spawn_kwargs(monkeypatch)
 
     assert seen.get("encoding") == "utf-8"
     assert seen.get("errors") == "replace"
@@ -114,15 +120,7 @@ def test_child_never_inherits_the_agent_transport_stdin(monkeypatch):
     in 0.07s from a shell. The tool reported a 180s timeout and GitHub triage
     was unusable.
     """
-    seen = {}
-    real_run = subprocess.run
-
-    def spy(*args, **kwargs):
-        seen.update(kwargs)
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", spy)
-    _shell_tool()(command="echo hello")
+    seen = _spawn_kwargs(monkeypatch)
 
     assert seen["stdin"] is subprocess.DEVNULL
 
