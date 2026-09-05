@@ -14,6 +14,11 @@ import os
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.file_edit import (
+    apply_unique_replacement,
+    record_read,
+    record_write,
+)
 
 
 class FileIOToolsMixin:
@@ -76,6 +81,9 @@ class FileIOToolsMixin:
                         "is_binary": True,
                         "size_bytes": len(content_bytes),
                     }
+
+                # Anchor later edits to what the agent actually saw.
+                record_read(file_path, content)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -249,6 +257,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(file_path), content)
 
                 # Audit successful write
                 if path_validator is not None:
@@ -285,9 +294,13 @@ class FileIOToolsMixin:
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
 
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
+
             Args:
                 file_path: Path to the file to edit
-                old_content: Content to find and replace
+                old_content: Content to find and replace; must be unique in the file
                 new_content: New content to insert
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
@@ -338,15 +351,15 @@ class FileIOToolsMixin:
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
 
-                # Check if old content exists
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": "Content to replace not found in file",
-                    }
-
-                # Create new content
-                modified_content = current_content.replace(old_content, new_content, 1)
+                modified_content, edit_error = apply_unique_replacement(
+                    str(file_path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(file_path), 0, "denied", edit_error["error"]
+                        )
+                    return edit_error
 
                 # Validate new content (graceful degradation: stdlib ast if no mixin)
                 if hasattr(self, "_validate_python_syntax"):
@@ -395,6 +408,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                record_write(str(file_path), modified_content)
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -614,6 +628,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(file_path), content)
 
                 # Audit successful write
                 if path_validator is not None:
@@ -693,6 +708,7 @@ class FileIOToolsMixin:
 
                 # Write content to file
                 path.write_text(content, encoding="utf-8")
+                record_write(str(path), content)
 
                 console = getattr(self, "console", None)
                 if console:
@@ -743,9 +759,14 @@ class FileIOToolsMixin:
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, backup creation, and audit logging.
 
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
+
             Args:
                 file_path: Path to the file to edit
-                old_content: Exact content to find and replace
+                old_content: Exact content to find and replace; must be unique
+                    in the file
                 new_content: New content to replace with
                 project_dir: Project root directory for resolving relative paths
 
@@ -806,20 +827,20 @@ class FileIOToolsMixin:
                 # Read current content
                 current_content = path.read_text(encoding="utf-8")
 
-                # Check if old_content exists in file
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": f"Content to replace not found in {file_path}",
-                    }
+                updated_content, edit_error = apply_unique_replacement(
+                    str(path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", edit_error["error"]
+                        )
+                    return edit_error
 
                 # Backup before editing
                 backup_path = None
                 if path_validator is not None:
                     backup_path = path_validator.create_backup(str(path))
-
-                # Replace content
-                updated_content = current_content.replace(old_content, new_content, 1)
 
                 # Generate diff before writing
                 diff = "\n".join(
@@ -834,6 +855,7 @@ class FileIOToolsMixin:
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
+                record_write(str(path), updated_content)
 
                 console = getattr(self, "console", None)
                 if console:
