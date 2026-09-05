@@ -83,8 +83,10 @@ ALLOWED_COMMANDS = {
     "ps",
     "top",
     "jobs",
-    # Git commands (mostly safe, read-only operations)
-    "git",  # Individual git subcommands checked separately
+    # `git` is deliberately NOT here. It has a full three-tier policy in
+    # gaia.skills.binaries instead, and that policy carries its own
+    # ungranted read-only floor (`BinaryPolicy.ungranted`) — the same
+    # subcommands this list used to allow. One table describes the binary.
 }
 
 # Actions/predicates that turn otherwise read-only commands into a write,
@@ -105,21 +107,6 @@ DANGEROUS_FIND_ACTIONS = {
     "-fprint0",
     "-fprintf",
     "-fls",
-}
-
-# Safe read-only git subcommands
-SAFE_GIT_COMMANDS = {
-    "status",
-    "log",
-    "show",
-    "diff",
-    "branch",
-    "remote",
-    "ls-files",
-    "ls-tree",
-    "describe",
-    "rev-parse",
-    "help",
 }
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
@@ -218,6 +205,22 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     from gaia.skills.binaries import normalize_binary
 
     return normalize_binary(token) in granted
+
+
+def _skips_path_scan(token: str, granted: frozenset) -> bool:
+    """True when this segment's operands are remote ids, so there is no path.
+
+    Narrower than :func:`_is_granted_binary` on purpose, and the difference is
+    the point: granting a LOCAL cli must not switch off the path check.
+    ``gh issue view 42`` names an issue; ``git diff --no-index /etc/passwd``
+    and ``python ../../x.py`` name files, and both are granted CLIs.
+    """
+    if not _is_granted_binary(token, granted):
+        return False
+    from gaia.skills.binaries import BINARY_POLICIES, normalize_binary
+
+    policy = BINARY_POLICIES.get(normalize_binary(token))
+    return policy is not None and policy.remote_operands
 
 
 def _operator_check_text(command: str) -> str:
@@ -533,52 +536,42 @@ class ShellToolsMixin:
             BINARY_POLICIES,
             REFUSE,
             classify_invocation,
+            classify_ungranted_invocation,
             normalize_binary,
         )
 
         binary = normalize_binary(cmd_base)
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
-            if binary not in granted_binaries:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
-                    "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
-                }
-            decision = classify_invocation(policy, cmd_parts)
-            if decision.outcome == REFUSE:
-                return {
-                    "status": "error",
-                    "error": decision.message,
-                    "has_errors": True,
-                    "hint": (
+            granted = binary in granted_binaries
+            classify = classify_invocation if granted else classify_ungranted_invocation
+            decision = classify(policy, cmd_parts)
+            if decision.outcome != REFUSE:
+                return None
+            return {
+                "status": "error",
+                "error": decision.message,
+                "has_errors": True,
+                "hint": (
+                    (
                         f"This one is refused outright, not gated — the '{binary}' "
                         "grant will not run it even with the user's approval. "
                         "Use an allowed command, or tell the user what you would "
                         "have run and why it is blocked."
-                    ),
-                }
-            return None
+                    )
+                    if granted
+                    else (
+                        f"{policy.summary} To go beyond that, load a skill "
+                        f"declaring 'shell:execute:{binary}' — the grant is "
+                        "what widens this, not a different spelling of the "
+                        f"command. If {binary} itself is missing: "
+                        f"{policy.install_hint}"
+                    )
+                ),
+            }
 
-        # Special handling for git - only allow read-only operations
-        if cmd_base == "git":
-            if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
-                    return {
-                        "status": "error",
-                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
-                        "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
-                    }
         # Special handling for wmic - only allow read-only queries
-        elif cmd_base == "wmic":
+        if cmd_base == "wmic":
             cmd_lower = command.lower()
             dangerous_wmic_ops = {"call", "create", "delete", "set"}
             cmd_words = set(cmd_lower.split())
@@ -732,7 +725,7 @@ class ShellToolsMixin:
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
                 "hint": "Only read-only, informational commands are allowed",
-                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+                "examples": "ls, cat, grep, find, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
         return None  # Command is allowed
@@ -847,8 +840,10 @@ class ShellToolsMixin:
                 # This prevents "cat ../secret.txt" even if "cat" is allowed.
                 # Exempt per SEGMENT, never per line: a granted CLI's operands are
                 # remote ids, but 'gh … | cat ../secret' must still be checked.
+                # And only for a CLI whose operands really are remote — a
+                # granted 'git'/'python' still gets scanned.
                 scanned = [
-                    seg for seg in segments if not _is_granted_binary(seg[0], granted)
+                    seg for seg in segments if not _skips_path_scan(seg[0], granted)
                 ]
                 if hasattr(self, "path_validator"):
                     for arg in [a for seg in scanned for a in seg[1:]]:
