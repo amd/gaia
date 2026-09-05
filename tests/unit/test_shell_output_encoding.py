@@ -84,13 +84,13 @@ def test_executor_decodes_utf8_not_the_locale(monkeypatch):
     nothing, on every platform whose locale codec happens to be strict.
     """
     seen = {}
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spy(*args, **kwargs):
         seen.update(kwargs)
-        return real_run(*args, **kwargs)
+        return real_popen(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "Popen", spy)
     _shell_tool()(command="echo hello")
 
     assert seen.get("encoding") == "utf-8"
@@ -104,10 +104,9 @@ def test_child_never_inherits_the_agent_transport_stdin(monkeypatch):
 
     capture_output redirects stdout/stderr but leaves stdin alone, and the
     agent's stdin is the TUI's pipe — open, never written, with no human behind
-    it. A child that reads it blocks forever, and subprocess.run's timeout does
-    not rescue it: on expiry it kills the cmd.exe it launched, then calls
-    communicate() again with NO timeout, waiting on pipes the surviving
-    grandchild still holds.
+    it. A child that reads it blocks forever, and a timeout that reaches only
+    the launched process does not rescue it: the surviving grandchild still
+    holds the pipes (which is why the executor kills the whole tree).
 
     Observed exactly that way: `gh` invoked from the agent never returned and
     left an orphaned gh.exe behind on every attempt, while the same command ran
@@ -115,13 +114,13 @@ def test_child_never_inherits_the_agent_transport_stdin(monkeypatch):
     was unusable.
     """
     seen = {}
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spy(*args, **kwargs):
         seen.update(kwargs)
-        return real_run(*args, **kwargs)
+        return real_popen(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "Popen", spy)
     _shell_tool()(command="echo hello")
 
     assert seen["stdin"] is subprocess.DEVNULL

@@ -121,7 +121,11 @@ class MyAgent(Agent, ShellToolsMixin):
         super()._register_tools()
         self.register_shell_tools()
         # Registers:
-        # - run_shell_command(command, working_directory=None, timeout=30)
+        # - run_shell_command(command, working_directory=None, timeout=None)
+        #     timeout=None picks the default for the command's class:
+        #     test 900s, build 1800s, network 300s, everything else 30s
+        # - wait_for_condition(command, working_directory=None,
+        #                      timeout=120, poll_interval=5)
 ```
 
 ---

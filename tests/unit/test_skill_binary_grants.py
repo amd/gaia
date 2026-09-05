@@ -1291,23 +1291,27 @@ def _captured_shell_tool(host):
 
 def _run_capturing_subprocess(host, command):
     """Run *command* through the tool, intercepting the subprocess call."""
-    import subprocess as subprocess_module
-
     import gaia.agents.tools.shell_tools as shell_module
 
     seen = {}
-    real_run = shell_module.subprocess.run
+    real_popen = shell_module.subprocess.Popen
 
-    def fake_run(args, **kwargs):
+    class _FakeProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    def fake_popen(args, **kwargs):
         seen["args"] = args
         seen["shell"] = kwargs.get("shell", False)
-        return subprocess_module.CompletedProcess(args, 0, "", "")
+        return _FakeProcess()
 
-    shell_module.subprocess.run = fake_run
+    shell_module.subprocess.Popen = fake_popen
     try:
         _captured_shell_tool(host)(command=command)
     finally:
-        shell_module.subprocess.run = real_run
+        shell_module.subprocess.Popen = real_popen
     return seen
 
 

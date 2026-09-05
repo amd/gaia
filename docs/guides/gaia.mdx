@@ -85,7 +85,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **67 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **68 tools** — the 56 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -95,7 +95,7 @@ The default construction registers **67 tools** — the 55 of the Chat agent's `
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
 | Images | `analyze_image`, `answer_question_about_image` |
-| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
+| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command`, `wait_for_condition` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools` |
@@ -104,14 +104,16 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 `run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
 
+How long a command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop.
+
 **Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
 
 ### Tools that need your approval
 
-Six tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`wait_for_condition`** (it re-runs a shell command until it succeeds), **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, all six are refused rather than prompted.** That
+  **Over the sidecar's `/query` stream, all seven are refused rather than prompted.** That
   surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
@@ -227,5 +229,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, all seven [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
 - **No image generation** — deliberately, so the chat model is never evicted mid-conversation.
