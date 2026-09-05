@@ -19,6 +19,12 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List
 
+from gaia.agents.tools.file_edit import (
+    apply_unique_replacement,
+    record_read,
+    record_write,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -672,6 +678,9 @@ class FileSearchToolsMixin:
                         "size_bytes": len(content_bytes),
                     }
 
+                # Anchor later edits to what the agent actually saw.
+                record_read(file_path, content)
+
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
 
@@ -1056,6 +1065,7 @@ class FileSearchToolsMixin:
                 # Write the file
                 with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(resolved_path), content)
 
                 # Audit the successful write
                 if path_validator is not None:
@@ -1306,7 +1316,7 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="edit_file",
-            description="Edit a file by replacing specific content. Finds old_content in the file and replaces it with new_content. Creates a backup before editing.",
+            description="Edit a file by replacing specific content. old_content must match exactly one place in the file — if it matches more than one, the edit is rejected rather than guessing. Creates a backup before editing.",
             parameters={
                 "file_path": {
                     "type": "str",
@@ -1315,7 +1325,11 @@ class FileSearchToolsMixin:
                 },
                 "old_content": {
                     "type": "str",
-                    "description": "Exact content to find and replace in the file",
+                    "description": (
+                        "Exact content to find and replace. Must appear exactly "
+                        "once in the file — include enough surrounding lines to "
+                        "make it unique, or the edit is rejected as ambiguous."
+                    ),
                     "required": True,
                 },
                 "new_content": {
@@ -1333,6 +1347,10 @@ class FileSearchToolsMixin:
 
             Similar to Claude Code's Edit tool — performs a partial string replacement
             rather than overwriting the entire file. Includes all security guardrails.
+
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1395,21 +1413,20 @@ class FileSearchToolsMixin:
                 # Read current content
                 current_content = resolved_path.read_text(encoding="utf-8")
 
-                # Check if old_content exists in file
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": f"Content to replace not found in {resolved_path}",
-                        "operation": "edit_file",
-                    }
+                updated_content, edit_error = apply_unique_replacement(
+                    str(resolved_path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(resolved_path), 0, "denied", edit_error["error"]
+                        )
+                    return {**edit_error, "operation": "edit_file"}
 
                 # Create backup before editing
                 backup_path = None
                 if path_validator is not None:
                     backup_path = path_validator.create_backup(str(resolved_path))
-
-                # Replace content (first occurrence only)
-                updated_content = current_content.replace(old_content, new_content, 1)
 
                 # Generate diff for logging/display
                 diff = "\n".join(
@@ -1423,6 +1440,7 @@ class FileSearchToolsMixin:
 
                 # Write updated content
                 resolved_path.write_text(updated_content, encoding="utf-8")
+                record_write(str(resolved_path), updated_content)
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))

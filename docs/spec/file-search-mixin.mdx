@@ -230,15 +230,23 @@ class FileSearchToolsMixin:
         """
         Edit a file by replacing old content with new content.
 
-        Partial string replacement (first occurrence only) rather than a full
-        overwrite — like Claude Code's Edit tool. Runs the same security
-        guardrails as write_file (PathValidator allowlist, blocked-dir and
-        sensitive-file checks, backup creation, audit logging). The target file
-        must already exist and contain old_content verbatim.
+        Partial string replacement rather than a full overwrite — like Claude
+        Code's Edit tool. Runs the same security guardrails as write_file
+        (PathValidator allowlist, blocked-dir and sensitive-file checks, backup
+        creation, audit logging). The target file must already exist.
+
+        old_content must match exactly one location. Matching several is an
+        error, not a first-match replacement: picking one would edit a region
+        the caller never named while reporting success. Matching nothing, and
+        editing a file that changed since it was read, are errors too. Every
+        rejection carries the file's current content so the retry needs no
+        separate read. The semantics live in `gaia.agents.tools.file_edit`,
+        shared by every edit tool.
 
         Args:
             file_path: File to edit
-            old_content: Exact text to find and replace
+            old_content: Exact text to find and replace; must be unique in the
+                file — include surrounding lines until it is
             new_content: Replacement text
 
         Returns:
@@ -249,6 +257,19 @@ class FileSearchToolsMixin:
                 "new_size": int,   # chars after edit
                 "diff": str,       # unified diff
                 "backup_path": str # only when a backup was created
+            }
+
+            On rejection:
+            {
+                "status": "error",
+                "error": str,           # names the cause and the fix
+                "match_count": int,     # 0 = not found, >1 = ambiguous
+                "match_lines": [int],   # ambiguous only
+                "stale": bool,          # changed-on-disk only
+                "current_content": str, # excerpt around the target region
+                "current_content_start_line": int,
+                "current_content_end_line": int,
+                "current_content_total_lines": int
             }
         """
         pass
