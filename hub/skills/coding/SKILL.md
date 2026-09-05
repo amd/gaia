@@ -2,12 +2,14 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.1.0
+version: 0.2.0
 metadata:
   gaia:
     security_tier: community
     permissions:
       - shell:execute:pytest
+      - shell:execute:python
+      - shell:execute:git
     tools_required:
       - read_file
       - edit_file
@@ -64,22 +66,36 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly:
+This skill grants `pytest` and `python`, so run the suite directly:
 
 ```
 pytest -q tests/
 pytest -x -k discount tests/test_cart.py
+python -m pytest tests/unit          # same thing, same rules
+python util/lint.py --all --fix      # or whatever the project's own runner is
 ```
 
-The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody
-can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outside
-the run — all refused. If you need something the grant will not allow, say so
-rather than working around it.
+`python <script.py>` runs any program already in the checkout — the project's
+lint runner, a build script, a reproduction you just wrote. What it will not do
+is run code passed on the command line: `python -c "..."` is refused, because
+that code is in no file anyone reviewed and it can reach straight past every
+other rule here. If you need to run something new, write it to a file first —
+then it is reviewable, re-runnable, and the diff shows it.
 
-For a suite pytest cannot drive (npm, go, make), write a runner and use
-`execute_python_file`. Then report what the run actually said. If you could not run it, say that
-plainly — *"I could not execute the suite, so this is unverified"* — rather than
-implying it passed.
+The rest of the grant is narrow on purpose. `--pdb` would hang waiting for a
+debugger nobody can answer, `-p <plugin>` imports arbitrary code, `--junitxml`
+writes outside the run. `python -m pytest --pdb` is refused for exactly the same
+reason `pytest --pdb` is — `-m` is not a way around a rule.
+
+For a suite `pytest` cannot drive — npm, go, cargo, make — you have no grant by
+default. GAIA ships policies for `npm`, `go`, `uv`, `pip`, `black`, `isort` and
+`ruff`, so a project skill can declare the one it needs (`shell:execute:npm`)
+and get the same three-tier treatment. `make` has no policy and will not get
+one: its argument is a target in a file, so "run `make test`" means "run
+whatever the Makefile says", which no approval prompt can honestly describe.
+
+If you could not run something, say so plainly — *"I could not execute the
+suite, so this is unverified"* — rather than implying it passed.
 
 ## Do not break what was already working
 
@@ -89,6 +105,24 @@ notice if you only look at the one.
 
 If something else fails, that is now your problem, whether or not you caused it.
 Say which of the two it is.
+
+## Committing: yours to propose, theirs to approve
+
+You have `git`. Reads — `status`, `diff`, `log`, `show`, `branch` — run straight
+through, and you should use them constantly: `git diff` before you report a
+change is the cheapest possible check that the diff is only what you meant.
+
+`add`, `commit`, `checkout`, `switch`, `restore` and `stash` each stop and show
+the user the exact command before running. That is not a formality to click
+past — write the commit message as if it is the only thing the reviewer reads,
+because for a squashed PR it is.
+
+What you cannot do, at all: `push`, `reset --hard`, `clean`, `rebase`,
+`commit --amend`, `git config`. Publishing and history-rewriting are the user's
+to run, and destroying uncommitted work has no undo anywhere. When the work is
+committed and wants pushing, **say so and stop** — *"committed on `fix/discount`;
+run `git push -u origin fix/discount` and I will open the PR"* — rather than
+looking for a spelling that gets through.
 
 ## Keep the diff to the change
 
@@ -108,9 +142,13 @@ more useful than a silent single fix.
 
 ## Scratch files are yours, not theirs
 
-Runner scripts and scratch output go in the system temp directory. Writing
-`create_doc.py` and `temp/` into the root of someone's repository leaves them in
-the next `git status`, and they did not ask for them.
+Runner scripts and scratch output go in the system temp directory — write them
+there and run them with `execute_python_file`, which does not care where the
+file lives. `python` does: its grant stops at the checkout, so a scratch script
+outside it is `execute_python_file`'s job, not the shell's.
+
+Writing `create_doc.py` and `temp/` into the root of someone's repository leaves
+them in the next `git status`, and they did not ask for them.
 
 ## Reporting a code change
 
