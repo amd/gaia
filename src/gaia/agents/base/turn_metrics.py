@@ -102,6 +102,11 @@ def _tokenizer() -> _Tokenizer:
     return _TOKENIZER
 
 
+def count_tokens(text: str) -> int:
+    """Estimated token count for *text*, via this module's shared estimator."""
+    return _tokenizer().count(text)
+
+
 def _common_prefix_len(a: str, b: str) -> int:
     """Length of the longest shared leading substring of *a* and *b*.
 
