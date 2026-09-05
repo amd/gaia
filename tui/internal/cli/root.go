@@ -23,8 +23,10 @@ import (
 // (see init) — old scripts and docs keep working, help lists one flag.
 var dev bool
 
-// bypassPermissions starts agents with confirmation prompts off: every gated
-// tool — shell commands, file writes — runs without asking.
+// bypassPermissions starts agents with the permission gates off: every gated
+// tool — shell commands, file writes — runs without asking, and the shell's own
+// guardrails come off with them (compound operators parse, the read-only binary
+// allowlist is replaced by a developer set, the rate limit is lifted).
 //
 // Off unless passed, and only for this launch. Nothing persists it, so there
 // is no way to land in this mode without having typed it, and the TUI carries
@@ -119,8 +121,9 @@ func init() {
 		panic(err) // only fails on a flag name that was never registered
 	}
 	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
-		"run every tool without asking for confirmation — the agent acts fully "+
-			"autonomously. Off by default; the TUI shows a persistent warning "+
+		"run every tool without asking for confirmation, with the shell "+
+			"guardrails off — the agent acts fully autonomously and can execute "+
+			"arbitrary code. Off by default; the TUI shows a persistent warning "+
 			"while it is on, and /bypass off turns it off mid-session")
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
 		"run the agent against Anthropic's Claude API instead of the local Lemonade "+

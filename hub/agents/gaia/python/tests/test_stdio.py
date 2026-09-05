@@ -176,6 +176,79 @@ def test_launching_unattended_is_recorded_too(configure_logging):
     assert "Bypass permissions ENABLED at launch" in _log_text(path)
 
 
+# ---------------------------------------------------------------------------
+# Bypass reaches the SHELL gates, not just the confirmation prompt (#3373).
+#
+# The two are separate attributes on purpose: an unattended harness that only
+# pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS) must not inherit an unguarded
+# shell. Only PermissionState sets both.
+# ---------------------------------------------------------------------------
+
+
+class _Handler:
+    """The slice of SSEOutputHandler that PermissionState writes to."""
+
+    def __init__(self):
+        self.auto_approve_gated_tools = False
+        self.bypass_permissions = False
+        self.confirm_timeout_seconds = 0
+        self._grants = set()
+
+    def session_grants(self):
+        return self._grants
+
+
+def test_attach_hands_the_turn_both_halves_of_bypass():
+    handler = _Handler()
+
+    stdio.PermissionState(bypass=True).attach(handler)
+
+    assert handler.auto_approve_gated_tools is True
+    assert handler.bypass_permissions is True
+
+
+def test_attach_leaves_a_normal_session_fully_gated():
+    handler = _Handler()
+
+    stdio.PermissionState().attach(handler)
+
+    assert handler.auto_approve_gated_tools is False
+    assert handler.bypass_permissions is False
+
+
+def test_toggling_bypass_mid_turn_reaches_the_shell_gates():
+    handler = _Handler()
+    state = stdio.PermissionState()
+    state.attach(handler)
+
+    state.set_bypass(True)
+    assert handler.bypass_permissions is True
+
+    # /bypass off must put the shell guardrails back on the next command, not
+    # at the next turn boundary.
+    state.set_bypass(False)
+    assert handler.bypass_permissions is False
+
+
+def test_the_shell_mixin_reads_the_attached_handler():
+    """End to end through the real predicate, not a re-implementation of it."""
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+    class _Agent(ShellToolsMixin):
+        def __init__(self):
+            self.console = _Handler()
+
+    agent = _Agent()
+    assert agent.bypass_gates_active() is False
+    # A compound command and an ungranted developer binary: both refused.
+    assert agent._validate_shell_command("cd . && make build")[0] is not None
+
+    stdio.PermissionState(bypass=True).attach(agent.console)
+
+    assert agent.bypass_gates_active() is True
+    assert agent._validate_shell_command("cd . && make build")[0] is None
+
+
 def test_a_denied_and_dropped_decision_is_recorded_at_the_default_level(
     configure_logging,
 ):
