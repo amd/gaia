@@ -384,7 +384,11 @@ jobs:
 
       - name: Preflight — judge key, baselines, Lemonade
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Blank when the OAuth token is present, deliberately: runner.py adds
+          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
+          # auth to the key alone, so leaving both set would ignore the token.
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
@@ -496,10 +500,21 @@ jobs:
           }
 
 
-          if (-not $env:ANTHROPIC_API_KEY) {
-            Write-Host "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
+          if (-not $env:CLAUDE_CODE_OAUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
+            Write-Host "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. `gaia eval agent` drives AND scores each scenario through ``claude -p`` (src/gaia/eval/runner.py), so without a credential every scenario errors in a few seconds and the scorecard is meaningless. Add either repository secret, or run the eval locally on AMD hardware."
             exit 1
           }
+
+          # Assert the credential is ACCEPTED, not merely present. #3341 sat red
+          # for weeks because the key existed and the account behind it was out
+          # of credit: the preflight passed and all five scenarios then died in
+          # three seconds each with their stdout discarded.
+          claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String -OutVariable probe | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::The Claude credential is present but a one-line probe was rejected, so every scenario would error. Response: $probe"
+            exit 1
+          }
+          Write-Host "Claude credential accepted by a live probe."
 
           foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
@@ -785,7 +800,11 @@ jobs:
         # derivation on the job above. Same convention as email_scorecard_refresh.yml.
         timeout-minutes: 400
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Blank when the OAuth token is present, deliberately: runner.py adds
+          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
+          # auth to the key alone, so leaving both set would ignore the token.
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           # Deliberately NOT "Stop": the eval's stderr is piped through `2>&1`
           # below, and under Stop the first stderr line from a native command
