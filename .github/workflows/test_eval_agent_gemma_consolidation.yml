@@ -346,7 +346,11 @@ jobs:
           # build the backend-default agent these scenarios run against, so install
           # the LOCAL editable hub package or every scenario dies at session
           # creation. Core gaia stays editable so eval fixtures resolve in-repo.
-          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python'
+          # `mcp` is not optional for this gate: every scenario is driven through
+          # the Agent UI MCP server, and without the extra that server exits with
+          # ModuleNotFoundError before writing a protocol frame — which the client
+          # reports only as CONNECTION_CLOSED.
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python'
 
       # `gaia eval agent` does not merely call the Anthropic API - it shells out
       # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
