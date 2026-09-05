@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 #: CLI tools whose presence also implies a desktop application is installed.
-#: Feeds the "Installed applications" fact; labels match the per-platform
-#: probes above it so the two never emit the same app twice.
+#: Labels match the per-platform probes in ``collect_system_info`` so the two
+#: never emit the same app twice.
 CLI_TOOL_PROBES: Dict[str, str] = {
     "git": "git",
     "code": "VS Code",
@@ -38,14 +38,9 @@ CLI_TOOL_PROBES: Dict[str, str] = {
     "npm": "npm",
 }
 
-#: Developer toolchain binaries — the build, package and VCS commands an agent
-#: reaches for while working inside a project. Closed list: a name absent here
-#: is simply never reported, and adding one is a one-line change.
-#:
-#: This is the *extension* over ``CLI_TOOL_PROBES``, which only covers the seven
-#: commands that double as desktop-app markers. Knowing ``uv`` is present but
-#: ``cargo`` is not is what stops an agent spending a round trip on
-#: "command not found".
+#: Developer toolchain binaries, probed by the project map. The extension over
+#: ``CLI_TOOL_PROBES``, which covers only the seven commands that double as
+#: desktop-app markers. Closed list; adding a name is a one-line change.
 DEV_TOOL_PROBES: Tuple[str, ...] = (
     "bash",
     "cargo",
@@ -78,9 +73,8 @@ DEV_TOOL_PROBES: Tuple[str, ...] = (
     "yarn",
 )
 
-#: ``(PATH value, binary name) -> present``. ``shutil.which`` walks the whole
-#: PATH per call, and the project map probes ~80 names; keying on PATH means a
-#: shell that prepends a venv still invalidates the answer.
+#: ``(PATH value, binary name) -> present``. Keyed on PATH so a shell that
+#: prepends a venv invalidates the answer rather than reusing a stale one.
 _BINARY_CACHE: Dict[Tuple[str, str], bool] = {}
 
 
@@ -96,10 +90,7 @@ def probe_binaries(names: Iterable[str]) -> Dict[str, bool]:
     for name in names:
         key = (path_env, name)
         if key not in _BINARY_CACHE:
-            try:
-                _BINARY_CACHE[key] = shutil.which(name) is not None
-            except Exception:
-                _BINARY_CACHE[key] = False
+            _BINARY_CACHE[key] = shutil.which(name) is not None
         result[name] = _BINARY_CACHE[key]
     return result
 
@@ -431,22 +422,6 @@ def collect_system_info() -> List[Dict[str, str]]:
             facts.append(
                 {
                     "content": f"Installed applications: {', '.join(found_apps)}",
-                    "domain": "system:software",
-                }
-            )
-    except Exception:
-        pass
-
-    # 11b. Developer toolchain — same probe, wider list. Build/package/VCS
-    # commands are what an agent working inside a project actually invokes.
-    try:
-        dev_present = [n for n, ok in probe_binaries(DEV_TOOL_PROBES).items() if ok]
-        if dev_present:
-            facts.append(
-                {
-                    "content": (
-                        f"Developer tools on PATH: {', '.join(sorted(dev_present))}"
-                    ),
                     "domain": "system:software",
                 }
             )

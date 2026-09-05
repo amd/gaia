@@ -10,9 +10,9 @@ What the map carries, and why each part is there:
 
 * **Directory shape and likely entry points** — the genuinely new half. Nothing
   else in GAIA states them without the model choosing to call ``tree``.
-* **Which binaries are present** — from :func:`gaia.agents.base.system_context.probe_binaries`,
-  the same probe that backs day-0 memory, widened to the developer toolchain and
-  to the shell tool's own allowlist. Absent commands are named too: "do not run
+* **Which binaries are present** — from ``system_context.probe_binaries``, the
+  same probe that backs day-0 memory, widened to the developer toolchain and to
+  the shell tool's own allowlist. Absent commands are named too: "do not run
   ``cargo``" saves the round trip that "command not found" would have cost.
 * **Three platform quirks** — path separator, quoting for spaces, shell dialect.
   Exactly three, enumerated in :class:`PlatformQuirks`.
@@ -33,7 +33,7 @@ import os
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.system_context import DEV_TOOL_PROBES, probe_binaries
 from gaia.agents.base.turn_metrics import count_tokens
@@ -43,7 +43,10 @@ logger = get_logger(__name__)
 
 # ── budget ────────────────────────────────────────────────────────────────
 
-#: Hard ceiling on the rendered map, in estimated tokens.
+#: Ceiling on the rendered map, measured with the shared estimator in
+#: :mod:`gaia.agents.base.turn_metrics` (cl100k, or a char ratio when tiktoken
+#: is absent) — so it bounds the map to within that estimator's error of the
+#: model's own count, not to the exact token.
 #:
 #: 600 tokens is 1.8% of the NPU profile's 32,768-token window (``NPU_CTX_SIZE``)
 #: and 0.9% of the GPU profile's 65,536. Sized against the NPU deliberately: the
@@ -228,8 +231,11 @@ class ProjectMap:
     top_level_dirs: List[str] = field(default_factory=list)
     subdirs: Dict[str, List[str]] = field(default_factory=dict)
     entry_points: List[str] = field(default_factory=list)
-    commands_present: List[str] = field(default_factory=list)
-    commands_absent: List[str] = field(default_factory=list)
+    #: Toolchain binaries found on PATH, and those looked for and not found.
+    tools_present: List[str] = field(default_factory=list)
+    tools_absent: List[str] = field(default_factory=list)
+    #: The subset of the above that ``run_shell_command`` will actually accept.
+    shell_commands: List[str] = field(default_factory=list)
     quirks: PlatformQuirks = field(default_factory=detect_platform_quirks)
     fingerprint: str = ""
 
@@ -237,8 +243,8 @@ class ProjectMap:
 def _shell_allowlisted_commands() -> Tuple[str, ...]:
     """Commands ``run_shell_command`` will accept, as a sorted tuple.
 
-    Imported lazily: the shell tool module is heavy and an agent without it
-    should still get a project map.
+    Imported lazily to keep ``agents/base`` free of an import-time dependency
+    on ``agents/tools``.
     """
     from gaia.agents.tools.shell_tools import ALLOWED_COMMANDS
 
@@ -253,13 +259,7 @@ def _fingerprint(root: Path) -> str:
     and the VCS head (a branch switch rewrites the tree). Reading the whole tree
     to detect a change would cost as much as rebuilding the map.
     """
-    parts: List[str] = []
-    try:
-        entries = sorted(e.name for e in os.scandir(root))
-    except OSError as e:
-        logger.debug("fingerprint scandir(%s) failed: %s", root, e)
-        entries = []
-    parts.append(",".join(entries))
+    parts: List[str] = [",".join(sorted(e.name for e in os.scandir(root)))]
 
     for name in PROJECT_MANIFESTS:
         p = root / name
@@ -280,8 +280,8 @@ def _fingerprint(root: Path) -> str:
     return "|".join(parts)
 
 
-#: ``absolute root -> (fingerprint, map)``. Module-level so a process that
-#: builds several agents over the same project pays for the walk once.
+#: ``absolute root -> (fingerprint, map)``. Module-level so several agents over
+#: the same project in one process pay for the walk once.
 _MAP_CACHE: Dict[str, Tuple[str, ProjectMap]] = {}
 
 
@@ -321,17 +321,14 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
     manifests = [f for f in PROJECT_MANIFESTS if (path / f).is_file()]
 
     top_dirs: List[str] = []
-    try:
-        for entry in sorted(os.scandir(path), key=lambda e: e.name):
-            if len(top_dirs) >= _MAX_TOP_LEVEL_DIRS:
-                break
-            if not entry.is_dir(follow_symlinks=False):
-                continue
-            if entry.name in IGNORED_DIRS or entry.name.startswith("."):
-                continue
-            top_dirs.append(entry.name)
-    except OSError as e:
-        logger.debug("[project-map] cannot list %s: %s", path, e)
+    for entry in sorted(os.scandir(path), key=lambda e: e.name):
+        if len(top_dirs) >= _MAX_TOP_LEVEL_DIRS:
+            break
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        if entry.name in IGNORED_DIRS or entry.name.startswith("."):
+            continue
+        top_dirs.append(entry.name)
 
     expand_order = sorted(
         top_dirs,
@@ -352,7 +349,10 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
                 if entry.name in IGNORED_DIRS or entry.name.startswith("."):
                     continue
                 children.append(entry.name)
-        except OSError:
+        except OSError as e:
+            # One unreadable subdirectory renders with no children rather than
+            # sinking the whole map.
+            logger.debug("[project-map] cannot list %s: %s", path / name, e)
             continue
         if children:
             subdirs[name] = children
@@ -360,12 +360,17 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
     entry_points = [c for c in ENTRY_POINT_CANDIDATES if (path / c).is_file()]
     entry_points.extend(_declared_npm_scripts(path))
 
-    probed = probe_binaries(set(DEV_TOOL_PROBES) | set(_shell_allowlisted_commands()))
-    present = sorted(n for n, ok in probed.items() if ok)
+    allowlist = _shell_allowlisted_commands()
+    probed = probe_binaries(set(DEV_TOOL_PROBES) | set(allowlist))
+    tools_present = sorted(n for n in DEV_TOOL_PROBES if probed.get(n))
     # Only toolchain absences are reported: that list is closed and bounded,
     # whereas "every allowlisted command not installed" is mostly platform noise
     # (a Windows box is never going to have ``lspci``).
-    absent = sorted(n for n in DEV_TOOL_PROBES if not probed.get(n))
+    tools_absent = sorted(n for n in DEV_TOOL_PROBES if not probed.get(n))
+    # Installed AND allowlisted. Kept separate from ``tools_present`` because
+    # most of the toolchain is not allowlisted — ``uv`` and ``npm`` are on this
+    # machine and ``run_shell_command`` refuses both.
+    shell_commands = sorted(n for n in allowlist if probed.get(n))
 
     return ProjectMap(
         root=str(path),
@@ -375,8 +380,9 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
         top_level_dirs=top_dirs,
         subdirs=subdirs,
         entry_points=entry_points,
-        commands_present=present,
-        commands_absent=absent,
+        tools_present=tools_present,
+        tools_absent=tools_absent,
+        shell_commands=shell_commands,
         quirks=detect_platform_quirks(),
         fingerprint=fingerprint,
     )
@@ -407,12 +413,29 @@ PROJECT_ROOT_ENV = "GAIA_PROJECT_ROOT"
 _MAX_ASCEND = 4
 
 
+def is_agent_own_source(root: os.PathLike | str) -> bool:
+    """Does *root* contain the ``gaia`` package this process is running from?
+
+    The daemon launches the agent sidecar with its working directory set to the
+    GAIA checkout in dev mode, so a working-directory-derived root there is the
+    agent's own source tree, not the user's project — and auto-indexing it would
+    embed thousands of files nobody asked about. An explicitly configured root
+    is never subject to this check: pointing GAIA at GAIA is legitimate when you
+    mean it.
+    """
+    import gaia
+
+    package = Path(gaia.__file__).resolve().parent
+    path = Path(root).resolve()
+    return path == package or path in package.parents
+
+
 def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
     """The project this task is about, or ``None`` when there isn't one.
 
     Order: *explicit* argument, then ``GAIA_PROJECT_ROOT``, then the working
     directory or the nearest repository above it (at most :data:`_MAX_ASCEND`
-    levels, never the home directory itself).
+    levels, never the home directory and never :func:`is_agent_own_source`).
 
     ``None`` is a real answer, not a degraded one — an agent answering questions
     from a home directory is not in a project, and inventing a map of ``~``
@@ -431,18 +454,22 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
             )
         return str(path.resolve())
 
-    try:
-        cwd = Path.cwd().resolve()
-        home = Path.home().resolve()
-    except OSError as e:
-        logger.debug("[project-map] cannot resolve the working directory: %s", e)
-        return None
-
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
     for ancestor in [cwd, *list(cwd.parents)[: _MAX_ASCEND - 1]]:
         if ancestor == home or ancestor == ancestor.parent:
             break
-        if is_code_repository(ancestor):
-            return str(ancestor)
+        if not is_code_repository(ancestor):
+            continue
+        if is_agent_own_source(ancestor):
+            logger.info(
+                "[project-map] %s is GAIA's own source tree — no map. Set %s to "
+                "the project you want mapped.",
+                ancestor,
+                PROJECT_ROOT_ENV,
+            )
+            return None
+        return str(ancestor)
     return None
 
 
@@ -463,12 +490,16 @@ def render_project_map(
     pm: ProjectMap,
     index_status: Optional[str] = None,
     token_budget: int = PROJECT_MAP_TOKEN_BUDGET,
+    has_shell_tool: bool = True,
 ) -> str:
     """Render *pm* as a system-prompt block of at most *token_budget* tokens.
 
     Sections are emitted in priority order and a section that would overflow
     stops the render, so what survives truncation is always the highest-value
     text rather than whatever happened to come first.
+
+    Pass ``has_shell_tool=False`` for an agent without ``run_shell_command`` —
+    naming a tool it does not have buys a guaranteed failed call.
     """
     q = pm.quirks
     header = [
@@ -501,17 +532,24 @@ def render_project_map(
         entries.append(f"Entry points: {', '.join(pm.entry_points)}")
 
     # Absences first: they are the line that prevents a wasted round trip, so
-    # they must survive the sub-cap even when the present-list does not.
+    # they must survive the sub-cap even when the longer lists do not.
     commands: List[str] = []
-    if pm.commands_absent:
-        commands.append(
-            f"NOT installed, do not invoke: {', '.join(pm.commands_absent)}"
-        )
-    if pm.commands_present:
-        commands.append(
-            "Installed and accepted by run_shell_command: "
-            f"{', '.join(pm.commands_present)}"
-        )
+    if pm.tools_absent:
+        commands.append(f"NOT installed, do not invoke: {', '.join(pm.tools_absent)}")
+    if has_shell_tool:
+        allowed = set(pm.shell_commands)
+        if pm.shell_commands:
+            commands.append(
+                f"run_shell_command accepts: {', '.join(pm.shell_commands)}"
+            )
+        off_limits = [t for t in pm.tools_present if t not in allowed]
+        if off_limits:
+            commands.append(
+                "Installed but run_shell_command refuses them — use a tool, not "
+                f"the shell: {', '.join(off_limits)}"
+            )
+    elif pm.tools_present:
+        commands.append(f"Installed: {', '.join(pm.tools_present)}")
 
     index: List[str] = [f"Code index: {index_status}"] if index_status else []
 
@@ -559,35 +597,76 @@ def auto_index_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: States of the task-start index trigger. All three post-``idle`` states are
+#: terminal for the session: the trigger fires at most once, and ``failed``
+#: exists so an index that died does not leave the prompt saying "building".
+_IDLE, _RUNNING, _DONE, _FAILED = "idle", "running", "done", "failed"
+
+
 class ProjectMapMixin:
     """Injects a project map into the system prompt and triggers indexing.
 
     Consumer responsibilities:
 
-    * Compose the mixin on an agent that also has :class:`CodeIndexToolsMixin`
-      if the ``index_codebase`` trigger is wanted; without it the map still
-      renders, minus the index line.
+    * List this mixin **before** the base agent in the bases — ``Agent``'s no-op
+      ``_on_task_start`` otherwise wins the MRO and the trigger never fires.
+      ``__init_subclass__`` raises if you get it wrong.
+    * Compose :class:`CodeIndexToolsMixin` too if the ``index_codebase`` trigger
+      is wanted; without it the map still renders, minus the index line.
     * Optionally give the config a ``project_root`` field; otherwise the root
       comes from ``GAIA_PROJECT_ROOT`` or the working directory.
     """
 
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Fail at class definition when the MRO would silence the hook.
+
+        The prompt fragment is found by ``dir()`` and would still render, so a
+        wrong base order otherwise produces a map with no index trigger and no
+        symptom at all.
+        """
+        super().__init_subclass__(**kwargs)
+        from gaia.agents.base.agent import Agent
+
+        mro = cls.__mro__
+        if Agent in mro and mro.index(ProjectMapMixin) > mro.index(Agent):
+            raise TypeError(
+                f"{cls.__name__} lists ProjectMapMixin after Agent, so "
+                f"Agent._on_task_start shadows it and the project map never "
+                f"triggers indexing. Put ProjectMapMixin first in the bases: "
+                f"class {cls.__name__}(ProjectMapMixin, ...)."
+            )
+
+    # ── the map ───────────────────────────────────────────────────────────
+
     def _project_map_root(self) -> Optional[str]:
-        explicit = getattr(getattr(self, "config", None), "project_root", None)
-        return resolve_project_root(explicit)
+        """This session's project root, resolved once.
+
+        Resolved once rather than per turn so the map and the code index can
+        never end up describing two different trees after a ``chdir``.
+        """
+        if not hasattr(self, "_project_map_root_cache"):
+            explicit = getattr(getattr(self, "config", None), "project_root", None)
+            self._project_map_root_cache = resolve_project_root(explicit)
+        return self._project_map_root_cache
 
     def materialize_project_map(self) -> Optional[ProjectMap]:
         """This task's map, or ``None`` when the task is not in a project."""
         root = self._project_map_root()
-        if root is None:
-            return None
-        return build_project_map(root)
+        return build_project_map(root) if root else None
 
     def get_project_map_system_prompt(self) -> str:
         """Auto-discovered by ``Agent._get_mixin_prompts``."""
         pm = self.materialize_project_map()
         if pm is None:
             return ""
-        return render_project_map(pm, index_status=self._code_index_status(pm))
+        return render_project_map(
+            pm,
+            index_status=self._code_index_status(pm),
+            has_shell_tool="run_shell_command" in (self._tool_names()),
+        )
+
+    def _tool_names(self) -> Dict[str, Any]:
+        return getattr(self, "_tools_registry", {}) or {}
 
     # ── code index ────────────────────────────────────────────────────────
 
@@ -600,19 +679,19 @@ class ProjectMapMixin:
             return None
         if indexed:
             return "built — use search_code_index before grepping"
-        if getattr(self, "_project_map_index_started", False):
+        state = getattr(self, "_project_map_index_state", _IDLE)
+        if state == _RUNNING:
             return "building now in the background; grep until it lands"
+        if state == _FAILED:
+            return "build FAILED — grep instead, or call index_codebase to see why"
         return "not built — call index_codebase to enable semantic code search"
 
     def _code_index_is_built(self) -> Optional[bool]:
         """``True``/``False``, or ``None`` when this agent has no code index.
 
-        Reads the code index at *the agent's* configured repo path, and the
-        trigger below indexes that same path — so the two can never disagree
-        about which tree they are talking about. A consumer that wants the
-        index scoped to the project map's root points
-        ``_init_code_index_state`` at :func:`resolve_project_root`, which is
-        what ``GaiaAgent`` does.
+        Reads the index at *the agent's* configured repo path, which the trigger
+        below also indexes, so the two can never disagree about which tree they
+        mean. ``GaiaAgent`` points both at :func:`resolve_project_root`.
         """
         getter = getattr(self, "_get_code_index_sdk", None)
         if getter is None:
@@ -620,7 +699,9 @@ class ProjectMapMixin:
         sdk = getter()
         if sdk is None:
             return None
-        return bool(sdk.get_status().get("indexed"))
+        # Presence check, not get_status(): this runs on every prompt
+        # composition and get_status parses every indexed chunk.
+        return bool(sdk.is_indexed())
 
     def _auto_index_enabled(self) -> bool:
         override = auto_index_env_override()
@@ -632,47 +713,67 @@ class ProjectMapMixin:
         """Materialize the map and, if warranted, kick off ``index_codebase``."""
         super()._on_task_start(user_input)
         pm = self.materialize_project_map()
-        if pm is None:
-            return
-        self._maybe_start_background_index(pm)
+        if pm is not None:
+            self._maybe_start_background_index(pm)
 
     def _maybe_start_background_index(self, pm: ProjectMap) -> None:
         """Start ``index_codebase`` in a background thread, at most once."""
-        if getattr(self, "_project_map_index_started", False):
+        if getattr(self, "_project_map_index_state", _IDLE) != _IDLE:
             return
         if not pm.is_repository or not self._auto_index_enabled():
             return
         if self._code_index_is_built() is not False:
             return
-        index_tool = (getattr(self, "_tools_registry", {}) or {}).get("index_codebase")
+        index_tool = self._tool_names().get("index_codebase")
         if index_tool is None:
             return
 
-        self._project_map_index_started = True
+        self._project_map_index_state = _RUNNING
         import threading
+
+        def _fail(detail: str) -> None:
+            # Background work has no caller to raise into, and a swallowed
+            # failure surfaces only as an empty search_code_index later.
+            self._project_map_index_state = _FAILED
+            logger.error(
+                "[project-map] background index of %s failed: %s. "
+                "Call index_codebase directly to see the full error.",
+                pm.root,
+                detail,
+            )
 
         def _run() -> None:
             logger.info("[project-map] indexing %s in the background", pm.root)
             try:
-                # No repo_path: the tool's default is the agent's configured
-                # code-index root, the same one the status above was read from.
-                index_tool["function"]()
+                # No repo_path: the tool defaults to the agent's configured
+                # code-index root, the one the status above was read from.
+                raw = index_tool["function"]()
             except Exception as e:
-                # Background work has no caller to raise into; a swallowed
-                # failure here would show up only as search_code_index
-                # returning nothing, which is unexplainable from the outside.
-                logger.error(
-                    "[project-map] background index of %s failed: %s. "
-                    "Call index_codebase directly to see the full error.",
-                    pm.root,
-                    e,
-                )
+                _fail(str(e))
+                return
+            # The tool reports refusals and internal errors as JSON rather than
+            # by raising, so "no exception" is not "it worked".
+            error = _tool_error(raw)
+            if error:
+                _fail(error)
             else:
+                self._project_map_index_state = _DONE
                 logger.info("[project-map] background index of %s done", pm.root)
 
         threading.Thread(
             target=_run, name="gaia-project-map-index", daemon=True
         ).start()
+
+
+def _tool_error(raw: Any) -> Optional[str]:
+    """The ``error`` a code-index tool reported as JSON, if any."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    return parsed.get("error") if isinstance(parsed, dict) else None
 
 
 __all__ = [
