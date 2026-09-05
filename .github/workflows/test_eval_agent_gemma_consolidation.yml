@@ -792,6 +792,22 @@ jobs:
             exit 1
           }
 
+      - name: Warm the MCP server's imports
+        # The eval spawns `python -m gaia.mcp.servers.agent_ui_mcp` once per
+        # scenario, and the client drops a server that is slow to hand-shake.
+        # Cold, that import pulls in most of GAIA and pays first-touch bytecode
+        # compilation and (on this box) an AV scan of every file it opens; warm,
+        # it is a couple of seconds. On the first run after this gate started
+        # measuring, scenarios 1-3 died with CONNECTION_CLOSED at 19s / 17s /
+        # 36s and scenarios 4-5 then ran to completion in 197s and 336s — a
+        # warm-up curve, not a flake. Paying it once here rather than inside
+        # the first scenario's startup budget.
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "SilentlyContinue"
+          python -c "import gaia.mcp.servers.agent_ui_mcp" 2>&1 | Out-Null
+          Write-Host "MCP server imports warmed (exit $LASTEXITCODE)."
+
       - name: Run the three eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
         # integrity / compare / upload steps still running on the partial results.
@@ -805,6 +821,10 @@ jobs:
           # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
           # auth to the key alone, so leaving both set would ignore the token.
           ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          # The MCP server's first launch is slow on this runner (see the warm-up
+          # step above). The default startup window drops it; 120s is generous
+          # enough that a genuinely dead server still fails, just not a slow one.
+          MCP_TIMEOUT: "120000"
         run: |
           # Deliberately NOT "Stop": the eval's stderr is piped through `2>&1`
           # below, and under Stop the first stderr line from a native command
