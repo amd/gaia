@@ -9,6 +9,7 @@ it is.
 """
 
 import os
+import shlex
 
 import pytest
 
@@ -151,6 +152,28 @@ def test_the_guardrails_still_refuse_a_blocked_command(tools):
 
     assert result["status"] == "error"
     assert result["has_errors"] is True
+
+
+@pytest.mark.parametrize(
+    "command, expected",
+    [
+        ("cat ~/../secret", "cat '~/../secret'"),
+        ("echo $HOME", "echo '$HOME'"),
+        ("ls *.py", "ls '*.py'"),
+        ("grep -r 'foo bar' .", "grep -r 'foo bar' ."),
+        ("ls | head -3", "ls | head -3"),
+    ],
+)
+def test_the_posix_shell_gets_argv_back_not_a_string_to_expand(command, expected):
+    """A session needs a shell, but the shell must not re-read the arguments.
+
+    `cat ~/../secret` is one literal token to the path validator and a different
+    file to sh. Re-quoting the validated tokens keeps the pipeline and leaves
+    expansion off, as it was before commands went through a shell at all.
+    """
+    from gaia.agents.tools.shell_tools import _requote_for_posix, _split_pipeline
+
+    assert _requote_for_posix(_split_pipeline(shlex.split(command))) == expected
 
 
 def test_teardown_is_repeatable(tools):
