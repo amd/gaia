@@ -159,7 +159,7 @@ TEST_F(FileToolsTest, FileWrite_MissingContent) {
 // ---------------------------------------------------------------------------
 
 TEST_F(FileToolsTest, FileEdit_BasicReplacement) {
-    std::string path = writeFile("edit_me.txt", "foo bar baz foo");
+    std::string path = writeFile("edit_me.txt", "foo bar baz");
 
     ToolInfo tool = FileIOTools::fileEdit();
     ASSERT_TRUE(tool.callback);
@@ -167,10 +167,101 @@ TEST_F(FileToolsTest, FileEdit_BasicReplacement) {
     json result = tool.callback({{"path", path}, {"old_string", "foo"}, {"new_string", "qux"}});
     EXPECT_FALSE(result.contains("error"));
     EXPECT_EQ(result["success"], true);
-    EXPECT_EQ(result["replacements"], 2);
+    EXPECT_EQ(result["replacements"], 1);
     EXPECT_EQ(result["path"], path);
 
-    EXPECT_EQ(readFile(path), "qux bar baz qux");
+    EXPECT_EQ(readFile(path), "qux bar baz");
+}
+
+TEST_F(FileToolsTest, FileEdit_AmbiguousOldStringIsRejected) {
+    // Two matches: neither "edit the first" nor "edit both" is what the caller
+    // asked for, and both report success. Refuse instead (#3377).
+    std::string path = writeFile("ambiguous.txt", "foo bar baz foo");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "foo"}, {"new_string", "qux"}});
+
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_EQ(result["ambiguous"], true);
+    EXPECT_EQ(result["replacements"], 0);
+    EXPECT_NE(result["error"].get<std::string>().find("2 locations"), std::string::npos);
+
+    // Untouched — an ambiguous edit must not be a partial edit.
+    EXPECT_EQ(readFile(path), "foo bar baz foo");
+}
+
+TEST_F(FileToolsTest, FileEdit_AmbiguityNamesEveryMatchingLine) {
+    std::string path = writeFile("ambiguous_lines.txt", "alpha\nvalue\nbeta\nvalue\ngamma\n");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "value"}, {"new_string", "other"}});
+
+    ASSERT_TRUE(result.contains("match_lines")) << result.dump();
+    EXPECT_EQ(result["match_lines"], (json::array({2, 4})));
+}
+
+TEST_F(FileToolsTest, FileEdit_UniqueMatchStillWorksWithContext) {
+    // The documented recovery from an ambiguity error: add surrounding lines.
+    std::string path = writeFile("recover.txt", "alpha\nvalue\nbeta\nvalue\ngamma\n");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha\nvalue"}, {"new_string", "alpha\nother"}});
+
+    ASSERT_FALSE(result.contains("error")) << result.dump();
+    EXPECT_EQ(result["replacements"], 1);
+    EXPECT_EQ(readFile(path), "alpha\nother\nbeta\nvalue\ngamma\n");
+}
+
+TEST_F(FileToolsTest, FileEdit_StaleRejectionIsNotADeadEnd) {
+    // Rejecting forever is as broken as clobbering: the rejection hands the
+    // current content back, so it counts as a read and the retry goes through.
+    std::string path = writeFile("relock.txt", "alpha\nbeta\n");
+    FileStateTracker::instance().recordRead(path, "something older");
+
+    json rejected = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha"}, {"new_string", "gamma"}});
+    ASSERT_TRUE(rejected.contains("error")) << rejected.dump();
+    EXPECT_EQ(rejected["stale"], true);
+    EXPECT_TRUE(rejected.contains("current_content"));
+
+    json retry = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha"}, {"new_string", "gamma"}});
+    ASSERT_FALSE(retry.contains("error")) << retry.dump();
+    EXPECT_EQ(readFile(path), "gamma\nbeta\n");
+}
+
+TEST_F(FileToolsTest, FileEdit_RejectionCarriesCurrentContent) {
+    // A rejected edit must hand back the text, or the retry costs a re-read.
+    std::string path = writeFile("carry.txt", "alpha\nbeta\ngamma\n");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "nowhere"}, {"new_string", "x"}});
+
+    ASSERT_TRUE(result.contains("current_content")) << result.dump();
+    EXPECT_NE(result["current_content"].get<std::string>().find("alpha"),
+              std::string::npos);
+    EXPECT_EQ(result["current_content_total_lines"], 3);
+}
+
+TEST_F(FileToolsTest, FileEdit_ExcerptFollowsTheIntendedRegion) {
+    // Getting a later line's indentation wrong is the commonest miss. The
+    // excerpt must land where the caller was aiming, not on line 1 of a long
+    // file — the anchor is the first line of old_string, matched without its
+    // own indentation.
+    std::string body;
+    for (int i = 1; i <= 200; ++i) body += "filler line " + std::to_string(i) + "\n";
+    body += "def target_function():\n    inner = 1\n";
+    std::string path = writeFile("long.py", body);
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path},
+         {"old_string", "def target_function():\n        inner = 1"},  // wrong indent
+         {"new_string", "def target_function():\n    inner = 2"}});
+
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_NE(result["current_content"].get<std::string>().find("target_function"),
+              std::string::npos);
+    EXPECT_GT(result["current_content_start_line"].get<int>(), 150);
 }
 
 TEST_F(FileToolsTest, FileEdit_StringNotFound) {
@@ -545,7 +636,10 @@ TEST_F(FileToolsHardeningTest, FileEdit_NonMatchingOldStringIsActionable) {
     const std::string message = result["error"].get<std::string>();
     EXPECT_NE(message.find("not found"), std::string::npos);
     EXPECT_NE(message.find("no replacement was made"), std::string::npos);
-    EXPECT_NE(message.find("file_read"), std::string::npos);
+    // The error hands the text back rather than sending the model to re-read.
+    EXPECT_NE(message.find("current_content"), std::string::npos);
+    EXPECT_NE(result["current_content"].get<std::string>().find("quick brown"),
+              std::string::npos);
     EXPECT_EQ(result["replacements"], 0);
     EXPECT_EQ(readFile(path), before);
 }
