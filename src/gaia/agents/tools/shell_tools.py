@@ -107,6 +107,54 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+# The binaries a developer session needs and a read-only session must not have
+# (#3374). Active ONLY under bypass permissions; ALLOWED_COMMANDS above is
+# untouched so the read-only tier keeps claiming exactly what it claims, and
+# #2768's sweep of it never has to reason about these entries.
+#
+# This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
+# each run whatever the working tree tells them to. That is why it is reachable
+# only from the mode the user turned on deliberately.
+#
+# python/python3/pytest and gh are listed for CONSOLIDATION, not new reach: all
+# four already have a path today (``execute_python_file`` for the
+# generic_file_ops profiles, a ``shell:execute:`` skill grant for pytest and
+# gh). Naming them here means bypass has one answer to "may this binary run"
+# instead of three. The per-skill grant path is unchanged and still works with
+# bypass off.
+DEVELOPER_COMMANDS = frozenset(
+    {
+        # Interpreters and test runners
+        "python",
+        "python3",
+        "pytest",
+        "node",
+        # Build and package tooling
+        "npm",
+        "make",
+        "cmake",
+        "go",
+        "cargo",
+        # Forge
+        "gh",
+        # Text processing that writes
+        "sed",
+        "awk",
+        # Network
+        "curl",
+        # Process control
+        "sleep",
+        "timeout",
+        "export",
+        # File shuffling. `cp` and `mv` are in; `rm` is deliberately NOT — see
+        # docs/plans/security-model.mdx. Not a boundary (anything above can
+        # delete a file), just a tripwire against an accidental recursive
+        # delete.
+        "cp",
+        "mv",
+    }
+)
+
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
     "status",
@@ -246,12 +294,41 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+#: Tokens that end one command and begin the next. Only ``|`` can appear
+#: outside bypass mode — ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before
+#: tokenisation — so extending the set leaves default behaviour untouched.
+_SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
+
+
+def _tokenize(command: str, bypass_gates: bool = False) -> list:
+    """Split *command* into argv tokens.
+
+    Default mode uses ``shlex.split``, unchanged. Bypass mode asks shlex to
+    treat ``;&|<>`` as punctuation instead, so ``cd build && make`` yields a
+    standalone ``&&`` for ``_split_pipeline`` to break on. Parentheses stay out
+    of the punctuation set: making them tokens would mangle ordinary operands
+    like ``find . -name "(draft)*"``.
+    """
+    if not bypass_gates:
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
+    return list(lexer)
+
+
 def _split_pipeline(cmd_parts: list) -> list:
-    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    """Split tokenised *cmd_parts* on shell separators into non-empty segments.
+
+    Every segment is validated and audited on its own, which is what keeps a
+    refused binary in ``a && b`` from riding in on an allowed one — and what
+    keeps the audit record honest under bypass mode, where the separators
+    actually reach a shell.
+    """
     segments: list = []
     current: list = []
     for part in cmd_parts:
-        if part == "|":
+        if part in _SEGMENT_SEPARATORS:
             if current:
                 segments.append(current)
             current = []
@@ -296,7 +373,11 @@ class ShellToolsMixin:
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
-        if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(command)):
+        bypass = self.bypass_gates_active()
+
+        if not bypass and DANGEROUS_SHELL_OPERATORS.search(
+            _operator_check_text(command)
+        ):
             return (
                 {
                     "status": "error",
@@ -308,7 +389,7 @@ class ShellToolsMixin:
             )
 
         try:
-            cmd_parts = shlex.split(command)
+            cmd_parts = _tokenize(command, bypass_gates=bypass)
         except ValueError as exc:
             return (
                 {
@@ -333,11 +414,36 @@ class ShellToolsMixin:
                 segment,
                 command if len(segments) == 1 else " ".join(segment),
                 granted_binaries=granted,
+                bypass_gates=bypass,
             )
             if error:
                 return error, segments
 
         return None, segments
+
+    def bypass_gates_active(self) -> bool:
+        """Whether this session is running under bypass permissions (#3373).
+
+        One source of truth, read live: the session's output handler carries
+        ``bypass_permissions``, set only by the sidecar's ``PermissionState``
+        from ``--bypass-permissions`` or the TUI's ``/bypass``. Every gate reads
+        this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
+        tool description, the executor — so they cannot hold different opinions
+        about whether a command is legal.
+
+        Read live rather than resolved once because bypass is toggleable
+        mid-session over the control channel; caching it would leave `/bypass
+        off` half-applied. Each ``run_shell_command`` reads it once and threads
+        that value through its own pre-flight and execution, so a toggle landing
+        mid-call cannot split the two.
+
+        Answers False for any host that never set it — a plain console, the
+        HTTP transport, a library embedding — which is what keeps the shipped
+        default byte-identical.
+        """
+        return bool(
+            getattr(getattr(self, "console", None), "bypass_permissions", False)
+        )
 
     def policy_refusal_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -404,6 +510,13 @@ class ShellToolsMixin:
             # anything else would skip the modal without enforcing the policy.
             return False
 
+        bypass = self.bypass_gates_active()
+        if bypass:
+            # Every gated tool is pre-approved in bypass mode; saying so here
+            # keeps this answer aligned with the console's, rather than leaving
+            # two predicates to disagree about whether the call was consented to.
+            return True
+
         granted = skill_granted_binaries(self)
         if not granted:
             return False
@@ -413,7 +526,7 @@ class ShellToolsMixin:
             return False
 
         try:
-            segments = _split_pipeline(shlex.split(command))
+            segments = _split_pipeline(_tokenize(command))
         except ValueError:
             return False
         if not segments:
@@ -505,6 +618,7 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        bypass_gates: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -516,6 +630,10 @@ class ShellToolsMixin:
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
+            bypass_gates: This session's ``--bypass-permissions`` state. When
+                True the read-only policy is replaced wholesale by
+                ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
+                exactly as it was.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -526,6 +644,9 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        if bypass_gates:
+            return ShellToolsMixin._validate_bypass_command(cmd_base)
+
         # Skill-granted CLIs are gated by their own policy table instead of
         # ALLOWED_COMMANDS; anything ungranted is still refused.
         # Imported here — gaia.skills pulls in the connector stack.
@@ -737,6 +858,49 @@ class ShellToolsMixin:
 
         return None  # Command is allowed
 
+    @staticmethod
+    def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
+        """The whole binary policy under bypass permissions.
+
+        Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
+        else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
+        ``find -exec``, ``sort -o``, ``uniq`` output) all encode "this binary
+        may not write", which is precisely the assumption bypass mode drops.
+
+        Still a set, not an open door — ``rm`` and anything unrecognised are
+        refused, and every segment lands in the audit record either way.
+        """
+        from gaia.skills.binaries import normalize_binary
+
+        candidates = {cmd_base, normalize_binary(cmd_base)}
+        if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
+            return None
+        return {
+            "status": "error",
+            "error": (
+                f"Command '{cmd_base}' is not in the developer command set, "
+                "even with bypass permissions active."
+            ),
+            "has_errors": True,
+            "hint": (
+                "Bypass permissions swap the read-only allowlist for a "
+                "developer set (python, python3, pytest, node, npm, make, "
+                "cmake, go, cargo, gh, sed, awk, curl, sleep, timeout, export, "
+                "cp, mv). 'rm' is deliberately excluded."
+            ),
+        }
+
+    def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
+        """Record a command run under bypass mode, arguments and all.
+
+        Skipping the confirmation *prompt* must not mean skipping the *record*:
+        consent was granted in advance, which is exactly when the audit trail is
+        the only evidence of what the agent did.
+        """
+        from gaia.security import audit_shell_command
+
+        audit_shell_command(command=command, cwd=cwd, segments=segments, mode="bypass")
+
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
         from gaia.agents.base.tools import tool
@@ -785,8 +949,12 @@ class ShellToolsMixin:
                 Dictionary with status, output, and error information
             """
             try:
+                bypass = self.bypass_gates_active()
+
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time = self._check_rate_limit()
+                allowed, reason, wait_time = (
+                    (True, "", 0.0) if bypass else self._check_rate_limit()
+                )
                 if not allowed:
                     return {
                         "status": "error",
@@ -908,15 +1076,21 @@ class ShellToolsMixin:
                 cmd_base = cmd_parts[0].lower()
 
                 # Validate every command in the pipeline, not just the first.
+                # The walk stays intact in bypass mode: it is what produces the
+                # per-segment audit record below.
                 for seg in segments:
                     error = self._validate_command(
                         seg[0].lower(),
                         seg,
                         command if len(segments) == 1 else " ".join(seg),
                         granted_binaries=granted,
+                        bypass_gates=bypass,
                     )
                     if error:
                         return error
+
+                if bypass:
+                    self._audit_shell_execution(command, cwd, segments)
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
@@ -941,12 +1115,17 @@ class ShellToolsMixin:
                 # One segment only: a pipeline needs a shell to be a pipeline,
                 # and `cmd_parts` has already dropped the `|` tokens, so an argv
                 # run of one would silently concatenate the two commands.
+                #
+                # Bypass mode needs a shell everywhere, not just on Windows: the
+                # operators it unblocks ARE the shell. argv-only execution would
+                # drop the separators `_split_pipeline` stripped and silently
+                # concatenate `a && b` into one bogus command line.
                 lone_granted_segment = (
                     len(segments) == 1
                     and bool(granted)
                     and _is_granted_binary(segments[0][0], granted)
                 )
-                use_shell = os.name == "nt" and not lone_granted_segment
+                use_shell = (os.name == "nt" or bypass) and not lone_granted_segment
 
                 # Build the command string for execution
                 # On Windows with shell=True, use the ORIGINAL command string
@@ -967,7 +1146,7 @@ class ShellToolsMixin:
                         "cp": "copy",
                         "mv": "move",
                     }
-                    if cmd_base in _UNIX_TO_WIN:
+                    if os.name == "nt" and cmd_base in _UNIX_TO_WIN:
                         import shutil
 
                         if not shutil.which(cmd_base):
@@ -1030,8 +1209,11 @@ class ShellToolsMixin:
                     )
                     duration = time.monotonic() - start_time
 
-                    # Record successful command execution for rate limiting
-                    self._record_command_execution()
+                    # Record successful command execution for rate limiting.
+                    # Skipped under bypass: the limit is lifted, and the deque
+                    # is created by _check_rate_limit, which never ran.
+                    if not bypass:
+                        self._record_command_execution()
                 except subprocess.TimeoutExpired as exc:
                     duration = time.monotonic() - start_time
 

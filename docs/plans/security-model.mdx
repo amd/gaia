@@ -219,6 +219,79 @@ The `risk_tier` parameter is stored in `_TOOL_REGISTRY[tool_name]["risk_tier"]`.
 The `_execute_tool` method in `src/gaia/agents/base/agent.py` checks the tier
 before execution and gates on confirmation if required.
 
+### 4.5 Bypass permissions and the shell guardrails
+
+**Status:** Shipped. **GitHub issues:** #3373, #3374.
+
+The flagship sidecar's `--bypass-permissions` (and the TUI's `/bypass`) is the
+one sanctioned place session-wide trust lives — see
+`src/gaia/agents/base/tool_grants.py`. It has always turned the confirmation
+prompt off. It now also lifts the shell tool's **own** guardrails, because
+turning off the prompt alone left the agent unable to do the work the user had
+just consented to: compound commands were refused before they parsed, and there
+was no interpreter, test runner or package manager in the allowlist.
+
+**What comes off, together, and only under bypass:**
+
+| Gate | Default | Under bypass |
+|------|---------|--------------|
+| Shell operator block (`&&`, `\|\|`, `;`, `>`, `>>`, `<`, `` ` ``, `$()`) | refused before parsing | parsed and executed |
+| Confirmation prompts | asked every call | pre-approved (unchanged behaviour) |
+| Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` sub-guards | replaced by `DEVELOPER_COMMANDS` |
+| Shell rate limit (10/min, 3/10s) | enforced | lifted |
+
+Pipes were never blocked and are unaffected.
+
+**Blast radius: arbitrary code execution.** The developer set adds `node`,
+`npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`,
+`export`, `cp` and `mv`. It also names `python`, `python3`, `pytest` and `gh`,
+which are **consolidation rather than new reach** — those already have paths
+today (`execute_python_file` for the `generic_file_ops` profiles, a
+`shell:execute:<binary>` skill grant for `pytest` and `gh`). Listing them here
+means bypass has one answer to "may this binary run" instead of three. The
+per-skill grant path is untouched and still works with bypass off.
+
+`rm` is deliberately excluded. This is not a security boundary — anything in the
+set can delete a file — it is a tripwire against an accidental recursive delete.
+`cp` and `mv` are in, because a build or test run reasonably needs them.
+
+`ALLOWED_COMMANDS` is **unchanged**. The developer set is a separate frozenset,
+so the read-only tier keeps claiming exactly what it claims and #2768's
+hardening of it never has to reason about these entries.
+
+**Stdio transport only.** Bypass exists on the sidecar's stdio transport, which
+is one local parent process on a private pipe. It is not reachable on the HTTP
+transport (`hub/agents/gaia/python/gaia_agent/server.py`): that is a bound
+socket, and an unguarded shell reachable over it is remote code execution rather
+than a relaxed permission model. The HTTP handler pins `bypass_permissions =
+False`, the request model forbids unknown fields so a client cannot ask for it,
+and there is no HTTP equivalent of the `gaia_control` bypass verb. Token auth
+and `HostOriginMiddleware` (`caller_auth.py`) continue to guard that surface for
+everything else.
+
+**It still audits.** Skipping the confirmation *prompt* does not skip the
+*record*. Every command executed under bypass is written to
+`~/.gaia/cache/file_audit.log` with its full arguments and its per-segment
+breakdown, so `cd build && make` is two auditable invocations rather than one
+opaque string. Arguments are recorded verbatim, so a secret passed on a command
+line lands in that file — treat it as sensitive.
+
+Command substitution is the one thing bypass cannot audit precisely: the body of
+a `$(...)` is not a segment and is not individually validated. It runs because
+the shell runs it.
+
+<Note>
+`bypass_permissions` is a **separate** handler attribute from
+`auto_approve_gated_tools`, and only `PermissionState` sets both. An unattended
+harness that merely pre-approves prompts — `GAIA_AUTO_APPROVE_TOOLS=1`, or a
+library host passing `auto_approve_gated_tools=True` — does **not** inherit an
+unguarded shell.
+
+Bypass is toggleable mid-session over the control channel, so the shell gates
+read it live rather than caching it: `/bypass off` puts the guardrails back on
+the very next command.
+</Note>
+
 ---
 
 ## 5. MCP Security

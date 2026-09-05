@@ -207,6 +207,20 @@ class OutputHandler(ABC):
     trusted unattended harness. Every approval taken this way is logged.
     """
 
+    bypass_permissions: bool = False
+    """Session-wide trust granted by ``--bypass-permissions`` / TUI ``/bypass``.
+
+    Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
+    effect. Only ``PermissionState`` sets it — an unattended harness that merely
+    pre-approves prompts must not also get an unguarded shell — and in exchange
+    it lifts the shell guardrails too: the operator block, the read-only binary
+    policy (replaced by ``DEVELOPER_COMMANDS``) and the rate limit. See
+    ``gaia.agents.tools.shell_tools.ShellToolsMixin.bypass_gates_active``.
+
+    Mutable for the life of the session: the host can toggle it mid-run over the
+    control channel, and the next gated call sees the new value.
+    """
+
     _last_denial: Optional[Tuple[str, str]] = None
     """``(tool_name, reason)`` for the most recent denial (#2210).
 

@@ -237,6 +237,36 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+### Bypass Permissions
+
+Off by default. Turned on only by the flagship sidecar's `--bypass-permissions`
+launch flag or the TUI's `/bypass`, both of which set `bypass_permissions` on
+the session's output handler. `bypass_gates_active()` reads that attribute live,
+so a mid-session toggle takes effect on the next command.
+
+When on, `_validate_command` short-circuits the whole read-only policy above and
+answers one question instead: is the binary in
+`ALLOWED_COMMANDS | DEVELOPER_COMMANDS`?
+
+```python
+DEVELOPER_COMMANDS = frozenset({
+    "node", "npm", "make", "cmake", "go", "cargo",
+    "sed", "awk", "curl", "sleep", "timeout", "export", "cp", "mv",
+    # consolidation, not new reach — these already have their own paths
+    "python", "python3", "pytest", "gh",
+})   # "rm" deliberately excluded
+```
+
+`ALLOWED_COMMANDS` is unchanged — the developer set is separate, so the
+read-only tier keeps meaning what it says. The operator block and the rate limit
+come off with it, and the per-segment `_split_pipeline` + `_validate_command`
+walk stays intact so every invocation is still audited to
+`~/.gaia/cache/file_audit.log`.
+
+This permits arbitrary code execution, and is reachable on the stdio transport
+only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
+and why the HTTP transport is excluded.
+
 ### Git Command Filtering
 
 ```python

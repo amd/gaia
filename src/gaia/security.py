@@ -22,6 +22,57 @@ logger = logging.getLogger(__name__)
 # Audit logger — separate from main logger for file operation tracking
 audit_logger = logging.getLogger("gaia.security.audit")
 
+
+def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
+    """Attach the rotating audit-log handler once, creating the file if needed.
+
+    Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit log cannot
+    grow unbounded on a developer's machine over months of use. Total cap:
+    ~40 MB of audit history.
+    """
+    if audit_logger.handlers:
+        return
+
+    from logging.handlers import RotatingFileHandler
+
+    cache_dir = cache_dir or (Path.home() / ".gaia" / "cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        str(cache_dir / "file_audit.log"),
+        maxBytes=10 * 1024 * 1024,  # 10 MB per file
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    audit_logger.addHandler(handler)
+    audit_logger.setLevel(logging.INFO)
+
+
+def audit_shell_command(
+    command: str, cwd: str, segments: List[List[str]], mode: str
+) -> None:
+    """Record a shell command the agent executed, with its full arguments.
+
+    Called on the bypass path, where the confirmation prompt is skipped: consent
+    was granted in advance, which is exactly when this record is the only
+    evidence of what the agent actually ran. Every pipeline/sequence segment is
+    listed separately, so ``a && b`` is two auditable invocations rather than
+    one opaque string.
+
+    Arguments are recorded verbatim, so a secret passed on a command line lands
+    in ``~/.gaia/cache/file_audit.log``. That is the trade the audit trail
+    makes; treat the file as sensitive.
+    """
+    ensure_audit_log_handler()
+    audit_logger.info(
+        "SHELL | %s | cwd=%s | %s | segments=%s",
+        mode,
+        cwd,
+        command,
+        json.dumps(segments),
+    )
+
+
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
 
@@ -271,27 +322,8 @@ class PathValidator:
         self._load_persisted_paths()
 
     def _setup_audit_logging(self):
-        """Configure audit logging to file for write operations.
-
-        Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit
-        log cannot grow unbounded on a developer's machine over months
-        of use.  Total cap: ~40 MB of audit history.
-        """
-        from logging.handlers import RotatingFileHandler
-
-        audit_log_file = self.cache_dir / "file_audit.log"
-        if not audit_logger.handlers:
-            handler = RotatingFileHandler(
-                str(audit_log_file),
-                maxBytes=10 * 1024 * 1024,  # 10 MB per file
-                backupCount=3,
-                encoding="utf-8",
-            )
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-            )
-            audit_logger.addHandler(handler)
-            audit_logger.setLevel(logging.INFO)
+        """Configure audit logging to file for write operations."""
+        ensure_audit_log_handler(self.cache_dir)
 
     def _load_persisted_paths(self):
         """Load allowed paths from cache file."""
