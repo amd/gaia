@@ -19,6 +19,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 **Key Features:**
 - Whitelist-based command security (only safe, read-only commands)
+- One persistent shell session per agent — cwd and environment survive between calls
 - Dual-tier rate limiting (burst + sustained)
 - Path traversal prevention with argument validation
 - Git read-only operations support
@@ -41,21 +42,28 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
    - Blacklist dangerous commands (rm, chmod, sudo, etc.)
    - Git read-only subcommands only
    - Working directory support
-   - Timeout protection (default: 30s)
+   - Timeout protection (default: 30s), killing the command's whole process tree
 
-2. **Rate Limiting**
+2. **Persistent Session State**
+   - One session per agent; `cd` and exported variables carry to the next call
+   - `get_shell_state` reports the directory and the changed environment
+   - `set_shell_variable` sets a variable for the rest of the session
+   - `reset_shell_session` returns the session to its starting state
+   - Serialised access; deterministic teardown with no surviving child
+
+3. **Rate Limiting**
    - Max 10 commands per minute (sustained)
    - Max 3 commands per 10 seconds (burst)
    - Clear wait time messaging
    - Timestamp tracking with deque
 
-3. **Path Security**
+4. **Path Security**
    - Validate working directory access
    - Check arguments for path traversal (.., separators)
    - Resolve relative paths to absolute
    - PathValidator integration
 
-4. **Output Management**
+5. **Output Management**
    - Capture stdout and stderr separately
    - Truncate large outputs (max 10,000 chars)
    - Return execution duration
@@ -106,6 +114,9 @@ class ShellToolsMixin:
 
     Tools provided:
     - run_shell_command: Execute safe shell commands with security checks
+    - get_shell_state: Report the session's directory and changed environment
+    - set_shell_variable: Set a variable for the rest of the session
+    - reset_shell_session: Return the session to its starting state
     """
 
     def __init__(self, *args, **kwargs):
@@ -254,6 +265,42 @@ if cmd_base == "git":
             "allowed_git_commands": list(safe_git_commands)
         }
 ```
+
+### Persistent Session
+
+Every command runs in the agent's one `ShellSession`
+([`shell_session.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/shell_session.py)),
+a port of the C++ toolbelt's `gaia::ShellSession`. What persists is the session
+*state*, not a resident child process: each command runs a generated script that
+restores the session's directory and variables, sources the command from its own
+file, then reports the resulting `pwd` and environment to a side file the session
+absorbs. Nothing outlives the call, so there is no child to orphan.
+
+- **Serialised.** One lock per session, taken for the whole command. A call that
+  cannot take it within its own timeout returns a "session busy" error rather
+  than blocking — a command that outran its tool timeout is still inside the
+  subprocess, and waiting on it forever would wedge the agent.
+- **Timeouts kill the tree.** POSIX kills the process group; Windows uses
+  `taskkill /T`. A timed-out build does not leave its compilers running.
+- **`cd` obeys the path policy.** A directory the agent may not access is not
+  absorbed, and the result carries a warning saying so. Otherwise persistence
+  would be a way to reach a forbidden directory and then read files by bare
+  name, which the per-argument check never sees.
+- **Granted binaries still run as argv.** A skill-granted CLI is never handed to
+  a shell as a string; it gets the session's directory and environment, but its
+  arguments cannot act.
+- **`working_directory` is unchanged.** An explicit per-call directory scopes
+  that call only; the session stays where it was.
+
+On Windows commands run as a `cmd.exe` batch script, so `%VAR%` expands as it
+would at a prompt and a `for` variable is written `%%i`. Point `GAIA_SHELL` at a
+POSIX shell (Git Bash, MSYS, WSL) to run shell scripts instead.
+
+Shell state that is not a directory or a variable — aliases, functions, shell
+options — is not carried. The read-only whitelist has no `export`, so
+`set_shell_variable` is how a variable gets set; it refuses `PATH`,
+`PYTHONPATH`, `LD_*` and the rest of the names that decide which binary or which
+code a later command runs.
 
 ### Path Traversal Prevention
 
