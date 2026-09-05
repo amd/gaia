@@ -1289,25 +1289,52 @@ def _captured_shell_tool(host):
     return captured["run_shell_command"]
 
 
-def _run_capturing_subprocess(host, command):
-    """Run *command* through the tool, intercepting the subprocess call."""
-    import subprocess as subprocess_module
+class _FakeChild:
+    """Stands in for the spawned process, recording the argv it was given."""
 
-    import gaia.agents.tools.shell_tools as shell_module
+    def __init__(self, args):
+        self.args = args
+        self.returncode = 0
+        self.pid = -1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def communicate(self, timeout=None):  # noqa: ARG002 - signature match
+        return "", ""
+
+    def poll(self):
+        return 0
+
+
+def _run_capturing_subprocess(host, command):
+    """Run *command* through the tool, intercepting the spawned child.
+
+    ``ran_directly`` is True when the binary itself was executed, False when the
+    tool handed the command to a shell as a generated script — the distinction
+    the grant path depends on.
+    """
+    import gaia.agents.tools.shell_session as session_module
 
     seen = {}
-    real_run = shell_module.subprocess.run
+    real_popen = session_module.subprocess.Popen
 
-    def fake_run(args, **kwargs):
+    def fake_popen(args, **kwargs):
         seen["args"] = args
-        seen["shell"] = kwargs.get("shell", False)
-        return subprocess_module.CompletedProcess(args, 0, "", "")
+        first = os.path.basename(str(args[0])).lower()
+        seen["ran_directly"] = not (
+            first.startswith(("cmd", "sh", "bash", "dash")) and first != "sh.py"
+        )
+        return _FakeChild(args)
 
-    shell_module.subprocess.run = fake_run
+    session_module.subprocess.Popen = fake_popen
     try:
         _captured_shell_tool(host)(command=command)
     finally:
-        shell_module.subprocess.run = real_run
+        session_module.subprocess.Popen = real_popen
     return seen
 
 
@@ -1315,7 +1342,7 @@ def test_a_granted_cli_is_handed_argv_not_a_shell_string():
     call = _run_capturing_subprocess(
         _Gated("gh"), "gh issue list --search x|echo pwned"
     )
-    assert call["shell"] is False, "a granted CLI must not go through cmd.exe"
+    assert call["ran_directly"] is True, "a granted CLI must not go through a shell"
     assert isinstance(call["args"], list)
     # The metacharacter stays inside one argument instead of becoming a pipe.
     assert "x|echo" in call["args"], call["args"]
@@ -1326,22 +1353,22 @@ def test_an_env_var_in_a_granted_write_reaches_the_process_unexpanded():
     call = _run_capturing_subprocess(
         _Gated("gh"), "gh issue comment 1 --body %GITHUB_TOKEN%"
     )
-    assert call["shell"] is False
+    assert call["ran_directly"] is True
     assert "%GITHUB_TOKEN%" in call["args"]
 
 
 def test_an_ungranted_command_keeps_the_shell_path():
-    """The exemption is for granted CLIs only. `pwd`/`ls` still need cmd.exe on
-    Windows to resolve built-ins, and this change must not touch them."""
+    """The exemption is for granted CLIs only. `pwd`/`ls` still need a shell to
+    resolve built-ins, and this change must not touch them."""
     call = _run_capturing_subprocess(_Gated(), "pwd")
-    assert call["shell"] is (os.name == "nt")
+    assert call["ran_directly"] is False
 
 
 def test_a_pipeline_is_not_run_as_argv():
     """`cmd_parts` has dropped the `|`, so an argv run of a pipeline would
     silently concatenate two commands into one. Only a lone segment qualifies."""
     call = _run_capturing_subprocess(_Gated("gh"), "gh issue list | head -5")
-    assert call["shell"] is (os.name == "nt")
+    assert call["ran_directly"] is False
 
 
 def test_pytest_has_no_write_tier():

@@ -10,11 +10,17 @@ import logging
 import os
 import re
 import shlex
-import subprocess
+import shutil
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
+
+from gaia.agents.tools.shell_session import (
+    ShellSession,
+    ShellSessionBusy,
+    ShellSessionClosed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +204,33 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
 #: only one a ``shell:execute`` grant may exempt from confirmation.
 _POLICY_GATED_SHELL_TOOL = "run_shell_command"
 
+#: Variables that decide which binary or which code a later command actually
+#: runs. Setting one turns the read-only whitelist into a name the agent
+#: controls: `PATH` picked the `ls` that ran, `PYTHONPATH` picked the module a
+#: script imported. The whitelist checks names, not what they resolve to, so
+#: these stay with the parent process.
+_UNSETTABLE_ENV_PREFIXES = ("LD_", "DYLD_")
+_UNSETTABLE_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SHELL",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "NODE_OPTIONS",
+        "PERL5LIB",
+        "RUBYOPT",
+        "GAIA_SHELL",
+    }
+)
+
+_VALID_SHELL_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def skill_granted_binaries(host: Any) -> frozenset:
     """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
@@ -246,6 +279,21 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+def _requote_for_posix(segments: list) -> str:
+    """Rebuild the command from its validated tokens, quoted for POSIX sh.
+
+    A session needs a shell — ``cd`` and ``export`` exist nowhere else — but
+    handing sh the raw string would newly let it expand what the checks above
+    read literally: ``~``, ``$VAR``, ``*``. ``cat ~/../secret`` is one token to
+    the path validator and a different file to the shell. Re-quoting the tokens
+    keeps the pipeline and gives the shell back exactly the argv it had before
+    there was a session.
+    """
+    return " | ".join(
+        " ".join(shlex.quote(token) for token in segment) for segment in segments
+    )
+
+
 def _split_pipeline(cmd_parts: list) -> list:
     """Split a shlex-split command on ``|`` into its non-empty segments."""
     segments: list = []
@@ -268,6 +316,12 @@ class ShellToolsMixin:
 
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
+    - get_shell_state: Read the session's directory and changed environment
+    - reset_shell_session: Return the session to the state it started in
+
+    Commands share one :class:`ShellSession` per agent, so a directory change or
+    an exported variable is still there on the next call. Access is serialised;
+    validation is unchanged and still applies per command.
 
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
@@ -282,6 +336,56 @@ class ShellToolsMixin:
         self.shell_command_times = deque(maxlen=100)  # Track last 100 command times
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
+
+        # Created on first use: an agent that never runs a command should not
+        # pay for a temp directory.
+        self._shell_session: Optional[ShellSession] = None
+
+    def _session_cwd_guard(self) -> Optional[Callable[[str], bool]]:
+        """The predicate the session asks before following a ``cd``.
+
+        Without it, persistence would be a way around the path policy: ``cd`` to
+        a forbidden directory, then read a file by bare name, and the per-argument
+        check never sees a path to reject.
+        """
+        validator = getattr(self, "path_validator", None)
+        if validator is not None:
+            guard: Callable[[str], bool] = validator.is_path_allowed
+            return guard
+        checker: Optional[Callable[[str], bool]] = getattr(
+            self, "_is_path_allowed", None
+        )
+        return checker
+
+    @property
+    def shell_session(self) -> ShellSession:
+        """This agent's shell session, created on first use."""
+        session = getattr(self, "_shell_session", None)
+        if session is None or session.closed:
+            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            self._shell_session = session
+        return session
+
+    def reset_shell_session(self) -> ShellSession:
+        """Replace the session with a clean one and return it.
+
+        Replaced rather than reset in place, so this also recovers a session
+        wedged by a command that outlived its tool timeout (#2600): the new
+        session has its own lock, and the old one is closed as soon as the
+        straggler lets go of it.
+        """
+        previous = getattr(self, "_shell_session", None)
+        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        if previous is not None:
+            previous.close()
+        return self._shell_session
+
+    def close_shell_session(self) -> None:
+        """Tear the session down at task end. Safe to call more than once."""
+        session = getattr(self, "_shell_session", None)
+        if session is not None:
+            session.close()
+            self._shell_session = None
 
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its segments.
@@ -829,9 +933,14 @@ class ShellToolsMixin:
                                 "has_errors": True,
                             }
 
-                    cwd = str(Path(working_directory).resolve())
+                    session_cwd_override = str(Path(working_directory).resolve())
+                    cwd = session_cwd_override
                 else:
-                    cwd = str(Path.cwd())
+                    # The session's directory, not the process's: a `cd` from an
+                    # earlier call is where this command actually runs, so it is
+                    # also what relative arguments must be checked against.
+                    session_cwd_override = None
+                    cwd = self.shell_session.cwd
 
                 # Operators, syntax, and the per-command whitelist. Shared with
                 # the pre-flight that runs before the confirmation prompt, so a
@@ -922,22 +1031,16 @@ class ShellToolsMixin:
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
 
-                # On Windows, many commands are shell built-ins (dir, cd, type,
-                # echo) and Unix commands (ls, pwd, cat) don't exist as .exe
-                # files.  Since we have already validated the command against the
-                # whitelist, we use shell=True on Windows so cmd.exe can resolve
-                # both built-ins and commands on PATH (including those from Git
-                # for Windows which provides ls, cat, grep, etc.).
-                #
-                # A skill-granted CLI is the exception, and must stay one. It is
-                # a real executable — it needs no built-in resolution — and it
-                # is the one path that can run without a confirmation prompt, on
-                # arguments built from untrusted remote text (an issue body the
-                # model just read). Handing cmd.exe the raw STRING there would
-                # let that text act: `--search "x|whoami"` is one argv token to
-                # every check above and two commands to cmd.exe, and `%VAR%`
-                # expands into a value the approval prompt never showed. argv
-                # goes to the process verbatim, so neither is possible.
+                # A skill-granted CLI runs as argv, never as a command string,
+                # and must keep doing so. It is a real executable — it needs no
+                # built-in resolution — and it is the one path that can run
+                # without a confirmation prompt, on arguments built from
+                # untrusted remote text (an issue body the model just read).
+                # Handing a shell the raw STRING there would let that text act:
+                # `--search "x|whoami"` is one argv token to every check above
+                # and two commands to a shell, and `%VAR%` expands into a value
+                # the approval prompt never showed. argv goes to the process
+                # verbatim, so neither is possible.
                 # One segment only: a pipeline needs a shell to be a pipeline,
                 # and `cmd_parts` has already dropped the `|` tokens, so an argv
                 # run of one would silently concatenate the two commands.
@@ -946,19 +1049,18 @@ class ShellToolsMixin:
                     and bool(granted)
                     and _is_granted_binary(segments[0][0], granted)
                 )
-                use_shell = os.name == "nt" and not lone_granted_segment
 
-                # Build the command string for execution
-                # On Windows with shell=True, use the ORIGINAL command string
-                # to preserve quoting (critical for PowerShell pipe commands)
-                exec_cmd = cmd_parts  # Default: list for subprocess
+                session = self.shell_session
+                if session.posix_script:
+                    exec_command = _requote_for_posix(segments)
+                else:
+                    # cmd.exe gets the ORIGINAL string: its quoting rules are not
+                    # shlex's, and re-quoting a PowerShell -Command body breaks
+                    # it. Unchanged from before the session existed.
+                    exec_command = command
 
-                if use_shell:
-                    # Start with original command to preserve quoting
-                    exec_cmd = command
-
-                    # Map common Unix commands to Windows equivalents
-                    # when Git-for-Windows tools aren't on PATH
+                    # Map Unix names to cmd built-ins when the Git-for-Windows
+                    # tools that provide them aren't on PATH.
                     _UNIX_TO_WIN = {
                         "ls": "dir",
                         "pwd": "cd",
@@ -967,106 +1069,62 @@ class ShellToolsMixin:
                         "cp": "copy",
                         "mv": "move",
                     }
-                    if cmd_base in _UNIX_TO_WIN:
-                        import shutil
+                    if cmd_base in _UNIX_TO_WIN and not shutil.which(cmd_base):
+                        win_cmd = _UNIX_TO_WIN[cmd_base]
+                        logger.info(
+                            f"Mapping Unix command '{cmd_base}' -> Windows '{win_cmd}'"
+                        )
+                        exec_command = win_cmd + command[len(cmd_base) :]
 
-                        if not shutil.which(cmd_base):
-                            win_cmd = _UNIX_TO_WIN[cmd_base]
-                            logger.info(
-                                f"Mapping Unix command '{cmd_base}' -> Windows '{win_cmd}'"
-                            )
-                            # Replace just the command name in the original string
-                            exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
-
-                # Execute command
-                #
-                # encoding/errors are explicit, and load-bearing. Bare
-                # ``text=True`` decodes with the locale codec — cp1252 on a
-                # default Windows box — and subprocess does that decode inside
-                # its pipe reader THREAD. A byte that codec cannot map raises
-                # UnicodeDecodeError in that thread, which dies, and
-                # subprocess.run then returns returncode 0 with EMPTY stdout.
-                # The command succeeded and its output was silently discarded.
-                #
-                # That is not an edge case: `gh issue list` on amd/gaia returns
-                # an issue title containing "⚠️", so GitHub triage got back
-                # nothing and the model reported an empty backlog it had never
-                # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
-                # hits it. errors="replace" keeps a stray undecodable byte from
-                # costing the whole output.
-                start_time = time.monotonic()
                 try:
-                    result = subprocess.run(
-                        exec_cmd,
-                        cwd=cwd,
-                        capture_output=True,
-                        # stdin is DEVNULL, never inherited. capture_output
-                        # redirects stdout/stderr but leaves stdin alone, and
-                        # this process's stdin is the agent transport's pipe —
-                        # held open by the TUI and never written to. A child
-                        # that reads it (directly, or by probing whether it is
-                        # interactive) blocks forever on input that cannot
-                        # arrive, because there is no human on that pipe.
-                        #
-                        # The hang was not theoretical: `gh` spawned from the
-                        # agent never exited, while the identical command took
-                        # 0.07s from a shell. Worse, subprocess.run's own
-                        # timeout does not save it — on expiry it kills the
-                        # cmd.exe it launched, then calls communicate() again
-                        # with NO timeout, which waits on pipes the surviving
-                        # grandchild still holds. That is the 180s tool timeout
-                        # and the orphaned gh.exe left behind by every attempt.
-                        #
-                        # DEVNULL gives an immediate EOF, which is the honest
-                        # answer here: an agent's shell command is
-                        # non-interactive by construction.
-                        stdin=subprocess.DEVNULL,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=timeout,
-                        check=False,
-                        env=os.environ.copy(),
-                        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
-                    )
-                    duration = time.monotonic() - start_time
-
-                    # Record successful command execution for rate limiting
-                    self._record_command_execution()
-                except subprocess.TimeoutExpired as exc:
-                    duration = time.monotonic() - start_time
-
-                    # Handle timeout gracefully
-                    stdout_str = ""
-                    stderr_str = ""
-                    if exc.stdout:
-                        stdout_str = (
-                            exc.stdout
-                            if isinstance(exc.stdout, str)
-                            else exc.stdout.decode("utf-8", errors="replace")
+                    if lone_granted_segment:
+                        result = session.run_argv(
+                            cmd_parts,
+                            timeout=timeout,
+                            working_directory=session_cwd_override,
                         )
-                    if exc.stderr:
-                        stderr_str = (
-                            exc.stderr
-                            if isinstance(exc.stderr, str)
-                            else exc.stderr.decode("utf-8", errors="replace")
+                    else:
+                        result = session.run(
+                            exec_command,
+                            timeout=timeout,
+                            working_directory=session_cwd_override,
                         )
+                except ShellSessionBusy as exc:
+                    return {
+                        "status": "error",
+                        "error": str(exc),
+                        "command": command,
+                        "has_errors": True,
+                        "session_busy": True,
+                        "hint": "Call reset_shell_session to abandon the stuck command and start clean.",
+                    }
+                except ShellSessionClosed as exc:
+                    return {
+                        "status": "error",
+                        "error": str(exc),
+                        "command": command,
+                        "has_errors": True,
+                    }
 
+                if result.timed_out:
                     return {
                         "status": "error",
                         "error": f"Command timed out after {timeout} seconds",
                         "command": command,
-                        "stdout": stdout_str,
-                        "stderr": stderr_str,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
                         "has_errors": True,
                         "timed_out": True,
                         "timeout": timeout,
-                        "duration_seconds": duration,
-                        "cwd": cwd,
+                        "duration_seconds": result.duration_seconds,
+                        "cwd": result.cwd,
                     }
 
+                self._record_command_execution()
+
                 # Capture and truncate output if too long
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
+                stdout = result.stdout
+                stderr = result.stderr
                 truncated = False
                 max_output = 10_000
 
@@ -1081,22 +1139,106 @@ class ShellToolsMixin:
                 # Debug logging
                 if hasattr(self, "debug") and self.debug:
                     logger.info(
-                        f"Command completed in {duration:.2f}s with return code {result.returncode}"
+                        f"Command completed in {result.duration_seconds:.2f}s "
+                        f"with return code {result.return_code}"
                     )
 
-                return {
+                response = {
                     "status": "success",
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "return_code": result.returncode,
-                    "has_errors": result.returncode != 0,
-                    "duration_seconds": duration,
+                    "return_code": result.return_code,
+                    "has_errors": result.return_code != 0,
+                    "duration_seconds": result.duration_seconds,
                     "timeout": timeout,
-                    "cwd": cwd,
+                    "cwd": result.cwd,
+                    "session_cwd": session.cwd,
                     "output_truncated": truncated,
                 }
+                if result.cwd_change_rejected:
+                    response["warning"] = result.cwd_change_rejected
+                return response
 
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
+
+        @tool(
+            atomic=True,
+            display_label="Shell state",
+        )
+        def get_shell_state() -> Dict[str, Any]:
+            """Report the shell session's current directory and changed environment.
+
+            Shell commands share one session, so a `cd` or an exported variable
+            from an earlier command is still in effect. Call this to read that
+            state instead of guessing it.
+            """
+            session = self.shell_session
+            return {
+                "status": "success",
+                "cwd": session.cwd,
+                "environment": session.environment(),
+                "removed_environment": session.removed_environment(),
+                "interpreter": "posix-shell" if session.posix_script else "cmd.exe",
+                "has_errors": False,
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Set shell variable",
+        )
+        def set_shell_variable(name: str, value: str) -> Dict[str, Any]:
+            """Set an environment variable for every later command this turn.
+
+            The shell's own `export` is not on the read-only command whitelist,
+            so this is how a variable gets set. Variables that decide which
+            binary or which code runs next — PATH, PYTHONPATH, LD_* and the
+            like — are refused.
+            """
+            upper = name.strip().upper()
+            if not _VALID_SHELL_VAR_NAME.match(name.strip()):
+                return {
+                    "status": "error",
+                    "error": f"'{name}' is not a valid environment variable name.",
+                    "has_errors": True,
+                    "hint": "Use letters, digits and underscores, starting with a letter or underscore.",
+                }
+            if upper in _UNSETTABLE_ENV_NAMES or upper.startswith(
+                _UNSETTABLE_ENV_PREFIXES
+            ):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{name}' decides which binary or which code a later command "
+                        "runs, so it cannot be set from here."
+                    ),
+                    "has_errors": True,
+                    "hint": "Pass the value on the command line instead, or use an absolute path.",
+                }
+            self.shell_session.set_env(name.strip(), value)
+            return {
+                "status": "success",
+                "message": f"{name.strip()} is set for the rest of this session.",
+                "has_errors": False,
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Reset shell",
+        )
+        def reset_shell_session() -> Dict[str, Any]:
+            """Return the shell session to the directory and environment it started in.
+
+            Use this when the session is in a bad state — a wrong directory, a
+            variable that should not be set, or a command that hung and left the
+            session busy.
+            """
+            session = self.reset_shell_session()
+            return {
+                "status": "success",
+                "message": "Shell session reset.",
+                "cwd": session.cwd,
+                "has_errors": False,
+            }
