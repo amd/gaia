@@ -23,7 +23,85 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Tuple
+
+#: CLI tools whose presence also implies a desktop application is installed.
+#: Feeds the "Installed applications" fact; labels match the per-platform
+#: probes above it so the two never emit the same app twice.
+CLI_TOOL_PROBES: Dict[str, str] = {
+    "git": "git",
+    "code": "VS Code",
+    "cursor": "Cursor",
+    "node": "Node.js",
+    "docker": "Docker",
+    "brew": "Homebrew",
+    "npm": "npm",
+}
+
+#: Developer toolchain binaries — the build, package and VCS commands an agent
+#: reaches for while working inside a project. Closed list: a name absent here
+#: is simply never reported, and adding one is a one-line change.
+#:
+#: This is the *extension* over ``CLI_TOOL_PROBES``, which only covers the seven
+#: commands that double as desktop-app markers. Knowing ``uv`` is present but
+#: ``cargo`` is not is what stops an agent spending a round trip on
+#: "command not found".
+DEV_TOOL_PROBES: Tuple[str, ...] = (
+    "bash",
+    "cargo",
+    "cmake",
+    "curl",
+    "docker",
+    "dotnet",
+    "gcc",
+    "gh",
+    "git",
+    "go",
+    "gradle",
+    "java",
+    "make",
+    "mvn",
+    "node",
+    "npm",
+    "npx",
+    "pip",
+    "pnpm",
+    "poetry",
+    "powershell",
+    "python",
+    "python3",
+    "rg",
+    "ruby",
+    "rustc",
+    "tsc",
+    "uv",
+    "yarn",
+)
+
+#: ``(PATH value, binary name) -> present``. ``shutil.which`` walks the whole
+#: PATH per call, and the project map probes ~80 names; keying on PATH means a
+#: shell that prepends a venv still invalidates the answer.
+_BINARY_CACHE: Dict[Tuple[str, str], bool] = {}
+
+
+def probe_binaries(names: Iterable[str]) -> Dict[str, bool]:
+    """Presence on PATH of each binary in *names*.
+
+    The single binary probe in the codebase — ``collect_system_info`` and the
+    project map both go through it, so "is X installed" has one answer and one
+    cache rather than drifting per caller.
+    """
+    path_env = os.environ.get("PATH", "")
+    result: Dict[str, bool] = {}
+    for name in names:
+        key = (path_env, name)
+        if key not in _BINARY_CACHE:
+            try:
+                _BINARY_CACHE[key] = shutil.which(name) is not None
+            except Exception:
+                _BINARY_CACHE[key] = False
+        result[name] = _BINARY_CACHE[key]
+    return result
 
 
 def collect_system_info() -> List[Dict[str, str]]:
@@ -342,28 +420,33 @@ def collect_system_info() -> List[Dict[str, str]]:
                 except Exception:
                     pass
 
-        # Cross-platform: shutil.which() for CLI tools.
+        # Cross-platform: PATH probe for CLI tools.
         # Use the same display names as the platform checks to avoid duplicates.
-        _cli_tools: dict = {
-            "git": "git",
-            "code": "VS Code",
-            "cursor": "Cursor",
-            "node": "Node.js",
-            "docker": "Docker",
-            "brew": "Homebrew",
-            "npm": "npm",
-        }
-        for cmd, label in _cli_tools.items():
-            try:
-                if shutil.which(cmd) and label not in found_apps:
-                    found_apps.append(label)
-            except Exception:
-                pass
+        present = probe_binaries(CLI_TOOL_PROBES)
+        for cmd, label in CLI_TOOL_PROBES.items():
+            if present.get(cmd) and label not in found_apps:
+                found_apps.append(label)
 
         if found_apps:
             facts.append(
                 {
                     "content": f"Installed applications: {', '.join(found_apps)}",
+                    "domain": "system:software",
+                }
+            )
+    except Exception:
+        pass
+
+    # 11b. Developer toolchain — same probe, wider list. Build/package/VCS
+    # commands are what an agent working inside a project actually invokes.
+    try:
+        dev_present = [n for n, ok in probe_binaries(DEV_TOOL_PROBES).items() if ok]
+        if dev_present:
+            facts.append(
+                {
+                    "content": (
+                        f"Developer tools on PATH: {', '.join(sorted(dev_present))}"
+                    ),
                     "domain": "system:software",
                 }
             )
