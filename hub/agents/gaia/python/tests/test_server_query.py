@@ -198,10 +198,14 @@ def test_the_http_transport_exposes_no_bypass_control():
     route, and must not grow one without revisiting the reasoning above."""
     paths = _all_route_paths(server_mod.build_app())
 
-    # Guard the guard. This assertion is only worth anything if the walk
-    # actually reached the mounted routes — a version bump that changed the
-    # route tree again would otherwise leave it passing on an empty set.
-    assert "/v1/gaia/query" in paths, f"route walk found no API routes: {sorted(paths)}"
+    # Guard the guard: assert the walk reached the mounted API namespace, or a
+    # route-tree change would leave the check below passing on an empty set.
+    # Keyed on the prefix, not one endpoint — which endpoints `build_app` mounts
+    # varies by environment, and pinning a specific one made this fail on CI
+    # while passing locally.
+    assert [
+        p for p in paths if p.startswith("/v1/gaia/")
+    ], f"route walk reached no /v1/gaia/ routes: {sorted(paths)}"
 
     assert not [p for p in paths if "bypass" in p.lower()]
 
