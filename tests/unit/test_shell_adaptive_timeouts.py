@@ -432,6 +432,48 @@ class TestWaitForCondition:
         assert refusal is not None and refusal["status"] == "error"
 
 
+class TestWhatTheModelIsTold:
+    """The table is worthless if the model never sees it.
+
+    The registry takes a tool's description from its ``__doc__`` — the
+    ``description=``/``parameters=`` kwargs on ``@tool`` are swallowed and
+    ignored — and the non-native prompt path renders only the FIRST LINE of it.
+    So the class defaults have to be in that first line, and stay there.
+    """
+
+    def _first_line(self, tool_name):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        _Host().register_shell_tools()
+        return _TOOL_REGISTRY[tool_name]["description"].splitlines()[0]
+
+    def test_the_docstring_states_every_class(self):
+        first_line = self._first_line("run_shell_command")
+
+        for command_class in TIMEOUT_CLASSES.values():
+            assert f"{command_class.seconds}s" in first_line, (
+                f"the {command_class.name} default is not in the one line of "
+                f"run_shell_command the model actually sees"
+            )
+
+    def test_timeout_is_still_declared_as_an_integer(self):
+        """An unreadable annotation is rendered as a string to the model."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        _Host().register_shell_tools()
+
+        for tool_name in ("run_shell_command", "wait_for_condition"):
+            params = _TOOL_REGISTRY[tool_name]["parameters"]
+            assert params["timeout"]["type"] == "integer"
+            assert params["timeout"]["required"] is False
+
+    def test_the_wait_tool_states_its_bounds(self):
+        first_line = self._first_line("wait_for_condition")
+
+        assert str(WAIT_MAX_TIMEOUT) in first_line
+        assert str(WAIT_MIN_POLL_INTERVAL) in first_line
+
+
 def test_the_tool_guard_outlasts_the_longest_command(monkeypatch):
     """The agent-level tool timeout must not fire before the command's own.
 
