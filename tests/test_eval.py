@@ -1020,14 +1020,14 @@ class TestRunScenarioSubprocess:
             "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
         }
 
-    def _run(self, mocker, stdout, returncode=0):
+    def _run(self, mocker, stdout, returncode=0, stderr=""):
         import tempfile
 
         from gaia.eval.runner import run_scenario_subprocess
 
         mock_proc = mocker.MagicMock()
         mock_proc.stdout = stdout
-        mock_proc.stderr = ""
+        mock_proc.stderr = stderr
         mock_proc.returncode = returncode
         mocker.patch("subprocess.run", return_value=mock_proc)
 
@@ -1073,6 +1073,31 @@ class TestRunScenarioSubprocess:
         result = self._run(mocker, "", returncode=1)
         assert result["status"] == "ERRORED"
         assert result["overall_score"] is None
+
+    def test_nonzero_exit_captures_stdout(self, mocker):
+        """`--output-format json` puts the CLI's error on stdout, not stderr.
+
+        Regression guard for the CI signature where every scenario ERRORED with
+        an empty `error` field, making the failure impossible to triage.
+        """
+        result = self._run(
+            mocker,
+            '{"type":"result","subtype":"error_during_execution"}',
+            returncode=1,
+        )
+        assert result["status"] == "ERRORED"
+        assert "error_during_execution" in result["error"]
+
+    def test_nonzero_exit_captures_both_streams(self, mocker):
+        result = self._run(mocker, "on-stdout", returncode=1, stderr="on-stderr")
+        assert "on-stderr" in result["error"]
+        assert "on-stdout" in result["error"]
+
+    def test_nonzero_exit_error_never_empty(self, mocker):
+        """A silent exit must still say something — an empty string explains nothing."""
+        result = self._run(mocker, "", returncode=3, stderr="")
+        assert result["error"].strip()
+        assert "exit 3" in result["error"]
 
     def test_missing_status_field_defaulted(self, mocker):
         """Eval agent returning JSON without 'status' should be defaulted to ERRORED."""
