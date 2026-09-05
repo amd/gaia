@@ -39,6 +39,10 @@ from typing import (
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import (
+    build_verification_scope,
+    verification_check_label,
+)
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -745,6 +749,8 @@ Do NOT wrap conversational replies in JSON.
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn (#2899).
         self._tool_reported_usage: List[Dict[str, Any]] = []
+        # Same rationale for the verification-scope log (#3376).
+        self._turn_tool_executions: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3328,7 +3334,9 @@ Do NOT wrap conversational replies in JSON.
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
         if recorder is None or getattr(self, "_tool_timing_depth", 0):
-            return self._execute_tool(tool_name, tool_args)
+            result = self._execute_tool(tool_name, tool_args)
+            self._note_verification_signal(tool_name, tool_args, result)
+            return result
 
         started = time.perf_counter()
         # Default False, set only on a clean return: a tool that RAISES must not
@@ -3339,6 +3347,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
+            self._note_verification_signal(tool_name, tool_args, result)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -4439,6 +4448,41 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
+    def _note_verification_signal(
+        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+    ) -> None:
+        """Record one executed tool call for this turn's verification scope.
+
+        Called from the single execution seam so every loop path — legacy,
+        native tool-calling, and the forced-call branch — is covered.
+        """
+        log = getattr(self, "_turn_tool_executions", None)
+        if log is None:
+            return
+        log.append(
+            {
+                "tool": tool_name,
+                "check_label": verification_check_label(tool_name, tool_args),
+                "failed": self._is_error_result(result),
+            }
+        )
+
+    def verification_scope_statement(self) -> str:
+        """This turn's bounded verified / partially verified / unverified line."""
+        return build_verification_scope(
+            getattr(self, "_turn_tool_executions", None) or []
+        )
+
+    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
+        """Append the scope statement to a non-empty answer (#3376).
+
+        Empty stays empty — a blank answer is a signal downstream (cancelled
+        turns skip persistence), and a scope line would make it non-blank.
+        """
+        if not answer or not answer.strip():
+            return answer
+        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+
     def process_query(
         self,
         user_input: str,
@@ -4556,6 +4600,12 @@ Do NOT wrap conversational replies in JSON.
         # reset per-turn since an Agent instance persists across queries in
         # an interactive session.
         self._tool_reported_usage: List[Dict[str, Any]] = []
+        # Executed tool calls this turn, classified for the verification-scope
+        # statement (#3376). Per-turn: an instance persists across queries.
+        self._turn_tool_executions: List[Dict[str, Any]] = []
+        # True once the emitted answer carries its scope line, so the post-loop
+        # catch-all below never appends a second one.
+        verification_scope_applied = False
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -6428,7 +6478,12 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
-                final_answer = self.finalize_answer(answer_candidate, conversation)
+                # Scope line goes on AFTER the subclass hook: a subclass that
+                # rewrites the answer must not be able to drop it (#3376).
+                final_answer = self._with_verification_scope(
+                    self.finalize_answer(answer_candidate, conversation)
+                )
+                verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
                 # can ride the same event, instead of the post-loop aggregation
@@ -6524,6 +6579,16 @@ Do NOT wrap conversational replies in JSON.
             conversation, self._tool_reported_usage
         )
 
+        # Every exit other than the parsed-answer seam sets ``final_answer``
+        # directly — cancel-event timeout, LLM connection error, context
+        # overflow, typed Lemonade error, parse give-up, loop-break summary —
+        # or leaves it None for the max-steps message below. Those are
+        # disproportionately the runs that went wrong, so they need the scope
+        # line most (#3376). The console-cancellation path returns above with a
+        # deliberately empty result and is excluded (#3386).
+        if not verification_scope_applied:
+            final_answer = self._with_verification_scope(final_answer)
+
         # Return the result
         has_errors = len(self.error_history) > 0
         has_valid_answer = (
@@ -6538,8 +6603,10 @@ Do NOT wrap conversational replies in JSON.
             "result": (
                 final_answer
                 if final_answer
-                else self._generate_max_steps_message(
-                    conversation, steps_taken, steps_limit
+                else self._with_verification_scope(
+                    self._generate_max_steps_message(
+                        conversation, steps_taken, steps_limit
+                    )
                 )
             ),
             "system_prompt": self.system_prompt,  # Include system prompt in the result
