@@ -90,8 +90,15 @@ _VOLATILE_ENV_NAMES = frozenset(
         "SHELLOPTS",
         "BASH_VERSION",
         "BASH_SUBSHELL",
+        "AWKLIBPATH",
     }
 )
+
+#: Families a shell or its rc files own outright. Matching by prefix rather
+#: than by name because the exact set is platform- and distro-specific —
+#: gawk alone contributes AWKPATH and AWKLIBPATH, and enumerating them one
+#: CI failure at a time is a losing game.
+_VOLATILE_ENV_PREFIXES = ("BASH_", "AWK", "ZSH_", "_GAIA_")
 
 _VALID_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -156,6 +163,11 @@ class _State:
 
 def _is_valid_env_name(name: str) -> bool:
     return bool(_VALID_ENV_NAME.match(name))
+
+
+def _is_shell_owned(key: str) -> bool:
+    """True for variables the shell maintains, not the agent."""
+    return key in _VOLATILE_ENV_NAMES or key.startswith(_VOLATILE_ENV_PREFIXES)
 
 
 def _posix_quote(value: str) -> str:
@@ -611,21 +623,22 @@ class ShellSession:
         if not captured:
             return rejected
 
-        overrides: Dict[str, str] = {}
-        unset = set()
         # Only replayable names participate: `ProgramFiles(x86)` is a real
         # Windows variable but no `set NAME=` / `export NAME` can name it.
         captured_keys = {
             _env_key(name) for name in captured if _is_valid_env_name(name)
         }
+
+        overrides: Dict[str, str] = {}
+        unset = set()
         for name, value in captured.items():
             key = _env_key(name)
-            if key in _VOLATILE_ENV_NAMES or not _is_valid_env_name(name):
+            if _is_shell_owned(key) or not _is_valid_env_name(name):
                 continue
             if self._baseline_env.get(key) != value:
                 overrides[name] = value
         for key in self._baseline_env:
-            if key in _VOLATILE_ENV_NAMES or not _is_valid_env_name(key):
+            if _is_shell_owned(key) or not _is_valid_env_name(key):
                 continue
             if key not in captured_keys:
                 unset.add(key)
