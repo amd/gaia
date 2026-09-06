@@ -166,10 +166,6 @@ contract version is tracked separately as
 
 ### Fixed
 
-- move_to_label_batch now restores messages to the inbox when its target is
-  INBOX (#2626). Batch moves used to add the inbox label and then archive
-  each message again, reporting success while leaving every message outside
-  the inbox.
 - **A reply/draft/send action could report failure even though it actually
   succeeded, and a retry made things worse (#2902).** After a draft was
   created or a message sent, a separate local audit-log write (`state.db`,
@@ -449,10 +445,6 @@ contract version is tracked separately as
 
 ### Fixed
 
-- move_to_label_batch now restores messages to the inbox when its target is
-  INBOX (#2626). Batch moves used to add the inbox label and then archive
-  each message again, reporting success while leaving every message outside
-  the inbox.
 - **A Gmail rate-limit no longer kills the whole scan (#2720, #2716).** Gmail
   enforces a per-user concurrent-request limit, and the metadata-first batch
   fetch (#2643) was oversized enough to reliably trip it — one 429'd
@@ -835,10 +827,6 @@ contract version is tracked separately as
 
 ### Fixed
 
-- move_to_label_batch now restores messages to the inbox when its target is
-  INBOX (#2626). Batch moves used to add the inbox label and then archive
-  each message again, reporting success while leaving every message outside
-  the inbox.
 - **A batch-tool retry no longer gets killed mid-recovery by the streaming
   layer (#2515).** When the model called a batch tool with a spurious extra
   argument (e.g. `archive_message_batch` with a stray `mailbox` kwarg), the
