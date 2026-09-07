@@ -208,6 +208,12 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Spawns a PowerShell child on Windows to render the notification, so it
+    # belongs with the other process-spawning tools rather than with the
+    # read-only ones. Gated on every platform on purpose: this set is keyed on
+    # tool name, not host, and a platform-conditional entry would silently stop
+    # applying the day a non-Windows backend (plyer) becomes reachable.
+    "notify_desktop",
 }
 
 
