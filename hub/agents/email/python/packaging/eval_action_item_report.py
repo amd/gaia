@@ -7,7 +7,7 @@ Precision / recall / F1 of the agent's extracted action items vs a hand-labeled
 corpus (``tests/fixtures/email/action_items_ground_truth.json``, hard negatives
 included). Generation drives the REAL triage path over a FakeGmailBackend
 (Lemonade — nothing is ever sent). The Claude equivalence judge resolves
-borderline description pairs and is REQUIRED: ``ANTHROPIC_API_KEY`` MUST be
+borderline description pairs and is REQUIRED: a judge credential MUST be
 present, and if the judge cannot run this FAILS LOUDLY. There is NO fallback to
 fuzzy-only matching — a missing or broken judge is an error, never a silent
 degradation to a weaker scorer (CLAUDE.md: No Silent Fallbacks — Fail Loudly).
@@ -19,8 +19,9 @@ no thresholds inlined here. Flip ``enforce`` in the manifest (data, not code) to
 make this gate block once a baseline confirms the bars.
 
 Config comes from the environment (shell-agnostic):
-  EMAIL_EVAL_MODEL   Lemonade model id (required)
-  ANTHROPIC_API_KEY  Claude judge credential (REQUIRED; absence -> loud failure)
+  EMAIL_EVAL_MODEL         Lemonade model id (required)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, preferred (driven via the `claude` CLI)
+  ANTHROPIC_API_KEY        Judge credential, fallback (neither set -> loud failure)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -39,6 +40,10 @@ from gaia.eval.action_item_quality import (
     make_claude_judge,
     score_generations,
     summarize_extraction,
+)
+from gaia.eval.judge_client import (
+    MISSING_CREDENTIAL_ERROR,
+    judge_credential_present,
 )
 
 CORPUS_PATH = "tests/fixtures/email/action_items_ground_truth.json"
@@ -61,12 +66,12 @@ def main() -> int:
     # credential is absent we FAIL LOUDLY here rather than silently scoring with
     # a weaker matcher (CLAUDE.md: No Silent Fallbacks). A judge that errors
     # mid-run also propagates and fails the step.
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not judge_credential_present():
         print(
-            "[EXTRACT-EVAL] ERROR: ANTHROPIC_API_KEY is not set. The "
-            "action-item extraction eval requires the Claude equivalence "
-            "judge and does NOT fall back to fuzzy-only matching. Set the "
-            "ANTHROPIC_API_KEY secret on this runner and re-run.",
+            "[EXTRACT-EVAL] ERROR: no Claude judge credential. The action-item "
+            "extraction eval requires the Claude equivalence judge and does NOT "
+            "fall back to fuzzy-only matching.\n"
+            f"{MISSING_CREDENTIAL_ERROR}",
             file=sys.stderr,
         )
         return 1

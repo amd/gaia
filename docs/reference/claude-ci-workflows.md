@@ -65,9 +65,11 @@ tracking issue with fix steps — turning a silent multi-week outage into a noti
 ## Key facts worth knowing
 
 - **Auth:** all jobs prefer a subscription OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) over a billed
-  API key; they fall back to `ANTHROPIC_API_KEY` if the token is missing/expired. (The eval
-  judge in `test_eval_rag.yml` still needs `ANTHROPIC_API_KEY` — OAuth tokens can't
-  authenticate direct API/SDK calls.)
+  API key; they fall back to `ANTHROPIC_API_KEY` if the token is missing/expired. An OAuth token
+  cannot authenticate a direct SDK call, so anything that judges through the Anthropic SDK has
+  to route the token through the `claude` CLI instead — that is what
+  `gaia.eval.judge_client` does for the email evals (drafting / action-item / briefing). A judge
+  still wired straight to the SDK, like `test_eval_rag.yml`, needs `ANTHROPIC_API_KEY`.
 - **Fork safety:** fork-facing jobs run under `pull_request_target` (base-repo permissions).
   Safe because they only *read* code and *post* comments — **never execute PR code** (no
   `pip install` / `npm install` / build). Don't add steps that run checked-out code.
