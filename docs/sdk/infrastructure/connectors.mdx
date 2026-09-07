@@ -61,7 +61,15 @@ async def main():
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
     )
 
+    # A grant cannot exceed what the connector's catalog entry advertises: a
+    # scope outside `available_scopes` raises ScopeNotAllowedError, and an
+    # unknown connector id raises UnknownConnectorError (both subclass
+    # ConnectorsError). Revoking is never gated this way — taking access away
+    # always works, even for a connector that has left the catalog.
+
     # 3. Fetch a short-lived access token (refresh is automatic).
+    #    Always name the scopes you need: a call that names none is refused
+    #    rather than silently skipping the grant check.
     token = await conn.get_access_token(
         provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
@@ -81,6 +89,15 @@ asyncio.run(main())
 | `AGENT_NOT_GRANTED` | This agent has no per-agent scope grant. |
 | `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
 | `REAUTH_REQUIRED` | OAuth client ID was rotated. |
+
+`AGENT_NOT_GRANTED` with `agent_id=None` is a distinct case: the call came from
+inside an agent turn that carries no identity, so no grant could be checked and
+none is assumed. Fix the identity, not the grants — see the warning below.
+
+It also raises `ConfigurationError` when an `agent_id` resolves but `scopes` is
+empty. An empty list satisfies the grant check vacuously, so it would hand back
+a full-capability token with the ledger never consulted; naming nothing is
+refused rather than treated as needing nothing.
 
 ## Forwarded connections (no re-auth)
 
@@ -207,6 +224,11 @@ gaia connectors grants grant google builtin:chat \
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
 
+# `grant` exits 1 if the scope is outside the connector's available_scopes or
+# the connector id is not in the catalog — `gaia connectors list` shows the
+# ids, `gaia connectors list <id>` its scopes. `revoke` is never gated that
+# way: taking access away always works.
+
 # NOTE: the Agent UI grants on connect (#2117): POST
 # /api/connectors/{id}/authorize accepts grant_agents (namespaced agent
 # ids); the router resolves each agent's REQUIRED_CONNECTORS scopes and
@@ -274,6 +296,39 @@ class GmailAgent(Agent):
 The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
+
+<Warning>
+**Credential access fails closed inside an agent turn.** The tool above passes
+no `agent_id`, and that is correct: the agent runtime binds your agent's
+identity to the current context and the credential call reads it from there.
+What changed is what happens when it *cannot* be read while a turn is running —
+the call is now refused with `AuthRequiredError` instead of falling through
+ungated.
+
+That matters when your tool hands work to something that does **not** inherit
+the context — a thread or process you start yourself, a background task queued
+for later, a callback fired from another runtime. Capture the id on the way in
+and pass it explicitly:
+
+```python
+from gaia.connectors import current_agent_id, get_access_token_sync
+
+@tool(description="Fetch in a worker thread")
+def _fetch(self) -> str:
+    agent_id = current_agent_id()          # captured in the tool body
+    def _work():
+        return get_access_token_sync(
+            provider="google",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            agent_id=agent_id,             # carried across the boundary
+        )
+    ...
+```
+
+Outside an agent turn — the CLI, a script, your own SDK embedding — there is no
+identity to resolve and no grant to check, which is the documented escape
+hatch. Pass `agent_id=` explicitly there if you want the grant enforced anyway.
+</Warning>
 
 If instead your agent loads MCP servers dynamically at runtime (from
 `~/.gaia/mcp_servers.json`) rather than declaring specific connectors, set

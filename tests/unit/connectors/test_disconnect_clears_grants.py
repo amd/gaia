@@ -42,30 +42,32 @@ def grants_in_tmp(tmp_path, monkeypatch):
 
 
 def test_revoke_all_grants_for_clears_every_agent(grants_in_tmp):
-    grant_agent("mcp-test", "agent-A", ["use"])
-    grant_agent("mcp-test", "agent-B", ["use"])
-    grant_agent("mcp-other", "agent-A", ["use"])
+    grant_agent("mcp-github", "agent-A", ["use"])
+    grant_agent("mcp-github", "agent-B", ["use"])
+    grant_agent("mcp-git", "agent-A", ["use"])
 
-    revoked = revoke_all_grants_for("mcp-test")
+    revoked = revoke_all_grants_for("mcp-github")
     assert sorted(revoked) == ["agent-A", "agent-B"]
 
-    # mcp-test grants are gone.
-    assert list_agent_grants("mcp-test") == {}
-    # mcp-other is unaffected.
-    assert list_agent_grants("mcp-other") == {"agent-A": ["use"]}
+    # mcp-github grants are gone.
+    assert list_agent_grants("mcp-github") == {}
+    # mcp-git is unaffected.
+    assert list_agent_grants("mcp-git") == {"agent-A": ["use"]}
 
 
 def test_revoke_all_grants_for_unknown_id_is_noop(grants_in_tmp):
-    grant_agent("mcp-test", "agent-A", ["use"])
+    grant_agent("mcp-github", "agent-A", ["use"])
 
     revoked = revoke_all_grants_for("nonexistent")
     assert revoked == []
-    # mcp-test untouched.
-    assert list_agent_grants("mcp-test") == {"agent-A": ["use"]}
+    # mcp-github untouched.
+    assert list_agent_grants("mcp-github") == {"agent-A": ["use"]}
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
+async def test_mcp_server_disconnect_revokes_grants(
+    grants_in_tmp, tmp_path, register_ephemeral_spec
+):
     """
     End-to-end: configure → grant → disconnect → assert grants empty.
     Re-configure with the same id and assert grants are still empty
@@ -94,6 +96,9 @@ async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
             ),
         ),
     )
+    # Published in the catalog for this test: grant_agent resolves the
+    # connector before writing (#915).
+    register_ephemeral_spec(spec)
 
     # Redirect ~/.gaia for the mcp_server module too.
     monkey_home = tmp_path
@@ -123,7 +128,9 @@ async def test_mcp_server_disconnect_revokes_grants(grants_in_tmp, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_oauth_pkce_disconnect_revokes_grants(grants_in_tmp, monkeypatch):
+async def test_oauth_pkce_disconnect_revokes_grants(
+    grants_in_tmp, monkeypatch, register_ephemeral_spec
+):
     """OAuth-pkce disconnect must also wipe grants for the connector_id."""
     from gaia.connectors.oauth_pkce import OAuthPkceHandler
 
@@ -150,8 +157,14 @@ async def test_oauth_pkce_disconnect_revokes_grants(grants_in_tmp, monkeypatch):
         tier=1,
         type="oauth_pkce",
         description="ephemeral",
+        # An OAuth spec's ceiling IS its available_scopes, so it has to
+        # advertise the scope the test grants (#915).
+        available_scopes=("scope.read",),
         oauth_provider_ref="oauth-test",
     )
+    # Published in the catalog for this test: grant_agent resolves the
+    # connector before writing (#915).
+    register_ephemeral_spec(spec)
 
     grant_agent(spec.id, "agent-A", ["scope.read"])
     grant_agent(spec.id, "agent-B", ["scope.read"])
