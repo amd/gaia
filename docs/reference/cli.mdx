@@ -998,7 +998,7 @@ gaia talk -i guide.pdf --no-tts
 </Card>
 
 ```bash
-gaia telegram start --token <BOT_TOKEN> --background
+gaia telegram start --token <BOT_TOKEN> --allowed-users 11111111 --background
 gaia telegram status
 gaia telegram stop
 ```
@@ -1008,7 +1008,7 @@ gaia telegram stop
 | Subcommand | Option | Default | Description |
 |-----------|--------|---------|-------------|
 | `start` | `--token` (required) | – | Telegram bot token. |
-| `start` | `--allowed-users` | allow all | Comma-separated user IDs permitted to interact. |
+| `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
 | `stop` | `--force` | false | Force stop if graceful shutdown fails. |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
