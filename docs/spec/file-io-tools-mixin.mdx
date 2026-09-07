@@ -89,7 +89,8 @@ Edit a Python file by replacing content with validation.
 
 **Parameters:**
 - `file_path` (str, required): Path to the file
-- `old_content` (str, required): Content to find and replace
+- `old_content` (str, required): Content to find and replace. Must match
+  exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to insert
 - `backup` (bool, optional): Create backup (default: True)
 - `dry_run` (bool, optional): Only simulate (default: False)
@@ -181,7 +182,8 @@ Edit any file by replacing content without validation.
 
 **Parameters:**
 - `file_path` (str, required): Path to file
-- `old_content` (str, required): Exact content to find and replace
+- `old_content` (str, required): Exact content to find and replace. Must match
+  exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to replace with
 - `project_dir` (str, optional): Project root for resolving paths
 
@@ -196,6 +198,44 @@ Edit any file by replacing content without validation.
     "diff": str
 }
 ```
+
+### Edit semantics
+
+`edit_file` and `edit_python_file` share one match-and-replace implementation,
+[`gaia.agents.tools.file_edit`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_edit.py),
+so the two cannot drift apart. Three rules:
+
+**`old_content` must match exactly one location.** Matching several is an
+error, not a first-match replacement — picking one edits a region the caller
+never named while reporting success, and the resulting diff looks plausible.
+Extend `old_content` with surrounding lines until it is unique.
+
+**A rejection carries the file's current content**, so the retry does not need
+a separate read.
+
+**An edit against a file that changed since it was read is rejected.** Reads and
+writes record a content hash; a mismatch means the file moved under the agent.
+The rejection hands back the current content and re-anchors, so the corrected
+retry proceeds. A file with no recorded read is not blocked.
+
+**Rejection shape:**
+```python
+{
+    "status": "error",
+    "error": str,           # names the cause and the fix
+    "match_count": int,     # 0 = not found, >1 = ambiguous
+    "match_lines": [int],   # ambiguous only
+    "matches": [dict],      # ambiguous only: line + surrounding context
+    "stale": bool,          # changed-on-disk only
+    "current_content": str, # excerpt around the target region
+    "current_content_start_line": int,
+    "current_content_end_line": int,
+    "current_content_total_lines": int
+}
+```
+
+The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows the same three
+rules, so an agent behaves identically on either tree.
 
 ### 8. replace_function
 
