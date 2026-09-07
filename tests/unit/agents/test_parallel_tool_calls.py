@@ -259,6 +259,30 @@ class TestParallelCallsExecuteAndCorrelate:
         assert {m["tool_call_id"] for m in tool_msgs} == {"id-A", "id-B"}
         assert {m["name"] for m in tool_msgs} == {"tool_a", "tool_b"}
 
+    def test_native_dedup_guidance_follows_tool_result(self, agent):
+        def mark_read(**kwargs):  # pylint: disable=unused-argument
+            return {"status": "success"}
+
+        _register_tool("mark_read", mark_read)
+        first = _native_envelope(("id-1", "mark_read", {"message_id": "same"}))
+        second = _native_envelope(("id-2", "mark_read", {"message_id": "same"}))
+        final = json.dumps({"thought": "done", "answer": "Done."})
+        chat = _stub_chat(agent, first, second, final)
+
+        agent.process_query("mark it read", max_steps=5)
+
+        third_call = chat.send_messages.call_args_list[2]
+        messages = third_call.kwargs.get("messages") or third_call.args[0]
+        assistant_index = max(
+            index
+            for index, message in enumerate(messages)
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        assert messages[assistant_index + 1]["role"] == "tool"
+        assert messages[assistant_index + 1]["tool_call_id"] == "id-2"
+        assert messages[assistant_index + 2]["role"] == "user"
+        assert "[SYSTEM]" in messages[assistant_index + 2]["content"]
+
 
 class TestParallelCallsWithError:
     """Acceptance criterion (b): three parallel calls, one errors —
