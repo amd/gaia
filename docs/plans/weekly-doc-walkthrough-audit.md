@@ -4,8 +4,8 @@ Design record for `.github/workflows/claude-weekly-doc-walkthrough.yml`.
 
 ## Why this matters
 
-`claude-weekly-audit.yml` (see `docs/plans/weekly-claude-audit.md`) is deliberately
-**static** — five read-only Claude lenses that read and grep, never install or run repo
+`claude-nightly-audit.yml` (see `docs/plans/weekly-claude-audit.md`) is deliberately
+**static** — read-only Claude lenses that read and grep, never install or run repo
 code. That non-goal was intentional, but it has a real blind spot: two bugs shipped that
 are only observable by actually running GAIA from a real user's initial state, never by
 reading source.
@@ -31,7 +31,7 @@ this sibling workflow is where execution-based verification now lives.
 
 ## Relationship to the static audit
 
-A **standalone sibling workflow**, not a 6th dimension of `claude-weekly-audit.yml`:
+A **standalone sibling workflow**, not a fifth dimension of `claude-nightly-audit.yml`:
 
 - Different runner (`[self-hosted, Windows, stx]` vs. the static audit's `ubuntu-latest`).
 - Different cost/runtime profile (hours, not minutes — deliberately; see Cadence).
@@ -39,21 +39,28 @@ A **standalone sibling workflow**, not a 6th dimension of `claude-weekly-audit.y
   can hang or time out).
 
 Isolating them means a slow or stuck walkthrough never delays or destabilizes the fast
-static lenses' weekly triage issue. The two workflows share vocabulary — severity scale
-(🔴 high · 🟠 medium · 🟡 low, no green), the `weekly-audit` label, the dedup-key pattern,
-`bug` → auto-fix promotion, `audit-wontfix` permanent suppression — but each files its
-**own** parent triage issue (`Doc walkthrough — <run_id>` vs. `Weekly audit — <mode> —
-<run_id>`), because they are different detection mechanisms surfacing potentially
-different root causes.
+static lenses. The two workflows share vocabulary — severity scale (🔴 high · 🟠 medium ·
+🟡 low, no green), the `weekly-audit` provenance label, the `cluster_key`/`dedup_key`
+scheme, `bug` → auto-fix promotion, `audit-wontfix` permanent suppression — and, since
+2026-09, the same deterministic dedup pass, `scripts/audit/prepare_synthesis.py`.
+
+> **Superseded (2026-09):** each workflow originally filed its **own** parent triage issue
+> (`Doc walkthrough — <run_id>` vs. `Weekly audit — <mode> — <run_id>`). Neither files one
+> now — see Synthesis below. The two are still separate detection mechanisms; they just
+> land their findings in the same shared backlog, deduped against it.
 
 ## Cadence & runtime
 
-Weekly, same day as the static audit but offset (static audit: Monday 06:00 UTC; this
-workflow: Monday 12:00 UTC) so the two don't compete for review attention or runner time
-in the same window. **Deliberately allowed to run for hours** — this is the one weekly
-deep pass, not a per-PR check, and thoroughness is the explicit goal over speed.
-`workflow_dispatch` accepts an optional `doc_filter` glob input so a single guide can be
-re-run in isolation (for validating the workflow itself, or re-checking one finding).
+Weekly, Monday 12:00 UTC. The static siblings went nightly; this one stays weekly on
+purpose because it drives a real Lemonade instance on the self-hosted Windows/STX box for
+hours, so it is hardware-bound rather than token-bound and a nightly cadence would
+monopolise that runner. On a Monday the three run in sequence — security audit 09:13 UTC →
+static audit 10:37 UTC → this at 12:00 UTC — so they never compete for runner time or
+review attention. **Deliberately allowed to run for hours** — this is the one weekly deep
+pass, not a per-PR check, and thoroughness is the explicit goal over speed.
+`workflow_dispatch` accepts an optional `doc_filter` glob so a single guide can be re-run
+in isolation, and a `dry_run` boolean that files and comments nothing while reporting what
+it would have done — the only way to validate a dedup change against the live backlog.
 
 ## Scope
 
@@ -155,6 +162,13 @@ Each matrix entry:
    is a claim, never trusted on its face"), applied here because a single self-judging
    session is exactly the kind of false-negative risk that would quietly erode trust in
    this workflow the way a false positive would.
+
+   > **Superseded:** both passes now run `claude-opus-5` — the repo standardised every
+   > Claude workflow on it, so this is no longer a cost split. What still matters is the
+   > **structural** split: the judge is a fresh context that never sees the executor's
+   > self-assessment. If a cheaper executor is reintroduced, change only
+   > `WALKTHROUGH_EXECUTOR_MODEL` and leave the judge on the stronger model.
+
 4. **Deterministic layer for `cli.mdx` specifically.** In addition to the judge's
    narrative read, the judge is instructed to explicitly enumerate every flag from
    `gaia -h` / each subcommand's `-h` output and from the doc's flag tables and diff them
@@ -167,24 +181,40 @@ Each matrix entry:
    static audit's "verify before you report" precision rule.
 6. **Output** — `findings-walkthrough-<doc-slug>.json`, same shape as the static audit's
    findings (`severity`/`path`/`symbol`/`title`/`why`/`evidence`/`auto_fixable`/
-   `dedup_key`), with `dedup_key` namespaced `walkthrough:<doc-path>:<step-heading>` —
-   a different namespace from the static lenses' `<dimension>:<path>:<symbol>`, so the two
-   mechanisms won't automatically cross-dedupe a shared root cause. Accepted as a known
-   gap for v1: a maintainer fixing either finding closes the underlying bug, which makes
-   the duplicate moot going forward.
+   `cluster_key`/`dedup_key`). `dedup_key` is namespaced `walkthrough:<doc-path>:<step-heading>`,
+   a different namespace from the static lenses' `<dimension>:<path>:<symbol>` — v1 accepted
+   that as a known gap, since it meant the two mechanisms could not cross-dedupe a shared
+   root cause. **Closed (2026-09)** by the second key: judges emit `cluster_key`
+   `docs:<root-cause-slug>`, the same root-cause namespace the static `docs` lens uses, so
+   one defect found by both mechanisms now merges into one issue.
 
 ## Synthesis
 
+> **Superseded (2026-09):** v1 filed a `Doc walkthrough — <run_id>` parent issue plus a
+> child issue per 🔴/🟠 finding, deduped against open `weekly-audit`-labelled issues only,
+> and cross-linked (never closed) the previous parent. Parents and children are both gone,
+> for the reasons recorded in `docs/plans/weekly-claude-audit.md` → Synthesis. The
+> no-auto-close rule they came from (#2010) survives as a blanket "the workflow never
+> closes an issue."
+
 A separate synthesis job (same repo, `issues: write` only there, matching the static
-audit's least-privilege pattern) collects every `findings-walkthrough-*.json`, dedupes
-against already-open `weekly-audit`-labeled issues via the same `<!-- audit-key: KEY -->`
-marker convention, rolls 🟡 (low) findings into the parent issue only (no child issue —
-reuses the static audit's already-learned churn-control rule: its first deep run filed 19
-children, ~13 low-value), files 🔴/🟠 findings as child issues, and posts one parent
-`Doc walkthrough — <run_id>` issue labeled `weekly-audit`. Cross-links (never closes) the
-previous walkthrough parent — the static audit's own postmortem (#2010: an earlier
-auto-close silently hid 18 unaddressed children) is the reason this rule exists; it
-applies identically here.
+audit's least-privilege pattern) collects every `findings-walkthrough-*.json` and runs the
+shared deterministic dedup pass, `scripts/audit/prepare_synthesis.py`. **That pass is this
+workflow's only cross-guide memory** — its per-guide judges are blind to each other, so one
+broken thing arrives as N differently-worded findings; the pass merges them by
+`cluster_key`, flags likely siblings whose keys disagreed, and searches the whole open
+backlog for an issue already tracking each defect. Five guides quoting a single dead
+Lemonade command became five issues in one night before it existed.
+
+Synthesis then drops, comments, or files exactly as the static audit does: 🟡 (low) defects
+are never filed, 🔴/🟠 defects become **one issue listing every guide they break**, and a
+defect the backlog already tracks gets a comment instead. The run report goes to
+`$GITHUB_STEP_SUMMARY`, not an issue.
+
+**A partial sweep never synthesizes.** Every discovered doc writes a findings file even
+when clean, so a short count means guides went unwalked — the job fails instead of filing.
+Without that gate a night where every judge crashed reached synthesis with zero findings
+and reported "nothing to file": a crash reading as a pass (#3058).
 
 ## Non-goals (v1)
 

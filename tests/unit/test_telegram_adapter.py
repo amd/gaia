@@ -128,7 +128,7 @@ def test_every_registered_update_handler_enforces_the_allowlist(mock_home, monke
     monkeypatch.setitem(sys.modules, "telegram.ext", fake_ext)
     monkeypatch.setenv("GAIA_TEST_MODE", "1")
 
-    adapter = TelegramAdapter(token="fake-token")
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
     adapter.start(token="fake-token", background=True)
 
     callbacks = [handler.callback for handler in app.handlers]
