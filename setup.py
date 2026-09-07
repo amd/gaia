@@ -204,8 +204,8 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.14",
-            "torchvision<0.29.0",
+            "torch>=2.0.0,<2.15",
+            "torchvision<0.30.0",
             "torchaudio",
         ],
         "mcp": [
