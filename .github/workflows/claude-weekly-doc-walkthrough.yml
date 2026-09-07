@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Execution-based sibling to claude-weekly-audit.yml (see docs/plans/
+# Execution-based sibling to claude-nightly-audit.yml (see docs/plans/
 # weekly-doc-walkthrough-audit.md and docs/plans/weekly-claude-audit.md's
 # "Non-goals"). That workflow is deliberately static (read-only, never installs
 # or runs repo code) -- this one exists because that non-goal has a real blind
@@ -14,13 +14,23 @@
 # Lemonade instance -- never the runner's shared, CI-warmed install (see
 # "Execution environment" in the design doc for why that distinction matters).
 #
-# STANDALONE from claude-weekly-audit.yml on purpose: different runner
+# STANDALONE from claude-nightly-audit.yml on purpose: different runner
 # (self-hosted Windows vs. ubuntu-latest), different cost/runtime profile
 # (hours, not minutes -- deliberate; see design doc "Cadence"), different
 # failure modes (a live command can hang). Isolating them means a stuck
-# walkthrough never delays the fast static audit's triage issue. Shares
-# vocabulary with it (severity scale, dedup-key pattern, weekly-audit label,
-# bug-label auto-fix promotion) but files its OWN parent issue.
+# walkthrough never delays the fast static audit. Shares vocabulary with it
+# (severity scale, cluster/dedup keys, weekly-audit label, bug-label auto-fix
+# promotion) and the same deterministic dedup pass,
+# scripts/audit/prepare_synthesis.py.
+#
+# CROSS-GUIDE DEDUP IS LOAD-BEARING HERE. The per-guide judges below are blind to
+# each other, so one broken thing arrives as N differently-worded findings. Only
+# the synthesize job can see all of them, and it is where they merge into ONE
+# issue -- five guides quoting a single dead Lemonade command previously became
+# five issues in one night. Do not move filing back into the matrix jobs.
+#
+# NO RUN RECEIPTS. The per-run summary goes to $GITHUB_STEP_SUMMARY, never a new
+# issue.
 #
 # EXECUTOR / JUDGE SPLIT: the executor walks each guide (high tool-call volume,
 # grinding sequential work); a SEPARATE judge pass scores the transcript (low
@@ -100,6 +110,13 @@ on:
       doc_filter:
         description: "Glob to scope this run to one or a few docs (e.g. docs/quickstart.mdx). Empty = all discovered docs."
         default: ""
+      dry_run:
+        # Files and comments NOTHING; writes what it WOULD have filed to the job summary.
+        # This is how you validate a dedup change against the real backlog without adding
+        # to it — see the same input on claude-nightly-audit.yml.
+        description: "Report what would be filed, without touching the tracker"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -471,7 +488,7 @@ jobs:
       # run -- which is correct -- but it also means the job can look green
       # in the Actions UI while the executor actually failed. Surface that
       # explicitly: check the action's own execution_file (same technique
-      # claude-weekly-audit.yml's synthesis job uses), and independently
+      # claude-nightly-audit.yml's synthesis job uses), and independently
       # confirm the transcript the judge depends on actually exists.
       - name: Report executor status
         if: always()
@@ -487,7 +504,7 @@ jobs:
           # line by line makes every line invalid and silently reports a healthy run
           # as crashed. Scan the whole text and keep the LAST is_error, matching the
           # bash `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
-          # claude-weekly-audit.yml uses on ubuntu.
+          # claude-nightly-audit.yml uses on ubuntu.
           $ok = $false
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
             $raw = Get-Content -Raw $env:EXEC_FILE
@@ -539,8 +556,13 @@ jobs:
             set by an earlier step in this job (check your Bash tool's shell to read it --
             `$env:RUN_DIR` in PowerShell, `$RUN_DIR` in a POSIX shell; not confirmed which
             this runner's tool uses at authoring time). If the file is missing, the
-            executor crashed before writing it -- file ONE 🟠 finding for that, dedup_key
-            `walkthrough:${{ matrix.doc.path }}:executor-crash`, and stop.
+            executor crashed before writing it -- file ONE 🟠 finding for that and stop.
+            It needs EVERY field the schema at step 5 lists (a finding missing one is
+            rejected): `severity` 🟠, `title`, `why`, `evidence` (say the file is absent),
+            `path`, `symbol`, `auto_fixable` false, `dedup_key`
+            `walkthrough:${{ matrix.doc.path }}:executor-crash`, and `cluster_key`
+            `walkthrough:executor-crash` — that shared cluster key merges every guide whose
+            executor died into one issue instead of one issue per guide.
 
             ## What to do
             1. Read `${{ matrix.doc.path }}` and the transcript file above, in full.
@@ -558,7 +580,7 @@ jobs:
                skip it. A step that failed and did NOT reproduce cleanly on retry (i.e.
                failed twice) IS eligible.
             5. Write findings to `findings-walkthrough-${{ matrix.doc.slug }}.json`
-               (repo root), same shape `claude-weekly-audit.yml` uses:
+               (repo root), same shape `claude-nightly-audit.yml` uses:
                ```json
                {"findings": [
                  {
@@ -569,6 +591,7 @@ jobs:
                    "why": "one sentence: the concrete impact / what breaks",
                    "evidence": "the exact transcript excerpt (command + captured output) proving the claim",
                    "auto_fixable": true | false,
+                   "cluster_key": "docs:<root-cause-slug>",
                    "dedup_key": "walkthrough:${{ matrix.doc.path }}:<step-heading>"
                  }
                ]}
@@ -578,6 +601,27 @@ jobs:
                false but the underlying command doesn't crash; 🟡 a cosmetic/minor gap
                (a missing caveat, a stale example). `auto_fixable` = true only if the fix
                is small and locatable (~1-3 files, no design call).
+
+               ### `cluster_key` — name the CAUSE, so guides you cannot see can merge with you
+               You are one of many parallel judges, each walking a different guide and
+               blind to the others. The same underlying defect usually breaks several
+               guides at once, and it is ONE fix — so a synthesis step merges findings that
+               share a `cluster_key`, and the maintainer gets one issue instead of five.
+               (Five guides quoting one dead command really did become five issues in a
+               single night.)
+
+               So write `cluster_key` as a short kebab-case slug describing **what is
+               broken in the product or in every guide**, with **no doc path, no guide
+               name, and no step heading in it** — those go in `dedup_key`. Ask: "if
+               another judge hit this exact problem in a different guide, would they write
+               this same slug?" If the slug mentions your guide, they would not.
+               - ✅ `docs:lemonade-server-serve-command-removed`
+               - ✅ `docs:missing-extras-in-prerequisites`
+               - ✅ `docs:gaia-chat-needs-chat-agent-package`
+               - ❌ `docs:quickstart-step-2-fails` (names your guide and step, merges with nothing)
+               Prefer the most obvious plain-English name for the cause; two judges
+               converge on `lemonade-server-serve-command-removed` far more often than on
+               a clever one.
 
                This file IS the deliverable. You have no Write tool: create it with Bash
                (a `cat > … <<'JSON'` heredoc). An empty `{"findings": []}` is a valid,
@@ -668,11 +712,10 @@ jobs:
           # means the judge never ran. Fail — a silent skip reads as "walked, all good".
           if-no-files-found: error
 
-  # Collect every matrix job's findings, dedupe against open weekly-audit
-  # issues, and file ONE parent triage issue + per-finding child issues.
-  # Same conventions as claude-weekly-audit.yml's synthesis job (label
-  # scheme, dedup-key marker, evidence gate, cross-link-never-close
-  # lifecycle) -- see the weekly-audit-patterns skill.
+  # Collect every matrix job's findings, run the deterministic dedup pass over
+  # them, and file ONE issue per surviving defect. Same conventions as
+  # claude-nightly-audit.yml's synthesis job (label scheme, cluster/dedup keys,
+  # evidence gate, job-summary report) -- see the weekly-audit-patterns skill.
   synthesize:
     needs: [discover, walkthrough]
     if: github.repository == 'amd/gaia' && !cancelled() && needs.discover.outputs.docs != '[]'
@@ -721,18 +764,71 @@ jobs:
           echo "**$total_files findings file(s) reported in, $total_findings raw finding(s) before dedup/verification.**" >> "$GITHUB_STEP_SUMMARY"
           echo "Reported in: $total_files files, $total_findings raw findings before dedup"
 
+      # The static audit has always refused to synthesize off a partial sweep; the
+      # walkthrough only tallied and carried on, so a night where every guide's judge died
+      # reached synthesis with zero findings and reported "nothing to file" — a crash
+      # reading as a pass (#3058). Every discovered doc writes a findings file even when
+      # clean, so a short count means guides went unwalked. Fail instead of filing.
+      - name: Require every discovered doc to have reported in
+        env:
+          EXPECTED_DOCS: ${{ needs.discover.outputs.docs }}
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s' "$EXPECTED_DOCS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          got=$(find walkthrough-findings -name 'findings-walkthrough-*.json' | wc -l)
+          if [ "$got" -lt "$expected" ]; then
+            echo "::error title=Doc walkthrough::Only $got/$expected guides produced findings — $((expected - got)) went unverified. Not synthesizing off a partial sweep."
+            exit 1
+          fi
+          echo "All $got/$expected guides reported in."
+
       - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # `weekly-audit` is a PROVENANCE label shared with claude-nightly-audit.yml, not a
+          # cadence one. See that workflow's header for why it keeps the name.
           gh label create weekly-audit --color 5319e7 \
-            --description "Proactive weekly Claude audit finding" \
+            --description "Filed by a proactive Claude audit (nightly code audit or weekly doc walkthrough)" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
           gh label create audit-wontfix --color cccccc \
-            --description "Accepted debt -- weekly audit will never re-file this finding" \
+            --description "Accepted debt -- the audits will never re-file this finding" \
             2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
 
-      - name: Synthesize and file the triage issue
+      # Same deterministic dedup pass the nightly audit runs — and the ONLY place this
+      # workflow gets cross-guide memory. Its per-guide judges are blind to each other, so
+      # without this five guides quoting one dead command file five issues in a night.
+      # It merges shared cluster keys, flags likely siblings whose keys disagreed, and
+      # searches the WHOLE open backlog rather than just this workflow's own label.
+      - name: Dedupe findings into a synthesis worklist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/prepare_synthesis.py \
+            --findings-dir walkthrough-findings \
+            --repo "${{ github.repository }}" \
+            --out synthesis-input.json \
+            --dossier synthesis-dossier.md
+          {
+            echo "## 🔁 Dedup pass"
+            echo ""
+            python3 -c "import json; c=json.load(open('synthesis-input.json'))['counts']; print(f\"{c['raw_findings']} raw findings → **{c['clusters']} distinct defects** ({c['new']} new, {c['already_filed']} already filed, {c['suppressed']} suppressed), searched {c['open_issues_searched']} open issues.\")"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A dry run is only prompt-enforced, and a mode that silently isn't dry is worse
+      # than no mode at all. Record the watermark now and check it afterwards.
+      - name: Record the issue watermark (dry run)
+        if: github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue list --repo "${{ github.repository }}" --state all --limit 1 \n            --json number --jq '.[0].number // 0' > .issue-watermark
+          echo "Highest issue before synthesis: $(cat .issue-watermark)"
+
+      - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
         uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10  # v1.0.210
@@ -744,90 +840,154 @@ jobs:
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
-            execution-based sibling of the static weekly-audit -- see
-            docs/plans/weekly-doc-walkthrough-audit.md). Each matrix job wrote a
-            findings-walkthrough-<slug>.json. Dedupe, rank, and file the output.
+            execution-based sibling of the static nightly audit -- see
+            docs/plans/weekly-doc-walkthrough-audit.md). A deterministic pass has ALREADY
+            merged the per-guide judges' findings into distinct defects and searched the
+            whole open backlog for each. Your job is the part a script cannot do: verify
+            the evidence, decide new-vs-already-tracked, and write for a human.
 
             REPO: ${{ github.repository }}
+            DRY RUN: ${{ github.event.inputs.dry_run || 'false' }}
             RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             ## First actions
-            1. Read every `findings-walkthrough-*.json` under `walkthrough-findings/`
-               (each artifact is in its own subdir). Missing/empty files are fine -- a
-               guide may have found nothing, or its job may have crashed.
+            1. Read `synthesis-dossier.md` -- your worklist. One section per NEW defect,
+               each with its locations, a ranked list of possibly-matching open issues,
+               and (where the per-guide judges disagreed on a key) its likely siblings in
+               this same run. Defects listed as already-filed or suppressed at the bottom
+               are **already handled -- do not act on them at all**.
             2. Read `CLAUDE.md` -> "Issue Response Guidelines" for tone/format.
-            3. Already-filed keys:
-               `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`,
-               collect the `<!-- audit-key: KEY -->` marker from each body.
-            4. Suppressed-forever keys:
-               `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`.
-            5. Previous parent to cross-link: the most recently created OPEN issue whose
-               title starts `Doc walkthrough —` (NOT `Weekly audit —` -- that belongs to
-               the static audit, a different lineage; do not cross-link across workflows).
+            3. `synthesis-input.json` has the same data structured, if you need a field
+               the dossier elides -- including the full location list when truncated.
+            If the dossier reports malformed findings or that the judges barely clustered,
+            say so in the run report: that is a judge-prompt bug a human needs to see.
+            You do NOT need to list issues or rebuild key sets -- that is done.
 
-            ## Dedup + verify
-            1. Drop any finding whose `dedup_key` is in either key set from step 3/4 above.
-               Match the exact key string -- never line numbers or prose similarity.
-            2. Evidence gate: drop any 🔴/🟠 finding whose `evidence` doesn't actually
-               substantiate its `title` -- spot-check by reading the cited transcript
-               excerpt/doc section yourself before filing.
-            3. If zero new findings remain after the above, post NOTHING and exit
-               cleanly -- do not file a parent issue, and never touch a prior parent.
+            ## Merge across guides BEFORE you file -- this workflow's signature failure
+            Each guide was judged by its own Claude job, blind to every other guide. One
+            broken thing therefore arrives as several defects worded differently. The
+            dossier's ⚠ sibling lines are exactly those: **if one fix would close a group
+            of them, they are ONE issue.** File it once, list every guide it breaks, and
+            skip the other sections. Five guides quoting one dead Lemonade command became
+            five separate issues in a single night -- that is the bug you are preventing.
 
-            ## File child issues -- 🔴/🟠 ONLY, non-security (this workflow finds no
-            security issues -- that lens belongs to claude-weekly-audit.yml)
-            🟡 (low) findings get NO child issue -- list them in the parent only. For each
-            NEW, verified 🔴/🟠 finding, write the body to a temp file, then
+            ## For each NEW defect, choose exactly one of three outcomes
+
+            ### (a) DROP it -- the evidence gate
+            Drop any finding whose `evidence` doesn't substantiate its `title`; spot-check
+            by reading the cited transcript excerpt or doc section yourself before filing.
+            **🟡 (low) defects are never filed** -- they go in the run report only.
+
+            ### (b) COMMENT on an existing issue -- 🔴/🟠 only, check this BEFORE filing
+            The dossier's candidates come from the WHOLE open backlog, not just this
+            workflow's label, so a human-filed or long-milestoned issue tracking the same
+            defect is visible. Open the top candidates and read them. If one already tracks
+            it, comment instead of filing:
+            `gh issue comment <n> --repo ${{ github.repository }} --body-file <file>`
+            The comment adds only what is NEW (the extra guides this run found, fresh
+            transcript evidence) and never restates the issue. End it with
+            `<!-- audit-cluster: <cluster_key> -->` so future runs match it by key.
+            A candidate matches when the same FIX closes both. Err toward commenting.
+
+            ### (c) FILE ONE issue -- 🔴/🟠 only
+            (This workflow finds no security issues -- that lens belongs to
+            claude-security-audit.yml.) Write the body to a temp file, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
-            WITHOUT the `bug` label. Body format — follow CLAUDE.md → "How You Communicate":
-            a human triages this, so the title and opening line say what broke and who it
-            hurts in plain words, and the location/evidence rows go in a collapsed
-            `<details>` underneath. Say each point once. The blank line after `</summary>`
-            is REQUIRED or GitHub renders the block as literal text.
+            WITHOUT the `bug` label.
+
+            **One issue per DEFECT, listing every guide it breaks.** The title names the
+            defect, never one guide: "The documented Lemonade start command no longer
+            exists (5 guides)", not "quickstart.mdx step 2 fails".
+
+            Body -- follow CLAUDE.md → "How You Communicate": the opening line says what
+            broke and who it hurts in plain words; mechanical rows go in a collapsed
+            `<details>`. The blank line after `</summary>` is REQUIRED or GitHub renders
+            the block as literal text. Both markers are REQUIRED -- they drive the next
+            run's dedup:
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
+            <one paragraph: what's wrong + the concrete impact, in plain words>
 
             <details>
-            <summary>🔍 Evidence and location</summary>
+            <summary>🔍 Evidence and locations</summary>
 
-            **Where:** `path` · `symbol`   (the finding carries no line number — do not invent one)
-            **Evidence:** <the finding's `evidence` -- the concrete transcript/doc excerpt>
             **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+
+            | Guide · step | Evidence (transcript excerpt) |
+            |---|---|
+            | `path` · `symbol` | <that location's evidence> |
             </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will
             never re-file it. Applying `bug` instead hands it to the existing auto-fix job.
 
-            <!-- audit-key: <the finding's dedup_key> -->
+            <!-- audit-cluster: <cluster_key> -->
+            <!-- audit-key: <the first location's dedup_key> -->
             ```
-            Capture each child issue number to reference from the parent.
 
-            ## File ONE parent issue
-            Title: `Doc walkthrough — ${{ github.run_id }}`. Label it `weekly-audit`.
-            Group findings by DOC PATH (this workflow has one detection mechanism, not
-            five dimensions like the static audit) -- most-severe-first across the whole
-            run, 🔴 before 🟠 before 🟡, each line prefixed with its severity emoji.
-            🔴/🟠 lines link their child issue (`· #<n>`); 🟡 lines have no child. Start
-            the body with a one-line tally: `New this run: N (🔴 a · 🟠 b) · low
-            (in-parent only): c · suppressed as dup/wontfix: d`.
+            ## Write the run report to `triage-report.md` -- NOT to an issue
+            A following step appends this file to the run's job summary. **Do not file a
+            "Doc walkthrough — <run-id>" issue; that convention is gone** -- those receipts
+            piled up in the tracker with nothing actionable in them. The old parent-chain
+            bookkeeping is gone with it: do not cross-link a previous run's issue, and never
+            close one. (Commenting on a backlog issue that tracks a real defect — outcome (b)
+            above — is a different thing, and is encouraged.)
 
-            ## Cross-link the previous parent -- NEVER close it
-            After filing the new parent, comment on the previous `Doc walkthrough —`
-            parent found in First-actions step 5 (if one exists) so readers can follow the
-            chain, but leave it OPEN:
-            `gh issue comment <prev-parent-#> --repo ${{ github.repository }} --body "Follow-up walkthrough run filed as #<new-parent-#>. This issue stays OPEN until its findings are addressed — only a maintainer should close it."`
-            Never call `gh issue close` on a parent from this workflow.
+            Write `triage-report.md`: a one-line tally, then the defects grouped by guide,
+            most-severe-first (🔴 → 🟠 → 🟡), each line prefixed with its severity emoji.
+            🟡 lines live here and nowhere else.
+            ```
+            ### Doc walkthrough
+            Filed: 2 new (🔴 1 · 🟠 1) · commented on existing: 1 · low (report-only): 3 · dropped on evidence: 4
+
+            - 🔴 The documented Lemonade start command no longer exists — breaks 5 guides — #<n>
+            - 🟠 `gaia chat` needs the chat agent package the Prerequisites never install — commented on existing #1077
+            - 🟡 `docs/guides/talk.mdx` example output is stale (report-only, no issue)
+            ```
+
+            ## If DRY RUN is true
+            Run NO `gh issue create` and NO `gh issue comment` -- file and comment nothing.
+            Do everything else, and in `triage-report.md` write what you WOULD have done
+            (`would file:` / `would comment on #<n>:`).
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
             - Do not open any PR and do not apply the `bug` label -- humans gate every
               code change.
+            - Never close any issue.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
             --max-turns 32
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+
+      - name: Prove the dry run filed nothing
+        if: always() && github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          before=$(cat .issue-watermark)
+          created=$(gh issue list --repo "${{ github.repository }}" --state all \n            --limit 100 --json number --jq "[.[] | select(.number > $before) | .number] | join(\", \")")
+          if [ -n "$created" ]; then
+            echo "::error title=Dry run was not dry::The synthesis step created issue(s) $created despite dry_run=true. Close them, then fix the dry-run instruction in the prompt."
+            exit 1
+          fi
+          echo "✅ Dry run confirmed: no issue created above #$before."
+
+      # The run receipt. Replaces the per-run "Doc walkthrough — <run-id>" ISSUE: a CI
+      # run's bookkeeping belongs in the run, not the tracker.
+      - name: Publish the triage report to the job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f triage-report.md ]; then
+            cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⚠️ No triage report" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The synthesis step wrote no \`triage-report.md\`. See the step status below." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Verify the walkthrough filed output
         if: always()
@@ -837,7 +997,7 @@ jobs:
         run: |
           # Don't trust step outcome (continue-on-error masks it; an install
           # crash exits before it's set). Check the real artifact the action
-          # writes on completion -- same verification claude-weekly-audit.yml
+          # writes on completion -- same verification claude-nightly-audit.yml
           # uses for its own synthesis step.
           ok=false
           if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
@@ -847,7 +1007,7 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
           else
-            # Hard-fail for the same reason as claude-weekly-audit.yml: a green run that
+            # Hard-fail for the same reason as claude-nightly-audit.yml: a green run that
             # synthesised nothing is indistinguishable from one that found nothing.
             echo "::error title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
             exit 1

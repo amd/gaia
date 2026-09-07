@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Proactive Claude SECURITY audit. A dedicated, security-only companion to
-# claude-weekly-audit.yml (which now owns correctness/docs/tests/features). It
+# claude-nightly-audit.yml (which now owns correctness/docs/tests/features). It
 # exists because the weekly audit's single general "security lens" missed the hub
 # tar-slip (CWE-22): it sampled a huge repo in one pass and trusted a
 # `# noqa: S202 - hub artifacts are trusted` comment as a settled decision.
@@ -41,7 +41,7 @@ on:
     # so one fixed hour cannot be the same local time year-round; the 1h winter drift is
     # accepted. The off-the-hour minute avoids the ":00" fleet-wide queue.
     #
-    # Deliberately ~1.4h BEFORE claude-weekly-audit.yml's nightly 10:37 UTC slot — the two
+    # Deliberately ~1.4h BEFORE claude-nightly-audit.yml's nightly 10:37 UTC slot — the two
     # proactive Claude runs must not stack on the shared subscription rate limit, and this
     # one goes first because it is the shorter job (deterministic semgrep + a single
     # Claude sweep, vs. four serialized lenses + synthesis).
@@ -71,7 +71,7 @@ jobs:
   # turns + synthesis (~$4-6 of subscription-equivalent usage per lens at the
   # ceiling); running that unconditionally every night would burn the shared
   # subscription pool re-reading an unchanged tree. Mirrors the skip-if-empty
-  # preflight in claude-weekly-audit.yml.
+  # preflight in claude-nightly-audit.yml.
   #
   # semgrep is deliberately NOT gated on this — it is cheap, deterministic, and
   # its rulesets update independently of this repo, so it still has something to
