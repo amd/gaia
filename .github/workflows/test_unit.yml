@@ -24,6 +24,11 @@ on:
       # tests/unit/test_doc_examples_runnable.py execs this guide's own code
       # blocks, so a docs-only change can still break the guard.
       - 'docs/guides/custom-agent.mdx'
+      # tests/unit/test_docs_json_release.py pins the navbar label and the
+      # Releases nav to src/gaia/version.py, so a docs-only change can break
+      # it too — and that is the exact drift that made v0.23.1 untaggable.
+      - 'docs/docs.json'
+      - 'docs/releases/**'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -40,6 +45,11 @@ on:
       # tests/unit/test_doc_examples_runnable.py execs this guide's own code
       # blocks, so a docs-only change can still break the guard.
       - 'docs/guides/custom-agent.mdx'
+      # tests/unit/test_docs_json_release.py pins the navbar label and the
+      # Releases nav to src/gaia/version.py, so a docs-only change can break
+      # it too — and that is the exact drift that made v0.23.1 untaggable.
+      - 'docs/docs.json'
+      - 'docs/releases/**'
   merge_group:
   workflow_dispatch:
 
