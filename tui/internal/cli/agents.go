@@ -58,12 +58,20 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		trace, err := openTrace(args[0])
+		if err != nil {
+			return err
+		}
+		defer closeTrace(trace)
 		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl,
-			bypassPermissions, useClaude, claudeModelArg(), mockAgent)
+			bypassPermissions, useClaude, claudeModelArg(), mockAgent, trace)
 		if err != nil {
 			return err
 		}
 		if code != 0 {
+			// Closed explicitly: os.Exit runs no deferred function, so the
+			// trace would never report a recording that stopped early.
+			closeTrace(trace)
 			// The failure was already rendered to stderr; exit without letting
 			// cobra print a second, less useful message.
 			os.Exit(code)
