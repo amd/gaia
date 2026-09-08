@@ -9,6 +9,7 @@ metadata:
     permissions:
       - shell:execute:pytest
       - shell:execute:python
+      - shell:execute:python3
       - shell:execute:git
     tools_required:
       - read_file
