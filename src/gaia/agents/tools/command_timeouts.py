@@ -341,7 +341,9 @@ def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
             os.killpg(os.getpgid(process.pid), 9)
     except (OSError, subprocess.SubprocessError) as exc:
         # Already dead, or unreachable — the kill below is the backstop.
-        logger.warning("Could not kill the process tree for pid %s: %s", process.pid, exc)
+        logger.warning(
+            "Could not kill the process tree for pid %s: %s", process.pid, exc
+        )
 
     process.kill()
     try:

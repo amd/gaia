@@ -22,7 +22,6 @@ import subprocess
 import pytest
 
 from gaia.agents.tools import shell_tools
-
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -376,9 +375,7 @@ class TestWaitForCondition:
 
     def test_the_deadline_expires_loudly(self, monkeypatch):
         _, tools = _shell_tools()
-        monkeypatch.setattr(
-            subprocess, "Popen", _completes(returncode=1, stderr="no")
-        )
+        monkeypatch.setattr(subprocess, "Popen", _completes(returncode=1, stderr="no"))
 
         result = tools["wait_for_condition"]("ls build/output.bin", timeout=1)
 
@@ -492,7 +489,11 @@ def test_a_blown_deadline_really_kills_the_process():
     from gaia.agents.tools.command_timeouts import terminate_process_tree
 
     child = subprocess.Popen(  # pylint: disable=consider-using-with
-        [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(120)"],
+        [
+            sys.executable,
+            "-c",
+            "import time; print('started', flush=True); time.sleep(120)",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
