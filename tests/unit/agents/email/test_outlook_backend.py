@@ -334,7 +334,7 @@ class TestReadTranslation:
         # (label:/has:/in:/after:/before:/is:<other>) used to reach Graph as
         # inert $search text and silently return nothing.
         backend, _, _ = _backend(lambda r: _ok({"value": []}))
-        with pytest.raises(ConnectorsError, match="has no Microsoft Graph equivalent"):
+        with pytest.raises(ConnectorsError, match="not supported by this backend"):
             backend.list_messages(query="label:promotions", max_results=5)
 
     def test_list_messages_normalizes_to_gmail_stub_shape(self):
