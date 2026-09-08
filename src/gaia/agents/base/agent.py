@@ -4291,13 +4291,12 @@ Do NOT wrap conversational replies in JSON.
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought too.
-                shrunk_rest.append(
-                    {
-                        "role": "assistant",
-                        "content": m["content"][:800] + "... (truncated)",
-                    }
-                )
+                # Truncate verbose assistant chain-of-thought, but keep the
+                # rest of the turn — dropping ``tool_calls`` here orphans the
+                # tool results that follow it.
+                shrunk = dict(m)
+                shrunk["content"] = m["content"][:800] + "... (truncated)"
+                shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
         return [first] + shrunk_rest
