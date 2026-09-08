@@ -28,7 +28,7 @@ Platform (these three change the commands you write):
 - Paths with spaces: wrap in double quotes: "C:\Program Files\app"
 - Shell dialect: cmd.exe
 
-Directories:
+Directories (second level listed for only a few):
 - docs/  (assets, deployment, guides, integrations)
 - hub/  (agents, components, skills)
 - src/  (gaia, vscode)
@@ -48,7 +48,7 @@ Code index: not built — call index_codebase to enable semantic code search
 |---------|---------------------|
 | Root, repository status | The `is_code_repository` predicate below |
 | Platform | `detect_platform_quirks()` — exactly three fields, see [Platform quirks](#platform-quirks) |
-| Directories | Two levels deep, build output and vendored dependencies skipped |
+| Directories | Two levels deep for the first few, build output and vendored dependencies skipped. The heading says so — a bare entry is not evidence a subdirectory is absent |
 | Entry points | A closed list of well-known files, plus `npm run` targets from `package.json` |
 | Commands | `probe_binaries()` — the same PATH probe that backs [day-0 memory](/guides/memory), crossed with the shell tool's own allowlist |
 | Code index | [`CodeIndexSDK.is_indexed()`](/guides/code-index) — a presence check, so it is cheap enough to run on every render |

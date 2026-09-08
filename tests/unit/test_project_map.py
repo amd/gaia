@@ -38,6 +38,7 @@ from gaia.agents.base.system_context import (
     probe_binaries,
 )
 from gaia.agents.base.turn_metrics import count_tokens
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.llm.lemonade_client import NPU_CTX_SIZE
 
 
@@ -654,3 +655,67 @@ def test_a_wrong_base_order_fails_at_class_definition():
 
         class _Wrong(Agent, ProjectMapMixin):
             pass
+
+
+# ── the code-index root ───────────────────────────────────────────────────
+#
+# Feeding the resolved root to the index is the map's one effect outside the
+# prompt, so a root that lands on the agent's own package costs the user
+# semantic code search over their own tree. The behavioural test composes the
+# mixins rather than importing ``GaiaAgent`` (same editable-install reason as
+# above); the AST test keeps the two from drifting apart.
+
+_FLAGSHIP_AGENT = (
+    _REPO / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "agent.py"
+)
+
+
+class _IndexRootAgent(ProjectMapMixin, CodeIndexToolsMixin):
+    """Just the flagship's index-root decision, with the real mixins."""
+
+    def __init__(self, allowed):
+        self._init_code_index_state(repo_path=self._project_map_root() or allowed[0])
+
+
+def test_the_index_is_not_rooted_at_the_sidecars_own_package(tmp_path, monkeypatch):
+    """Dev mode runs the sidecar from ``<repo>/hub/agents/<id>/python``."""
+    checkout = tmp_path / "gaia"
+    _install_gaia_at(monkeypatch, checkout / "src" / "gaia")
+    sidecar = checkout / "hub" / "agents" / "gaia" / "python"
+    sidecar.mkdir(parents=True)
+    (sidecar / "pyproject.toml").write_text("[project]\nname='gaia-agent'\n")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(sidecar)
+
+    agent = _IndexRootAgent([str(workspace)])
+
+    assert pathlib.Path(agent._repo_path) != sidecar
+    assert pathlib.Path(agent._repo_path) == workspace
+
+
+def test_the_index_is_rooted_at_the_project_when_there_is_one(tmp_path, monkeypatch):
+    """The fallback must not swallow the case the feature exists for."""
+    _install_gaia_at(monkeypatch, tmp_path / "gaia" / "src" / "gaia")
+    project = tmp_path / "userproj"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='userproj'\n")
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(project)
+
+    agent = _IndexRootAgent([str(tmp_path / "elsewhere")])
+
+    assert pathlib.Path(agent._repo_path) == project
+
+
+def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
+    """``_IndexRootAgent`` only means something while the agent matches it."""
+    tree = ast.parse(_FLAGSHIP_AGENT.read_text(encoding="utf-8"))
+    assigned = [
+        ast.unparse(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "index_root" for t in node.targets)
+    ]
+    assert assigned == ["self._project_map_root() or allowed[0]"]
