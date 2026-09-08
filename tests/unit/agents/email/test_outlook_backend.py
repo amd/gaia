@@ -328,6 +328,15 @@ class TestReadTranslation:
         with pytest.raises(ConnectorsError, match="cannot be combined"):
             backend.list_messages(query="is:unread from:alice", max_results=5)
 
+    def test_list_messages_unsupported_operator_raises_instead_of_empty_result(self):
+        # Same wrapping as the mixed-family case above, for the other half of
+        # #2996 finding I62: an operator Graph cannot express at all
+        # (label:/has:/in:/after:/before:/is:<other>) used to reach Graph as
+        # inert $search text and silently return nothing.
+        backend, _, _ = _backend(lambda r: _ok({"value": []}))
+        with pytest.raises(ConnectorsError, match="has no Microsoft Graph equivalent"):
+            backend.list_messages(query="label:promotions", max_results=5)
+
     def test_list_messages_normalizes_to_gmail_stub_shape(self):
         backend, _, _ = _backend(
             lambda r: _ok(

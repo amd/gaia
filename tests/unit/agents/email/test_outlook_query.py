@@ -109,5 +109,32 @@ def test_filter_and_grouped_bare_text_still_raises():
         translate_query("(newer_than:7d) budget report", now=_NOW)
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "is:starred",
+        "after:2026/07/01",
+        "before:2026/07/08",
+        "label:promotions",
+        "has:attachment",
+        "in:inbox",
+    ],
+)
+def test_operator_with_no_graph_equivalent_raises_instead_of_matching_nothing(query):
+    # Before this fix each of these fell through to _graph_search_param and
+    # reached Graph as literal text, matching nothing with no error (#2996
+    # finding I62).
+    with pytest.raises(ValueError, match="has no Microsoft Graph equivalent"):
+        translate_query(query, now=_NOW)
+
+
+def test_is_unsupported_value_raises_even_combined_with_valid_filter():
+    # is:starred is not consumed by _IS_RE (only unread/read are), so it
+    # reaches the mixed-family check as ordinary remainder text alongside a
+    # real filter, still a loud error, just via the older message.
+    with pytest.raises(ValueError, match="cannot be combined"):
+        translate_query("is:unread is:starred", now=_NOW)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
