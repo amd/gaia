@@ -432,6 +432,90 @@ class TestAgentEvalRunner:
         assert len(diff["score_regressed"]) == 0
         assert len(diff["unchanged"]) == 1
 
+    @pytest.mark.parametrize(
+        "status",
+        ["INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"],
+    )
+    def test_unmeasured_scenario_is_not_a_regression(self, tmp_path, status):
+        """A harness failure scores 0.0; that must not read as PASS -> FAIL.
+
+        Run 34163958523 reported ``multi_step_plan 7.3 -> 0.0`` as a PASS -> FAIL
+        regression when the scenario had actually ended in SETUP_ERROR and was
+        never scored at all. "We could not measure" and "it got worse" are
+        different findings; only the second is a regression.
+        """
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        def _sc(results, name):
+            sc = build_scorecard("run", results, {})
+            p = tmp_path / f"sc_{name}_{status}.json"
+            p.write_text(json.dumps(sc))
+            return p
+
+        baseline_results = [
+            {
+                "scenario_id": "multi_step_plan",
+                "status": "PASS",
+                "overall_score": 7.3,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+        ]
+        current_results = [
+            {
+                "scenario_id": "multi_step_plan",
+                "status": status,
+                "overall_score": 0.0,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+        ]
+        diff = compare_scorecards(
+            _sc(baseline_results, "base"), _sc(current_results, "curr")
+        )
+        assert len(diff["unmeasured"]) == 1
+        assert diff["unmeasured"][0]["scenario_id"] == "multi_step_plan"
+        assert diff["unmeasured"][0]["current_status"] == status
+        # Excluded from every bucket the CLI turns into a non-zero exit code.
+        assert diff["regressed"] == []
+        assert diff["score_regressed"] == []
+        assert diff["time_regressed"] == []
+
+    def test_unmeasured_does_not_mask_a_real_regression(self, tmp_path):
+        """The scenarios that DID get measured are still judged normally."""
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        def _sc(results, name):
+            sc = build_scorecard("run", results, {})
+            p = tmp_path / f"mixed_{name}.json"
+            p.write_text(json.dumps(sc))
+            return p
+
+        def _r(sid, status, score):
+            return {
+                "scenario_id": sid,
+                "status": status,
+                "overall_score": score,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+
+        baseline_results = [
+            _r("multi_step_plan", "PASS", 7.3),
+            _r("smart_discovery", "PASS", 9.4),
+        ]
+        current_results = [
+            _r("multi_step_plan", "SETUP_ERROR", 0.0),
+            _r("smart_discovery", "FAIL", 3.4),
+        ]
+        diff = compare_scorecards(
+            _sc(baseline_results, "base"), _sc(current_results, "curr")
+        )
+        assert [e["scenario_id"] for e in diff["unmeasured"]] == ["multi_step_plan"]
+        assert [e["scenario_id"] for e in diff["regressed"]] == ["smart_discovery"]
+
 
 class TestScoreValidation:
     """Tests for post-hoc score validation helpers."""
