@@ -509,6 +509,49 @@ class TestPerSegmentWalkSurvivesBypass:
         assert [seg[0] for seg in segments] == ["ls", "grep", "head"]
 
 
+class TestNewlineSeparatesSegmentsUnderBypass:
+    """A newline reaches the shell as a command separator, so the segment walk
+    has to treat it as one. While it did not, `ls\\nrm -rf /tmp/x` was walked as
+    a single `ls` — the refused binary never checked, and the audit record
+    showing one invocation where two ran."""
+
+    def test_newline_does_not_smuggle_a_refused_binary(self):
+        result = check("ls\nrm -rf /tmp/x", bypass=True)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_each_line_is_recorded_as_its_own_segment(self):
+        segments = segments_for("ls\necho hi", bypass=True)
+        assert [seg[0] for seg in segments] == ["ls", "echo"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls;\nrm -rf /tmp/x",
+            "ls &&\nrm -rf /tmp/x",
+            "ls |\nrm -rf /tmp/x",
+            "ls\n;rm -rf /tmp/x",
+        ],
+    )
+    def test_newline_fused_to_another_operator_still_separates(self, command):
+        # shlex emits a run of adjacent punctuation as ONE token, so these
+        # arrive as ';\n', '&&\n', '|\n', '\n;' rather than two tokens.
+        result = check(command, bypass=True)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_blank_lines_do_not_create_empty_segments(self):
+        segments = segments_for("ls\n\n\necho hi\n", bypass=True)
+        assert [seg[0] for seg in segments] == ["ls", "echo"]
+
+    def test_a_quoted_newline_is_data_not_a_separator(self):
+        # The regression guard for the fix: quoting must still work, or
+        # `echo "a<newline>b"` would be walked as a bogus `b` command.
+        segments = segments_for('echo "a\nb"', bypass=True)
+        assert segments == [["echo", "a\nb"]]
+        assert check('echo "a\nb"', bypass=True) is None
+
+
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
     """The find/sort/uniq/git/PowerShell guards all encode "this binary may not
     write" — the exact assumption bypass mode drops. Each must still hold with

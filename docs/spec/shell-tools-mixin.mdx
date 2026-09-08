@@ -263,6 +263,11 @@ come off with it, and the per-segment `_split_pipeline` + `_validate_command`
 walk stays intact so every invocation is still audited to
 `~/.gaia/cache/file_audit.log`.
 
+Segment separators include the newline, not just `&&`, `||`, `;`, `&` and `|` —
+the shell running the string treats a line break as a command separator, so the
+walk has to as well, or a second command rides in unvalidated and unaudited. A
+newline inside quotes stays ordinary data.
+
 This permits arbitrary code execution, and is reachable on the stdio transport
 only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
 and why the HTTP transport is excluded.

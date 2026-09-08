@@ -299,22 +299,49 @@ def _operator_check_text(command: str) -> str:
 #: tokenisation — so extending the set leaves default behaviour untouched.
 _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 
+#: Characters shlex is asked to lex as punctuation in bypass mode. A newline is
+#: one of them because the shell that ultimately runs the string treats it as a
+#: command separator, so the segment walk has to as well.
+_BYPASS_PUNCTUATION = ";&|<>\n"
+
 
 def _tokenize(command: str, bypass_gates: bool = False) -> list:
     """Split *command* into argv tokens.
 
     Default mode uses ``shlex.split``, unchanged. Bypass mode asks shlex to
-    treat ``;&|<>`` as punctuation instead, so ``cd build && make`` yields a
-    standalone ``&&`` for ``_split_pipeline`` to break on. Parentheses stay out
-    of the punctuation set: making them tokens would mangle ordinary operands
-    like ``find . -name "(draft)*"``.
+    treat ``;&|<>`` and the newline as punctuation instead, so ``cd build &&
+    make`` yields a standalone ``&&`` for ``_split_pipeline`` to break on.
+    Parentheses stay out of the punctuation set: making them tokens would
+    mangle ordinary operands like ``find . -name "(draft)*"``.
+
+    The newline is dropped from ``whitespace`` so it survives as a token rather
+    than being eaten as a space. Inside quotes it is still ordinary data, so
+    ``echo "a<newline>b"`` remains one operand.
     """
     if not bypass_gates:
         return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
+    lexer.whitespace = " \t\r"
     return list(lexer)
+
+
+def _is_segment_separator(token: str) -> bool:
+    """Whether *token* ends one command and begins the next.
+
+    shlex emits a *run* of adjacent punctuation as a single token, so a newline
+    reaches here fused to whatever preceded it — ``;\\n``, ``&&\\n``, ``\\n|\\n``.
+    Any all-punctuation run containing a newline therefore separates, which is
+    what stops ``ls\\nrm -rf /tmp/x`` from being walked as one ``ls`` segment.
+    """
+    if token in _SEGMENT_SEPARATORS:
+        return True
+    return (
+        bool(token)
+        and "\n" in token
+        and all(char in _BYPASS_PUNCTUATION for char in token)
+    )
 
 
 def _split_pipeline(cmd_parts: list) -> list:
@@ -328,7 +355,7 @@ def _split_pipeline(cmd_parts: list) -> list:
     segments: list = []
     current: list = []
     for part in cmd_parts:
-        if part in _SEGMENT_SEPARATORS:
+        if _is_segment_separator(part):
             if current:
                 segments.append(current)
             current = []
