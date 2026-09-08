@@ -376,6 +376,24 @@ in flight. It also takes `--bypass-permissions` (start with gating off) and
 local Lemonade; embeddings stay on Lemonade either way). None of that is
 reachable over `/v1/gaia/query`.
 
+`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+tool's own guardrails for the session: compound operators (`&&`, `||`, `;`, `>`)
+parse and run, the read-only binary allowlist is replaced by a developer set
+(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
+`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`, which
+already had their own paths), and the shell rate limit is dropped. That is
+arbitrary code execution in the working directory, which is why it exists only
+on this transport: one local parent process on a private pipe. It is **not**
+reachable over HTTP, and the request body cannot ask for it. `rm` is excluded
+from the developer set — not a boundary, since anything in the set can delete a
+file, but a tripwire against an accidental recursive delete.
+
+Every shell command run under bypass is recorded with its full arguments and its
+per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
+does not skip the record. Treat that file as sensitive; arguments are verbatim.
+The host can toggle bypass mid-session over `gaia_control`, and the shell gates
+follow on the very next command.
+
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
 turned on for what this package delivers: the terminal UI **refuses** it for a
 daemon-transport agent, with an error saying so, because the daemon relay has no

@@ -146,6 +146,99 @@ def _wait_until(predicate, timeout=5.0):
 
 
 # ---------------------------------------------------------------------------
+# Bypass permissions never reach this transport (#3373)
+#
+# Bypass lifts the shell guardrails as well as the confirmation prompt, so an
+# HTTP-reachable agent running under it is remote code execution rather than a
+# relaxed permission model. It is a stdio affordance — one local parent on a
+# private pipe — and must stay one.
+# ---------------------------------------------------------------------------
+
+
+def test_a_query_runs_with_the_shell_gates_on(built):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    assert agents[0].console is not None
+    assert agents[0].console.bypass_permissions is False
+
+
+def test_the_request_body_cannot_ask_for_bypass(built):
+    """extra='forbid' is what makes this unreachable; pin it, so adding a
+    bypass field fails here instead of shipping."""
+    client, _agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(bypass_permissions=True))
+
+    assert r.status_code == 422, r.text
+
+
+def _all_route_paths(router) -> set:
+    """Every path reachable under *router*, descending into sub-routers.
+
+    The route list is not flat on every FastAPI version: ``include_router`` can
+    leave an ``_IncludedRouter`` wrapper that carries ``.routes`` but no
+    ``.path``. Reading ``.path`` off each entry raises there, and skipping the
+    entries that lack one would walk right past the mounted API.
+    """
+    paths = set()
+    for route in getattr(router, "routes", ()):
+        path = getattr(route, "path", None)
+        if path is not None:
+            paths.add(path)
+        if hasattr(route, "routes"):
+            paths |= _all_route_paths(route)
+    return paths
+
+
+def test_the_http_transport_exposes_no_bypass_control():
+    """The stdio control channel carries a bypass verb; HTTP has no equivalent
+    route, and must not grow one without revisiting the reasoning above."""
+    paths = _all_route_paths(server_mod.build_app())
+
+    # Guard the guard: assert the walk reached the mounted API namespace, or a
+    # route-tree change would leave the check below passing on an empty set.
+    # Keyed on the prefix, not one endpoint — which endpoints `build_app` mounts
+    # varies by environment, and pinning a specific one made this fail on CI
+    # while passing locally.
+    assert [
+        p for p in paths if p.startswith("/v1/gaia/")
+    ], f"route walk reached no /v1/gaia/ routes: {sorted(paths)}"
+
+    assert not [p for p in paths if "bypass" in p.lower()]
+
+
+def test_the_route_walk_descends_into_included_routers():
+    """Covers the shape this repo's pinned FastAPI does not produce locally.
+
+    On the CI version, ``include_router`` leaves a wrapper carrying ``.routes``
+    and no ``.path``. Without a real one to test against, the walk is asserted
+    on a stand-in of that shape — otherwise the guard above would be a fix
+    nobody had run.
+    """
+
+    class _Leaf:
+        def __init__(self, path):
+            self.path = path
+
+    class _IncludedRouterLike:
+        """No .path, only .routes — what broke the flat comprehension."""
+
+        def __init__(self, routes):
+            self.routes = routes
+
+    class _App:
+        routes = [
+            _Leaf("/health"),
+            _IncludedRouterLike([_Leaf("/v1/gaia/query"), _Leaf("/v1/gaia/init")]),
+        ]
+
+    assert _all_route_paths(_App()) == {"/health", "/v1/gaia/query", "/v1/gaia/init"}
+
+
+# ---------------------------------------------------------------------------
 # One-shot teardown
 # ---------------------------------------------------------------------------
 
