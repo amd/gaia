@@ -418,14 +418,18 @@ _INSTALLED_PACKAGE_DIRS = frozenset({"site-packages", "dist-packages"})
 
 
 def is_agent_own_source(root: os.PathLike | str) -> bool:
-    """Does *root* contain the ``gaia`` package this process is running from?
+    """Is *root* part of the GAIA checkout this process is running from?
 
-    The daemon launches the agent sidecar with its working directory set to the
-    GAIA checkout in dev mode, so a working-directory-derived root there is the
-    agent's own source tree, not the user's project — and auto-indexing it would
-    embed thousands of files nobody asked about. An explicitly configured root
-    is never subject to this check: pointing GAIA at GAIA is legitimate when you
-    mean it.
+    The daemon launches the agent sidecar with its working directory set inside
+    the GAIA checkout in dev mode, so a working-directory-derived root there is
+    the agent's own source tree, not the user's project — and auto-indexing it
+    would embed thousands of files nobody asked about. An explicitly configured
+    root is never subject to this check: pointing GAIA at GAIA is legitimate
+    when you mean it.
+
+    Anywhere in the checkout counts, not just the package. In dev mode the cwd
+    is ``<repo>/hub/agents/<id>/python``, which carries its own ``pyproject.toml``
+    and would otherwise read as a project in its own right (#3379).
 
     Only a source or editable checkout counts. A wheel installed into a venv
     under the user's project makes that project an ancestor of the package, and
@@ -437,7 +441,11 @@ def is_agent_own_source(root: os.PathLike | str) -> bool:
     if any(p.name in _INSTALLED_PACKAGE_DIRS for p in package.parents):
         return False
     path = Path(root).resolve()
-    return path == package or path in package.parents
+    if path == package or path in package.parents:
+        return True
+    # ``<repo>/src/gaia`` -> ``<repo>``: the sidecar's cwd lives under it.
+    checkout = package.parents[1] if package.parent.name == "src" else None
+    return checkout is not None and (path == checkout or checkout in path.parents)
 
 
 def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:

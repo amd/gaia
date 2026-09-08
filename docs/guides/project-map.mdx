@@ -117,10 +117,11 @@ Resolution order:
 2. the `GAIA_PROJECT_ROOT` environment variable
 3. the working directory, or the nearest repository up to four levels above it
 
-A working directory that resolves to **GAIA's own source tree** is rejected — in
-dev mode the agent sidecar is launched from the GAIA checkout, and mapping (and
-auto-indexing) its own source is never what the user asked for. An explicitly
-configured root is exempt: pointing GAIA at GAIA is fine when you mean it.
+A working directory anywhere inside **GAIA's own source tree** is rejected — in
+dev mode the agent sidecar is launched from its package directory inside the
+GAIA checkout, and mapping (and auto-indexing) its own source is never what the
+user asked for. An explicitly configured root is exempt: pointing GAIA at GAIA
+is fine when you mean it.
 
 Only a source or editable checkout counts as GAIA's own tree. Installing GAIA
 into a virtualenv inside your own project — the embedded-SDK layout — leaves

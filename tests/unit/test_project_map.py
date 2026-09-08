@@ -337,6 +337,35 @@ def test_an_editable_checkout_is_still_gaias_own_source(tmp_path, monkeypatch):
     assert is_agent_own_source(checkout) is True
 
 
+def test_the_sidecar_package_dir_is_gaias_own_source(tmp_path, monkeypatch):
+    """Dev mode puts the sidecar's cwd at ``<repo>/hub/agents/<id>/python``.
+
+    That directory ships its own ``pyproject.toml``, so without this it reads as
+    a project in its own right and the agent maps — and indexes — itself.
+    """
+    checkout = tmp_path / "gaia"
+    _install_gaia_at(monkeypatch, checkout / "src" / "gaia")
+    sidecar = checkout / "hub" / "agents" / "gaia" / "python"
+    sidecar.mkdir(parents=True)
+    assert is_agent_own_source(sidecar) is True
+
+
+def test_a_dev_mode_sidecar_resolves_to_no_root(tmp_path, monkeypatch):
+    """End-to-end: the sidecar's own package dir must not become the project.
+
+    Falling through to ``None`` is what keeps the code index rooted at
+    ``allowed_paths`` instead of narrowing to the agent's own package.
+    """
+    checkout = tmp_path / "gaia"
+    _install_gaia_at(monkeypatch, checkout / "src" / "gaia")
+    sidecar = checkout / "hub" / "agents" / "gaia" / "python"
+    sidecar.mkdir(parents=True)
+    (sidecar / "pyproject.toml").write_text("[project]\nname='gaia-agent'\n")
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(sidecar)
+    assert resolve_project_root() is None
+
+
 def test_a_project_with_gaia_in_its_venv_still_gets_a_root(tmp_path, monkeypatch):
     """End-to-end for the bug: such a project resolves to itself, not ``None``."""
     project = tmp_path / "userproj"
