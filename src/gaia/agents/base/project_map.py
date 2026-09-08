@@ -412,6 +412,10 @@ PROJECT_ROOT_ENV = "GAIA_PROJECT_ROOT"
 #: How far up from the working directory to look for a repository root.
 _MAX_ASCEND = 4
 
+#: Directory names that mark an installed (non-editable) distribution. A ``gaia``
+#: package under one of these is a wheel in somebody else's venv, not a checkout.
+_INSTALLED_PACKAGE_DIRS = frozenset({"site-packages", "dist-packages"})
+
 
 def is_agent_own_source(root: os.PathLike | str) -> bool:
     """Does *root* contain the ``gaia`` package this process is running from?
@@ -422,10 +426,16 @@ def is_agent_own_source(root: os.PathLike | str) -> bool:
     embed thousands of files nobody asked about. An explicitly configured root
     is never subject to this check: pointing GAIA at GAIA is legitimate when you
     mean it.
+
+    Only a source or editable checkout counts. A wheel installed into a venv
+    under the user's project makes that project an ancestor of the package, and
+    treating it as GAIA's own tree would silently cost the user their map.
     """
     import gaia
 
     package = Path(gaia.__file__).resolve().parent
+    if any(p.name in _INSTALLED_PACKAGE_DIRS for p in package.parents):
+        return False
     path = Path(root).resolve()
     return path == package or path in package.parents
 
@@ -712,7 +722,14 @@ class ProjectMapMixin:
     def _on_task_start(self, user_input: str) -> None:
         """Materialize the map and, if warranted, kick off ``index_codebase``."""
         super()._on_task_start(user_input)
-        pm = self.materialize_project_map()
+        try:
+            pm = self.materialize_project_map()
+        except OSError as e:
+            # The root is resolved once per session and can be deleted, renamed
+            # or unmounted under us. Orientation is decorative and must not take
+            # the turn with it. A misconfigured explicit root still raises.
+            logger.warning("[project-map] cannot read the project root: %s", e)
+            return
         if pm is not None:
             self._maybe_start_background_index(pm)
 

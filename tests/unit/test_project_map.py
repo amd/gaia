@@ -300,6 +300,55 @@ def test_no_root_outside_a_repository(tmp_path, monkeypatch):
     assert resolve_project_root() is None
 
 
+def _install_gaia_at(monkeypatch, package: pathlib.Path) -> None:
+    """Point the imported ``gaia`` package at *package* for one test."""
+    import gaia
+
+    package.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(gaia, "__file__", str(package / "__init__.py"))
+
+
+def test_a_wheel_in_the_projects_venv_is_not_gaias_own_source(tmp_path, monkeypatch):
+    """The embedded-SDK layout: GAIA pip-installed into the user's own venv.
+
+    The project is an ancestor of the package, which used to read as "this is
+    GAIA" and cost the project its map entirely.
+    """
+    project = tmp_path / "userproj"
+    _install_gaia_at(
+        monkeypatch, project / ".venv" / "lib" / "python3.11" / "site-packages" / "gaia"
+    )
+    assert is_agent_own_source(project) is False
+
+
+def test_a_dist_packages_install_is_not_gaias_own_source(tmp_path, monkeypatch):
+    """Same layout, under the Debian-style directory name."""
+    project = tmp_path / "userproj"
+    _install_gaia_at(
+        monkeypatch, project / "vendor" / "lib" / "python3" / "dist-packages" / "gaia"
+    )
+    assert is_agent_own_source(project) is False
+
+
+def test_an_editable_checkout_is_still_gaias_own_source(tmp_path, monkeypatch):
+    """Dev mode must keep working: editable installs point at ``<repo>/src/gaia``."""
+    checkout = tmp_path / "gaia"
+    _install_gaia_at(monkeypatch, checkout / "src" / "gaia")
+    assert is_agent_own_source(checkout) is True
+
+
+def test_a_project_with_gaia_in_its_venv_still_gets_a_root(tmp_path, monkeypatch):
+    """End-to-end for the bug: such a project resolves to itself, not ``None``."""
+    project = tmp_path / "userproj"
+    (project / ".git").mkdir(parents=True)
+    _install_gaia_at(
+        monkeypatch, project / ".venv" / "lib" / "python3.11" / "site-packages" / "gaia"
+    )
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(project)
+    assert resolve_project_root() == str(project.resolve())
+
+
 # ── the mixin: prompt injection and the index trigger ─────────────────────
 
 
@@ -368,6 +417,30 @@ def test_index_trigger_fires_for_an_unindexed_repository(repo):
     agent = _FakeAgent(repo, indexed=False)
     agent._on_task_start("do a thing")
     assert _join(agent) == [{}]
+
+
+def test_a_vanished_project_root_does_not_fail_the_turn(repo, caplog):
+    """The root is resolved once per session and can go away mid-session.
+
+    Orientation is decorative — losing it must cost the map, not the query.
+    """
+    import shutil
+
+    agent = _FakeAgent(repo, indexed=True)
+    agent._on_task_start("warm the resolved-root cache")
+    shutil.rmtree(repo)
+
+    with caplog.at_level("WARNING"):
+        agent._on_task_start("the root is gone now")  # must not raise
+
+    assert "cannot read the project root" in caplog.text
+
+
+def test_a_misconfigured_root_still_fails_loudly(tmp_path):
+    """The OSError guard must not swallow a root the user configured wrong."""
+    agent = _FakeAgent(tmp_path / "never-existed")
+    with pytest.raises(ValueError, match="not a directory"):
+        agent._on_task_start("do a thing")
 
 
 def test_prompt_says_building_while_the_index_is_running(repo):

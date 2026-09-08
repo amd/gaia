@@ -122,6 +122,10 @@ dev mode the agent sidecar is launched from the GAIA checkout, and mapping (and
 auto-indexing) its own source is never what the user asked for. An explicitly
 configured root is exempt: pointing GAIA at GAIA is fine when you mean it.
 
+Only a source or editable checkout counts as GAIA's own tree. Installing GAIA
+into a virtualenv inside your own project — the embedded-SDK layout — leaves
+your project mapped normally.
+
 If none of those is a repository the agent gets **no map at all**. That is the
 right answer, not a degraded one — an agent answering questions from a home
 directory is not in a project, and a map of `~` would spend tokens describing
