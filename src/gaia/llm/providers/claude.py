@@ -221,14 +221,23 @@ class ClaudeProvider(LLMClient):
 
     def _restore_tool_name(self, api_name: str) -> str:
         if api_name not in self._tool_name_map:
-            # Every outbound name is registered, so a miss means the map is
-            # stale — the agent would blame the model for "Unknown tool name".
-            logger.warning(
-                "Tool %r is not in the outbound name map; returning it "
-                "unmapped. Dispatch will fail if the name was sanitized.",
+            # Every outbound name is registered, so a miss means request and
+            # response were shaped against different tool sets. The message
+            # reaches the user verbatim, so the diagnostic detail goes to the
+            # log rather than into the exception.
+            logger.error(
+                "Tool %r is not in the outbound name map. The map is rebuilt "
+                "per request in _to_anthropic_tools, so a miss means this "
+                "response was parsed against a different tool set than the one "
+                "sent — e.g. an overlapping chat() call on this provider "
+                "instance. Registered: %s",
                 api_name,
+                sorted(self._tool_name_map),
             )
-            return api_name
+            raise RuntimeError(
+                f"Claude returned tool {api_name!r}, which was not in the tool "
+                "set sent with this request."
+            )
         return self._tool_name_map[api_name]
 
     def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
@@ -243,13 +252,22 @@ class ClaudeProvider(LLMClient):
                 dict(tool)  # already Anthropic-shaped (name + input_schema)
                 if fn is None
                 else {
-                    "name": fn["name"],
+                    # .get so a nameless entry hits the guard below rather
+                    # than dying on a bare KeyError.
+                    "name": fn.get("name"),
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters")
                     or {"type": "object", "properties": {}},
                 }
             )
-            original = entry.get("name", "")
+            original = entry.get("name")
+            if not original:
+                raise ValueError(
+                    "Tool definition has no name: "
+                    f"{tool!r}. Anthropic requires a name on every tool entry "
+                    "(custom, server, and client-side alike), and GAIA needs "
+                    "one to route the model's call back to a registered tool."
+                )
             api_name = self._api_tool_name(original)
             # Register identity names too: `write/file` sanitizes onto the
             # builtin `write_file`, and only a full map can see that clash.

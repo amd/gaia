@@ -443,7 +443,11 @@ def _stream_events():
                 type="content_block_start",
                 index=2,
                 content_block=SimpleNamespace(
-                    type="tool_use", id="toolu_s1", name="list_directory"
+                    # Must be a tool this request actually declared
+                    # (OPENAI_TOOLS) — the API only returns declared names.
+                    type="tool_use",
+                    id="toolu_s1",
+                    name="read_file",
                 ),
             ),
             SimpleNamespace(
@@ -481,7 +485,7 @@ def test_stream_assembles_input_json_deltas_into_sentinel(fake_anthropic):
     assert sentinel.startswith(NATIVE_TOOL_CALLS_PREFIX)
     envelope = json.loads(sentinel)
     (call,) = envelope[_NATIVE_TC_KEY]
-    assert call["function"]["name"] == "list_directory"
+    assert call["function"]["name"] == "read_file"
     assert json.loads(call["function"]["arguments"]) == {"path": "C:/"}
     assert envelope["finish_reason"] == "tool_calls"
     assert envelope["content"] == "Checking."
@@ -704,6 +708,34 @@ class TestToolNameSanitization:
         converted = p._to_anthropic_tools(self._tools("read_file", "query-docs"))
         assert [t["name"] for t in converted] == ["read_file", "query-docs"]
         assert p._restore_tool_name("read_file") == "read_file"
+
+    def test_unmapped_returned_name_fails_loudly(self, fake_anthropic, caplog):
+        """A miss means request and response were shaped against different
+        tool sets. Returning the name unmapped surfaces later as "unknown
+        tool", blaming the model for a bug that is here."""
+        p = _provider(fake_anthropic)
+        p._to_anthropic_tools(self._tools("read_file"))
+        with pytest.raises(RuntimeError, match="not in the tool set sent"):
+            p._restore_tool_name("some_other_tool")
+        # The user-facing message stays short; the diagnostic goes to the log.
+        assert "read_file" in caplog.text
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"type": "function", "function": {"parameters": {}}},  # OpenAI shape
+            {"input_schema": {}},  # already-Anthropic shape
+        ],
+        ids=["openai_shape", "anthropic_shape"],
+    )
+    def test_nameless_tool_entry_fails_loudly(self, fake_anthropic, entry):
+        """Anthropic requires a name on every tool entry, so a nameless one is
+        malformed input — not something to pass through. Without the guard two
+        of them both sanitize to '' and trip the collision error, which names
+        the wrong problem."""
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="has no name"):
+            p._to_anthropic_tools([entry])
 
     def test_sanitization_collision_fails_loudly(self, fake_anthropic):
         p = _provider(fake_anthropic)
