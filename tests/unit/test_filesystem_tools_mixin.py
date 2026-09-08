@@ -1539,12 +1539,14 @@ class TestEdgeCases:
         assert str(tmp_path.resolve()) in result
 
     def test_find_files_with_invalid_scope(self, tmp_path):
-        """find_files with a nonexistent scope path returns no results."""
+        """find_files with a nonexistent scope path returns an error."""
+        missing = tmp_path / "does_not_exist"
         result = self.tools["find_files"](
             query="anything",
-            scope=str(tmp_path / "does_not_exist"),
+            scope=str(missing),
         )
-        assert "No files found" in result
+        assert "Search root does not exist" in result
+        assert "No files found" not in result
 
     def test_read_file_with_encoding_fallback(self, tmp_path):
         """read_file falls back to utf-8 with error replacement on decode failure."""

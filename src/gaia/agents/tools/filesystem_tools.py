@@ -692,6 +692,8 @@ class FileSystemToolsMixin:
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = _get_search_roots(scope)
+                named_scopes = ("smart", "home", "cwd", "everywhere")
+                user_named_root = scope not in named_scopes
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
@@ -702,6 +704,11 @@ class FileSystemToolsMixin:
 
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
+                        # Named folders like ~/Documents can be skipped. A
+                        # caller supplied path should fail the same way
+                        # search_directory does, not look like an empty hit.
+                        if user_named_root:
+                            return f"Error: Search root does not exist: {root}"
                         continue
 
                     if effective_type == "content":
