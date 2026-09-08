@@ -316,6 +316,9 @@ class BuilderAgent(Agent):
         # greeting/question when the request already named the agent.
         nudged_missing_tool = False
         parse_errors = 0
+        # One-shot guard: a create_agent call that dropped a required argument
+        # gets exactly one corrective turn before the fail-loudly path.
+        retried_invalid_args = False
 
         while steps_taken < steps_limit and final_answer is None:
             steps_taken += 1
@@ -409,6 +412,32 @@ class BuilderAgent(Agent):
                     if isinstance(tool_result, dict)
                     else str(tool_result)
                 )
+                # A malformed call is not a failed creation: hand the error back
+                # once so the model can re-emit the tool call with the argument
+                # it dropped, then fall through to the fail-loudly path (#3581).
+                if (
+                    tool_name == "create_agent"
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("error_type") == "invalid_arguments"
+                    and not retried_invalid_args
+                ):
+                    retried_invalid_args = True
+                    logger.warning(
+                        "BuilderAgent: malformed create_agent call (%s); retrying once",
+                        tool_result.get("error"),
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"The create_agent call was rejected: "
+                                f"{tool_result.get('error')}\n"
+                                "Re-emit ONLY the bare JSON tool call with every "
+                                "required argument filled in from the request above."
+                            ),
+                        }
+                    )
+                    continue
                 # Fail loudly: if create_agent returned an error, end immediately.
                 if tool_name == "create_agent" and (
                     (

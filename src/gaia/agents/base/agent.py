@@ -2904,6 +2904,9 @@ Do NOT wrap conversational replies in JSON.
         """
 
         def _python_to_json_type(py_type: str) -> str:
+            # Accepts both the registry's JSON names (what @tool emits) and raw
+            # Python names (programmatically registered schemas). Without the
+            # former, "integer"/"array" fell through to the "string" default.
             return {
                 "str": "string",
                 "int": "integer",
@@ -2911,6 +2914,12 @@ Do NOT wrap conversational replies in JSON.
                 "bool": "boolean",
                 "list": "array",
                 "dict": "object",
+                "string": "string",
+                "integer": "integer",
+                "number": "number",
+                "boolean": "boolean",
+                "array": "array",
+                "object": "object",
             }.get(py_type.lower().strip(), "string")
 
         if filter_to is None:
@@ -3811,7 +3820,13 @@ Do NOT wrap conversational replies in JSON.
                 f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
             )
             logger.error(error_msg)
-            return {"status": "error", "error": error_msg}
+            # Tagged so callers can tell a malformed call (retryable — the model
+            # can re-emit it) from a tool that ran and failed (#3581).
+            return {
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": error_msg,
+            }
 
         # Reject arguments the tool does not accept before dispatch. A model that
         # hallucinates a kwarg (e.g. mailbox= on archive_message_batch) would
@@ -3841,7 +3856,11 @@ Do NOT wrap conversational replies in JSON.
                     f"Accepted argument(s): {', '.join(sorted(accepted_args)) or 'none'}."
                 )
                 logger.error(error_msg)
-                return {"status": "error", "error": error_msg}
+                return {
+                    "status": "error",
+                    "error_type": "invalid_arguments",
+                    "error": error_msg,
+                }
 
         # Models routinely send numbers as JSON strings ("120" for timeout: int).
         # Every tool body would otherwise have to defend itself, and the ones
@@ -3849,7 +3868,11 @@ Do NOT wrap conversational replies in JSON.
         tool_args, coercion_error = self._coerce_tool_args(tool_name, sig, tool_args)
         if coercion_error is not None:
             logger.error(coercion_error)
-            return {"status": "error", "error": coercion_error}
+            return {
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": coercion_error,
+            }
 
         # Before dispatch, not after: a tool that times out or raises may still
         # have pulled content into the turn, and its error string can carry it.
