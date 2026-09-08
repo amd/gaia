@@ -26,7 +26,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **68** (CORE 11 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **69** (CORE 11 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
@@ -42,7 +42,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `screenshot`: 1
   - `shell`: 3
   - `skill_hub`: 4
-  - `skills`: 4
+  - `skills`: 5
   - `vision`: 2
   - `web`: 6
 - Skill-library tools (framework `SKILL_LIBRARY_TOOL_NAMES`, all in the union): **8**

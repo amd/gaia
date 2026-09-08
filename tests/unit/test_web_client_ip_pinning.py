@@ -528,6 +528,7 @@ def test_adapter_constructs_on_a_supported_requests():
     ), "test environment predates requests 2.32.3"
     assert PinnedIPAdapter() is not None
 
+
 class TestLoopbackAllowlist:
     """GAIA_WEB_ALLOWED_HOSTS is an opt-in test affordance: default-off, and it
     only permits loopback for a host the operator explicitly named."""

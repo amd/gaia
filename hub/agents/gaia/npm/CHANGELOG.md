@@ -56,7 +56,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 26 of its 67 tools on any one call — a
+  profile.** The model is sent at most 26 of its 69 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.
