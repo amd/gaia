@@ -9,16 +9,20 @@ Tests data-conversion functions and filesystem helpers in gaia.ui.utils:
 - message_to_response: message dict -> MessageResponse (with JSON parsing)
 - doc_to_response: document dict -> DocumentResponse
 - ensure_within_home: home directory security guard
+- document_roots: the declared-root allowlist behind that guard
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
 from gaia.ui.utils import (
+    DOCUMENT_ROOTS_ENV,
     doc_to_response,
+    document_roots,
     ensure_within_home,
     format_size,
     message_to_response,
@@ -426,7 +430,8 @@ class TestEnsureWithinHome:
         with pytest.raises(HTTPException) as exc_info:
             ensure_within_home(Path("/"))
         assert exc_info.value.status_code == 403
-        assert "home directory" in exc_info.value.detail
+        # The message names the roots that WOULD have been accepted.
+        assert str(Path.home().resolve()) in exc_info.value.detail
 
     def test_system_path_raises_403(self):
         with pytest.raises(HTTPException) as exc_info:
@@ -438,3 +443,57 @@ class TestEnsureWithinHome:
     def test_deeply_nested_home_subdirectory_passes(self):
         deep_path = Path.home() / "a" / "b" / "c" / "d" / "e"
         ensure_within_home(deep_path)
+
+    def test_declared_root_outside_home_passes(self, tmp_path, monkeypatch):
+        """A root declared via GAIA_DOCUMENT_ROOTS is accepted (#3585)."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))
+        ensure_within_home((corpus / "documents" / "report.md").resolve())
+
+    def test_sibling_of_declared_root_still_raises_403(self, tmp_path, monkeypatch):
+        """Declaring a root must not open its parent."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))
+        with pytest.raises(HTTPException) as exc_info:
+            ensure_within_home((tmp_path / "secrets.md").resolve())
+        assert exc_info.value.status_code == 403
+
+
+# ── document_roots ────────────────────────────────────────────────────────
+
+
+class TestDocumentRoots:
+    """Tests for document_roots()."""
+
+    def test_home_is_always_a_root(self, monkeypatch):
+        monkeypatch.delenv(DOCUMENT_ROOTS_ENV, raising=False)
+        assert Path.home().resolve() in document_roots()
+
+    def test_multiple_roots_are_pathsep_separated(self, tmp_path, monkeypatch):
+        a, b = tmp_path / "a", tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, os.pathsep.join([str(a), str(b)]))
+        roots = document_roots()
+        assert a.resolve() in roots
+        assert b.resolve() in roots
+
+    def test_relative_entry_raises_500(self, monkeypatch):
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, "eval/corpus")
+        with pytest.raises(HTTPException) as exc_info:
+            document_roots()
+        assert exc_info.value.status_code == 500
+        assert "absolute" in exc_info.value.detail
+
+    def test_missing_directory_raises_500(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(tmp_path / "nope"))
+        with pytest.raises(HTTPException) as exc_info:
+            document_roots()
+        assert exc_info.value.status_code == 500
+        assert "existing" in exc_info.value.detail
+
+    def test_empty_value_is_home_only(self, monkeypatch):
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, "")
+        assert set(document_roots()) <= {Path.home(), Path.home().resolve()}

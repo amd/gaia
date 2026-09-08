@@ -349,6 +349,30 @@ The agent supports the **Model Context Protocol** in both directions — connect
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
   </Accordion>
 
+  <Accordion title="Access denied: path must be within one of ...">
+    Documents can only be read from an allowed root. By default that is your
+    home directory — a file elsewhere on disk is rejected with HTTP 403.
+
+    This bites on service accounts and CI runners, whose home
+    (`C:\Windows\System32\config\systemprofile`) is not where their files live.
+    Add the extra directory before starting the server:
+
+    ```bash
+    # POSIX — separate multiple roots with ':'
+    export GAIA_DOCUMENT_ROOTS=/srv/corpus
+    ```
+    ```powershell
+    # Windows — separate multiple roots with ';'
+    $env:GAIA_DOCUMENT_ROOTS = "C:\actions-runner\_work\gaia\gaia\eval\corpus"
+    ```
+
+    Each entry must be an absolute path to a directory that exists; a relative
+    or missing one fails the request with HTTP 500 rather than being ignored.
+    The containment check still applies — declaring a root widens access to
+    that root only, never to its parent, and a symlink escaping it is still
+    rejected.
+  </Accordion>
+
   <Accordion title="First-run network egress to huggingface.co">
     The first time you index a document, Lemonade Server pulls the embedding
     model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
