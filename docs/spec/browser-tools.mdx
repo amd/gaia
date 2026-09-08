@@ -179,6 +179,9 @@ def download_file(
     PDFs, CSVs, images, or any file from the web for local analysis.
     After downloading, use read_file or index_document to process it.
 
+    Never replaces a file that already exists: if the destination is
+    taken the download fails, so pass filename= to choose a free name.
+
     Args:
         url: Direct URL to the file to download
         save_to: Local directory to save the file (default: ~/Downloads)
@@ -189,8 +192,18 @@ def download_file(
 **Limits:**
 - Max file size: 100 MB (configurable)
 - Streams download to disk (doesn't load into memory)
-- Validates path with `PathValidator` before writing
+- Validates the directory *and* the resolved destination with `PathValidator`
+  before any bytes are written
+- Refuses to overwrite an existing file, and refuses to start when a `.part`
+  file for the same name is already present
+- Writes to `<name>.part` and renames into place, so an interrupted download
+  never leaves a truncated file under the real name
 - Returns file path + size for follow-up tool use
+
+**Why the overwrite refusal:** the filename can come from the remote
+`Content-Disposition` header, which the server chooses. Without the check, a
+page serving `filename=report.pdf` would replace the user's own
+`~/Downloads/report.pdf`.
 
 **Output format:**
 ```

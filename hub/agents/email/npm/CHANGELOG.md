@@ -29,6 +29,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
   as literal search text; they are now translated to the matching Graph
   query so `search({ query: "is:unread" })` and similar calls behave the
   way they do for Gmail (#2996).
+- **Searching Outlook with `is:starred`, `after:`, `before:`, `label:`,
+  `has:`, or `in:` now fails with a clear error instead of quietly matching
+  nothing.** Microsoft Graph has no equivalent for these, so they used to be
+  sent as plain search text and return zero results with no indication why
+  (#2996).
 
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the

@@ -66,6 +66,7 @@ from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
+from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
@@ -545,7 +546,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS - allow local origins and tunnel URLs for mobile access
+    # CORS - first-party dev origins only.
+    #
+    # No tunnel origin is listed: the mobile flow serves the SPA *from*
+    # the tunnel, so those requests are same-origin and CORS never
+    # applies. A wildcard over a shared self-service namespace
+    # (*.ngrok-free.app, *.use.devtunnels.ms) would hand every tenant of
+    # those namespaces an approved preflight -- including for the
+    # X-Gaia-UI header the CSRF guard depends on.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -556,7 +564,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.(ngrok-free\.app|use\.devtunnels\.ms)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -566,6 +573,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # the ngrok tunnel is active.  Must be added *after* CORSMiddleware so
     # that CORS preflight (OPTIONS) responses are handled first.
     app.add_middleware(TunnelAuthMiddleware)
+
+    # Host / Origin / X-Gaia-UI guard. Added last so it is the OUTERMOST
+    # middleware: it runs before tunnel auth (which passes everything
+    # through while the tunnel is off) and its rejections carry no CORS
+    # headers, so a cross-site page cannot read why it failed.
+    app.add_middleware(UIRequestGuardMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
