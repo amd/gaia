@@ -32,14 +32,34 @@ param(
 
 $ErrorActionPreference = "Continue"
 $TaskName = "GaiaLemonadeServer"
+# Bump whenever the task ACTION below changes (launch environment, args,
+# redirects). The health fast-path reuses whatever the Task Scheduler started
+# from the definition registered LAST time, so without this marker an edit to
+# the action never reaches a runner whose server is already up -- it waits for a
+# reboot or an explicit -ForceRestart. That is why the stdout/stderr redirect
+# added for #3015 only ever applied on the workflows that pass -ForceRestart.
+$TaskActionVersion = "2026-09-coopmat"
+
 function Test-Health {
     try { Invoke-RestMethod "http://localhost:$Port/api/v1/health" -TimeoutSec 5 | Out-Null; return $true }
     catch { return $false }
 }
 
+# Is the REGISTERED task action the one this script writes today?
+function Test-TaskCurrent {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) { return $false }
+    return [bool](@($task.Actions) | Where-Object {
+        $_.Arguments -like "*GAIA_LEMONADE_TASK_VERSION='$TaskActionVersion'*"
+    })
+}
+
 if (-not $ForceRestart -and (Test-Health)) {
-    Write-Host "Lemonade already healthy on port $Port -- reusing persistent server."
-    exit 0
+    if (Test-TaskCurrent) {
+        Write-Host "Lemonade already healthy on port $Port -- reusing persistent server."
+        exit 0
+    }
+    Write-Host "Lemonade is healthy on port $Port but its scheduled task predates action version '$TaskActionVersion' -- re-registering and restarting so the current launch environment applies."
 }
 
 # Resolve the server binary. In v10.x the server is LemonadeServer.exe; the
@@ -90,7 +110,15 @@ $StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
 # log stays empty. Measured: stdout 0 bytes without it, 39 with; stderr arrives
 # either way (Python line-buffers stderr). So an empty STDERR log is not a
 # buffering symptom -- it means the server wrote nothing there.
+#
+# GGML_VK_DISABLE_COOPMAT: every OTHER way GAIA starts Lemonade sets it
+# (start-lemonade.ps1/.bat/.sh) and this task was the one launch path that did
+# not, which made the persistent server the only one running the Vulkan
+# cooperative-matrix path. On the eval runner that is the difference between the
+# job that serves the RAG embedder and the gate that cannot (#3016).
 $InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
+             "`$env:GGML_VK_DISABLE_COOPMAT='1'; " +
+             "`$env:GAIA_LEMONADE_TASK_VERSION='$TaskActionVersion'; " +
              "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
              "-RedirectStandardOutput '$StdoutLog' -RedirectStandardError '$StderrLog' " +
              "-NoNewWindow -Wait"
