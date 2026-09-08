@@ -14,6 +14,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **A project map at task start.** In a code repository the agent now opens
+  every task knowing the directory shape, the likely entry points, which
+  commands are installed, and the three platform differences that change
+  command syntax — instead of discovering each one through a failed tool call.
+  Capped at 600 prompt tokens. If the repository has no code index the map
+  starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
+  and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
+  it. See SKILL §11.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
