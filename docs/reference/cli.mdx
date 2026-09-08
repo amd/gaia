@@ -2978,9 +2978,12 @@ Each line wraps the event with the two things the payload itself does not carry
 {"at":"2026-09-08T18:39:32.547Z","seq":189,"event":{"type":"tool_result","tool":"find_files","data":{"success":true,"summary":"Found 25 result(s)…","summary_truncated":true}}}
 ```
 
-A frame the TUI could not parse is still recorded, under `unparsed` instead of
-`event` — that is the frame a trace is most wanted for. Events are flushed one
-at a time, so a run that crashes mid-turn still leaves everything it received.
+A frame the TUI could not parse is still recorded — that is the frame a trace is
+most wanted for. It carries `unparsed` (the raw text) instead of `event`, or
+`unparsed_b64` when the bytes are not valid UTF-8, since encoding those as a
+JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
+A reader must check all three keys. Events are flushed one at a time, so a run
+that crashes mid-turn still leaves everything it received.
 
 `--trace` and `--dev` are independent: `--dev` chooses what is rendered on
 screen, `--trace` chooses what is written to disk. Use both together to watch a

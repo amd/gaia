@@ -98,6 +98,26 @@ var tracePath string
 // A file genuinely named "auto" is still reachable as `--trace=./auto`.
 const traceAutoPath = "auto"
 
+// traceArgAdvice explains a stray positional that is really a spaced --trace
+// path, and returns nil when --trace does not explain it.
+//
+// want is how many positionals the command legitimately takes. pflag refuses to
+// attach a spaced value to a flag that is legal without one, so
+// `… --trace out.jsonl` leaves out.jsonl as an argument and records to the
+// DEFAULT path — the exact "recording somewhere you did not ask for" this flag
+// exists to remove. Every command that accepts --trace has to say so, not just
+// the root one.
+func traceArgAdvice(args []string, want int) error {
+	if tracePath != traceAutoPath || len(args) <= want {
+		return nil
+	}
+	stray := args[want]
+	return fmt.Errorf(
+		"--trace takes its path attached, not spaced: write --trace=%s "+
+			"(as written, %q was read as an argument, and the trace would have gone "+
+			"to the default path instead)", stray, stray)
+}
+
 // openTrace turns --trace into a writer, or nil when the flag was not passed.
 // agentID names the run in the default filename, so a trace can be told apart
 // from another agent's without opening it.
@@ -241,13 +261,12 @@ func init() {
 		// Cobra's own legacyArgs message, suggestions included — this hook
 		// replaced it, so it owes the same help for an ordinary typo.
 		near := cmd.SuggestionsFor(args[0])
-		// The trace advice only when nothing else explains the stray argument:
-		// with --trace on, `gaia-tui --trace chatt` is a misspelled command,
-		// not a misplaced path, and must still be told so.
-		if tracePath == traceAutoPath && len(near) == 0 {
-			return fmt.Errorf(
-				"--trace takes its path attached, not spaced: write --trace=%s "+
-					"(as written, %q was read as a command name)", args[0], args[0])
+		// A near-miss is a misspelled COMMAND, not a misplaced path: with
+		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
+		if len(near) == 0 {
+			if err := traceArgAdvice(args, 0); err != nil {
+				return err
+			}
 		}
 		msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
 		if len(near) > 0 {

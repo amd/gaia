@@ -48,7 +48,15 @@ var runCmd = &cobra.Command{
 		"on a model server that is not there. The turn itself is bounded too, so an " +
 		"agent that accepts the query and then goes quiet is reported, never waited " +
 		"on forever — raise or lower that bound with --timeout.",
-	Args:         cobra.ExactArgs(1),
+	// ExactArgs(1) alone reports "accepts 1 arg(s), received 2" for
+	// `run <agent> --trace out.jsonl`, which never mentions the flag that
+	// caused it.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := traceArgAdvice(args, 1); err != nil {
+			return err
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := checkModelSupported(args[0], runModel); err != nil {

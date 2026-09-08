@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // parseTraceFlag runs argv through the root command's flag set and returns what
@@ -90,6 +92,74 @@ func TestTraceFlagRejectsASpacedPathWithTheFix(t *testing.T) {
 	if strings.Contains(typo.Error(), "--trace=") {
 		t.Errorf("a misspelled command was reported as a misplaced trace path: %v", typo)
 	}
+}
+
+// --trace is a PERSISTENT flag, so the spaced-path trap exists on every
+// subcommand too. It used to be caught only on the root command: `chat --trace
+// out.jsonl` silently recorded to the default path and never created the file
+// the user named, and `run <agent> --trace out.jsonl` said only "accepts 1
+// arg(s), received 2".
+func TestTraceSpacedPathIsCaughtOnEverySubcommand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  *cobra.Command
+		args []string
+	}{
+		{"root", rootCmd, []string{"out.jsonl"}},
+		{"chat", chatCmd, []string{"out.jsonl"}},
+		{"run", runCmd, []string{"email", "out.jsonl"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseTraceFlag(t, "--trace"); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if tc.cmd.Args == nil {
+				t.Fatalf("%s declares no Args hook, so a stray --trace path is swallowed", tc.name)
+			}
+			err := tc.cmd.Args(tc.cmd, tc.args)
+			if err == nil {
+				t.Fatalf("%s accepted a spaced --trace path; it would record to the default path", tc.name)
+			}
+			if !strings.Contains(err.Error(), "--trace=out.jsonl") {
+				t.Errorf("%s does not name the working form: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// The advice must not fire on arguments the command legitimately takes, nor
+// when --trace was given a real path.
+func TestTraceArgAdviceStaysOutOfTheWay(t *testing.T) {
+	t.Run("run keeps its agent id", func(t *testing.T) {
+		if _, err := parseTraceFlag(t, "--trace"); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if err := runCmd.Args(runCmd, []string{"email"}); err != nil {
+			t.Errorf("`run email --trace` was rejected: %v", err)
+		}
+	})
+
+	t.Run("an attached path leaves a stray arg to the normal error", func(t *testing.T) {
+		if _, err := parseTraceFlag(t, "--trace=/tmp/run.jsonl"); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		err := chatCmd.Args(chatCmd, []string{"nonsense"})
+		if err == nil {
+			t.Fatal("a stray argument was accepted")
+		}
+		if strings.Contains(err.Error(), "--trace=") {
+			t.Errorf("an unrelated stray argument was blamed on --trace: %v", err)
+		}
+	})
+
+	t.Run("no --trace at all", func(t *testing.T) {
+		if _, err := parseTraceFlag(t); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if err := traceArgAdvice([]string{"whatever"}, 0); err != nil {
+			t.Errorf("advice fired without --trace: %v", err)
+		}
+	})
 }
 
 // Without --trace, a stray argument is still a bad command and must say so —

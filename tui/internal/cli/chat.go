@@ -25,6 +25,15 @@ var chatCmd = &cobra.Command{
 		"(--agent, which uses the transport that agent declares) or by spawning a " +
 		"binary directly (--subprocess).",
 	SilenceUsage: true,
+	// Everything this command takes is a flag. Without this, a stray argument
+	// was accepted and dropped — and `chat --trace out.jsonl` recorded to the
+	// default path while the file the user named never appeared.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := traceArgAdvice(args, 0); err != nil {
+			return err
+		}
+		return cobra.NoArgs(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if agentID != "" && subprocess != "" {
 			return fmt.Errorf("--agent and --subprocess are mutually exclusive: pick one")
