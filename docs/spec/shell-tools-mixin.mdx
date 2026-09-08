@@ -302,6 +302,13 @@ options — is not carried. The read-only whitelist has no `export`, so
 `PYTHONPATH`, `LD_*` and the rest of the names that decide which binary or which
 code a later command runs.
 
+A variable reaches each later command's *process*; it is not interpolated into
+that command's arguments. On the POSIX path `$NAME` in a command stays literal,
+for the same reason the tokens are re-quoted at all — a variable the agent set
+could otherwise name a file the path validator only ever saw as `$NAME`. Read a
+value back with `get_shell_state`. On `cmd.exe` the original string is passed
+through unchanged, so `%NAME%` expands there exactly as it always has.
+
 ### Path Traversal Prevention
 
 ```python

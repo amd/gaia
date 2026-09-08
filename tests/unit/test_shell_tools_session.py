@@ -8,7 +8,6 @@ call is indistinguishable from one that reuses a session until you ask it where
 it is.
 """
 
-import os
 import shlex
 
 import pytest
@@ -73,16 +72,37 @@ def test_the_probe_reports_the_session_directory(tools, tmp_path):
 
 
 def test_a_variable_set_through_the_tool_reaches_later_commands(tools):
+    """Set once, and every later command's child process inherits it.
+
+    Read back through the probe and the environment a child is handed, not by
+    echoing `$VAR`: the POSIX path re-quotes the command so the shell cannot
+    expand it. That the exported variable really reaches the shell is proved at
+    the session layer, where the command is not re-quoted
+    (``test_set_env_applies_to_the_next_command``).
+    """
+    host = tools["_host"]
     assert tools["set_shell_variable"](name="GAIA_TOOL_VAR", value="kept")[
         "status"
     ] == ("success")
 
-    state = tools["get_shell_state"]()
-    assert state["environment"]["GAIA_TOOL_VAR"] == "kept"
+    tools["run_shell_command"](command="echo hello")
 
-    echo = "echo %GAIA_TOOL_VAR%" if os.name == "nt" else "echo $GAIA_TOOL_VAR"
-    result = tools["run_shell_command"](command=echo)
-    assert "kept" in result["stdout"]
+    assert tools["get_shell_state"]()["environment"]["GAIA_TOOL_VAR"] == "kept"
+    assert host.shell_session.effective_env()["GAIA_TOOL_VAR"] == "kept"
+
+
+def test_a_variable_is_not_interpolated_into_the_command(tools):
+    """The value is in the child's environment, never substitutable into argv.
+
+    Expansion is off by design: `cat $X` would let a variable the agent set name
+    a file the path validator only ever saw as the literal `$X`. `get_shell_state`
+    is how the agent reads a value back.
+    """
+    tools["set_shell_variable"](name="GAIA_TOOL_NOEXPAND", value="secret-value")
+
+    result = tools["run_shell_command"](command="echo $GAIA_TOOL_NOEXPAND")
+
+    assert "secret-value" not in result["stdout"]
 
 
 @pytest.mark.parametrize(

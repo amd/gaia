@@ -1196,6 +1196,10 @@ class ShellToolsMixin:
             so this is how a variable gets set. Variables that decide which
             binary or which code runs next — PATH, PYTHONPATH, LD_* and the
             like — are refused.
+
+            The value is passed to each later command's process, not pasted into
+            its arguments: `$NAME` in a command stays literal. Use
+            get_shell_state to read a value back.
             """
             upper = name.strip().upper()
             if not _VALID_SHELL_VAR_NAME.match(name.strip()):
