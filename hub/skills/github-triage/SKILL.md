@@ -68,12 +68,14 @@ report it and move on. Never re-run a denied command hoping for a different
 answer.
 
 **Refused outright — no prompt, and approval is not available.** `gh auth token`
-(prints the credential), `gh alias` (defines a shell command), `gh extension`
-(installs and runs code), `gh config`, `gh codespace`, any `gh api` write
-(`-X POST`, `-f`/`--field`, `graphql`), and the irreversible ones: `gh pr merge`,
-`gh issue close`, `gh label delete`, `gh repo delete`. Also refused inside an
-otherwise-approvable write: `--body-file` (uploads a local file's contents),
-`--editor`, and `--web`.
+and `gh auth status -t`/`--show-token` (both print the credential), `gh alias`
+(defines a shell command), `gh extension` (installs and runs code), `gh config`,
+`gh codespace`, any `gh api` write (`-X POST`, `-f`/`--field`, `graphql`), and
+the irreversible ones: `gh pr merge`, `gh issue close`, `gh label delete`,
+`gh repo delete`. Also refused on any subcommand: `--body-file` (uploads a local
+file's contents), `--editor`, `--web` (opens a browser, returns you nothing), and
+`--watch` (blocks until the run finishes). Reads take a fixed flag allowlist, so
+a `gh` flag not listed here is refused rather than passed through.
 
 A refused command returns an error, not a silent no-op. Report it as a refusal
 and say what you would have run. These commands are refused outright rather than
