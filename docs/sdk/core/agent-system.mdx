@@ -869,6 +869,52 @@ walkthrough of the registry entry.
 
 ---
 
+## Verification Scope
+
+Every answer the agent loop emits ends with one line saying whether the result
+was actually checked. Without it, "done" reads the same whether the agent ran
+the test suite or ran nothing at all, and the only rational response is to
+distrust every completion message.
+
+```text
+Fixed the off-by-one in the pagination helper.
+
+Verification: verified — pytest ran and passed.
+```
+
+Three states, derived from the tool calls that actually executed during the
+turn — no extra model call:
+
+| State | When |
+|-------|------|
+| `verified` | At least one test / lint / build ran, and every one passed. |
+| `partially verified` | Checks ran, but not all of them passed. |
+| `unverified` | No check ran. Names how many tools did run, if any. |
+
+A call counts as a check when the tool is one of `run_tests`, `run_lint`,
+`typecheck`, or `build`, or when its `command` argument names a known runner
+(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
+classifier is deliberately conservative: a missed runner reads `unverified`,
+which is cautious rather than wrong.
+
+The statement rides in the emitted answer, so it reaches every surface — the
+CLI console, the SSE `answer` event, and `process_query`'s return value — and
+it is capped at `VERIFICATION_SCOPE_MAX_CHARS` (200) so it cannot grow the
+prompt as conversation history accumulates.
+
+```python
+from gaia.agents.base.verification import strip_verification_scope
+
+answer_only = strip_verification_scope(result["result"])
+```
+
+<Note>
+A turn cancelled from the UI returns an empty result on purpose, and carries no
+statement — filling it in would make a cancelled turn look like a completed one.
+</Note>
+
+---
+
 ## Proactive Lifecycle Hooks
 
 Beyond responding to a user prompt, an agent can act **proactively** — proposing

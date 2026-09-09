@@ -338,7 +338,13 @@ class CanonicalTranslator:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
             data = {}
-            for key in ("summary", "success", "command_output", "latency_ms"):
+            for key in (
+                "summary",
+                "success",
+                "summary_truncated",
+                "command_output",
+                "latency_ms",
+            ):
                 if key in event:
                     data[key] = event[key]
         tool = self._last_tool or "unknown"

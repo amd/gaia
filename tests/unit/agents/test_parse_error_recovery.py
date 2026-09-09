@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
+from gaia.agents.base.verification import strip_verification_scope
 
 
 class _DummyAgent(Agent):
@@ -221,7 +222,8 @@ class TestProcessQueryRecoversOnContextOverflow:
         # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
         text = result["result"] if isinstance(result, dict) else str(result)
         assert text, "expected the friendly trim-exhausted fallback text"
-        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        # The loop appends a verification-scope line to every answer (#3376).
+        assert strip_verification_scope(text) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
         assert "Max length reached" not in text
         assert "Sorry, I ran into" not in text
 
@@ -353,7 +355,8 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
 
         assert call_count["n"] == 2  # initial attempt + one trim-and-retry
         text = result["result"] if isinstance(result, dict) else str(result)
-        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        # The loop appends a verification-scope line to every answer (#3376).
+        assert strip_verification_scope(text) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
         assert "exceeds the available context size" not in text
         assert "Sorry, I ran into" not in text
 

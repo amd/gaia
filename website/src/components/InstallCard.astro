@@ -7,7 +7,7 @@
 // from the catalog — nothing about a specific agent is written into the markup.
 
 import InstallMethods from './InstallMethods.astro';
-import { formatBytes, isAgent, languageLabel, type Agent } from '../data/catalog';
+import { formatBytes, installCta, isNpmSidecar, languageLabel, type Agent } from '../data/catalog';
 
 interface Props {
   agent: Agent;
@@ -15,13 +15,15 @@ interface Props {
 
 const { agent } = Astro.props;
 
-const isNpm = !!agent.npm_package;
+// The sidecar wording belongs to the agent lane only — see isNpmSidecar.
+const isSidecar = isNpmSidecar(agent);
 const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_package}` : '';
 const deepLink = `gaia://hub/install/${agent.id}`;
+const cta = installCta(agent);
 
 const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_bytes) : '';
 const meta = [
-  isNpm ? 'npm client + frozen sidecar' : `${languageLabel(agent.language)} package`,
+  isSidecar ? 'npm client + frozen sidecar' : `${languageLabel(agent.language)} package`,
   size,
 ].filter(Boolean).join(' · ');
 ---
@@ -35,14 +37,16 @@ const meta = [
   <InstallMethods agent={agent} />
 
   <p class="mt-3.5 text-[13px] leading-[1.6] text-g-faint">
-    {isAgent(agent) && isNpm && (
+    {isSidecar && (
       <span>Ships as an npm client plus a frozen binary sidecar — GAIA is the recommended install path (there is no PyPI wheel). The npm package is for embedding the agent in a JS/TS app. </span>
     )}
     A local model must be running first: <span class="mono text-g-muted">gaia init</span> then <span class="mono text-g-muted">lemonade-server serve</span>.
   </p>
 
   <div class="mt-[18px] flex flex-wrap gap-3">
-    {isNpm ? (
+    {cta === 'npm' ? (
+      <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-primary">View on npm</a>
+    ) : cta === 'gaia+npm' ? (
       <>
         <a href={deepLink} class="g-btn g-btn-primary">Open in GAIA</a>
         <a href={npmUrl} target="_blank" rel="noopener" class="g-btn g-btn-secondary">View on npm</a>

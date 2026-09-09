@@ -71,7 +71,6 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 1. **Message Handling**
    - OpenAI message format
    - System/user/assistant roles
-   - GitHub Copilot workspace extraction
    - Prompt formatting
 
 2. **Response Generation**
@@ -497,63 +496,23 @@ async def stream_chat_completion(
 
 ## Implementation Details
 
-### Workspace Root Extraction
-
-```python
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-```
-
 ### Request Processing Flow
 
 ```python
 async def create_chat_completion(request: ChatCompletionRequest):
-    # 1. Extract workspace root (carried in the last user message's metadata).
-    workspace_root = extract_workspace_root(request.messages)
-
-    # 2. Resolve the agent. `get_agent()` takes only model_id; workspace_root
-    #    is applied afterwards (e.g., via agent.config or a per-request setter).
+    # 1. Resolve the agent. `get_agent()` takes only model_id.
     try:
         agent = registry.get_agent(request.model)
     except KeyError:
         raise HTTPException(404, f"Model not found: {request.model}")
-    if workspace_root and hasattr(agent, "set_workspace_root"):
-        agent.set_workspace_root(workspace_root)
 
-    # 3. Extract user message
+    # 2. Extract user message
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
         raise HTTPException(400, "No user message in request")
     user_message = user_messages[-1].content
 
-    # 4. Generate response
+    # 3. Generate response
     if request.stream:
         # Streaming response
         return StreamingResponse(

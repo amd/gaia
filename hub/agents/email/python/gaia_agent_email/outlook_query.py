@@ -28,6 +28,11 @@ This module splits that string into what each half of it actually is:
   request, so a query mixing the two families (``is:unread from:alice``)
   cannot be expressed in one call; that raises rather than silently dropping
   one half.
+- An operator this backend does not translate (``is:starred``, ``after:``,
+  ``before:``, ``newer:``, ``older:``, ``label:``, ``has:``, ``in:``) used to
+  fall into the ``$search`` bucket above and reach Graph as inert literal
+  text, matching nothing with no error. These now raise instead of silently
+  degrading.
 """
 
 from __future__ import annotations
@@ -40,12 +45,34 @@ from typing import List, Optional
 from gaia_agent_email.gmail_query import parse_gmail_duration_value
 
 # The only two Gmail ``is:`` values with an unambiguous Graph $filter mapping
-# (``isRead``); any other value (``starred``, ...) is left as free text, which
-# the mixed-family check below turns into a loud error, not a silent no-op.
+# (``isRead``); any other value (``starred``, ...) is caught below by
+# _UNSUPPORTED_OPERATOR_RE instead of reaching Graph as free text.
 _IS_RE = re.compile(r"\bis:(unread|read)\b", re.IGNORECASE)
 
 _DURATION_RE = re.compile(
-    r"\b(?P<op>newer_than|older_than):(?P<val>\S+)", re.IGNORECASE
+    # Stop at grouping punctuation so `(newer_than:7d)` validates `7d`, not
+    # `7d)`, just like the Gmail query normalizer.
+    r'\b(?P<op>newer_than|older_than):(?P<val>"[^"]*"|[^\s)}\]]+)',
+    re.IGNORECASE,
+)
+
+# Gmail operators with no Graph $filter mapping and no meaning to Graph's KQL
+# $search parser either (unlike from:/subject:, which Graph reads inside the
+# wrapping quotes the same way Outlook's own search box does). Left
+# unguarded, each reaches _graph_search_param as inert literal text: Graph
+# never errors on an unrecognised $search token, so the query silently
+# matches nothing (#2996 finding I62). ``is:`` here only matches a value
+# _IS_RE didn't already consume, i.e. anything other than unread/read.
+# ``newer:``/``older:`` (bare, not the ``_than`` duration forms _DURATION_RE
+# already handles) are read_tools._DATE_OP_RE's own vocabulary for absolute
+# dates and reach here unchanged by normalize_gmail_date_operators, so they
+# need the same guard as after:/before: or they degrade the same way (review
+# on this PR). The value grammar accepts an empty match (``\S*``, not
+# ``\S+``) so a bare ``label:`` with nothing after it still raises instead of
+# reaching $search as literal text.
+_UNSUPPORTED_OPERATOR_RE = re.compile(
+    r'\b(?P<op>is|after|before|newer|older|label|has|in):(?P<val>"[^"]*"|\S*)',
+    re.IGNORECASE,
 )
 
 # Graph has no calendar-aware relative-date filter, so a month is 30 days
@@ -104,6 +131,14 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
     does not defeat them the way it defeats ``is:``/``newer_than:`` (which
     ``$search`` cannot express under any quoting and route to ``$filter``
     above instead).
+
+    Also raises ``ValueError`` for a Gmail operator this backend does not
+    translate (``is:starred``, ``after:``, ``before:``, ``newer:``,
+    ``older:``, ``label:``, ``has:``, ``in:``), rather than sending it to
+    ``$search`` as text that silently matches nothing. Some of these (a
+    received-date bound, ``hasAttachments``) do have a Graph field; this
+    module just does not map them yet, which the error says plainly instead
+    of implying Graph itself has no such concept.
     """
     now = now or datetime.now(timezone.utc)
     filters: List[str] = []
@@ -122,7 +157,28 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
 
     remainder = _IS_RE.sub(_is_sub, query)
     remainder = _DURATION_RE.sub(_duration_sub, remainder)
+    if filters:
+        # Parentheses/brackets that wrapped a filter-only operator are syntax,
+        # not a second search term. Keep rejecting actual text after removing
+        # those wrappers, because Graph cannot combine $filter and $search.
+        remainder = re.sub(r"[()\[\]{}]", " ", remainder)
     remainder = " ".join(remainder.split())
+
+    # Checked before the mixed-family error below: a remainder that itself
+    # carries an operator Graph cannot express at all is never a valid
+    # second search term, so naming it beats telling the caller to re-run it
+    # as a separate search that would fail the exact same way (review on
+    # this PR).
+    unsupported = _UNSUPPORTED_OPERATOR_RE.search(remainder)
+    if unsupported:
+        raise ValueError(
+            "search_messages: on Outlook, "
+            f"{unsupported.group(0)!r} is not supported by this backend and "
+            "would silently match nothing if sent as search text. Supported "
+            "operators are is:unread, is:read, newer_than:, older_than:, "
+            f"from:, and subject:, so drop {unsupported.group('op')}: from "
+            "the query and try again."
+        )
 
     if filters and remainder:
         raise ValueError(
@@ -135,4 +191,5 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
         )
     if filters:
         return GraphQuery(filter=" and ".join(filters))
+
     return GraphQuery(search=_graph_search_param(query))

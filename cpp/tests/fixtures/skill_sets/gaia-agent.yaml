@@ -1,0 +1,56 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# A realistically shaped agent manifest used by test_skill_sets.cpp. It carries
+# the full set of hub publishing fields a packaged agent ships (see
+# cpp/agents/bash/gaia-agent.yaml) so the tests prove the skill-declaration
+# parser reads a real manifest and ignores everything that is not its business.
+id: mailroom
+name: Mailroom Agent
+version: 0.1.0
+description: "Triage, schedule, and summarize mail across a personal and a work profile."
+author: AMD
+license: MIT
+
+category: productivity
+tags: [email, triage, scheduling, skills]
+icon: inbox
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+permissions:
+  - filesystem:read
+  - network:read
+
+interfaces:
+  tui: true
+  cli: true
+
+# --- The blocks skill_sets.h owns -----------------------------------------
+# Always on, whichever set is active.
+skills:
+  - mailbox-hygiene
+  - name: incident-review
+    version: ">=0.1.0"
+    required: false
+
+# Exactly one of these is active per launch. `inbox-triage` deliberately
+# appears in both: sets overlap, and an overlapping skill must survive a
+# switch between them rather than being unloaded and reloaded.
+skill_sets:
+  personal:
+    - inbox-triage
+    - newsletter-digest
+  work:
+    - inbox-triage
+    - meeting-scheduling
+    - name: escalation-routing
+      required: false
+
+default_skill_set: personal

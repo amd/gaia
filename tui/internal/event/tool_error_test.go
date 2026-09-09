@@ -1,6 +1,7 @@
 package event
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -164,5 +165,61 @@ func TestToolErrorLeavesAHealthyEncodedSummaryAlone(t *testing.T) {
 	plain := `{"summary":"Listed 5 files and 1 directory","success":true}`
 	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "ls", Data: []byte(plain)}); failed {
 		t.Error("a prose summary was read as a failure")
+	}
+}
+
+func TestToolErrorDoesNotFailOnTruncatedPartialSuccess(t *testing.T) {
+	// The Python producer marks this summary because it was cut at the cap;
+	// the visible succeeded evidence must beat a per-item error marker.
+	data, err := json.Marshal(map[string]any{
+		"summary_truncated": true,
+		"summary":           `{"succeeded":["a","b"],"failed":[{"error":"already archived"`,
+		"success":           true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); failed {
+		t.Fatal("a truncated partial-success batch was reported as failed")
+	}
+}
+
+func TestToolErrorStillFailsOnTruncatedFailure(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary_truncated": true,
+		"summary":           `{"succeeded":[],"failed":[{"error":"permission denied"`,
+		"success":           true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); !failed {
+		t.Fatal("a truncated failure without successes was not reported")
+	}
+}
+
+func TestToolErrorIgnoresPartialSuccessWithoutTruncatedHint(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary": `{"succeeded":["a"],"failed":[{"error":"already archived"`,
+		"success": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); failed {
+		t.Fatal("a truncated partial-success batch without a producer hint was reported as failed")
+	}
+}
+
+func TestToolErrorHonorsExplicitFailureBeforePartialSuccess(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"summary": `{"succeeded":["a"],"ok":false,"failed":[{"error":"rejected"`,
+		"success": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); !failed {
+		t.Fatal("an explicit nested ok:false was hidden by partial-success evidence")
 	}
 }

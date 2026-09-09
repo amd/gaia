@@ -2242,11 +2242,11 @@ def pre_scan_inbox_impl(
                         "sender": item["sender"],
                         "subject": item["subject"],
                         "is_meeting_request": item.get("is_meeting_request", False),
+                        "preference_applied": item.get("preference_applied"),
                         "reason": (
                             "informational + session default 'archive'"
                             f" — {item.get('why', '')}"
                         ).rstrip(" —"),
-                        "preference_applied": item.get("preference_applied"),
                     }
                 )
             informational = []
@@ -2863,6 +2863,13 @@ class ReadToolsMixin:
               - words expected in the subject → ``subject:invoice``
               - status / recency → ``is:unread``, ``newer_than:7d``,
                 ``label:promotions``
+
+            On an Outlook-only mailbox, only ``from:``, ``subject:``,
+            ``is:unread``, ``is:read``, ``newer_than:``, and ``older_than:``
+            are supported; any other operator (``label:``, ``has:``,
+            ``after:``, ``before:``, ``in:``, ``is:starred``, ...) raises an
+            error naming the unsupported operator instead of matching
+            nothing silently.
 
             Combine them: ``"from:boss@example.com is:unread newer_than:7d"``.
             Date operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
