@@ -1549,6 +1549,55 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertTrue(valid)
         self.assertIsNone(error)
 
+    @responses.activate
+    def test_get_status_context_size_ignores_non_llm_models(self):
+        """get_status() must report the LLM's ctx_size, not a transcription
+        or other non-embedding model's, even if that model sorts first in
+        all_models_loaded (issue: Whisper-Large-v3-Turbo's ctx_size=4096 was
+        being reported instead of Qwen3-8B-GGUF's ctx_size=65536)."""
+        health_response = {
+            "status": "ok",
+            "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "backend_url": "http://127.0.0.1:8001/v1",
+                    "checkpoint": "amd/Whisper-Large-v3-Turbo",
+                    "device": "cpu",
+                    "model_name": "Whisper-Large-v3-Turbo",
+                    "recipe": "llamacpp",
+                    "recipe_options": {
+                        "ctx_size": 4096,
+                    },
+                    "type": "transcription",
+                },
+                {
+                    "backend_url": "http://127.0.0.1:8002/v1",
+                    "checkpoint": "amd/Qwen3-8B-GGUF",
+                    "device": "gpu",
+                    "model_name": "Qwen3-8B-GGUF",
+                    "recipe": "llamacpp",
+                    "recipe_options": {
+                        "ctx_size": 65536,
+                    },
+                    "type": "llm",
+                },
+            ],
+        }
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json=health_response, status=200
+        )
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json={"object": "list", "data": []},
+            status=200,
+        )
+
+        status = self.client.get_status()
+
+        self.assertEqual(status.context_size, 65536)
+
     # ------------------------------------------------------------------
     # LEMONADE_API_KEY support (issue #1139)
     # ------------------------------------------------------------------

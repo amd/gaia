@@ -19,6 +19,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
+    is_llm_model_entry,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -881,23 +882,14 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
-        # Filter to the LLM(s) actually loaded. ``type=="llm"`` is the
-        # precise check on health-format entries; the label fallback
-        # covers legacy code paths that populate ``loaded_models`` from
-        # the catalog (which lacks ``type``). Embedding and image models
-        # are excluded — reloading them with an LLM ctx_size makes no
-        # sense and (pre-#1030 follow-up) used to load the wrong model
-        # entirely because the embedder can sort before ``Gemma-…``.
-        llm_models = [
-            m
-            for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
-            )
-        ]
+        # Filter to the LLM(s) actually loaded, via the same
+        # ``is_llm_model_entry`` check ``get_status()`` uses for
+        # ``context_size`` — a single source of truth so the two can't drift.
+        # Embedding, image, and transcription models are excluded —
+        # reloading them with an LLM ctx_size makes no sense and (pre-#1030
+        # follow-up) used to load the wrong model entirely because the
+        # embedder can sort before ``Gemma-…``.
+        llm_models = [m for m in status.loaded_models if is_llm_model_entry(m)]
         if not llm_models:
             return False
 
