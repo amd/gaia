@@ -453,6 +453,12 @@ class TestEnsureWithinHome:
 
     def test_sibling_of_declared_root_still_raises_403(self, tmp_path, monkeypatch):
         """Declaring a root must not open its parent."""
+        # Home is always a root, and on Windows the temp dir sits INSIDE the
+        # profile — so without pinning home elsewhere the sibling is allowed on
+        # home's account and this test passes without testing anything.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))

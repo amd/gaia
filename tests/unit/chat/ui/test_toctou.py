@@ -141,6 +141,12 @@ class TestSafeOpenDocument:
 
     def test_declared_root_does_not_open_its_parent(self, tmp_path, monkeypatch):
         """Declaring a root widens access to that root only, not above it."""
+        # Home is always a root, and on Windows the temp dir sits INSIDE the
+        # profile — so without pinning home elsewhere `outside` is allowed on
+        # home's account and this test passes without testing anything.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         outside = tmp_path / "secrets.txt"
