@@ -123,7 +123,14 @@ The agent's file, document, and data tools are confined to a set of allowed path
 
 That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied to path:` error naming both the requested and the resolved path.
 
-To narrow it, construct the agent with an explicit list:
+**The allowed set is not the whole story, and shouldn't be treated as one.** Two denylists apply *inside* it, because "in scope" and "safe" are different questions:
+
+- **Secrets are never read back.** `.env`, `id_rsa`, `credentials.json`, `.netrc`, any `.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` are refused on read even when they sit in an allowed directory — otherwise "summarise this folder" is a credential exfiltration primitive.
+- **Files that run on their own are never written.** Shell startup files (`.bashrc`, `.zshrc`, `.profile`), PowerShell profiles, `~/.config/autostart/*`, systemd user units, `LaunchAgents`, and anything inside a repo's `.git/` — hooks and config alike. Writing to one of those isn't editing a document, it's arranging for the agent's output to execute at your next login.
+
+Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
+
+To narrow the scope, construct the agent with an explicit list:
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig

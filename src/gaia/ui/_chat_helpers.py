@@ -27,6 +27,7 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.security import BLOCKED_DIRECTORIES
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -923,20 +924,83 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
         return [], []
 
 
-def _compute_allowed_paths(rag_file_paths: list) -> list:
-    """Derive allowed filesystem paths from document locations.
+def _managed_documents_dir() -> Path:
+    """The Agent UI's own documents folder — the session's writable scratch space.
 
-    Collects the unique parent directories of all RAG document paths.
-    Falls back to the current working directory when no document paths
-    are provided, to avoid granting unnecessarily broad access across
-    unrelated projects on the same machine.
+    Resolved late rather than imported as a constant so a test that relocates
+    ``Path.home()`` gets the relocated directory.
     """
-    dirs = set()
+    return (Path.home() / ".gaia" / "documents").resolve()
+
+
+def _unsafe_directory_grant_reason(directory: Path) -> str:
+    """Why *directory* is too broad to hand a session, or ``""`` if it is fine.
+
+    Args:
+        directory: A resolved directory being considered as a session scope.
+
+    Returns:
+        A reason naming what the grant would expose, empty when it is safe.
+    """
+    if directory == Path(directory.anchor):
+        return "it is a filesystem root"
+    if directory == Path.home().resolve():
+        return "it is your home directory"
+    for blocked in BLOCKED_DIRECTORIES:
+        blocked_path = Path(blocked)
+        if directory == blocked_path or blocked_path.is_relative_to(directory):
+            return f"it contains the protected directory '{blocked}'"
+    return ""
+
+
+def _compute_allowed_paths(rag_file_paths: list) -> list:
+    """Derive a session's filesystem scope from its attached documents.
+
+    Grants each document **file**, never the directory it sits in.
+    ``PathValidator`` matches exact paths, so a session that attached
+    ``~/notes.txt`` gets ``~/notes.txt`` — granting ``Path.home()`` because a
+    document happened to be saved there handed the whole home tree to an agent
+    with ``write_file`` and shell tools.
+
+    Always adds GAIA's own managed documents directory so the agent still has
+    somewhere to *write* — a bounded, GAIA-owned folder the Agent UI already
+    surfaces, rather than whichever of the user's folders a document came from.
+
+    Falls back to the current working directory only when nothing is attached,
+    and refuses even that when the CWD is a root, ``$HOME``, or an ancestor of a
+    protected directory — a scope that broad is not a scope.
+
+    Args:
+        rag_file_paths: Paths of the documents attached to this session.
+
+    Returns:
+        The allowlist, possibly empty. An empty list means no file access, which
+        ``PathValidator`` enforces as such rather than widening to the CWD.
+    """
+    allowed = set()
     for fp in rag_file_paths:
-        dirs.add(str(Path(fp).parent))
-    if not dirs:
-        dirs.add(str(Path.cwd()))
-    return list(dirs)
+        if not fp:
+            continue
+        try:
+            allowed.add(str(Path(fp).resolve()))
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping unresolvable document path %r: %s", fp, exc)
+    if allowed:
+        allowed.add(str(_managed_documents_dir()))
+        return sorted(allowed)
+
+    cwd = Path.cwd().resolve()
+    reason = _unsafe_directory_grant_reason(cwd)
+    if reason:
+        logger.error(
+            "Refusing to grant this session file access to %s because %s. The "
+            "session has no attached documents, so it gets no file scope. Attach "
+            "a document, or start the Agent UI backend from a project directory.",
+            cwd,
+            reason,
+        )
+        return []
+    return [str(cwd)]
 
 
 def _session_agent_kwargs(

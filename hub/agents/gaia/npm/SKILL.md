@@ -368,6 +368,16 @@ for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
 
+**Being in scope is not the same as being safe, and two denylists apply inside
+it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
+`.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` —
+even in an allowed directory. Writes additionally refuse anything that executes
+on its own: shell startup files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Both
+come back as a structured error naming the file and the reason, so do not plan an
+integration around reading a credential file or editing a shell rc — perform
+those from your own code.
+
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
 `--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in

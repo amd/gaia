@@ -170,12 +170,11 @@ class FileIOToolsMixin:
                 Dictionary with file content and type-specific metadata
             """
             try:
-                # Security check
-                if not self.path_validator.is_path_allowed(file_path):
-                    return {
-                        "status": "error",
-                        "error": f"Access denied: {file_path} is not in allowed paths",
-                    }
+                # Scope *and* secrets: being in an allowed directory never made
+                # a private key safe to read into the conversation.
+                is_allowed, reason = self.path_validator.validate_read(file_path)
+                if not is_allowed:
+                    return {"status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
@@ -590,6 +589,11 @@ class FileIOToolsMixin:
                             continue
 
                         file_path = os.path.join(root, file)
+                        # A directory-wide grep must not be the way a secret gets
+                        # read back that read_file would have refused outright.
+                        blocked, _ = self.path_validator.is_read_blocked(file_path)
+                        if blocked:
+                            continue
                         files_searched += 1
 
                         try:
@@ -649,12 +653,10 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             try:
-                # Security check
-                if not self.path_validator.is_path_allowed(file_path):
-                    return {
-                        "status": "error",
-                        "error": f"Access denied: {file_path} is not in allowed paths",
-                    }
+                # A diff prints the original file, so it is a read.
+                is_allowed, reason = self.path_validator.validate_read(file_path)
+                if not is_allowed:
+                    return {"status": "error", "error": reason}
 
                 # Read original content
                 if os.path.exists(file_path):
