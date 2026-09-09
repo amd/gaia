@@ -61,6 +61,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
@@ -345,23 +346,25 @@ _GH_WRITE_DENIED_FLAGS = frozenset(
     {"-F", "--body-file", "-e", "--editor", "-w", "--web", "--watch"}
 )
 
-_GH_WRITE_DENIED_FLAG_REASONS = {
-    "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
-    "and an upload wearing an issue body's clothes. Pass the text with --body",
-    "--body-file": "it posts the contents of a LOCAL file to the remote — a "
-    "file-read and an upload wearing an issue body's clothes. Pass the text "
-    "with --body",
-    "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
-    "closed. Pass the text with --body",
-    "--editor": "it opens an interactive editor, which hangs an agent whose "
-    "stdin is closed. Pass the text with --body",
-    "-w": "it opens a browser on the machine instead of returning anything, so "
-    "a read gets you no output and a write you approved never happens",
-    "--web": "it opens a browser on the machine instead of returning anything, "
-    "so a read gets you no output and a write you approved never happens",
-    "--watch": "it blocks until the run finishes, which hangs an agent whose "
-    "stdin is closed. Poll with a plain read instead",
-}
+_GH_WRITE_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
+        "and an upload wearing an issue body's clothes. Pass the text with --body",
+        "--body-file": "it posts the contents of a LOCAL file to the remote — a "
+        "file-read and an upload wearing an issue body's clothes. Pass the text "
+        "with --body",
+        "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
+        "closed. Pass the text with --body",
+        "--editor": "it opens an interactive editor, which hangs an agent whose "
+        "stdin is closed. Pass the text with --body",
+        "-w": "it opens a browser on the machine instead of returning anything, so "
+        "a read gets you no output and a write you approved never happens",
+        "--web": "it opens a browser on the machine instead of returning anything, "
+        "so a read gets you no output and a write you approved never happens",
+        "--watch": "it blocks until the run finishes, which hangs an agent whose "
+        "stdin is closed. Poll with a plain read instead",
+    }
+)
 
 
 #: Refused on gh's READ subcommands. ``--web`` and ``--watch`` for the reasons
@@ -373,13 +376,15 @@ _GH_READ_DENIED_FLAGS = frozenset({"-w", "--web", "--watch"})
 
 _GH_AUTH_DENIED_FLAGS = _GH_READ_DENIED_FLAGS | {"-t", "--show-token"}
 
-_GH_AUTH_DENIED_FLAG_REASONS = {
-    **_GH_WRITE_DENIED_FLAG_REASONS,
-    "-t": "it prints the GitHub token to the output, which is the same "
-    "credential disclosure 'gh auth token' is refused for",
-    "--show-token": "it prints the GitHub token to the output, which is the "
-    "same credential disclosure 'gh auth token' is refused for",
-}
+_GH_AUTH_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        **_GH_WRITE_DENIED_FLAG_REASONS,
+        "-t": "it prints the GitHub token to the output, which is the same "
+        "credential disclosure 'gh auth token' is refused for",
+        "--show-token": "it prints the GitHub token to the output, which is the "
+        "same credential disclosure 'gh auth token' is refused for",
+    }
+)
 
 
 #: Valueless flags a read subcommand accepts. An ALLOWLIST, like ``pytest``'s
