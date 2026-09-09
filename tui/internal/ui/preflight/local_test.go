@@ -188,10 +188,22 @@ func TestTheLemonadeRemedyIsSharedWithTheDaemonRunner(t *testing.T) {
 		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
 	}
 
+	// The COMMAND and the docs link are what must never drift — sending two
+	// screens to different start instructions for the same server is the bug
+	// this reuse exists to prevent. The Action legitimately differs: only this
+	// runner offers `f`, so only it leads with what that key does.
 	want := lemonadeStartRemedy()
-	if row.Remedy != want {
+	if row.Remedy.Command != want.Command || row.Remedy.Where != want.Where {
 		t.Errorf("the local runner's Lemonade remedy has drifted from the shared one:\n"+
 			" local: %+v\nshared: %+v", row.Remedy, want)
+	}
+	if !strings.Contains(row.Remedy.Action, want.Action) {
+		t.Errorf("the shared start instruction was dropped rather than prefixed:\n"+
+			" local: %q\nshared: %q", row.Remedy.Action, want.Action)
+	}
+	if !strings.HasPrefix(row.Remedy.Action, "Press f and setup installs") {
+		t.Errorf("the row explains the manual route before the key that automates "+
+			"it:\n%q", row.Remedy.Action)
 	}
 }
 
@@ -464,4 +476,90 @@ func exitStub(t *testing.T, code int) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A down Lemonade is the commonest first-run failure, and Check stops at the
+// FIRST failure — so when this row blocks, the model row below it is pending
+// and cannot be focused. Withholding the setup key here left the screen with
+// nothing to press and a command the user had to go type somewhere else.
+func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State != StateFailed {
+		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
+	}
+	if row.Fix != FixRunSetup {
+		t.Errorf("fix = %v, want FixRunSetup — `gaia init` installs and starts "+
+			"Lemonade, so this row is fixable from the screen", row.Fix)
+	}
+}
+
+// The guard the comment on that Fix depends on: rows after the first failure
+// are PENDING, so two rows can never offer setup at once.
+//
+// Asserting on the Fix fields directly would pass vacuously wherever `gaia` is
+// absent from PATH (every CI runner): checkModels would report StateUnknown,
+// not StateFailed, so the count would be 1 whether or not the halt existed.
+// Asserting the halt itself needs nothing external.
+func TestCheckHaltsAtTheFirstFailureSoOnlyOneRowCanOfferSetup(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	dir := t.TempDir()
+	name := "fixture-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := localRunner{opts: LocalOptions{Binary: path}}.
+		Check(context.Background(), localCfg())
+
+	seenFailure := false
+	for _, r := range rep.Rows {
+		if seenFailure && r.State != StatePending {
+			t.Errorf("row %q is %s after an earlier failure; the walk did not halt, "+
+				"so two rows could offer setup at once:\n%s",
+				r.Key, r.State.Word(), rep)
+		}
+		if r.State == StateFailed {
+			seenFailure = true
+		}
+	}
+	if !seenFailure {
+		t.Fatalf("expected a failed row with Lemonade pointed at a dead port:\n%s", rep)
+	}
+}
+
+// `gaia init` inherits the same bad LEMONADE_SERVER_PATH, so pressing f would
+// fail every time — while the step that actually fixes it (unset the variable)
+// sat below as the optional alternative.
+func TestABadServerPathOverrideOffersNoSetupKey(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+	t.Setenv(serverPathEnv, filepath.Join(t.TempDir(), "not-here"))
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v, want FixNone — setup cannot repair an override it "+
+			"would inherit", row.Fix)
+	}
+}
+
+// `gaia init` auto-detects remote mode from a non-loopback LEMONADE_BASE_URL and
+// then refuses to install or start anything, so the key provably cannot work.
+// The daemon runner already special-cases this; the two screens must not differ.
+func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://192.168.1.50:13305/api/v1")
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State != StateFailed {
+		t.Fatalf("an unreachable remote Lemonade is %s, want failed", row.State.Word())
+	}
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v, want FixNone — `gaia init` refuses to install or "+
+			"start anything in remote mode", row.Fix)
+	}
 }

@@ -10,6 +10,8 @@ Every test runs from a cold state: roots live under ``tmp_path`` and the real
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -558,6 +560,29 @@ class _StubAgent:
 
     def rebuild_system_prompt(self):
         self.rebuilt += 1
+
+
+def test_source_less_agent_skips_bundled_skill_discovery():
+    agent = _StubAgent()
+
+    with patch(
+        "gaia.agents.base.agent.inspect.getfile",
+        side_effect=OSError("source code not available"),
+    ):
+        assert agent._bundled_skill_dirs() == []
+        assert agent._resolve_skill_manifest() is None
+
+
+def test_source_less_agent_with_relative_manifest_fails_actionably():
+    class RelativeManifestAgent(_StubAgent):
+        SKILL_MANIFEST = "gaia-agent.yaml"
+
+    with patch(
+        "gaia.agents.base.agent.inspect.getfile",
+        side_effect=OSError("source code not available"),
+    ):
+        with pytest.raises(SkillValidationError, match="Use an absolute path"):
+            RelativeManifestAgent()._resolve_skill_manifest()
 
 
 def test_agent_load_skill_registers_namespaced_tools_and_injects_body(roots):

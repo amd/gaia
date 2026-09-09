@@ -92,12 +92,9 @@ if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import (
-    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-    MemoryMixin,
-)
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import strip_verification_scope
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
@@ -983,11 +980,7 @@ class EmailTriageAgent(
         # rather than being told memory failed to come up and how to fix it.
         # Skip the deliberate GAIA_MEMORY_DISABLED=1 opt-out here — that's an
         # explicit choice (used by tests/CI), not a silent degradation.
-        if getattr(self, "_memory_unavailable_reason", None) in (
-            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-        ):
-            self.console.print_warning(self.memory_unavailable_message())
+        self.report_memory_unavailable()
 
         # Exact ctx pin (#1892): set the instance-scoped override on the
         # concrete LemonadeClient this agent chats through. Post-super(),
@@ -1219,6 +1212,12 @@ class EmailTriageAgent(
         return super().get_memory_dynamic_context()
 
     def process_query(self, user_input: str, *args, **kwargs):
+        # EmailTriageAgent.__mro__ puts Agent before MemoryMixin, so
+        # Agent.process_query never delegates into MemoryMixin.process_query
+        # (unlike ChatAgent) — report here or the construction-time report is
+        # this session's only chance to warn about a UI console swapped in later.
+        self.report_memory_unavailable()
+
         # Zero the batch-organize counter per turn so a long-lived instance
         # can't carry a prior turn's count into the batch-confirm threshold.
         # Only the batch counter resets here; session preferences persist.
@@ -1231,7 +1230,12 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
-        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+        if (
+            isinstance(result, dict)
+            # The loop appends a verification-scope line after finalize_answer
+            # (#3376); compare the answer text itself.
+            and strip_verification_scope(result.get("result")) != self._grounded_answer
+        ):
             # Normally finalize_answer already grounded this text before the
             # loop emitted it. This covers the branches that never reach that
             # call — the loop setting an actionable answer on an internal error

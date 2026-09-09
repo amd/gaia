@@ -331,9 +331,13 @@ FULL_BUNDLES = [
                 "load_skill",
                 "unload_skill",
                 "skill_status",
+                "remember_skill_lesson",
             }
         ),
-        description="List, load, and unload the skills installed on this machine.",
+        description=(
+            "List, load, and unload the skills installed on this machine, and "
+            "correct a loaded skill's instructions when they are wrong."
+        ),
     ),
     ToolBundle(
         name="skill_hub",
@@ -406,8 +410,9 @@ FULL_BUNDLES = [
 #    on PATH; ChatAgent skips it rather than register a tool whose backend
 #    always fails. (``search_web`` is NOT optional here: the browser mixin
 #    registers it unconditionally for this profile.)
-# 2. Subclass-provided mixins -- the skill-library and code-index tools come
-#    from GaiaAgent, so a plain ChatAgent on prompt_profile="full" has none.
+# 2. Subclass-provided mixins -- the skill-library, skill-learning, and
+#    code-index tools come from GaiaAgent, so a plain ChatAgent on
+#    prompt_profile="full" has none.
 # 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
 #    a degraded-but-running agent has a store and no memory tools. Selection
 #    already skips CORE names absent from the registry; without this, validation
@@ -431,6 +436,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "load_skill",
         "unload_skill",
         "skill_status",
+        "remember_skill_lesson",
         "search_skill_hub",
         "install_skill",
         "remove_skill",

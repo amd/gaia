@@ -117,6 +117,16 @@ def test_unprobed_npu_keeps_cannot_verify_warning(monkeypatch):
     assert any("cannot verify NPU" in w for w in report.warnings)
 
 
+def test_failed_npu_probe_does_not_suggest_driver_remediation(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility(
+        {"platforms": [], "npu": True},
+        npu_probe_error="Lemonade system-info query failed",
+    )
+    assert any("could not query Lemonade" in w for w in report.warnings)
+    assert not any("driver is installed" in w for w in report.warnings)
+
+
 def test_detected_gpu_vram_below_requirement_warns(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility(

@@ -133,8 +133,23 @@ func clipToTerminal(lines []string, cols, rows int) string {
 	return strings.Join(lines, "\n")
 }
 
+// headerTitle names what the screen is DOING, not a fixed caption. This is a
+// setup screen — when a row is blocking, saying "setting up" is what tells the
+// user the work happens here rather than in some terminal they have to go find.
+func headerTitle(m Model) string {
+	switch {
+	case m.phase == phaseProvisioning:
+		return fmt.Sprintf("Setting up %s", m.cfg.AgentName)
+	case m.phase == phaseChecking:
+		return fmt.Sprintf("Checking %s setup", m.cfg.AgentName)
+	case m.rep.Blocked():
+		return fmt.Sprintf("Setting up %s", m.cfg.AgentName)
+	}
+	return fmt.Sprintf("Getting %s ready", m.cfg.AgentName)
+}
+
 func (m Model) header(w int) string {
-	left := fmt.Sprintf("Getting %s ready", m.cfg.AgentName)
+	left := headerTitle(m)
 	right := m.rep.Summary()
 	if m.phase == phaseChecking {
 		right = "checking…"
@@ -313,26 +328,34 @@ func (m Model) remedyLines(row Row, w int) []string {
 			out = append(out, labelStyle.Render(l))
 		}
 	}
+	// The one-key fix leads. It used to sit UNDER the command, which read as
+	// "go run this yourself" on a row the TUI fixes in place — the whole reason
+	// `f` exists. The command stays as the copy-paste escape hatch and says so
+	// ("or run:") whenever pressing f would do the same work.
+	if row.Fix != FixNone {
+		out = append(out, keyStyle.Render("f")+" "+dimStyle.Render(row.Fix.Label()))
+	}
 	if row.Remedy.Command != "" {
-		for i, l := range wrap(row.Remedy.Command, w-7) {
-			prefix := dimStyle.Render("run:   ")
+		label := "run:   "
+		if row.Fix != FixNone {
+			label = "or run:"
+		}
+		for i, l := range wrap(row.Remedy.Command, w-8) {
+			prefix := dimStyle.Render(label + " ")
 			if i > 0 {
-				prefix = "       "
+				prefix = strings.Repeat(" ", len(label)+1)
 			}
 			out = append(out, prefix+cmdStyle.Render(l))
 		}
 	}
 	if row.Remedy.Where != "" {
-		for i, l := range wrap(row.Remedy.Where, w-7) {
-			prefix := dimStyle.Render("look:  ")
+		for i, l := range wrap(row.Remedy.Where, w-8) {
+			prefix := dimStyle.Render("look:   ")
 			if i > 0 {
-				prefix = "       "
+				prefix = "        "
 			}
 			out = append(out, prefix+dimStyle.Render(l))
 		}
-	}
-	if row.Fix != FixNone {
-		out = append(out, keyStyle.Render("f")+" "+dimStyle.Render(row.Fix.Label()))
 	}
 	return out
 }

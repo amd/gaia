@@ -69,7 +69,7 @@ const INSTALL_POLL_INTERVAL = 750;
  */
 const INSTALL_TIMEOUT = 15 * 60 * 1000;
 
-/** Header the UI backend requires on state-changing hub routes (see hub.py). */
+/** Header the UI backend requires on every mutating route (see gaia/ui/security.py). */
 const UI_HEADER = { "X-Gaia-UI": "1" };
 
 // ── AgentProcessManager ──────────────────────────────────────────────────
