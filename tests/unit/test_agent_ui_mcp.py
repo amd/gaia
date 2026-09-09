@@ -199,8 +199,9 @@ class TestStreamChatModelPin:
         """Patch requests.post to capture the json payload and end the stream."""
         captured = {}
 
-        def _fake_post(url, json=None, stream=False, timeout=None):
+        def _fake_post(url, json=None, stream=False, timeout=None, headers=None):
             captured["payload"] = json
+            captured["headers"] = headers
             resp = MagicMock()
             resp.raise_for_status.return_value = None
             resp.iter_lines.return_value = iter(["data: [DONE]"])
@@ -211,7 +212,7 @@ class TestStreamChatModelPin:
     def test_default_payload_pins_the_lemonade_model(self, monkeypatch):
         monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+        from gaia.mcp.servers.agent_ui_mcp import UI_HEADER, _stream_chat
 
         captured, fake_post = self._capture_payload()
         with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", fake_post):
@@ -223,6 +224,9 @@ class TestStreamChatModelPin:
             "stream": True,
             "model": DEFAULT_MODEL_NAME,
         }
+        # The backend rejects mutating calls without this header; a mock that
+        # does not accept it turns the CSRF contract into a silent pass.
+        assert captured["headers"] == UI_HEADER
 
     def test_claude_provider_omits_the_lemonade_pin(self, monkeypatch):
         monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
