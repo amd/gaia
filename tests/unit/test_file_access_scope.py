@@ -136,6 +136,84 @@ class TestSensitiveReadsAreRefused:
         assert ".ssh" in reason
 
 
+# ── The report's probe, driven through the tools a model actually calls ──
+
+
+class TestReadToolsRefuseThePrivateKey:
+    """``read_file("~/.ssh/id_rsa")`` returned the key. Both mixins define a
+    ``read_file``; the flagship registers the ``file_search`` one, so a fix that
+    only covered ``FileIOToolsMixin`` would have left the live path open."""
+
+    @pytest.fixture
+    def sandbox(self, tmp_path, monkeypatch):
+        import gaia.security as security
+
+        fake_home = tmp_path / "home"
+        ssh = fake_home / ".ssh"
+        ssh.mkdir(parents=True)
+        key = ssh / "id_rsa"
+        key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----", encoding="utf-8")
+        doc = fake_home / "notes.md"
+        doc.write_text("attached notes", encoding="utf-8")
+
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+        monkeypatch.setattr(security, "_is_interactive", lambda: False)
+        monkeypatch.setattr(
+            security, "SECRET_DIRECTORIES", security._secret_directories()
+        )
+        # A scope deliberately wider than the fix's own advice, so the denylist
+        # is what refuses the key rather than the allowlist doing it by accident.
+        return PathValidator(allowed_paths=[str(fake_home)]), key, doc
+
+    def _read_file_tool(self, mixin_cls, register, validator):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        instance = type("_Stub", (mixin_cls,), {})()
+        instance.path_validator = validator
+        getattr(instance, register)()
+        return _TOOL_REGISTRY["read_file"]["function"]
+
+    def test_file_search_read_file_refuses_the_key(self, sandbox):
+        from gaia.agents.tools.file_tools import FileSearchToolsMixin
+
+        validator, key, _ = sandbox
+        read_file = self._read_file_tool(
+            FileSearchToolsMixin, "register_file_search_tools", validator
+        )
+
+        result = read_file(str(key))
+
+        assert result["status"] == "error"
+        assert "PRIVATE KEY" not in str(result)
+
+    def test_file_io_read_file_refuses_the_key(self, sandbox):
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
+        validator, key, _ = sandbox
+        read_file = self._read_file_tool(
+            FileIOToolsMixin, "register_file_io_tools", validator
+        )
+
+        result = read_file(str(key))
+
+        assert result["status"] == "error"
+        assert "PRIVATE KEY" not in str(result)
+
+    def test_an_attached_document_is_still_readable(self, sandbox):
+        """The positive control — the fix must not break the actual use case."""
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
+        validator, _, doc = sandbox
+        read_file = self._read_file_tool(
+            FileIOToolsMixin, "register_file_io_tools", validator
+        )
+
+        result = read_file(str(doc))
+
+        assert result["status"] == "success"
+        assert "attached notes" in result["content"]
+
+
 # ── Writes: files that execute on their own ──────────────────────────────
 
 
