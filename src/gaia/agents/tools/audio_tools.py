@@ -660,7 +660,18 @@ class AudioToolsMixin:
     ) -> List[tuple]:
         """Ask the model who speaks each pre-cut turn. Returns (name, text)."""
         texts = [" ".join(seg["text"] for seg in turn).strip() for turn in batch]
-        listing = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
+        # The pause before each turn is evidence the model would otherwise be
+        # guessing without: a long silence usually means someone else started,
+        # a short one usually means the same person carried on. Without it the
+        # model over-split a four-person meeting into eight voices.
+        gaps = [0.0] + [
+            max(batch[i][0]["start"] - batch[i - 1][-1]["end"], 0.0)
+            for i in range(1, len(batch))
+        ]
+        listing = "\n".join(
+            f"{i}. [pause {gap:.1f}s] {t}" if i > 1 else f"{i}. {t}"
+            for i, (gap, t) in enumerate(zip(gaps, texts), 1)
+        )
         known = (
             f"\nSpeakers already identified in this meeting: "
             f"{', '.join(speaker_notes)}. Reuse those exact labels for the "
@@ -674,8 +685,12 @@ class AudioToolsMixin:
             "turns are already split correctly — your only job is to say "
             "WHO speaks each one.\n\n"
             "Most meetings have 2 to 5 people. Consecutive turns are often "
-            "the SAME person continuing; only change speaker when the "
-            "content clearly indicates someone else took over. Use a real "
+            "the SAME person continuing — keep the same label unless there is "
+            "a reason to change. The `[pause Xs]` before a turn is how long "
+            "the silence was: under about 1.5s usually means the same person "
+            "carried on, and a longer pause makes a new speaker more likely "
+            "but does not prove one. Weigh it together with whether the "
+            "content reads as a reply or a continuation. Use a real "
             "name only if the transcript supports it (a self-introduction, "
             "or someone addressed by name). Otherwise use Speaker A, "
             "Speaker B, and so on."

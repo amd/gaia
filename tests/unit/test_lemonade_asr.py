@@ -231,10 +231,14 @@ class TestOutgoingRequestShape:
         fields, _files = parse_multipart(recorder.last)
         assert fields["response_format"] in RESPONSE_FORMATS
         # verbose_json is the only format carrying segments/words/confidence.
-        assert fields["response_format"] == TRANSCRIPTION_RESPONSE_FORMAT == "verbose_json"
+        assert (
+            fields["response_format"] == TRANSCRIPTION_RESPONSE_FORMAT == "verbose_json"
+        )
 
     def test_model_field_matches_configured_model(self, monkeypatch, wav_file):
-        client = LemonadeASRClient(base_url="http://localhost:13305", model="Whisper-Base")
+        client = LemonadeASRClient(
+            base_url="http://localhost:13305", model="Whisper-Base"
+        )
         recorder = Recorder(monkeypatch, [FakeResponse(body=VERBOSE_JSON)])
         client.transcribe(wav_file)
 
@@ -265,9 +269,7 @@ class TestOutgoingRequestShape:
             "http://localhost:13305/api/v1/audio/transcriptions"
         )
 
-    def test_no_auth_header_when_no_key_configured(
-        self, monkeypatch, client, wav_file
-    ):
+    def test_no_auth_header_when_no_key_configured(self, monkeypatch, client, wav_file):
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         client = LemonadeASRClient(base_url="http://localhost:13305")
         recorder = Recorder(monkeypatch, [FakeResponse(body=VERBOSE_JSON)])
@@ -324,9 +326,7 @@ class TestFlmGuard:
         assert "require_timestamps=False" in message
         assert recorder.requests == [], "must fail before spending a request"
 
-    def test_flm_allowed_when_caller_waives_timestamps(
-        self, monkeypatch, wav_file
-    ):
+    def test_flm_allowed_when_caller_waives_timestamps(self, monkeypatch, wav_file):
         client = LemonadeASRClient(
             base_url="http://localhost:13305", model="whisper-v3-turbo-FLM"
         )
@@ -643,7 +643,10 @@ class TestErrors:
 class TestAvailableModels:
     MODEL_LIST = {
         "data": [
-            {"id": "Whisper-Base", "labels": ["transcription", "realtime-transcription"]},
+            {
+                "id": "Whisper-Base",
+                "labels": ["transcription", "realtime-transcription"],
+            },
             {"id": "Gemma-4-E4B-it-GGUF", "labels": ["tool-calling", "vision"]},
             {"id": "SDXL-Turbo", "labels": ["image"]},
             {"id": "whisper-v3-turbo-FLM", "labels": ["audio", "transcription"]},

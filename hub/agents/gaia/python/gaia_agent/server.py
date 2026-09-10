@@ -24,6 +24,7 @@ would be worse than the honest gap.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import queue
@@ -802,7 +803,24 @@ def build_app() -> FastAPI:
     """
     from gaia_agent import __version__
 
-    app = FastAPI(title="GAIA Agent", version=__version__)
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        """Load the model before the first question instead of during it.
+
+        Without this the first turn pays the model load *and* the first pass
+        over a large system prompt, which reads as a 60-90s "Getting started"
+        hang on a freshly opened chat. Backgrounded so readiness is not
+        delayed, and never fatal — a cold first turn is slow, not broken.
+        """
+        task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
+        # Held so it is not garbage-collected while in flight.
+        _app.state.warmup_task = task
+        try:
+            yield
+        finally:
+            task.cancel()
+
+    app = FastAPI(title="GAIA Agent", version=__version__, lifespan=_lifespan)
 
     # Loopback is not access control: without this, any page the user visits can
     # drive an agent that has shell and file tools. Wired ONLY here, on the
@@ -843,17 +861,6 @@ def build_app() -> FastAPI:
     @app.get(f"/v1/{AGENT_ID}/version", include_in_schema=True)
     async def agent_version() -> Dict[str, str]:
         return {"apiVersion": API_VERSION, "version": __version__, "agent": AGENT_ID}
-
-    @app.on_event("startup")
-    async def _warm_model() -> None:
-        """Load the model before the first question instead of during it.
-
-        Without this the first turn pays the model load *and* the first pass
-        over a large system prompt, which reads as a 60-90s "Getting started"
-        hang on a freshly opened chat. Backgrounded so readiness is not
-        delayed, and never fatal — a cold first turn is slow, not broken.
-        """
-        asyncio.create_task(asyncio.to_thread(_warmup_blocking))
 
     app.include_router(router, prefix=f"/v1/{AGENT_ID}")
     return app

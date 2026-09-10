@@ -149,9 +149,7 @@ class TestEnsureFfmpeg:
         assert media.ensure_ffmpeg().endswith("ffmpeg")
         assert calls == [["brew", "install", "ffmpeg"]]
 
-    def test_no_package_manager_fails_loudly_with_commands_and_docs(
-        self, monkeypatch
-    ):
+    def test_no_package_manager_fails_loudly_with_commands_and_docs(self, monkeypatch):
         """Plan validation item: 'missing ffmpeg with no package manager fails loudly'."""
         monkeypatch.setattr(media.platform, "system", lambda: "Linux")
         monkeypatch.setattr(media, "_which", lambda tool: None)
