@@ -722,13 +722,6 @@
         "additionalProperties": false,
         "description": "Result of GET /v1/email/calendar/events (read-only view).",
         "properties": {
-          "count": {
-            "default": 0,
-            "description": "Number of events returned in this page.",
-            "minimum": 0.0,
-            "title": "Count",
-            "type": "integer"
-          },
           "events": {
             "description": "Matching events, ordered by start time.",
             "items": {
@@ -742,6 +735,13 @@
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
+          },
+          "count": {
+            "default": 0,
+            "description": "Number of events returned in this page.",
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
           },
           "truncated": {
             "default": false,
@@ -1183,6 +1183,11 @@
             "$ref": "#/components/schemas/EmailPreScanResult",
             "description": "The email_pre_scan envelope the scheduled run produced."
           },
+          "cache_age_seconds": {
+            "description": "Seconds since generated_at; measured when this response was read.",
+            "title": "Cache Age Seconds",
+            "type": "number"
+          },
           "generated_at": {
             "description": "UTC ISO-8601 timestamp of the scheduled run.",
             "title": "Generated At",
@@ -1193,10 +1198,17 @@
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
+          },
+          "stale": {
+            "description": "True when the briefing is at least 24 hours old; stale briefings are labeled, not regenerated or refused.",
+            "title": "Stale",
+            "type": "boolean"
           }
         },
         "required": [
           "generated_at",
+          "cache_age_seconds",
+          "stale",
           "briefing"
         ],
         "title": "EmailBriefingResponse",

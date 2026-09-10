@@ -77,7 +77,7 @@ WHEEL_MEMBER = "gaia/daemon/constants.py"
 # Verified by installing each amd-gaia wheel from PyPI and reading
 # gaia/daemon/constants.py: 0.21.2 and every release before it have no
 # gaia/daemon package at all, and 0.22.0 — the first release with a daemon —
-# shipped "1". Repo main has since moved to "1.1".
+# shipped "1"; 0.23.0 shipped "1.1", which is what this tree still serves.
 #
 # Maintenance: after cutting a core release, add its row and bump
 # LATEST_CORE_RELEASE. Forgetting makes the offline mode fall back to trusting
@@ -87,8 +87,9 @@ WHEEL_MEMBER = "gaia/daemon/constants.py"
 FIRST_CORE_RELEASE_WITH_DAEMON = (0, 22, 0)
 RELEASED_DAEMON_API: dict[tuple[int, ...], str] = {
     (0, 22, 0): "1",
+    (0, 23, 0): "1.1",
 }
-LATEST_CORE_RELEASE = (0, 22, 0)
+LATEST_CORE_RELEASE = (0, 23, 0)
 
 # Which daemon host API each hub component needs. "tui" reads the floor from the
 # Go constants the terminal hub enforces at runtime, so the guard cannot drift

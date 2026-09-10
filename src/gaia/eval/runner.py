@@ -782,7 +782,7 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
     req = urllib.request.Request(
         f"{backend_url}/api/memory/admin/seed",
         data=b'{"items":[]}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
         method="POST",
     )
     try:

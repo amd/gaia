@@ -7,7 +7,7 @@
 # single source the publish workflow reads. Both are asserted equal in CI.
 id: terminal-hub
 name: GAIA Terminal Hub
-version: 0.23.0
+version: 0.23.1
 description: "Browse, install, and chat with GAIA agents from the terminal"
 author: AMD
 license: MIT

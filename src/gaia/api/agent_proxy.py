@@ -42,6 +42,7 @@ from fastapi.responses import Response, StreamingResponse
 from starlette.convertors import Convertor, register_url_convertor
 
 from gaia.daemon.errors import DaemonError
+from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,7 +56,7 @@ AUTH_SCHEME = "Bearer"
 CONNECT_TIMEOUT = 10.0
 #: Read timeout between chunks — spans a whole agent-loop step relayed by the
 #: daemon, so it matches the daemon relay's own long per-request budget.
-READ_TIMEOUT = 300.0
+READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
 
 #: HTTP methods the fixed-function relay accepts. OPTIONS/HEAD are intentionally
 #: left to the CORS middleware / FastAPI defaults.
@@ -314,8 +315,12 @@ def build_agent_proxy_router() -> APIRouter:
         upstream_headers["Accept-Encoding"] = "identity"
         url = f"{inst.base_url}/v1/{agent_id}/{path}"
 
+        try:
+            read_timeout = agent_read_timeout()
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         client = httpx.AsyncClient(
-            timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT)
+            timeout=httpx.Timeout(read_timeout, connect=CONNECT_TIMEOUT)
         )
         try:
             upstream = await client.send(
