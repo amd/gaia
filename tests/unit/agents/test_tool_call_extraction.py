@@ -5,7 +5,8 @@
 Stage A of issue #1428: verify the base parser's decision logic:
   1. ≥1 unfenced candidate → return the first (unchanged behaviour)
   2. exactly one fenced candidate → return it (the fix)
-  3. >1 fenced + 0 unfenced → ambiguous → None + warning
+  3. >1 fenced + 0 unfenced → ambiguous → None + warning when prose surrounds
+     the fences, ValueError when the response is fenced calls only (#3596)
   4. no candidates → None
 """
 
@@ -180,11 +181,29 @@ class TestMultipleFencedCandidates:
         assert result is None
         assert any("ambiguous" in r.message.lower() for r in caplog.records)
 
-    def test_three_fenced_returns_none(self, parser):
+    def test_three_fenced_with_prose_returns_none(self, parser):
         fenced = '```json\n{"tool": "t", "tool_args": {}}\n```'
-        response = f"{fenced}\n{fenced}\n{fenced}"
+        response = f"First:\n{fenced}\nSecond:\n{fenced}\nThird:\n{fenced}"
         result = _call(parser, response)
         assert result is None
+
+    def test_fenced_only_no_prose_raises(self, parser):
+        """Nothing but fenced tool calls is a fumbled call, not an answer (#3596).
+
+        Returning None here would hand the user raw JSON as the turn's answer;
+        raising routes the turn into process_query's parse-error recovery.
+        """
+        fenced = '```json\n{"tool": "t", "tool_args": {}}\n```'
+        response = f"{fenced}\n{fenced}\n{fenced}"
+        with pytest.raises(ValueError, match="Ambiguous tool call"):
+            _call(parser, response)
+
+    def test_fenced_only_unclosed_fence_raises(self, parser):
+        """The shape seen in #3596: fenced calls trailed by an unclosed fence."""
+        fenced = '```json\n{"tool": "extract_audio", "tool_args": {}}\n```'
+        response = f"{fenced}\n{fenced}\n```json}}"
+        with pytest.raises(ValueError, match="Ambiguous tool call"):
+            _call(parser, response)
 
 
 # ---------------------------------------------------------------------------

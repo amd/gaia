@@ -2388,7 +2388,9 @@ Do NOT wrap conversational replies in JSON.
         each tagged fenced/unfenced:
           1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
           2. else exactly one fenced candidate → return it (the fix for #1428).
-          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          3. else >1 fenced, 0 unfenced → ambiguous: with prose around the
+             fences it looks like docs → None + warning; with no prose at all
+             it is a fumbled tool call → ValueError (#3596).
           4. else → fall back to Python-call syntax detection (#2521), e.g.
              ``remember(fact="...", category="preference")``.
 
@@ -2401,7 +2403,8 @@ Do NOT wrap conversational replies in JSON.
             ValueError: propagated from the Python-call-syntax fallback (#2521)
                 when a *registered* tool's name is followed by an argument list
                 that can't be parsed — a loud failure rather than echoing the
-                raw syntax to the user as an answer.
+                raw syntax to the user as an answer.  Also raised for rule 3
+                above when the response is nothing but fenced tool calls.
         """
         # Quick check: must contain "tool" to be worth scanning for the JSON
         # shape. Responses without it may still carry the #2521 Python-call
@@ -2513,7 +2516,19 @@ Do NOT wrap conversational replies in JSON.
             return fenced[0]
 
         if len(fenced) > 1:
-            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation
+            # examples. Prose outside the fences is what makes it readable as an
+            # answer; with none, returning it would hand the user raw JSON.
+            prose = response
+            for fence_start, fence_end in reversed(_code_ranges):
+                prose = prose[:fence_start] + prose[fence_end:]
+            if not prose.strip():
+                raise ValueError(
+                    f"Ambiguous tool call: {len(fenced)} fenced tool-call blocks "
+                    "and no other text, so the intended call is undecidable "
+                    f"(candidates: {[c.get('tool') for c in fenced]}). Emit "
+                    "exactly one tool call, unfenced."
+                )
             logger.warning(
                 "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
                 "unfenced call; cannot determine which is real — returning None",
