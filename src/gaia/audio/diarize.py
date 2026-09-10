@@ -17,7 +17,9 @@ Everything is fetched on first use, never at import or startup.
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -78,11 +80,7 @@ def is_available() -> bool:
     """Whether diarization can run right now without downloading anything."""
     if not (_SEGMENTATION_MODEL.is_file() and _EMBEDDING_MODEL.is_file()):
         return False
-    try:
-        import sherpa_onnx  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return _package_installed()
 
 
 def ensure_ready(progress: Optional[Callable[[str], None]] = None) -> None:
@@ -190,13 +188,14 @@ def _read_wav(path: Path):
     return samples, rate
 
 
-def _ensure_package(say: Callable[[str], None]) -> None:
-    try:
-        import sherpa_onnx  # noqa: F401
+def _package_installed() -> bool:
+    """Whether sherpa-onnx can be imported, without importing it."""
+    return importlib.util.find_spec("sherpa_onnx") is not None
 
+
+def _ensure_package(say: Callable[[str], None]) -> None:
+    if _package_installed():
         return
-    except ImportError:
-        pass
 
     say("Installing the speaker-identification engine (about 40 MB, once)...")
     try:
@@ -220,15 +219,14 @@ def _ensure_package(say: Callable[[str], None]) -> None:
             f"{sys.executable} -m pip install sherpa-onnx\nSee {DOCS_URL}"
         ) from e
 
-    try:
-        import sherpa_onnx  # noqa: F401
-    except ImportError as e:
+    importlib.invalidate_caches()
+    if not _package_installed():
         raise DiarizationError(
             "sherpa-onnx installed but cannot be imported. If GAIA is running "
             "from a different environment than the one just installed into, "
             "install it there instead. "
             f"See {DOCS_URL}"
-        ) from e
+        )
 
 
 def _ensure_models(say: Callable[[str], None]) -> None:
@@ -283,7 +281,13 @@ def _download(url: str, destination: Path) -> None:
 
 
 def _safe_extract(tar: tarfile.TarFile, target: Path) -> None:
-    """Extract without letting a crafted archive escape the target directory."""
+    """Extract a model archive without letting it write outside *target*.
+
+    Members are validated and written one at a time. ``extractall`` is not used
+    even after a validation loop, because it re-reads the archive and would
+    place a traversing or link member regardless of what the loop concluded —
+    the CWE-22 tar-slip that .security-suppressions.json exists to stop.
+    """
     target = target.resolve()
     for member in tar.getmembers():
         destination = (target / member.name).resolve()
@@ -291,4 +295,18 @@ def _safe_extract(tar: tarfile.TarFile, target: Path) -> None:
             raise DiarizationError(
                 f"Refusing to extract '{member.name}' — it points outside " f"{target}."
             )
-    tar.extractall(target)
+        if member.issym() or member.islnk():
+            raise DiarizationError(
+                f"Refusing to extract link '{member.name}' from the model archive."
+            )
+        if member.isdir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        if not member.isfile():
+            continue
+        source = tar.extractfile(member)
+        if source is None:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with source, destination.open("wb") as handle:
+            shutil.copyfileobj(source, handle)
