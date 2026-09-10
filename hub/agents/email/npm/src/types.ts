@@ -822,6 +822,10 @@ export interface CalendarEvent {
 export interface CalendarEventsResponse {
   /** Echoes the contract version. */
   schema_version: string;
+  /** Number of events returned in this page. */
+  count: number;
+  /** True when the provider reported another page; `events` is not the complete calendar window. */
+  truncated: boolean;
   /** Matching events, ordered by start time. */
   events: CalendarEvent[];
 }
