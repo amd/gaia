@@ -494,17 +494,13 @@ def _handle_connect_device(
             )
         sys.stdout.write("Waiting for sign-in...\n")
         sys.stdout.flush()
-        poll_kwargs = {
-            "scopes": info["scopes"],
-            "interval": info["interval"],
-            "expires_in": info["expires_in"],
-        }
-        if grant_agents:
-            poll_kwargs["grant_agents"] = grant_agents
         result = await poll_device_flow(
             args.connector_id,
             info["device_code"],
-            **poll_kwargs,
+            scopes=info["scopes"],
+            interval=info["interval"],
+            expires_in=info["expires_in"],
+            grant_agents=grant_agents,
         )
         return result.get("account_email") or "<unknown>"
 
@@ -515,11 +511,17 @@ def _handle_connect_device(
         return 1
     msg = f"Connected as {email}"
     if grant_agents:
-        agent_id, granted_scopes = next(iter(grant_agents.items()))
-        msg += (
-            f"; granted {args.connector_id} → {agent_id}: "
-            f"{', '.join(granted_scopes)}"
-        )
+        from gaia.connectors.grants import list_agent_grants
+
+        # The ledger, not the request, is the source of truth — a provider
+        # can narrow the granted scopes below what was requested.
+        ledger = list_agent_grants(args.connector_id)
+        for agent_id in grant_agents:
+            granted_scopes = ledger.get(agent_id, [])
+            msg += (
+                f"; granted {args.connector_id} → {agent_id}: "
+                f"{', '.join(granted_scopes)}"
+            )
     sys.stdout.write(msg + "\n")
     return 0
 

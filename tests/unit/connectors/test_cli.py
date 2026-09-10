@@ -95,10 +95,12 @@ class TestConnectGrantAgent:
     flow so the scopes can never drift (#2347 UX)."""
 
     @staticmethod
-    def _install_fake_agent_registry(monkeypatch, declared_scopes):
+    def _install_fake_agent_registry(
+        monkeypatch, declared_scopes, connector_id="google"
+    ):
         """Stand in for `AgentRegistry() -> .discover() -> register_installed_
         sidecars()` (#2603) with a fake that resolves ``installed:email`` to
-        *declared_scopes* for ``google``, without importing gaia_agent_email
+        *declared_scopes* for *connector_id*, without importing gaia_agent_email
         or touching disk."""
         from dataclasses import dataclass, field
         from typing import List
@@ -114,7 +116,9 @@ class TestConnectGrantAgent:
 
         class FakeAgentRegistry:
             def __init__(self, *_a, **_k):
-                cr = ConnectorRequirement(connector_id="google", scopes=declared_scopes)
+                cr = ConnectorRequirement(
+                    connector_id=connector_id, scopes=declared_scopes
+                )
                 self._regs = [
                     FakeReg(
                         namespaced_agent_id="installed:email",
@@ -300,6 +304,69 @@ class TestConnectGrantAgent:
         assert "Requesting access to google:" in out
         assert "Connected as alice@example.com" in out
         assert "granted google → installed:email" in out
+
+    def test_device_grant_message_reflects_narrowed_ledger_not_request(
+        self, monkeypatch
+    ):
+        """The device path must read the grant ledger back like the browser
+        path does (#3266) — a provider can grant fewer scopes than requested,
+        and the success message must never claim a scope that isn't in the
+        ledger."""
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-client-id")
+        requested = [
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/Mail.Send",
+        ]
+        self._install_fake_agent_registry(
+            monkeypatch, requested, connector_id="microsoft"
+        )
+
+        async def _fake_start(connector_id, *, scopes):
+            return {
+                "message": "Go to https://microsoft.example and enter CODE",
+                "device_code": "device-code",
+                "user_code": "CODE",
+                "verification_uri": "https://microsoft.example",
+                "scopes": list(scopes),
+                "interval": 1,
+                "expires_in": 900,
+            }
+
+        async def _fake_poll(
+            connector_id,
+            device_code,
+            *,
+            scopes,
+            interval,
+            expires_in,
+            grant_agents=None,
+        ):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_device_flow", _fake_start)
+        monkeypatch.setattr("gaia.connectors.api.poll_device_flow", _fake_poll)
+        # The provider narrowed the grant to Mail.Read only — the ledger, not
+        # the request, is what the message must report.
+        monkeypatch.setattr(
+            "gaia.connectors.grants.list_agent_grants",
+            lambda _connector_id: {
+                "installed:email": ["https://graph.microsoft.com/Mail.Read"]
+            },
+        )
+
+        rc, out, err = _run(
+            "connectors",
+            "connect",
+            "microsoft",
+            "--device",
+            "--grant-agent",
+            "installed:email",
+        )
+        assert rc == 0, err
+        assert "Connected as alice@example.com" in out
+        assert "granted microsoft → installed:email" in out
+        assert "Mail.Read" in out
+        assert "Mail.Send" not in out
 
     @pytest.mark.allow_network  # asyncio's Windows event loop uses a local socketpair
     def test_device_connect_describes_microsoft_graph_scopes(self, monkeypatch):
