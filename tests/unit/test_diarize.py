@@ -86,6 +86,16 @@ class TestInstallFailures:
                 diarize._ensure_package(lambda _m: None)
         run.assert_not_called()
 
+    def test_pip_install_does_not_inherit_stdin(self):
+        """The child must not inherit the host's stdin. Over the TUI's
+        subprocess transport, the agent's own stdin is a pipe fed one line
+        per turn — a child that reads it blocks forever waiting for input
+        that cannot arrive until this very call returns."""
+        with patch.object(diarize, "_package_installed", side_effect=[False, True]):
+            with patch("subprocess.run") as run:
+                diarize._ensure_package(lambda _m: None)
+        assert run.call_args.kwargs.get("stdin") == subprocess.DEVNULL
+
     def test_download_failure_is_actionable(self, tmp_path):
         """The message must say what failed and where to read more."""
         import requests

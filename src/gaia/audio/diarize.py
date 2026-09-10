@@ -205,6 +205,11 @@ def _ensure_package(say: Callable[[str], None]) -> None:
             capture_output=True,
             text=True,
             timeout=900,
+            # Never inherit our stdin: on the TUI's subprocess transport it is
+            # a pipe fed one line per turn, so a child that reads it blocks
+            # forever waiting for input that cannot arrive until this call
+            # returns.
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
         raise DiarizationError(
