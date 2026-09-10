@@ -675,8 +675,13 @@ def detect_calendar_conflicts_impl(
     half-open overlap test to every returned event — correct whether or not
     the backend pre-filtered. Events whose times can't be parsed are skipped.
 
-    Returns ``{"has_conflict": bool, "conflicts": [...], "candidate": {...}}``
-    where each conflict carries ``id``, ``summary``, ``start``, ``end``.
+    Returns ``{"has_conflict": bool, "conflicts": [...], "candidate": {...},
+    "truncated": bool}`` where each conflict carries ``id``, ``summary``,
+    ``start``, ``end``. ``truncated`` is derived from the provider's own
+    continuation token (never from ``len(items)``, which can't tell a full
+    last page from a clipped one): when it is True the window was only
+    partially scanned, so ``has_conflict: False`` means "not verified", not
+    "free" (#3610).
 
     Raises ``ValueError`` if the window is empty/inverted (``end <= start``).
     Any error from ``cal.list_events`` propagates — never a silent "no
@@ -699,6 +704,9 @@ def detect_calendar_conflicts_impl(
             time_min=_normalize_time_bound(start_iso, param_name="start_iso"),
             time_max=_normalize_time_bound(end_iso, param_name="end_iso"),
         )
+        # The provider pages at max_results; a conflict past page one would
+        # otherwise read as "free".
+        truncated = bool(data.get("nextPageToken"))
         conflicts: List[Dict[str, Any]] = []
         for ev in data.get("items", []):
             window = _event_window(ev)
@@ -717,11 +725,15 @@ def detect_calendar_conflicts_impl(
                         "attendees": _extract_attendees(ev),
                     }
                 )
-        st["result_summary"] = {"conflict_count": len(conflicts)}
+        st["result_summary"] = {
+            "conflict_count": len(conflicts),
+            "truncated": truncated,
+        }
         return {
             "has_conflict": bool(conflicts),
             "conflicts": conflicts,
             "candidate": {"start": start_iso, "end": end_iso},
+            "truncated": truncated,
         }
 
 
@@ -1289,6 +1301,12 @@ class CalendarToolsMixin:
             reassuring "no conflicts". Never state an attendee for a
             conflicting event unless that event's own ``attendees`` list
             actually names them.
+
+            ``data`` also carries ``truncated`` (bool). When it is true the
+            calendar held more events than one page and the window was only
+            partially checked: with ``has_conflict`` false, say the slot
+            could NOT be verified and offer to check a narrower window —
+            never call it free.
             """
             try:
                 return _envelope_ok(
