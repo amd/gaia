@@ -75,13 +75,16 @@ class TestInstallFailures:
         assert "pip install" in str(e.value)
         assert "sherpa-onnx" in str(e.value)
 
-    def test_download_failure_names_the_host(self, tmp_path):
+    def test_download_failure_is_actionable(self, tmp_path):
+        """The message must say what failed and where to read more."""
         import requests
 
         with patch("requests.get", side_effect=requests.ConnectionError("dns")):
             with pytest.raises(DiarizationError) as e:
                 diarize._download("https://example.invalid/m.onnx", tmp_path / "m.onnx")
-        assert "github.com" in str(e.value)
+        message = str(e.value)
+        assert "Could not download" in message
+        assert diarize.DOCS_URL in message
         assert not (tmp_path / "m.onnx").exists()
 
     def test_partial_download_is_not_left_behind(self, tmp_path):
