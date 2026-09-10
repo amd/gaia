@@ -312,3 +312,57 @@ class TestRealDecode:
 
         with pytest.raises(media.MediaError, match="ffprobe"):
             media.probe_duration(bogus)
+
+
+class TestNoSubprocessInheritsStdin:
+    """stdin is the event wire on the TUI's subprocess transport.
+
+    A child that inherits and reads it blocks forever waiting for input that
+    cannot arrive until the call it is blocking returns. ffmpeg is the classic
+    offender — it reads stdin for keyboard commands — but a package manager
+    prompting for confirmation deadlocks exactly the same way.
+    """
+
+    def _calls(self, source: str):
+        """Every subprocess.run / Popen call in a module, as source text."""
+        import ast
+
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"run", "Popen"}
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "subprocess"
+            ):
+                yield node
+
+    def test_every_spawn_in_media_pins_stdin(self):
+        from gaia.audio import media
+
+        source = Path(media.__file__).read_text(encoding="utf-8")
+        offenders = [
+            node.lineno
+            for node in self._calls(source)
+            if "stdin" not in {kw.arg for kw in node.keywords}
+        ]
+        assert not offenders, (
+            f"{media.__file__} spawns without stdin= at line(s) {offenders}; "
+            "pass stdin=subprocess.DEVNULL or the child can eat the event wire"
+        )
+
+    def test_every_spawn_in_diarize_pins_stdin(self):
+        from gaia.audio import diarize
+
+        source = Path(diarize.__file__).read_text(encoding="utf-8")
+        offenders = [
+            node.lineno
+            for node in self._calls(source)
+            if "stdin" not in {kw.arg for kw in node.keywords}
+        ]
+        assert (
+            not offenders
+        ), f"{diarize.__file__} spawns without stdin= at line(s) {offenders}"

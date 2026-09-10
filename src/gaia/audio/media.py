@@ -137,6 +137,9 @@ def _install_ffmpeg() -> None:
                 text=True,
                 timeout=_INSTALL_TIMEOUT_SECONDS,
                 check=False,
+                # Never inherit our stdin: on the TUI's subprocess transport it
+                # is the event wire, and a child that reads it deadlocks.
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired as e:
             raise MediaError(
@@ -238,6 +241,7 @@ def probe_duration(src: os.PathLike | str) -> float:
             text=True,
             timeout=_PROBE_TIMEOUT_SECONDS,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         raise MediaError(
@@ -345,7 +349,13 @@ def _decode_failure(src: Path, returncode: int, stderr: str) -> MediaError:
 
 def _run_ffmpeg(cmd: List[str], src: Path) -> None:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
     except OSError as e:
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
     if result.returncode != 0:
@@ -367,6 +377,7 @@ def _run_ffmpeg_with_progress(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            stdin=subprocess.DEVNULL,
         )
     except OSError as e:
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
