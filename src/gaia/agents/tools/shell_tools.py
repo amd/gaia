@@ -202,6 +202,28 @@ FILE_REWRITE_BINARIES = frozenset(
     {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
 )
 
+#: In-place flags for the binaries that can also be used read-only. ``sed -n
+#: '10,20p' f`` prints a range and ``awk '{print $1}' f`` filters a stream;
+#: neither is an edit, and answering them with "use edit_file" would push the
+#: agent toward a write tool when it was trying to read.
+_IN_PLACE_FLAGS = ("-i", "--in-place")
+
+#: These write by definition — there is no read-only invocation to protect.
+_ALWAYS_WRITES = frozenset({"tee", "patch", "dd", "truncate", "ed"})
+
+
+def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
+    """Would this invocation change a file, as opposed to reading one?"""
+    if cmd_base in _ALWAYS_WRITES:
+        return True
+    return any(
+        part == flag
+        or part.startswith(flag + "=")
+        or (flag == "-i" and part.startswith("-i") and not part.startswith("--"))
+        for part in cmd_parts[1:]
+        for flag in _IN_PLACE_FLAGS
+    )
+
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
 #: only one a ``shell:execute`` grant may exempt from confirmation.
@@ -739,7 +761,13 @@ class ShellToolsMixin:
             # Refusing a file rewrite with "only read-only commands are allowed"
             # is a dead end: the agent wanted to change a file and the message
             # names nothing that can. Point at the tool that does the job.
-            if cmd_base in FILE_REWRITE_BINARIES:
+            #
+            # Only when the invocation actually writes. `sed -n '10,20p' f`
+            # prints a line range; answering that with "use edit_file" sends the
+            # agent to a write tool when it was trying to read.
+            if cmd_base in FILE_REWRITE_BINARIES and _rewrites_in_place(
+                cmd_base, cmd_parts
+            ):
                 return {
                     "status": "error",
                     "error": (

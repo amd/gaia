@@ -22,11 +22,24 @@ validate = ShellToolsMixin._validate_command
 
 class TestARefusedRewritePointsAtTheEditTools:
     @pytest.mark.parametrize("binary", sorted(FILE_REWRITE_BINARIES))
-    def test_every_rewrite_binary_names_edit_file(self, binary):
-        result = validate(binary, [binary, "x"], f"{binary} x")
-        assert result is not None, f"{binary} should still be refused"
+    def test_every_rewrite_binary_is_still_refused(self, binary):
+        assert validate(binary, [binary, "x"], f"{binary} x") is not None
+
+    @pytest.mark.parametrize(
+        "parts",
+        [
+            ["sed", "-i", "s/a/b/", "f.py"],
+            ["sed", "-i.bak", "s/a/b/", "f.py"],
+            ["perl", "-i", "-pe", "s/a/b/", "f"],
+            ["awk", "-i", "inplace", "{print}", "f"],
+            ["tee", "out.txt"],
+            ["patch", "-p1"],
+        ],
+    )
+    def test_an_in_place_rewrite_names_edit_file(self, parts):
+        result = validate(parts[0], parts, " ".join(parts))
         blob = " ".join(str(v) for v in result.values())
-        assert "edit_file" in blob, f"{binary}'s refusal must name edit_file"
+        assert "edit_file" in blob, f"{parts} should point at the edit tools"
 
     def test_it_mentions_the_python_variant_and_file_creation(self):
         result = validate("sed", ["sed", "-i", "s/a/b/", "f.py"], "sed -i s/a/b/ f.py")
@@ -39,6 +52,25 @@ class TestARefusedRewritePointsAtTheEditTools:
         result = validate("sed", ["sed", "-i", "s/a/b/", "f"], "sed -i s/a/b/ f")
         assert result["status"] == "error"
         assert result["has_errors"] is True
+
+
+class TestAReadIsNotARewrite:
+    """`sed -n '10,20p' f` prints a range. Answering that with "use edit_file"
+    sends the agent to a write tool when it was trying to read — caught by
+    re-running the corpus after the first version of this guard shipped."""
+
+    @pytest.mark.parametrize(
+        "parts",
+        [
+            ["sed", "-n", "288,294p", "f.md"],
+            ["awk", "{print $1}", "f.csv"],
+            ["perl", "-pe", "s/a/b/", "f"],
+        ],
+    )
+    def test_a_read_only_invocation_does_not_point_at_edit_file(self, parts):
+        result = validate(parts[0], parts, " ".join(parts))
+        blob = " ".join(str(v) for v in (result or {}).values())
+        assert "edit_file" not in blob, f"{parts} is a read, not an edit"
 
 
 class TestNothingElseChanged:
