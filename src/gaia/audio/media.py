@@ -54,10 +54,20 @@ _INSTALL_COMMANDS: dict[str, Sequence[tuple[str, Sequence[str]]]] = {
         ),
     ),
     "Darwin": (("brew", ("brew", "install", "ffmpeg")),),
+    # Linux is deliberately absent: every Linux package manager here needs
+    # root, and this runs inside a tool the model calls on its own. An
+    # unattended privileged install is not something an agent gets to decide —
+    # on Linux we fail with the exact command and let the user run it.
+}
+
+# Shown to the user when we cannot (or must not) install automatically.
+_MANUAL_COMMANDS: dict[str, Sequence[str]] = {
+    "Windows": ("winget install Gyan.FFmpeg",),
+    "Darwin": ("brew install ffmpeg",),
     "Linux": (
-        ("apt-get", ("sudo", "apt-get", "install", "-y", "ffmpeg")),
-        ("dnf", ("sudo", "dnf", "install", "-y", "ffmpeg")),
-        ("pacman", ("sudo", "pacman", "-S", "--noconfirm", "ffmpeg")),
+        "sudo apt-get install ffmpeg",
+        "sudo dnf install ffmpeg",
+        "sudo pacman -S ffmpeg",
     ),
 }
 
@@ -106,11 +116,10 @@ def find_ffmpeg() -> Optional[str]:
 
 def _manual_install_hint() -> str:
     system = platform.system()
-    candidates = _INSTALL_COMMANDS.get(system)
-    if not candidates:
+    commands = _MANUAL_COMMANDS.get(system)
+    if not commands:
         return f"Install ffmpeg for {system} and ensure it is on PATH."
-    commands = " or ".join(" ".join(argv) for _, argv in candidates)
-    return f"Install it manually with: {commands}"
+    return f"Install it with: {' or '.join(commands)}"
 
 
 def _install_ffmpeg() -> None:
@@ -148,11 +157,9 @@ def _install_ffmpeg() -> None:
             )
         return
 
-    managers = ", ".join(manager for manager, _ in candidates) or "a package manager"
     raise MediaError(
-        f"ffmpeg is required to decode media but is not installed, and no "
-        f"supported package manager ({managers}) was found on PATH. "
-        f"{_manual_install_hint()} See {DOCS_URL}"
+        "ffmpeg is required to decode audio and video but is not installed. "
+        f"{_manual_install_hint()} Then run this again. See {DOCS_URL}"
     )
 
 

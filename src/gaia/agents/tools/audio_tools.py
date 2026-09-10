@@ -31,6 +31,9 @@ PREVIEW_CHARS = 1200
 # Correction targets worth naming inline; the count carries the rest.
 MAX_REPORTED_SPANS = 25
 
+# Minimum change before another progress line is worth emitting.
+PROGRESS_STEP = 0.05
+
 
 # Refinement is one LLM pass per section; a 46-minute meeting is ~9 sections.
 REFINE_TOOL_TIMEOUT = 3600
@@ -259,13 +262,21 @@ class AudioToolsMixin:
         try:
             media_seconds = probe_duration(source)
 
+            last_shown = [-1.0]
+
             def _decoding(fraction: float) -> None:
                 # Decode is the one stage that reports often enough to abort
                 # promptly if the agent has already stopped waiting.
                 raise_if_cancelled()
+                # ffmpeg emits one progress block per second of MEDIA, so a
+                # 46-minute file would push ~2700 status events at the UI.
+                # A percentage only changes usefully every few points.
+                pct = min(fraction, 1.0)
+                if pct - last_shown[0] < PROGRESS_STEP and pct < 1.0:
+                    return
+                last_shown[0] = pct
                 self._report_progress(
-                    f"Decoding {source.name} — {min(fraction, 1.0):.0%} "
-                    f"of {_clock(media_seconds)}"
+                    f"Decoding {source.name} — {pct:.0%} of {_clock(media_seconds)}"
                 )
 
             wav_path = to_wav16k_mono(source, progress_callback=_decoding)
