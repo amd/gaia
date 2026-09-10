@@ -147,8 +147,8 @@ def _isolated_registry():
         tools_mod._TOOL_REGISTRY.update(saved)
 
 
-def _build_skeleton_tool_loader(dynamic_tools: bool):
-    """Return a real ToolLoader over the doc config, or ``None`` when off.
+def _build_skeleton_tool_loader(dynamic_tools: bool, profile: str = DEFAULT_PROFILE):
+    """Return a real ToolLoader over *profile*'s config, or ``None`` when off.
 
     Registration only consults ``self.tool_loader is not None``; it never embeds
     or selects, so a trivial zero-vector embedder is enough to attach a loader.
@@ -156,13 +156,15 @@ def _build_skeleton_tool_loader(dynamic_tools: bool):
     if not dynamic_tools:
         return None
     import numpy as np
-    from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+    from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
     from gaia.agents.base.tool_loader import ToolLoader
 
+    cfg = PROFILE_TOOL_CONFIGS[profile]
     return ToolLoader(
-        core_tools=DOC_CORE_TOOLS,
-        bundles=DOC_BUNDLES,
+        core_tools=cfg.core,
+        bundles=cfg.bundles,
+        optional_tools=cfg.optional,
         embed_fn=lambda text: np.zeros(1, dtype=np.float32),
     )
 
@@ -241,9 +243,79 @@ def build_doc_agent_skeleton(
                 agent._web_client = None
                 agent._fs_index = None
                 agent._scratchpad = None
-                agent.tool_loader = _build_skeleton_tool_loader(dynamic_tools)
+                agent.tool_loader = _build_skeleton_tool_loader(
+                    dynamic_tools, profile=profile
+                )
                 agent._register_tools()
-                agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
+                # Profiles with generic_file_ops end _register_tools by popping
+                # seven code-writing tools out of _instance_tools; re-snapshotting
+                # the global registry would put them back.
+                if agent._instance_tools is None:
+                    agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
+
+        return agent
+    finally:
+        for mod in stubbed:
+            sys.modules.pop(mod, None)
+
+
+def build_full_agent_skeleton(dynamic_tools: bool = True):
+    """Build a flagship ``GaiaAgent`` skeleton with its ``full`` tools registered.
+
+    The ``full``-profile counterpart to :func:`build_doc_agent_skeleton`, and the
+    only offline way to render the flagship's real tool prompt: constructing a
+    live ``GaiaAgent`` runs ``LemonadeManager.ensure_ready``, which preloads a
+    model. Same trade as the doc skeleton — ``Agent.__init__`` is bypassed and
+    the registration closures never execute, so stub backends are enough.
+
+    Two differences from the doc skeleton, both because this is GaiaAgent:
+
+    * ``_register_tools`` also registers the skill-library and code-index
+      mixins, so the skeleton pre-seeds the state those need.
+    * ``_memory_store`` is a stub from the start. MemoryMixin skips its five
+      tools when the embedder is unreachable, which would silently understate
+      the flagship's registry by five on any machine without Lemonade.
+
+    Returns a skeleton whose ``_tools_registry`` is the flagship's 67-tool set
+    (66 + ``load_tools`` when *dynamic_tools*).
+    """
+    stubbed = _ensure_optional_deps_stubbed()
+    try:
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+        cfg = GaiaAgentConfig(
+            rag_documents=[], streaming=False, silent_mode=True, debug=False
+        )
+
+        with _isolated_registry() as tools_mod:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(
+                    patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
+                )
+                agent = GaiaAgent.__new__(GaiaAgent)
+                agent.config = cfg
+                agent._instance_tools = None
+                agent.model_id = "Gemma-4-E4B-it-GGUF"
+                agent._memory_store = MagicMock()
+                agent.rag = MagicMock()
+                agent.console = MagicMock()
+                agent.observers = []
+                agent._web_client = None
+                agent._fs_index = None
+                agent._scratchpad = None
+                # None short-circuits the MCP block; MCP tools are per-install
+                # and deliberately outside the measured baseline.
+                agent._mcp_manager = None
+                agent.tool_loader = _build_skeleton_tool_loader(
+                    dynamic_tools, profile="full"
+                )
+                agent._register_tools()
+                # Do NOT re-snapshot from the global registry here. The "full"
+                # profile's _register_tools ends by popping the seven
+                # code-writing tools OUT of _instance_tools; overwriting it with
+                # the raw registry puts them back and overstates the agent by 7.
+                if agent._instance_tools is None:
+                    agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
 
         return agent
     finally:

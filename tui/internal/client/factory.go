@@ -5,6 +5,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // ForAgentOptions configures the transport built by ForAgent.
@@ -35,6 +36,11 @@ type ForAgentOptions struct {
 	// ClaudeModel picks which Claude model UseClaude uses; empty lets the
 	// agent pick its default. Meaningless without UseClaude, and refused.
 	ClaudeModel string
+	// Trace records every event the transport receives to a JSONL file
+	// (the TUI's --trace). Nil means tracing is off. Honoured by BOTH
+	// transports: the flagship's is chosen by install state, so tracing only
+	// one of them would leave --trace silently recording nothing.
+	Trace *event.TraceWriter
 }
 
 // BypassPermissionsFlag is the argument that starts a subprocess agent with
@@ -80,6 +86,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			MaxSteps:    opts.MaxSteps,
 			Logf:        opts.Logf,
 			Interactive: opts.Interactive,
+			Trace:       opts.Trace,
 		}), nil
 
 	case catalog.TransportSubprocess:
@@ -112,9 +119,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			args = append(append([]string{}, args...), extra...)
 		}
 		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev), nil
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
 		}
-		return NewSubprocessClient(bin, args, opts.Dev), nil
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
 
 	default:
 		return nil, fmt.Errorf(

@@ -27,6 +27,17 @@ function getFriendlyError(status: number, detail: string): string {
     }
 }
 
+/**
+ * CSRF marker required by the backend on every mutating request.
+ *
+ * A cross-origin page cannot set a custom header without a CORS
+ * preflight, and the backend approves preflights only from its own
+ * origins — so this is what stops a page the user visits from driving
+ * the Agent UI. Sent on reads too: a few read routes require it, and one
+ * unconditional rule is one fewer thing to forget.
+ */
+export const UI_HEADER = { 'x-gaia-ui': '1' };
+
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(
     method: string,
@@ -44,9 +55,9 @@ async function apiFetch<T>(
         : {};
     const init: RequestInit = {
         method,
-        // extraHeaders first so Content-Type cannot be accidentally overridden
-        // by a caller for body requests.
-        headers: { ...extraHeaders, ...baseHeaders },
+        // UI_HEADER first so no caller can drop it; extraHeaders next so
+        // Content-Type cannot be accidentally overridden for body requests.
+        headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
     };
 
@@ -216,7 +227,6 @@ export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
 import type { AgentMcpServer, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
-const UI_HEADER = { 'x-gaia-ui': '1' };
 
 export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
     return apiFetch('GET', '/connectors');
@@ -515,7 +525,7 @@ export function sendMessageStream(
 
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
         body: JSON.stringify({
             session_id: sessionId,
             message,
@@ -729,7 +739,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
 
     let res: Response;
     try {
-        res = await fetch(url, { method: 'POST', body: formData });
+        res = await fetch(url, { method: 'POST', headers: UI_HEADER, body: formData });
     } catch (err) {
         log.api.error(`POST ${url} - network error`, err);
         throw err;
@@ -810,6 +820,7 @@ export async function uploadFile(file: File): Promise<{
 
     const res = await fetch(url, {
         method: 'POST',
+        headers: UI_HEADER,
         body: formData,
     });
 

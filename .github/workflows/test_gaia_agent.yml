@@ -100,3 +100,18 @@ jobs:
             tests/unit/test_starter_skills.py \
             tests/unit/test_skill_sets.py \
             -v --tb=short
+
+      - name: Run Command-Injection Regression Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "================================================================"
+          echo "              COMMAND-INJECTION REGRESSION TESTS"
+          echo "================================================================"
+          # notify_desktop lives in the chat package, so its half of this file
+          # only executes where that package is installed — this lane. The
+          # PPTX-filename half needs no agent package and also runs in
+          # test_unit.yml; running the whole file here keeps both guarded.
+          python -m pytest \
+            tests/unit/test_powershell_command_injection.py \
+            -v --tb=short

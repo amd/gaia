@@ -1,6 +1,15 @@
-# NOTE: This workflow activates once #1297 (Strix Halo self-hosted runner) lands.
-# Until then it is validated out-of-band on Strix Halo class hardware.
-# The strix-halo runner is Windows. Python/uv setup goes through the
+# NOTE: Runs on the AMD Ryzen Dev Lab pool, which registers a runner per job and
+# destroys it afterwards. `devlab-dispatch` is what routes it there. That pool
+# does not answer to `strix-halo` alone: the word describes the silicon, and it
+# is equally true of the dedicated runner #1297 is about, so naming it is a
+# description of hardware rather than a request for a particular fleet.
+#
+# `Windows` is load-bearing rather than tidy. The pool is mixed and most of its
+# Halos are Linux, while the inline `run:` step below is PowerShell -- without
+# the OS label this job can be placed on a Linux host and fail there. It never
+# needed an OS before because the only runner carrying `strix-halo` was Windows.
+#
+# Python/uv setup goes through the
 # ./.github/actions/setup-venv composite action (the lab-runner convention,
 # see build_cpp.yml) which installs uv, creates .venv and puts it on PATH.
 # Inline `run:` steps use PowerShell — bash syntax (&&, \ continuation) is not
@@ -22,7 +31,7 @@ permissions:
 
 jobs:
   behavior-e2e:
-    runs-on: [self-hosted, strix-halo]
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     steps:
       - uses: actions/checkout@v7
 

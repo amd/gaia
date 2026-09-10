@@ -423,7 +423,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
         for scope in scopes:
             sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
 
-    async def _run() -> str:
+    async def _run() -> dict:
         info = await start_authorization(
             args.connector_id, scopes=scopes, grant_agents=grant_agents
         )
@@ -437,12 +437,15 @@ def _handle_connect(args: argparse.Namespace) -> int:
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
-        return result.get("account_email") or "<unknown>"
+        return result
 
-    email = asyncio.run(_run())
+    result = asyncio.run(_run())
+    email = result.get("account_email") or "<unknown>"
     msg = f"Connected as {email}"
     if grant_agent:
-        granted_scopes = grant_agents[grant_agent]
+        from gaia.connectors.grants import list_agent_grants
+
+        granted_scopes = list_agent_grants(args.connector_id).get(grant_agent, [])
         msg += (
             f"; granted {args.connector_id} → {grant_agent}: "
             f"{', '.join(granted_scopes)}"
@@ -656,6 +659,10 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
 
 
 def _handle_grants(args: argparse.Namespace) -> int:
+    from gaia.connectors.errors import (
+        ScopeNotAllowedError,
+        UnknownConnectorError,
+    )
     from gaia.connectors.grants import (
         grant_agent,
         list_agent_grants,
@@ -672,7 +679,13 @@ def _handle_grants(args: argparse.Namespace) -> int:
             sys.stdout.write(f"{args.connector_id} {agent_id}: {', '.join(scopes)}\n")
         return 0
     if sub == "grant":
-        grant_agent(args.connector_id, args.agent_id, args.scopes)
+        # Both gates live in grant_agent so this command and the Agent UI
+        # route enforce one ceiling (#915).
+        try:
+            grant_agent(args.connector_id, args.agent_id, args.scopes)
+        except (ScopeNotAllowedError, UnknownConnectorError) as e:
+            sys.stderr.write(f"gaia connectors grants grant: {e}\n")
+            return 1
         sys.stdout.write(
             f"Granted {args.connector_id} → {args.agent_id}: "
             f"{', '.join(args.scopes)}\n"
