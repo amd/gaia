@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for AudioToolsMixin — the agent-facing transcription surface."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -249,7 +250,18 @@ class TestTranscribeMedia:
 
 
 class TestRefineTranscript:
-    """The correction + attribution stage, as a tool the model cannot skip."""
+    """Speaker turns come from pauses; the model only names them."""
+
+    def _transcript_with_timings(self, tmp_path, segments, name="meeting"):
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        raw = tmp_path / f"{name}.txt"
+        raw.write_text(" ".join(s["text"] for s in segments), encoding="utf-8")
+        timings_path_for(raw).write_text(
+            json.dumps({"duration": segments[-1]["end"], "segments": segments}),
+            encoding="utf-8",
+        )
+        return raw
 
     def test_missing_transcript_is_actionable(self, tmp_path):
         result = Host()._refine_transcript(str(tmp_path / "nope.txt"))
@@ -263,59 +275,80 @@ class TestRefineTranscript:
         assert result["status"] == "error"
         assert "empty" in result["error"]
 
-    def test_writes_speaker_labelled_file_and_points_at_summarization(self, tmp_path):
-        raw = tmp_path / "meeting.txt"
-        raw.write_text("alice here we should ship it bob i disagree", encoding="utf-8")
+    def test_missing_timings_fails_loudly_rather_than_guessing(self, tmp_path):
+        """Without pauses there is no evidence for turns — do not invent them.
 
-        with patch.object(
-            Host,
-            "_llm_text",
-            return_value="Alice: Alice here, we should ship it.\nBob: I disagree.",
-        ):
+        Regression: segmenting continuous prose blind produced sixty speakers
+        in a four-person meeting.
+        """
+        raw = tmp_path / "meeting.txt"
+        raw.write_text("some words that were spoken", encoding="utf-8")
+        result = Host()._refine_transcript(str(raw))
+        assert result["status"] == "error"
+        assert "timing" in result["error"].lower()
+        assert "transcribe_media" in result["error"]
+
+    def test_turns_follow_pauses_and_text_is_verbatim(self, tmp_path):
+        segments = [
+            {"start": 0.0, "end": 2.0, "text": "We should ship it."},
+            {"start": 2.1, "end": 4.0, "text": "Next quarter."},
+            {"start": 6.0, "end": 8.0, "text": "I disagree."},
+        ]
+        raw = self._transcript_with_timings(tmp_path, segments)
+
+        with patch.object(Host, "_llm_text", return_value="1: Alice\n2: Bob"):
             result = Host()._refine_transcript(str(raw))
 
         assert result["status"] == "success"
         assert result["speakers"] == ["Alice", "Bob"]
-        refined = Path(result["refined_path"])
-        assert refined.exists()
-        body = refined.read_text(encoding="utf-8")
-        assert "Alice:" in body and "Bob:" in body
-        # Must steer to the corrected file, and index before summarizing.
-        assert "index_document" in result["next_step"]
-        assert "summarize_document" in result["next_step"]
-        assert str(refined) in result["next_step"]
+        body = Path(result["refined_path"]).read_text(encoding="utf-8")
+        # Two segments 0.1s apart are one turn; the 2s gap starts a new one.
+        assert "Alice: We should ship it. Next quarter." in body
+        assert "Bob: I disagree." in body
+        # Every spoken word survives — the model never re-emits the text.
+        for segment in segments:
+            assert segment["text"] in body
 
-    def test_long_transcript_is_refined_in_sections(self, tmp_path):
-        from gaia.agents.tools.audio_tools import REFINE_SECTION_CHARS
+    def test_speaker_count_is_capped(self, tmp_path):
+        """The model once assigned a new speaker to every sentence."""
+        from gaia.agents.tools.audio_tools import MAX_SPEAKERS
 
-        raw = tmp_path / "long.txt"
-        raw.write_text("This is a spoken sentence. " * 2000, encoding="utf-8")
+        segments = [
+            {"start": i * 3.0, "end": i * 3.0 + 1.0, "text": f"Sentence {i}."}
+            for i in range(30)
+        ]
+        raw = self._transcript_with_timings(tmp_path, segments)
+        runaway = "\n".join(f"{i}: Speaker {i}" for i in range(1, 31))
 
-        calls = []
-
-        def fake(self, prompt):
-            calls.append(prompt)
-            return "Speaker A: content."
-
-        with patch.object(Host, "_llm_text", fake):
+        with patch.object(Host, "_llm_text", return_value=runaway):
             result = Host()._refine_transcript(str(raw))
 
         assert result["status"] == "success"
-        assert result["sections"] > 1, "a long transcript must be sectioned"
-        assert len(calls) == result["sections"]
-        for prompt in calls:
-            assert len(prompt) < REFINE_SECTION_CHARS * 2
+        assert len(result["speakers"]) <= MAX_SPEAKERS
+
+    def test_points_at_indexing_then_summarization(self, tmp_path):
+        segments = [{"start": 0.0, "end": 1.0, "text": "Hello."}]
+        raw = self._transcript_with_timings(tmp_path, segments)
+
+        with patch.object(Host, "_llm_text", return_value="1: Alice"):
+            result = Host()._refine_transcript(str(raw))
+
+        step = result["next_step"]
+        assert "index_document" in step
+        assert "summarize_document" in step
+        assert result["refined_path"] in step
 
     def test_result_is_small_enough_to_never_truncate(self, tmp_path):
         """The refined transcript travels by path, like the raw one."""
-        import json
-
         from gaia.llm.lemonade_client import NPU_CTX_SIZE, budget_for_ctx
 
-        raw = tmp_path / "long.txt"
-        raw.write_text("This is a spoken sentence. " * 2000, encoding="utf-8")
+        segments = [
+            {"start": i * 3.0, "end": i * 3.0 + 1.0, "text": "A spoken sentence. " * 20}
+            for i in range(60)
+        ]
+        raw = self._transcript_with_timings(tmp_path, segments)
 
-        with patch.object(Host, "_llm_text", return_value="Speaker A: " + "x" * 4000):
+        with patch.object(Host, "_llm_text", return_value="1: Alice"):
             result = Host()._refine_transcript(str(raw))
 
         size = len(json.dumps(result, ensure_ascii=False))

@@ -34,6 +34,17 @@ MAX_REPORTED_SPANS = 25
 # Minimum change before another progress line is worth emitting.
 PROGRESS_STEP = 0.05
 
+# Silence long enough to usually mean someone else started talking.
+TURN_GAP_SECONDS = 0.8
+
+# Turns per naming call. Small replies, so this is bounded by how much
+# transcript the model can hold in view, not by its reply budget.
+REFINE_TURNS_PER_CALL = 40
+
+# A real meeting has a handful of voices. Without this the model assigned
+# a new speaker per sentence — sixty of them in a four-person meeting.
+MAX_SPEAKERS = 8
+
 
 # Refinement is one LLM pass per section; a 46-minute meeting is ~9 sections.
 REFINE_TOOL_TIMEOUT = 3600
@@ -73,6 +84,157 @@ def _split_sections(text: str, limit: int) -> List[str]:
     if current:
         sections.append(current)
     return sections
+
+
+_TURN_SPAN = re.compile(r"^\s*(\d+)\s*[-–]\s*(\d+)\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+_TURN_LABEL = re.compile(r"^\s*(\d+)\s*[:.]\s*(.+?)\s*$", re.MULTILINE)
+
+
+_ALIAS_LINE = re.compile(r"^\s*(.+?)\s*->\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _parse_alias_map(reply, known):
+    """Read `Old -> Final` lines into a rename map, ignoring unknown labels."""
+    mapping = {}
+    for old, new in _ALIAS_LINE.findall(reply):
+        old, new = old.strip().strip("`"), new.strip().strip("`")
+        if old in known and new and old != new:
+            mapping[old] = new
+    # A chain (A->B, B->C) must resolve to its endpoint.
+    for key in list(mapping):
+        seen = {key}
+        value = mapping[key]
+        while value in mapping and value not in seen:
+            seen.add(value)
+            value = mapping[value]
+        mapping[key] = value
+    return mapping
+
+
+def _batch_turns(turns: List[List[dict]], per_call: int) -> List[List[List[dict]]]:
+    """Chunk turns into naming calls."""
+    return [turns[i : i + per_call] for i in range(0, len(turns), per_call)] or [[]]
+
+
+def _parse_turn_labels(reply: str, count: int) -> List[str]:
+    """Read `N: Name` lines into one label per turn, in order.
+
+    A turn the model skipped inherits the previous speaker — silence is far
+    more likely to mean "same person continuing" than a new voice.
+    """
+    found: Dict[int, str] = {}
+    for raw_index, name in _TURN_LABEL.findall(reply):
+        index = int(raw_index)
+        label = name.strip().rstrip(":").strip()
+        if 1 <= index <= count and label:
+            found.setdefault(index, label)
+    labels: List[str] = []
+    for i in range(1, count + 1):
+        labels.append(found.get(i) or (labels[-1] if labels else "Speaker A"))
+    return labels
+
+
+def _merge_adjacent(named: List[tuple]) -> List[tuple]:
+    """Join consecutive turns by the same speaker into one block."""
+    merged: List[tuple] = []
+    for name, text in named:
+        if merged and merged[-1][0] == name:
+            merged[-1] = (name, f"{merged[-1][1]} {text}".strip())
+        else:
+            merged.append((name, text))
+    return merged
+
+
+def timings_path_for(transcript_path: Path) -> Path:
+    """Where the segment timings for a transcript live."""
+    return transcript_path.with_suffix(transcript_path.suffix + ".timing.json")
+
+
+def _write_timings(destination: Path, transcript) -> None:
+    """Persist segment start/end/text next to the transcript.
+
+    Speaker turns cannot be recovered from continuous prose — asked to segment
+    it blind, the model invented sixty speakers in a four-person meeting. A
+    pause between segments is the one piece of real evidence available without
+    acoustic diarization, so it has to survive past the transcribe call.
+    """
+    import json
+
+    payload = {
+        "duration": transcript.duration,
+        "segments": [
+            {
+                "start": round(seg.start, 3),
+                "end": round(seg.end, 3),
+                "text": seg.text.strip(),
+            }
+            for seg in transcript.segments
+            if seg.text.strip()
+        ],
+    }
+    try:
+        timings_path_for(destination).write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as e:
+        # The transcript is the artifact; losing timings costs turn quality,
+        # not the run.
+        logger.warning("Could not write timings for %s: %s", destination, e)
+
+
+def _turns_from_gaps(segments: List[dict], gap_seconds: float) -> List[List[dict]]:
+    """Group segments into candidate speaker turns on silence.
+
+    A speaker change almost always follows a pause; a pause does not always
+    mean a speaker change. Over-splitting here is safe because the model then
+    merges adjacent turns by giving them the same name.
+    """
+    turns: List[List[dict]] = []
+    for seg in segments:
+        if turns and seg["start"] - turns[-1][-1]["end"] < gap_seconds:
+            turns[-1].append(seg)
+        else:
+            turns.append([seg])
+    return turns
+
+
+def _sentences(text: str) -> List[str]:
+    """Split a section into sentences, the unit a speaker turn starts on."""
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+
+
+def _parse_turn_spans(reply: str, count: int) -> List[tuple]:
+    """Read `START-END: Name` lines into ordered, gap-free spans.
+
+    Every sentence must land in exactly one turn — a model that skips or
+    overlaps ranges would otherwise silently drop speech. Gaps are healed by
+    extending the previous turn, and anything left over is appended, so the
+    output always contains the whole section.
+    """
+    spans: List[tuple] = []
+    for raw_start, raw_end, name in _TURN_SPAN.findall(reply):
+        start, end = int(raw_start), int(raw_end)
+        label = name.strip().rstrip(":").strip()
+        if not label or start < 1 or end < start or start > count:
+            continue
+        end = min(end, count)
+        if spans and start <= spans[-1][1]:
+            start = spans[-1][1] + 1  # overlap: the earlier turn wins
+            if start > end:
+                continue
+        if spans and start > spans[-1][1] + 1:
+            prev = spans[-1]
+            spans[-1] = (prev[0], start - 1, prev[2])  # heal the gap
+        spans.append((start, end, label))
+
+    if not spans:
+        return [(1, count, "Speaker A")]
+    if spans[0][0] > 1:
+        spans[0] = (1, spans[0][1], spans[0][2])
+    if spans[-1][1] < count:
+        last = spans[-1]
+        spans[-1] = (last[0], count, last[2])
+    return spans
 
 
 def _collect_speakers(blocks: List[str]) -> List[str]:
@@ -291,6 +453,7 @@ class AudioToolsMixin:
 
             destination = self._write_transcript(transcript, source, output_path)
             saved_path = destination
+            _write_timings(destination, transcript)
             spans = transcript.low_confidence_spans(
                 threshold=DEFAULT_CONFIDENCE_THRESHOLD
             )
@@ -356,12 +519,15 @@ class AudioToolsMixin:
     def _refine_transcript(
         self, transcript_path: str, output_path: Optional[str] = None
     ) -> Dict:
-        """Correct and attribute a raw transcript, section by section.
+        """Split a raw transcript into speaker turns and name them.
 
-        The two quality stages are a tool rather than skill prose because a
-        small local model reliably skips multi-step instructions — it summarised
-        the raw transcript and reported no speakers. One call it cannot skip.
+        Turn boundaries come from pauses in the recording, not from the model.
+        Asked to segment continuous prose blind it invented sixty speakers in a
+        four-person meeting, because nothing in the text marks a change of
+        voice. The model's only job here is naming turns it is handed.
         """
+        import json
+
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
 
         source = Path(transcript_path).expanduser()
@@ -384,17 +550,39 @@ class AudioToolsMixin:
             else source.with_suffix(".transcript.md")
         )
 
-        sections = _split_sections(raw, REFINE_SECTION_CHARS)
-        refined: List[str] = []
+        timings_file = timings_path_for(source)
+        segments: List[dict] = []
+        if timings_file.is_file():
+            try:
+                segments = json.loads(timings_file.read_text(encoding="utf-8")).get(
+                    "segments", []
+                )
+            except (OSError, ValueError) as e:
+                logger.warning("Could not read timings %s: %s", timings_file, e)
+
+        if not segments:
+            return {
+                "status": "error",
+                "error": (
+                    f"No segment timings found next to {source} "
+                    f"(expected {timings_file.name}). Speaker turns are derived "
+                    "from pauses in the recording; without them the result "
+                    "would be invented. Re-run transcribe_media on the original "
+                    "media file to regenerate both files."
+                ),
+            }
+
+        turns = _turns_from_gaps(segments, TURN_GAP_SECONDS)
+        batches = _batch_turns(turns, REFINE_TURNS_PER_CALL)
+        named: List[tuple] = []
         speaker_notes: List[str] = []
         try:
-            for index, section in enumerate(sections, 1):
+            for index, batch in enumerate(batches, 1):
                 raise_if_cancelled()
                 self._report_progress(
-                    f"Refining transcript — section {index} of {len(sections)}"
+                    f"Identifying speakers — batch {index} of {len(batches)}"
                 )
-                body = self._refine_section(section, index, speaker_notes)
-                refined.append(body)
+                named.extend(self._name_turns(batch, speaker_notes))
         except ToolCancelled:
             logger.warning("Refinement of %s cancelled after timeout", source)
             raise
@@ -402,68 +590,122 @@ class AudioToolsMixin:
             logger.error("Refinement failed for %s: %s", source, e)
             return {"status": "error", "error": str(e)}
 
-        speakers = _collect_speakers(refined)
+        self._report_progress("Consolidating speakers...")
+        named = self._consolidate_speakers(named)
+        blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
+        speakers = list(dict.fromkeys(name for name, _ in named))
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
-            _render_refined(source, speakers, refined), encoding="utf-8"
+            _render_refined(source, speakers, blocks), encoding="utf-8"
         )
 
         return {
             "status": "success",
             "refined_path": str(destination),
             "speakers": speakers,
-            "sections": len(sections),
+            "turns": len(blocks),
             "source_transcript": str(source),
             "next_step": (
-                f"Corrected, speaker-labelled transcript saved to {destination}. "
+                f"Speaker-labelled transcript saved to {destination}. "
                 "Tell the user this path. Then finish in two calls:\n"
                 f"1. index_document('{destination}') — required before "
-                "summarizing, and it is also what lets the user ask follow-up "
-                "questions about this meeting afterwards. Never skip it.\n"
-                f"2. summarize_document('{destination}', summary_type='detailed')"
-                " — this folds the whole transcript forward in sections, so the "
-                "brief and action items cover the entire meeting.\n"
+                "summarizing, and it is also what lets the user ask "
+                "follow-up questions about this meeting afterwards. "
+                "Never skip it.\n"
+                f"2. summarize_document('{destination}', "
+                "summary_type='detailed') — this folds the whole "
+                "transcript forward in sections, so the brief and action "
+                "items cover the entire meeting.\n"
                 "Do not summarise the raw transcript, and do not use "
-                "query_documents to build the summary — it returns only the top "
-                "few matching chunks and would miss most of the meeting. "
-                "query_documents IS the right tool for a later follow-up "
-                "question about a specific detail.\n"
-                "Finally, invite the follow-up: tell the user they can ask "
-                "questions about the meeting and you will answer from the "
-                "indexed transcript."
+                "query_documents to build the summary — it returns only "
+                "the top few matching chunks and would miss most of the "
+                "meeting. query_documents IS the right tool for a later "
+                "follow-up question about a specific detail.\n"
+                "Finally, invite the follow-up: tell the user they can "
+                "ask questions about the meeting and you will answer "
+                "from the indexed transcript."
             ),
         }
 
-    def _refine_section(
-        self, section: str, index: int, speaker_notes: List[str]
-    ) -> str:
-        """Rewrite one section with speakers labelled and mis-hearings fixed."""
-        carried = (
-            f"\nSpeakers already identified earlier: {', '.join(speaker_notes)}."
+    def _name_turns(
+        self, batch: List[List[dict]], speaker_notes: List[str]
+    ) -> List[tuple]:
+        """Ask the model who speaks each pre-cut turn. Returns (name, text)."""
+        texts = [" ".join(seg["text"] for seg in turn).strip() for turn in batch]
+        listing = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
+        known = (
+            f"\nSpeakers already identified in this meeting: "
+            f"{', '.join(speaker_notes)}. Reuse those exact labels for the "
+            "same people — do not invent a new label for someone already "
+            "listed."
             if speaker_notes
             else ""
         )
         prompt = (
-            "You are cleaning up a raw speech-to-text transcript of a meeting.\n"
-            "Do exactly two things and nothing else:\n"
-            "1. Fix clear mis-hearings — words the recognizer obviously got "
-            "wrong given the surrounding context (product names, jargon, "
-            "names). If you are not confident, leave the original wording.\n"
-            "2. Split the text into speaker turns and label each one. Use a "
-            "real name when the transcript supports it (someone introduces "
-            "themselves, or is addressed by name). Otherwise use Speaker A, "
-            "Speaker B, and so on, consistently.\n\n"
-            "Rules: keep every point that was made. Do not summarize, "
-            "shorten, add, or editorialize. Output ONLY the labelled "
-            "transcript, one turn per line, formatted exactly as "
-            "'Name: what they said'." + carried + "\n\n"
-            f"Transcript section {index}:\n{section}"
+            "Below are consecutive turns from a meeting transcript. The "
+            "turns are already split correctly — your only job is to say "
+            "WHO speaks each one.\n\n"
+            "Most meetings have 2 to 5 people. Consecutive turns are often "
+            "the SAME person continuing; only change speaker when the "
+            "content clearly indicates someone else took over. Use a real "
+            "name only if the transcript supports it (a self-introduction, "
+            "or someone addressed by name). Otherwise use Speaker A, "
+            "Speaker B, and so on."
+            f" Never use more than {MAX_SPEAKERS} distinct labels.{known}"
+            "\n\nOutput ONLY lines of the form `N: Name`, one per turn, "
+            "for every turn number below. Example:\n1: Speaker A\n"
+            "2: Speaker A\n3: Priya\n\n"
+            f"Turns:\n{listing}"
         )
-        text = self._llm_text(prompt)
-        for name in _collect_speakers([text]):
-            if name not in speaker_notes:
+        labels = _parse_turn_labels(self._llm_text(prompt), len(texts))
+        for name in labels:
+            if name not in speaker_notes and len(speaker_notes) < MAX_SPEAKERS:
                 speaker_notes.append(name)
-        return text.strip()
+        # A label past the cap is a hallucinated extra voice; fold it into
+        # the previous speaker rather than let the roster grow unbounded.
+        cleaned: List[tuple] = []
+        for i, name in enumerate(labels):
+            if name not in speaker_notes:
+                name = cleaned[-1][0] if cleaned else "Speaker A"
+            cleaned.append((name, texts[i]))
+        return cleaned
+
+    def _consolidate_speakers(self, named):
+        """Merge labels that are the same person under different names.
+
+        Turn naming runs in batches, and within a batch the model changes
+        speaker more eagerly than people actually do — it found eight voices in
+        a four-person meeting. This pass sees the whole roster at once and
+        folds the duplicates together.
+        """
+        roster = {}
+        for name, text in named:
+            roster.setdefault(name, []).append(text)
+        if len(roster) < 3:
+            return named
+
+        sample = "\n".join(
+            f"{name}: " + " / ".join(t[:120] for t in texts[:3])
+            for name, texts in roster.items()
+        )
+        prompt = (
+            "A meeting transcript was labelled in batches, so the same person "
+            "may have been given more than one label. Below is each label with "
+            "a few of its lines.\n\nDecide which labels are the SAME person. "
+            "Merge freely — most meetings have 2 to 5 people, and splitting one "
+            "person across labels is the common error here.\n\nOutput ONLY "
+            "lines of the form `OldLabel -> FinalLabel`, one per label, "
+            "including labels that stay as they are. Use a real name as the "
+            "final label when one is evident.\n\nLabels:\n" + sample
+        )
+        try:
+            mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
+        except Exception as e:  # noqa: BLE001 — consolidation is an improvement
+            logger.info("Speaker consolidation skipped (%s)", e)
+            return named
+        if not mapping:
+            return named
+        return [(mapping.get(name, name), text) for name, text in named]
 
     def _llm_text(self, prompt: str) -> str:
         """One-shot completion on whatever LLM this agent is already using.
