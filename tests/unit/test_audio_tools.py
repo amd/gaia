@@ -326,17 +326,43 @@ class TestRefineTranscript:
         assert result["status"] == "success"
         assert len(result["speakers"]) <= MAX_SPEAKERS
 
-    def test_points_at_indexing_then_summarization(self, tmp_path):
+    def test_indexes_its_own_output_and_points_at_summarization(self, tmp_path):
+        """Indexing is done here, not instructed — the model kept skipping it."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        segments = [{"start": 0.0, "end": 1.0, "text": "Hello."}]
+        raw = self._transcript_with_timings(tmp_path, segments)
+        indexed = []
+
+        fake = {"function": lambda path: indexed.append(path) or {"status": "success"}}
+        with patch.dict(_TOOL_REGISTRY, {"index_document": fake}, clear=False):
+            with patch.object(Host, "_llm_text", return_value="1: Alice"):
+                result = Host()._refine_transcript(str(raw))
+
+        assert result["indexed"] is True
+        assert indexed == [result["refined_path"]]
+
+        step = result["next_step"]
+        assert "summarize_document" in step
+        assert "query_documents" in step, "must warn against the chunk shortcut"
+        assert result["refined_path"] in step
+
+    def test_missing_indexer_does_not_fail_the_refinement(self, tmp_path):
+        """A transcript that exists but is unindexed still beats losing it."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
         segments = [{"start": 0.0, "end": 1.0, "text": "Hello."}]
         raw = self._transcript_with_timings(tmp_path, segments)
 
-        with patch.object(Host, "_llm_text", return_value="1: Alice"):
-            result = Host()._refine_transcript(str(raw))
+        registry = dict(_TOOL_REGISTRY)
+        registry.pop("index_document", None)
+        with patch("gaia.agents.base.tools._TOOL_REGISTRY", registry):
+            with patch.object(Host, "_llm_text", return_value="1: Alice"):
+                result = Host()._refine_transcript(str(raw))
 
-        step = result["next_step"]
-        assert "index_document" in step
-        assert "summarize_document" in step
-        assert result["refined_path"] in step
+        assert result["status"] == "success"
+        assert result["indexed"] is False
+        assert Path(result["refined_path"]).exists()
 
     def test_result_is_small_enough_to_never_truncate(self, tmp_path):
         """The refined transcript travels by path, like the raw one."""

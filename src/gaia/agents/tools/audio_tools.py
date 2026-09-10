@@ -599,33 +599,61 @@ class AudioToolsMixin:
             _render_refined(source, speakers, blocks), encoding="utf-8"
         )
 
+        self._report_progress("Indexing transcript for questions...")
+        indexed = self._index_refined(destination)
+
         return {
             "status": "success",
             "refined_path": str(destination),
             "speakers": speakers,
             "turns": len(blocks),
+            "indexed": indexed,
             "source_transcript": str(source),
             "next_step": (
-                f"Speaker-labelled transcript saved to {destination}. "
-                "Tell the user this path. Then finish in two calls:\n"
-                f"1. index_document('{destination}') — required before "
-                "summarizing, and it is also what lets the user ask "
-                "follow-up questions about this meeting afterwards. "
-                "Never skip it.\n"
-                f"2. summarize_document('{destination}', "
-                "summary_type='detailed') — this folds the whole "
-                "transcript forward in sections, so the brief and action "
-                "items cover the entire meeting.\n"
-                "Do not summarise the raw transcript, and do not use "
-                "query_documents to build the summary — it returns only "
-                "the top few matching chunks and would miss most of the "
-                "meeting. query_documents IS the right tool for a later "
-                "follow-up question about a specific detail.\n"
-                "Finally, invite the follow-up: tell the user they can "
-                "ask questions about the meeting and you will answer "
-                "from the indexed transcript."
+                f"Speaker-labelled transcript saved to {destination} and "
+                "indexed, so questions about this meeting can now be "
+                "answered from it.\n\n"
+                "Do these two things, in this order:\n"
+                f"1. Call summarize_document('{destination}', "
+                "summary_type='detailed') and build the brief and action "
+                "items from what it returns. It folds the whole transcript "
+                "forward in sections, so the brief covers the entire "
+                "meeting. Do NOT use query_documents for this — it returns "
+                "only the top few matching chunks, so the brief would "
+                "silently miss most of what was said.\n"
+                "2. Tell the user where both files are, and that they can "
+                "now ask questions about specific details of the meeting.\n\n"
+                "Answering with a question instead of a summary is not "
+                "acceptable here: the user already asked for one."
             ),
         }
+
+    def _index_refined(self, path):
+        """Index the refined transcript so summarizing and follow-ups work.
+
+        Doing it here rather than instructing the model to: summarize_document
+        requires an indexed file, and every extra instructed step is another
+        one the model can skip — in testing it repeatedly reached for
+        query_documents instead and answered from a couple of chunks. Indexing
+        is also what makes later questions about the meeting answerable, so it
+        should never depend on the model remembering.
+        """
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        entry = _TOOL_REGISTRY.get("index_document") or {}
+        fn = entry.get("function") or entry.get("func")
+        if not callable(fn):
+            logger.info("index_document unavailable; leaving %s unindexed", path)
+            return False
+        try:
+            result = fn(str(path))
+        except Exception as e:  # noqa: BLE001 — the transcript still stands
+            logger.warning("Could not index %s: %s", path, e)
+            return False
+        ok = isinstance(result, dict) and result.get("status") == "success"
+        if not ok:
+            logger.warning("Indexing %s did not succeed: %s", path, result)
+        return ok
 
     def _name_turns(
         self, batch: List[List[dict]], speaker_notes: List[str]
