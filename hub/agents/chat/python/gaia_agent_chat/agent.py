@@ -1045,7 +1045,7 @@ No documents are currently indexed.
 
 **IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
+**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already

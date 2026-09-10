@@ -96,6 +96,41 @@ class TestRegistration:
             assert fn.__doc__ and len(fn.__doc__) > 80, f"{name} needs a real docstring"
 
 
+class TestSystemPromptAgreesWithTheToolset:
+    """A prompt that says "I can't" beats a tool that says "I can"."""
+
+    def _chat_agent_source(self):
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "hub/agents/chat/python/gaia_agent_chat/agent.py"
+        )
+        if not path.is_file():
+            pytest.skip(f"chat agent not present at {path}")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_prompt_does_not_call_audio_or_video_unsupported(self):
+        """Regression: the installed agent refused an .mp4 outright.
+
+        transcribe_media was registered and working, but the system prompt
+        still listed "video/audio analysis" as UNSUPPORTED, so the model
+        declined before trying — and pointed the user at a feature request
+        for something that had already shipped.
+        """
+        source = self._chat_agent_source()
+        for claim in ("video/audio analysis", "audio/video analysis"):
+            assert claim not in source, (
+                f"the system prompt still lists {claim!r} as unsupported, "
+                "which makes the agent refuse recordings it can transcribe"
+            )
+
+    def test_the_prompt_says_recordings_are_supported(self):
+        source = self._chat_agent_source()
+        assert "transcribe_media" in source, (
+            "the prompt should name transcribe_media so the model knows "
+            "recordings are handled"
+        )
+
+
 class TestTranscribeMedia:
     def test_missing_file_is_actionable_and_does_no_work(self, tmp_path):
         """A bad path must not trigger an ffmpeg install or a model pull."""
