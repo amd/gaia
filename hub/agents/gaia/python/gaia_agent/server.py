@@ -19,6 +19,10 @@ is the one gate still unimplemented: it ends the run with a refusal (the
 stateless D1 stub, same as email) rather than pretending to support server-side
 resume. That is additive when a tool needs it; claiming support we haven't built
 would be worse than the honest gap.
+
+:func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
+HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
+executable serves both, so the release matrix stays one artifact per platform.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ import contextlib
 import json
 import os
 import queue
+import sys
 import threading
 import time
 import uuid
@@ -40,7 +45,7 @@ from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from gaia.logger import get_logger
+from gaia.logger import get_logger, route_console_logging_to_stderr
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
@@ -789,6 +794,37 @@ async def respond_to_query(
     )
 
 
+def _log_caller_auth_state(auth_config: Any) -> None:
+    """Report which caller-auth channel this server came up on.
+
+    Emitted from the app's LIFESPAN, not from ``build_app``: importing this
+    module is also how the frozen binary reaches the stdio transport, whose
+    stdout is the event wire — a line logged at import time lands in the middle
+    of the JSON stream and the reader renders it as a malformed event.
+    """
+    if auth_config.token:
+        channel = (
+            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
+            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
+            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
+        )
+        logger.info(
+            "GAIA sidecar: caller authentication ENABLED via %s "
+            "(per-session bearer token required on /v1/%s/* requests).",
+            channel,
+            AGENT_ID,
+        )
+        return
+    logger.warning(
+        "GAIA sidecar: caller authentication DISABLED — neither %s nor %s "
+        "is in the environment. This is intended for LOCAL DEVELOPMENT "
+        "only; the shipped product spawns the sidecar with a per-session "
+        "token. Host/Origin protection is still enforced.",
+        caller_auth.TOKEN_FILE_ENV_VAR,
+        caller_auth.TOKEN_ENV_VAR,
+    )
+
+
 def build_app() -> FastAPI:
     """The sidecar ASGI app.
 
@@ -803,6 +839,12 @@ def build_app() -> FastAPI:
     """
     from gaia_agent import __version__
 
+    # Loopback is not access control: without this, any page the user visits can
+    # drive an agent that has shell and file tools. Wired ONLY here, on the
+    # sidecar app the frozen binary serves.
+    auth_config = caller_auth.config_from_environment()
+    caller_auth.configure(auth_config)
+
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI):
         """Load the model before the first question instead of during it.
@@ -812,6 +854,7 @@ def build_app() -> FastAPI:
         hang on a freshly opened chat. Backgrounded so readiness is not
         delayed, and never fatal — a cold first turn is slow, not broken.
         """
+        _log_caller_auth_state(auth_config)
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
@@ -821,34 +864,7 @@ def build_app() -> FastAPI:
             task.cancel()
 
     app = FastAPI(title="GAIA Agent", version=__version__, lifespan=_lifespan)
-
-    # Loopback is not access control: without this, any page the user visits can
-    # drive an agent that has shell and file tools. Wired ONLY here, on the
-    # sidecar app the frozen binary serves.
-    auth_config = caller_auth.config_from_environment()
-    caller_auth.configure(auth_config)
     app.add_middleware(caller_auth.HostOriginMiddleware)
-    if auth_config.token:
-        channel = (
-            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
-            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
-            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
-        )
-        logger.info(
-            "GAIA sidecar: caller authentication ENABLED via %s "
-            "(per-session bearer token required on /v1/%s/* requests).",
-            channel,
-            AGENT_ID,
-        )
-    else:
-        logger.warning(
-            "GAIA sidecar: caller authentication DISABLED — neither %s nor %s "
-            "is in the environment. This is intended for LOCAL DEVELOPMENT "
-            "only; the shipped product spawns the sidecar with a per-session "
-            "token. Host/Origin protection is still enforced.",
-            caller_auth.TOKEN_FILE_ENV_VAR,
-            caller_auth.TOKEN_ENV_VAR,
-        )
 
     @app.get("/health", include_in_schema=True)
     async def health() -> Dict[str, str]:
@@ -880,8 +896,9 @@ def _warmup_blocking() -> None:
 
     started = time.time()
     try:
-        from gaia.llm.lemonade_client import create_lemonade_client
         from gaia_agent.session_registry import build_session_agent
+
+        from gaia.llm.lemonade_client import create_lemonade_client
 
         agent = build_session_agent()
         try:
@@ -918,20 +935,83 @@ def _warmup_blocking() -> None:
 app = build_app()
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    """Run the sidecar. Bound to loopback by default — this speaks for the
-    user's documents and memory and has no business on a LAN interface."""
+#: argv spellings that select the HTTP sidecar. ``--serve`` is the explicit
+#: selector; the bind flags imply it because the daemon spawns the installed
+#: binary as ``<binary> --host H --port P`` with no ``--serve``
+#: (``gaia.daemon.sidecars.manager``). Neither spelling exists in the stdio
+#: parser and none of its flags exist here, so the split is unambiguous.
+_HTTP_SELECTORS = ("--serve", "--host", "--port")
+
+_TRANSPORT_HELP = """\
+gaia-agent serves two transports from one binary, chosen by argv:
+
+  gaia-agent --serve [--host HOST] [--port PORT]
+      The HTTP sidecar: the /v1/gaia/* contract the daemon and the Agent UI
+      speak. Bound to 127.0.0.1:8141 unless told otherwise.
+
+  gaia-agent [OPTIONS]
+      Newline-delimited JSON over stdin/stdout -- one query per line in, one
+      turn's canonical events out. This is what the TUI spawns. Its options:
+"""
+
+
+def _selects_http(argv: List[str]) -> bool:
+    """Whether *argv* asks for the HTTP sidecar rather than the stdio wire."""
+    return any(
+        arg == flag or arg.startswith(f"{flag}=")
+        for arg in argv
+        for flag in _HTTP_SELECTORS
+    )
+
+
+def _serve_http(argv: List[str]) -> int:
+    """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
+    the user's documents and memory and has no business on a LAN interface."""
     import argparse
 
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="GAIA flagship agent sidecar")
+    parser = argparse.ArgumentParser(
+        prog="gaia-agent --serve", description="GAIA flagship agent HTTP sidecar"
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the HTTP sidecar (implied by --host/--port).",
+    )
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     args = parser.parse_args(argv)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Dispatch this process onto one of the agent's two transports.
+
+    ``--serve`` (or a bind flag) runs the HTTP sidecar. Everything else,
+    including no arguments at all, is the stdio JSONL transport the TUI spawns
+    as a child — its parser owns ``--model`` / ``--use-claude`` /
+    ``--claude-model`` / ``--json-events`` / ``--dev``, so argv is forwarded
+    verbatim. A flag from the wrong transport is an argparse error, never a
+    quiet switch to the other one.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    if _selects_http(args):
+        return _serve_http(args)
+
+    # The stdio parser cannot mention a mode it does not own.
+    if any(arg in ("-h", "--help") for arg in args):
+        print(_TRANSPORT_HELP)
+
+    # stdout is about to become the event wire, so nothing imported below may
+    # log to it — a stray line reaches the reader as a malformed event.
+    route_console_logging_to_stderr()
+
+    from gaia_agent.stdio import main as stdio_main
+
+    return stdio_main(args)
 
 
 if __name__ == "__main__":  # pragma: no cover

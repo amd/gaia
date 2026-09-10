@@ -462,6 +462,14 @@ class AudioToolsMixin:
                 ),
             }
 
+        # A second call on the same recording must not redo five minutes of
+        # decode, transcription and diarization. Asking a follow-up question
+        # about a meeting reached this tool again and silently re-transcribed
+        # the whole thing.
+        cached = self._existing_transcript(source, output_path)
+        if cached is not None:
+            return cached
+
         # ffmpeg and the model pull are both slow and both happen here, never
         # at startup — the user only pays for them if they actually transcribe.
         try:
@@ -902,6 +910,57 @@ class AudioToolsMixin:
             )
         return text
 
+    def _existing_transcript(self, source, output_path):
+        """Return the previous result for *source*, or None to transcribe it.
+
+        Transcribing is the expensive, deterministic part of this pipeline, and
+        the model reaches this tool again whenever a follow-up question mentions
+        the recording. Without this, "what did they say about pricing?" costs
+        another full decode, transcription and diarization pass.
+
+        Re-transcribes only when the recording is newer than the transcript, so
+        editing or replacing the file still does the right thing.
+        """
+        destination = self._transcript_destination(source, output_path)
+        timings = timings_path_for(destination)
+        if not (destination.is_file() and timings.is_file()):
+            return None
+        try:
+            if source.stat().st_mtime > destination.stat().st_mtime:
+                logger.info("%s is newer than its transcript; re-transcribing", source)
+                return None
+            text = destination.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if not text.strip():
+            return None
+
+        logger.info("Reusing the transcript already at %s", destination)
+        return {
+            "status": "success",
+            "transcript_path": str(destination),
+            "reused": True,
+            "language": "",
+            "character_count": len(text),
+            "preview": text[:PREVIEW_CHARS],
+            "low_confidence_spans": [],
+            "low_confidence_span_count": 0,
+            "next_step": (
+                f"This recording was already transcribed; {destination} is the "
+                "existing transcript and nothing was re-run.\n\nIf you are "
+                "answering a question about the meeting, the transcript is "
+                "already indexed — use query_documents rather than calling this "
+                "tool again. If you still need the speaker-labelled version, "
+                f"call refine_transcript('{destination}')."
+            ),
+        }
+
+    def _transcript_destination(self, source, output_path):
+        """Where this recording's transcript lives."""
+        if output_path:
+            return Path(output_path).expanduser()
+        return TRANSCRIPT_DIR / f"{source.stem}.txt"
+
     def _diarize_if_possible(self, wav_path):
         """Work out who spoke when, from the audio, while the WAV still exists.
 
@@ -927,11 +986,7 @@ class AudioToolsMixin:
 
     def _write_transcript(self, transcript, source: Path, output_path: Optional[str]):
         """Persist the transcript before any later stage can fail."""
-        if output_path:
-            destination = Path(output_path).expanduser()
-        else:
-            TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-            destination = TRANSCRIPT_DIR / f"{source.stem}.txt"
+        destination = self._transcript_destination(source, output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(transcript.text, encoding="utf-8")
         return destination

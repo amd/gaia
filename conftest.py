@@ -27,12 +27,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 
 #: Source roots this repo owns, in the order they should shadow anything else.
+#: For a hub agent the importable root is the directory CONTAINING the package
+#: (``hub/agents/gaia/python``), not the package itself — putting the package
+#: dir on sys.path makes ``import gaia_agent`` miss it entirely and silently
+#: fall through to whatever the editable install points at.
 _SOURCE_ROOTS = [REPO_ROOT / "src"] + sorted(
-    p.parent for p in REPO_ROOT.glob("hub/agents/*/python/*/__init__.py")
+    {p.parent.parent for p in REPO_ROOT.glob("hub/agents/*/python/*/__init__.py")}
 )
 
-#: Modules whose origin proves which checkout is under test.
-_ANCHOR_MODULES = ("gaia",)
+#: Modules whose origin proves which checkout is under test. The hub agents are
+#: listed too: they are separately editable-installed, so ``gaia`` can resolve
+#: here while ``gaia_agent`` quietly comes from another worktree.
+_ANCHOR_MODULES = ("gaia", "gaia_agent", "gaia_agent_chat")
 
 
 def _prepend_source_roots() -> None:

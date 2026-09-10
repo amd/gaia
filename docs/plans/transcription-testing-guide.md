@@ -40,6 +40,7 @@ but transcription will be slow.
 git clone https://github.com/amd/gaia.git
 cd gaia
 git checkout kalin/transcription-pipeline
+git pull                      # the branch moves; start from the tip
 
 python -m pip install uv
 uv venv
@@ -47,6 +48,10 @@ uv venv
 # macOS / Linux:  source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
+
+> **Already cloned?** `git pull` first. This branch is still being worked on,
+> and a stale checkout is the second most common reason something here does not
+> behave as described (the first is §5).
 
 ## 3. Install Lemonade and pull the models
 

@@ -138,6 +138,62 @@ class TestTranscribeMedia:
         assert spans[0]["text"].strip() == "diar"
         assert spans[0]["min_probability"] == pytest.approx(0.31, abs=0.01)
 
+    def test_a_second_call_reuses_the_transcript(self, tmp_path):
+        """A follow-up question must not re-transcribe the recording.
+
+        Regression: asking "what did they say about X?" reached this tool
+        again and silently redid five minutes of decode, transcription and
+        diarization.
+        """
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        source = tmp_path / "meeting.mp4"
+        source.write_bytes(b"stub")
+        out = tmp_path / "meeting.txt"
+        out.write_text("already transcribed words", encoding="utf-8")
+        timings_path_for(out).write_text('{"segments": []}', encoding="utf-8")
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg") as ffmpeg,
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            result = Host()._transcribe_media(str(source), output_path=str(out))
+
+        assert result["status"] == "success"
+        assert result["reused"] is True
+        assert result["transcript_path"] == str(out)
+        # Nothing expensive may run on the reuse path.
+        ffmpeg.assert_not_called()
+        client.assert_not_called()
+        # And it must point the model at the cheap way to answer.
+        assert "query_documents" in result["next_step"]
+
+    def test_a_newer_recording_is_transcribed_again(self, tmp_path):
+        """Replacing the media file must invalidate the old transcript."""
+        import os
+        import time
+
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        out = tmp_path / "meeting.txt"
+        out.write_text("stale", encoding="utf-8")
+        timings_path_for(out).write_text('{"segments": []}', encoding="utf-8")
+        source = tmp_path / "meeting.mp4"
+        source.write_bytes(b"stub")
+        # Make the recording unambiguously newer than its transcript.
+        future = time.time() + 60
+        os.utime(source, (future, future))
+
+        with patch(
+            "gaia.audio.media.ensure_ffmpeg",
+            side_effect=RuntimeError("ffmpeg probe reached"),
+        ):
+            result = Host()._transcribe_media(str(source), output_path=str(out))
+
+        # It got past the reuse check and tried to do real work.
+        assert result["status"] == "error"
+        assert "ffmpeg probe reached" in result["error"]
+
     def test_long_meeting_result_stays_under_the_truncation_budget(self, tmp_path):
         """Regression: a 46-min meeting serialised to ~135K chars vs a 60K cap.
 

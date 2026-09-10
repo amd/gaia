@@ -11,13 +11,17 @@ installer/
 ├── README.md      ← you are here
 ├── scripts/       build + bootstrap scripts (PowerShell, bash, batch)
 ├── version/       version normalization and bump helpers (Node)
-├── nsis/          Windows NSIS installer config + assets  (populated in Phase C/E)
+├── nsis/          Windows NSIS installer scripts + assets
 ├── debian/        Debian packaging metadata               (populated in Phase C/E)
 ├── macos/         DMG layout, entitlements, Info.plist    (populated in Phase E)
 └── linux/         .desktop file + AppImage assets         (populated in Phase E)
 ```
 
-Empty subdirectories (`nsis/`, `debian/`, `macos/`, `linux/`) are placeholders kept via `.gitkeep`. They will be populated when Phases C and E of the [desktop installer plan](../docs/plans/desktop-installer.mdx) land.
+`nsis/` holds two separate installers, plus the icon and sidebar they share:
+`gaia.nsi` is the standalone terminal installer (the shareable `.exe`), and
+`installer.nsh` is an include the electron-builder Agent UI installer pulls in.
+
+`debian/`, `macos/` and `linux/` are still placeholders kept via `.gitkeep`. They will be populated when Phases C and E of the [desktop installer plan](../docs/plans/desktop-installer.mdx) land.
 
 ## `scripts/` — bootstrap and build scripts
 
@@ -25,9 +29,39 @@ Empty subdirectories (`nsis/`, `debian/`, `macos/`, `linux/`) are placeholders k
 |---|---|
 | `install.ps1` | One-shot Windows installer pulled via `irm https://amd-gaia.ai/install.ps1 \| iex` |
 | `install.sh` | One-shot Linux/macOS installer pulled via `curl ... \| bash` |
+| `build-gaia-installer.ps1` | Package the two GAIA binaries into a single shareable Windows `.exe` |
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
 | `start-lemonade.ps1` / `.sh` / `.bat` | Launch a local Lemonade Server for development and CI |
+
+### Building the GAIA terminal installer locally
+
+This is the one you send to a colleague: a single per-user `.exe` that installs
+`gaia-tui` and the GAIA agent on a machine with no Python, no Go and no clone.
+See [the plan](../docs/plans/shareable-custom-build.md) for why it exists.
+
+It packages binaries, it does not build them — build both first, then package:
+
+```powershell
+cd tui; go build -o bin/gaia-tui.exe ./cmd/gaia; cd ..
+python hub/agents/gaia/python/packaging/freeze.py --onefile
+.\installer\scripts\build-gaia-installer.ps1
+```
+
+The result lands in `dist/installer/gaia-setup-<version>.exe`. Needs NSIS 3.x
+(`winget install NSIS.NSIS`); every other input is checked before makensis runs,
+so a missing binary fails with the command that produces it.
+
+What the installer puts where, and why:
+
+| Path | What |
+|---|---|
+| `%LOCALAPPDATA%\Programs\GAIA\gaia-tui.exe` | The terminal UI. Its folder is added to the **user** PATH — no admin rights anywhere in this install. |
+| `%USERPROFILE%\.gaia\agents\gaia\gaia-agent.exe` | The frozen flagship, in the hub install root the TUI searches. One copy, not two. |
+| `%USERPROFILE%\.gaia\agents\gaia\.installed` | The install sentinel. **Load-bearing**: without it the TUI treats the agent as an unverified install and refuses to spawn it (`catalog.findInstalledBinaryIn`, #3062). |
+
+Lemonade and the models are deliberately not bundled — they are gigabytes and
+`gaia init` already owns them.
 
 ### Building the Agent UI installer locally
 
@@ -70,7 +104,6 @@ node installer/version/release-ui.mjs
 
 ## Future content (tracked in the plan)
 
-- **`nsis/`** — `installer.nsh`, `installer-banner.bmp`, `installer-sidebar.bmp`, `icon.ico` (Phases C + E)
 - **`debian/`** — DEB control files and postinstall/postrm hooks (Phase C)
 - **`macos/`** — `Info.plist`, `entitlements.mac.plist`, `dmg-background.png`, `icon.icns` (Phase E)
 - **`linux/`** — `gaia-ui.desktop`, `gaia-ui.png` for AppImage/DEB (Phase E)
