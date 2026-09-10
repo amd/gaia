@@ -82,8 +82,8 @@ def test_ip_pinning_prevents_dns_rebind(monkeypatch):
 
 
 def test_https_pinning_preserves_tls_hostname(monkeypatch):
-    """HTTPS requests encode the original hostname in URL userinfo so
-    get_connection sets assert_hostname on the pool."""
+    """HTTPS requests encode the original hostname in URL userinfo so the
+    pool is built with server_hostname set to it."""
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
@@ -105,13 +105,12 @@ def test_https_pinning_preserves_tls_hostname(monkeypatch):
     # URL should contain userinfo with original hostname
     assert "example.com@93.184.216.34:443" in req.url
 
-    # get_connection should strip userinfo and set assert_hostname
-    mock_pool = MagicMock()
-    with patch.object(
-        PinnedIPAdapter.__bases__[0], "get_connection", return_value=mock_pool
-    ):
-        pool = adapter.get_connection(req.url)
-    assert pool.assert_hostname == "example.com"
+    # The pool is keyed on the pinned IP but names the real host in TLS.
+    host_params, pool_kwargs = adapter.build_connection_pool_key_attributes(
+        req, True, None
+    )
+    assert host_params["host"] == "93.184.216.34"
+    assert pool_kwargs["server_hostname"] == "example.com"
 
 
 def test_http_pinning_does_not_set_tls_hostname(monkeypatch):
@@ -169,7 +168,7 @@ def test_ip_pinning_brackets_ipv6_literals(monkeypatch, scheme, port):
 
 
 def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
-    """Each thread's HTTPS request gets the correct assert_hostname on its pool."""
+    """Each thread's HTTPS request gets the correct server_hostname."""
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
         ips = {
@@ -193,24 +192,17 @@ def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
         try:
             req = requests.Request("GET", f"https://{hostname}/path").prepare()
             adapter.send(req)
-            pool = adapter.get_connection(req.url)
-            results[hostname] = pool.assert_hostname
+            _, pool_kwargs = adapter.build_connection_pool_key_attributes(
+                req, True, None
+            )
+            results[hostname] = pool_kwargs["server_hostname"]
         except Exception as exc:
             errors.append(exc)
 
-    # Install the transport + pool-factory patches ONCE around both threads.
-    # Patching a shared class method inside each thread races on install/
-    # teardown and can leak a real network call; a single install is safe.
-    # get_connection returns a FRESH mock per call so each request gets its
-    # own pool — the per-hostname isolation under test.
-    with (
-        patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp),
-        patch.object(
-            PinnedIPAdapter.__bases__[0],
-            "get_connection",
-            side_effect=lambda *a, **k: MagicMock(),
-        ),
-    ):
+    # Install the transport patch ONCE around both threads. Patching a shared
+    # class method inside each thread races on install/teardown and can leak a
+    # real network call; a single install is safe.
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp):
         threads = [
             threading.Thread(target=make_request, args=("alpha.example.com",)),
             threading.Thread(target=make_request, args=("beta.example.com",)),
@@ -226,8 +218,8 @@ def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
 
 
 def test_concurrent_same_ip_different_hosts(monkeypatch):
-    """Two hosts resolving to the SAME pinned IP get separate pools with
-    correct assert_hostname — the key race condition this design prevents."""
+    """Two hosts resolving to the SAME pinned IP keep separate TLS identities
+    — the race this design exists to prevent."""
 
     SHARED_IP = "93.184.216.34"
 
@@ -250,26 +242,19 @@ def test_concurrent_same_ip_different_hosts(monkeypatch):
             req = requests.Request("GET", f"https://{hostname}/path").prepare()
             adapter.send(req)
 
-            # Synchronize so both threads call get_connection concurrently
+            # Synchronize so both threads resolve the pool key concurrently.
             barrier.wait()
 
-            pool = adapter.get_connection(req.url)
-            results[hostname] = pool.assert_hostname
+            _, pool_kwargs = adapter.build_connection_pool_key_attributes(
+                req, True, None
+            )
+            results[hostname] = pool_kwargs["server_hostname"]
         except Exception as exc:
             errors.append(exc)
 
-    # Single install of the patches (see sibling test): per-thread context
-    # managers race on teardown and can leak a real connection. A fresh mock
-    # pool per get_connection call proves each host keeps its own
-    # assert_hostname even though both resolve to the same pinned IP.
-    with (
-        patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp),
-        patch.object(
-            PinnedIPAdapter.__bases__[0],
-            "get_connection",
-            side_effect=lambda *a, **k: MagicMock(),
-        ),
-    ):
+    # Single install of the patch (see sibling test): per-thread context
+    # managers race on teardown and can leak a real connection.
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp):
         threads = [
             threading.Thread(target=make_request, args=("site-a.example.com",)),
             threading.Thread(target=make_request, args=("site-b.example.com",)),
@@ -416,3 +401,129 @@ def test_full_request_succeeds_for_public_host(monkeypatch):
         )
     finally:
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# SNI: the pinned IP must not become the TLS server name
+#
+# The adapter connects to a validated, pinned IP but must still NAME the real
+# hostname in the TLS ClientHello, or every SNI-vhosted host (most CDNs)
+# returns the wrong certificate or refuses the handshake.
+# ---------------------------------------------------------------------------
+
+
+def _pinned_https_request(monkeypatch, hostname, ip):
+    """Build the PreparedRequest the adapter produces for an HTTPS URL."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: [(socket.AF_INET, 1, 6, "", (ip, port))],
+    )
+    adapter = PinnedIPAdapter()
+    req = requests.Request("GET", f"https://{hostname}/page").prepare()
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()):
+        adapter.send(req)
+    return adapter, req
+
+
+def test_https_pool_kwargs_set_sni_server_hostname(monkeypatch):
+    """The TLS pool is built with server_hostname = the real hostname.
+
+    Without this the ClientHello carries the IP and SNI-vhosted servers fail.
+    """
+    adapter, req = _pinned_https_request(monkeypatch, "example.com", "93.184.216.34")
+
+    host_params, pool_kwargs = adapter.build_connection_pool_key_attributes(
+        req, True, None
+    )
+
+    # Connect address stays the validated, pinned IP...
+    assert host_params["host"] == "93.184.216.34"
+    assert host_params["scheme"] == "https"
+    # ...while the TLS identity is the real hostname. server_hostname is what
+    # urllib3 puts in the ClientHello AND what OpenSSL verifies the cert
+    # against, so this one key covers both.
+    assert pool_kwargs["server_hostname"] == "example.com"
+
+
+def test_http_pool_kwargs_have_no_tls_hostname(monkeypatch):
+    """Plain HTTP carries no userinfo, so no TLS pool arguments are added."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: [
+            (socket.AF_INET, 1, 6, "", ("93.184.216.34", port))
+        ],
+    )
+    adapter = PinnedIPAdapter()
+    req = requests.Request("GET", "http://example.com/page").prepare()
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()):
+        adapter.send(req)
+
+    host_params, pool_kwargs = adapter.build_connection_pool_key_attributes(
+        req, True, None
+    )
+    assert host_params["host"] == "93.184.216.34"
+    assert "server_hostname" not in pool_kwargs
+
+
+def test_same_ip_different_hosts_get_separate_pools(monkeypatch):
+    """Two hostnames on one IP must not share a TLS connection pool.
+
+    server_hostname is a urllib3 PoolKey field, so distinct hostnames key
+    distinct pools instead of racing to overwrite each other's TLS identity.
+    """
+    shared_ip = "93.184.216.34"
+    adapter = PinnedIPAdapter()
+    pools = {}
+    for hostname in ("alpha.example", "beta.example"):
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda host, port, *a, **k: [(socket.AF_INET, 1, 6, "", (shared_ip, port))],
+        )
+        req = requests.Request("GET", f"https://{hostname}/").prepare()
+        with patch.object(
+            PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()
+        ):
+            adapter.send(req)
+        pools[hostname] = adapter.get_connection_with_tls_context(req, True)
+
+    assert pools["alpha.example"] is not pools["beta.example"]
+    assert pools["alpha.example"].conn_kw["server_hostname"] == "alpha.example"
+    assert pools["beta.example"].conn_kw["server_hostname"] == "beta.example"
+    # Both still dial the same pinned IP.
+    assert pools["alpha.example"].host == shared_ip
+    assert pools["beta.example"].host == shared_ip
+
+
+def test_adapter_refuses_to_start_without_the_sni_hook(monkeypatch):
+    """An old requests must fail loudly, not silently revert to IP-as-SNI.
+
+    build_connection_pool_key_attributes arrived in requests 2.32.3. Without
+    it the override never runs and every HTTPS fetch names the pinned IP in
+    the handshake again — the exact bug the adapter exists to avoid. A pin in
+    setup.py only covers fresh installs, so the check has to be at runtime.
+    """
+    monkeypatch.delattr(
+        requests.adapters.HTTPAdapter,
+        "build_connection_pool_key_attributes",
+        raising=True,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        PinnedIPAdapter()
+
+    message = str(excinfo.value)
+    # The error has to name the requirement, the actual state, and the fix.
+    assert "2.32.3" in message
+    assert requests.__version__ in message
+    assert "pip install" in message
+
+
+def test_adapter_constructs_on_a_supported_requests():
+    """The guard is a capability check, so it passes on the pinned floor."""
+    assert hasattr(
+        requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"
+    ), "test environment predates requests 2.32.3"
+    assert PinnedIPAdapter() is not None

@@ -81,7 +81,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 ```
 
 Creates a configured FastAPI application with:
-- CORS middleware (allows all origins for local use)
+- Request guard + CORS middleware (see [Security Considerations](#security-considerations))
 - Database initialization and shared `AgentRegistry`
 - Router registration (`include_router` for each module above)
 - Static file serving (for web frontend, when `dist/` build exists)
@@ -248,7 +248,10 @@ All 14 Pydantic models:
 
 ## Security Considerations
 
-- **CORS:** Uses an allowlist of localhost origins plus ngrok regex. The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default. Note: `gaia chat --ui` binds to `0.0.0.0` for Electron/browser access
+- **CSRF:** Every mutating (`POST`/`PUT`/`PATCH`/`DELETE`) request to `/api/*` or `/v1/*` must carry `X-Gaia-UI: 1`. A page cannot set a custom header cross-origin without a CORS preflight, and preflights are approved only from GAIA's own origins — so a site the user visits cannot drive the backend. Enforced in `UIRequestGuardMiddleware` (`gaia/ui/security.py`), not per route, so a new route is covered on the day it lands
+- **Origin:** A mutating request whose `Origin` is neither this server, loopback, nor the live tunnel is refused with 403. Extend with `GAIA_UI_ALLOWED_ORIGINS` (comma-separated) when fronting the backend with a proxy
+- **Host:** A request whose `Host` is a name the server does not know is refused with 400, which blocks DNS rebinding. IP literals and loopback names always pass, so `--host 0.0.0.0` LAN access keeps working; add named hosts with `GAIA_UI_ALLOWED_HOSTS`
+- **CORS:** An allowlist of localhost dev origins. No tunnel origin is listed: the mobile flow serves the SPA *from* the tunnel, so those requests are same-origin and CORS never applies. The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default
 - **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
 - **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
   - Null byte rejection (prevents path injection)

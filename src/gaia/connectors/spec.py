@@ -27,6 +27,12 @@ _VALID_KINDS = frozenset(
 )
 _VALID_TYPES: frozenset[str] = frozenset({"oauth_pkce", "mcp_server"})
 
+# The implicit scope an ``mcp_server`` connector carries. MCP servers have no
+# OAuth-style scope list — holding the credential IS the capability — so the
+# grant ledger records a single "may use this server" scope for them. Agents
+# declare it as ``ConnectorRequirement(connector_id="mcp-…", scopes=("use",))``.
+MCP_SERVER_SCOPES: tuple[str, ...] = ("use",)
+
 
 @dataclass(frozen=True)
 class ConfigField:
@@ -123,6 +129,24 @@ class ConnectorSpec:
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)
     mcp_env_keys: tuple[str, ...] = field(default_factory=tuple)
+
+    def scope_ceiling(self) -> tuple[str, ...]:
+        """Every scope a grant for this connector is allowed to carry.
+
+        ``available_scopes`` is the ceiling whenever a spec declares one — the
+        same list ``flow._reject_scopes_outside_catalog`` enforces on the OAuth
+        authorize path. An ``mcp_server`` spec that declares none falls back to
+        the implicit ``MCP_SERVER_SCOPES`` rather than to a deny-all empty
+        tuple, so adding an MCP connector to the catalog cannot accidentally
+        ship a connector nobody can be granted. An ``oauth_pkce`` spec with no
+        ``available_scopes`` IS deny-all: #3247 already requires OAuth entries
+        to publish their list, and guessing one would defeat the ceiling.
+        """
+        if self.available_scopes:
+            return self.available_scopes
+        if self.type == "mcp_server":
+            return MCP_SERVER_SCOPES
+        return ()
 
     def __post_init__(self) -> None:
         if not self.id or not self.id.strip():

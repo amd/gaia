@@ -185,6 +185,8 @@ std::thread t2([&] { agent.processQuery("query 2"); });  // race condition
 
 Similarly, do not call `connectMcpServer()` or `disconnectMcpServer()` while `processQuery()` is running.
 
+The same rule covers the skill-set API: `loadSkillSet()` and `setSkillLoader()` mutate agent state and must be serialized by the caller. They are setup-time calls in practice. A lock inside `loadSkillSet()` would not make them safe — the `SkillLoader` may call back into the agent to register tools or rebuild the prompt, and the agent's config mutex is not recursive. Reading `activeSkillSet()` or `skillSetLoaded()` from another thread **is** safe; both return by value under the lock.
+
 ---
 
 ## Security Model
@@ -358,12 +360,75 @@ public:
     std::string systemPrompt() const;
     void rebuildSystemPrompt();  // call after adding tools dynamically
 
+    // Skill sets — see the Skill sets section below
+    const SkillSets& skillSets() const;
+    SkillSetResolution resolveSkillSet(const std::optional<std::string>& requested = {}) const;
+    std::vector<std::string> loadSkillSet(const std::optional<std::string>& requested = {});
+    std::optional<std::string> activeSkillSet() const;
+    std::vector<std::string> skillSetLoaded() const;
+    void setSkillLoader(SkillLoader* loader);
+
 protected:
     virtual void registerTools() {}           // override to register domain tools
     virtual std::string getSystemPrompt() const;  // override for agent-specific instructions
+    virtual std::optional<std::string> selectSkillSet() const;  // override to pick a set at runtime
     void init();  // call at end of subclass constructor
 };
 ```
+
+### Skill sets (`gaia::SkillSets`)
+
+An agent can carry more than one interchangeable capability set and activate
+**exactly one per launch**. Declare them in the agent's `gaia-agent.yaml`:
+
+```yaml
+skills:                      # always-on, whichever set is active
+  - mailbox-hygiene
+  - name: incident-review
+    version: ">=0.1.0"
+    required: false
+skill_sets:                  # exactly ONE active per launch
+  personal: [inbox-triage, newsletter-digest]
+  work:     [inbox-triage, meeting-scheduling]
+default_skill_set: personal  # required when skill_sets is non-empty
+```
+
+The active set is chosen in this order: `AgentConfig::skillSet` (the
+`--skill-set` flag's home) → the agent's `selectSkillSet()` hook → the
+manifest's `default_skill_set`. **A name the manifest does not declare always
+throws `SkillSetError` naming the valid sets** — it is never quietly downgraded
+to the default, because launching with the wrong capability bundle is worse than
+not launching.
+
+```cpp
+gaia::AgentConfig cfg;
+cfg.skillManifest = "/opt/mailroom/gaia-agent.yaml";  // empty = look beside the executable
+cfg.skillSet      = "work";                            // empty = hook, then default
+
+MyAgent agent(cfg);
+agent.setSkillLoader(&loader);       // supplies load/unload; see below
+agent.loadSkillSet();                // throws on an undeclared name
+agent.activeSkillSet();              // "work"
+```
+
+Switching sets mid-session is `loadSkillSet("personal")`. The new set is loaded
+**before** the old one is retired, and only the skills the previous set brought
+in are unloaded — an always-on skill, and anything loaded outside a set, both
+survive. A failure part-way through rolls back completely, so the agent is never
+left reporting one set while carrying another's.
+
+<Note>
+`version:` pins are parsed and reported but **not enforced** — GAIA cannot check
+one until versioned skill installs land. A declared pin logs a warning naming
+the pin and the on-disk version rather than being silently accepted.
+</Note>
+
+<Warning>
+Skill *discovery* and registration arrive with the `SkillManager` work. Until an
+implementation of `SkillLoader` is installed via `setSkillLoader()`,
+`loadSkillSet()` resolves the set and warns that nothing was registered. Treat
+`activeSkillSet()` as "which set was chosen", not as proof the skills are loaded.
+</Warning>
 
 ### ToolRegistry
 
