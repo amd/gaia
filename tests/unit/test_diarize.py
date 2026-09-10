@@ -3,7 +3,6 @@
 """Tests for acoustic speaker diarization."""
 
 import subprocess
-import sys
 import tarfile
 import wave
 from pathlib import Path
@@ -67,13 +66,25 @@ class TestInstallFailures:
 
     def test_pip_failure_gives_the_manual_command(self):
         error = subprocess.CalledProcessError(1, "pip", stderr="no network")
-        with patch.dict(sys.modules, {"sherpa_onnx": None}):
-            with patch("builtins.__import__", side_effect=ImportError):
-                with patch("subprocess.run", side_effect=error):
-                    with pytest.raises(DiarizationError) as e:
-                        diarize._ensure_package(lambda _m: None)
+        with patch.object(diarize, "_package_installed", return_value=False):
+            with patch("subprocess.run", side_effect=error):
+                with pytest.raises(DiarizationError) as e:
+                    diarize._ensure_package(lambda _m: None)
         assert "pip install" in str(e.value)
         assert "sherpa-onnx" in str(e.value)
+
+    def test_install_that_does_not_take_is_reported(self):
+        """pip returning 0 while the module still cannot be imported."""
+        with patch.object(diarize, "_package_installed", return_value=False):
+            with patch("subprocess.run"):
+                with pytest.raises(DiarizationError, match="cannot be imported"):
+                    diarize._ensure_package(lambda _m: None)
+
+    def test_already_installed_does_not_shell_out(self):
+        with patch.object(diarize, "_package_installed", return_value=True):
+            with patch("subprocess.run") as run:
+                diarize._ensure_package(lambda _m: None)
+        run.assert_not_called()
 
     def test_download_failure_is_actionable(self, tmp_path):
         """The message must say what failed and where to read more."""
