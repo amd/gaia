@@ -33,7 +33,8 @@ a cloud service, and that's enforced when the agent starts up.
   a bare question mark, a convincing cold-outreach email, or having emailed
   the sender before in some unrelated thread never qualifies on its own.
 - **Daily briefing** — generate a morning inbox summary on a schedule, no prompt
-  needed.
+  needed. Reading one back says how old it is, so yesterday's briefing is never
+  presented as this morning's.
 - **Plain-language requests** — describe what you want done ("find today's
   urgent mail and archive the promotions") and the agent chains the steps
   itself, streaming progress; runs are cancellable mid-way.

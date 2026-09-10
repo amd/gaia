@@ -14,6 +14,11 @@ contract version is tracked separately as
   so the cap must retain the safest candidates rather than the senders the
   user explicitly marked as important. The priority-sender tool description
   now also reflects that pre-scan ordering is active.
+- **Scheduled briefings now expose cache age on every surface (#2759).**
+  `GET /v1/email/briefing` and the agent `get_briefing` tool now return
+  `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled
+  as stale for the user, but are not refused or regenerated automatically.
+
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,
