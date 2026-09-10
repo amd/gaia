@@ -25,6 +25,7 @@ from typing import Dict, Optional, Set
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
+from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = get_logger(__name__)
@@ -260,7 +261,9 @@ class TelegramAdapter:
             # Optionally finalize or log
             pass
 
-    def start(self, token: str, background: bool = False) -> None:
+    def start(
+        self, token: str, background: bool = False, health_port: int = TELEGRAM_HEALTH_PORT
+    ) -> None:
         """Start the telegram Application and run polling.
 
         If `background` is True, polling runs in a non-daemon thread so a CLI
@@ -364,7 +367,7 @@ class TelegramAdapter:
                         # Silence default logging
                         return
 
-                server = HTTPServer(("127.0.0.1", 8765), HealthHandler)
+                server = HTTPServer(("127.0.0.1", health_port), HealthHandler)
                 # Run until stop_event is set
                 while not stop_event.is_set():
                     server.handle_request()
@@ -430,7 +433,10 @@ class TelegramAdapter:
 
 
 def run_telegram(
-    token: str, allowed_users: Optional[Set[int]] = None, background: bool = False
+    token: str,
+    allowed_users: Optional[Set[int]] = None,
+    background: bool = False,
+    health_port: int = TELEGRAM_HEALTH_PORT,
 ):
     """Entrypoint used by the CLI to start the Telegram adapter.
 
@@ -444,5 +450,5 @@ def run_telegram(
             rather than started permissively.
     """
     adapter = TelegramAdapter(token=token, allowed_users=allowed_users)
-    adapter.start(token=token, background=background)
+    adapter.start(token=token, background=background, health_port=health_port)
     return adapter
