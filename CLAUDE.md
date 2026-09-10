@@ -371,6 +371,20 @@ python -m gaia.mcp.mcp_bridge
 
 **#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
+### Tests always run against THIS checkout
+
+The root `conftest.py` puts this repo's `src/` and `hub/agents/*/python` at the
+front of `sys.path` before collection, and fails the session if `gaia` still
+resolves somewhere else. You do **not** need `PYTHONPATH=$(pwd)/src` — running
+`pytest` from the repo root is enough, in any clone or worktree.
+
+This exists because `gaia` is normally editable-installed, and on a machine with
+several worktrees that install points at whichever one ran `pip install -e` last.
+Without the pin, `import gaia` inside another checkout's tests silently imports a
+different branch's source — the run is green or red against code that isn't the
+code under review. Set `GAIA_ALLOW_EXTERNAL_IMPORTS=1` only when you deliberately
+want to test an installed wheel.
+
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
 **Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
