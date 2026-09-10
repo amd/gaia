@@ -113,6 +113,36 @@ def _parse_alias_map(reply, known):
     return mapping
 
 
+def _speaker_at(spans, start, end):
+    """Which diarized voice best covers a transcript segment."""
+    best, best_overlap = None, 0.0
+    for span in spans:
+        overlap = min(end, span["end"]) - max(start, span["start"])
+        if overlap > best_overlap:
+            best, best_overlap = span["speaker"], overlap
+    return best
+
+
+def _turns_from_speakers(segments, spans):
+    """Group transcript segments into turns by diarized voice.
+
+    Returns the turns and their acoustic labels. A segment no voice covers
+    inherits the previous speaker rather than starting a phantom turn — a
+    silent gap in the diarization is missing evidence, not a new person.
+    """
+    turns, labels = [], []
+    for seg in segments:
+        who = _speaker_at(spans, seg["start"], seg["end"]) or (
+            labels[-1] if labels else "Speaker 1"
+        )
+        if labels and who == labels[-1]:
+            turns[-1].append(seg)
+        else:
+            turns.append([seg])
+            labels.append(who)
+    return turns, labels
+
+
 def _batch_turns(turns: List[List[dict]], per_call: int) -> List[List[List[dict]]]:
     """Chunk turns into naming calls."""
     return [turns[i : i + per_call] for i in range(0, len(turns), per_call)] or [[]]
@@ -152,7 +182,7 @@ def timings_path_for(transcript_path: Path) -> Path:
     return transcript_path.with_suffix(transcript_path.suffix + ".timing.json")
 
 
-def _write_timings(destination: Path, transcript) -> None:
+def _write_timings(destination: Path, transcript, speaker_spans=None) -> None:
     """Persist segment start/end/text next to the transcript.
 
     Speaker turns cannot be recovered from continuous prose — asked to segment
@@ -164,6 +194,14 @@ def _write_timings(destination: Path, transcript) -> None:
 
     payload = {
         "duration": transcript.duration,
+        "speakers": [
+            {
+                "start": round(sp.start, 3),
+                "end": round(sp.end, 3),
+                "speaker": sp.speaker,
+            }
+            for sp in (speaker_spans or [])
+        ],
         "segments": [
             {
                 "start": round(seg.start, 3),
@@ -251,16 +289,28 @@ def _collect_speakers(blocks: List[str]) -> List[str]:
     return seen
 
 
-def _render_refined(source: Path, speakers: List[str], blocks: List[str]) -> str:
+def _render_refined(
+    source: Path, speakers: List[str], blocks: List[str], acoustic: bool = False
+) -> str:
     """Assemble the refined transcript, with its provenance on the page."""
     key = "\n".join(f"- {name}" for name in speakers) or "- (none identified)"
+    how = (
+        "Voices were separated from the audio itself. Any real names are "
+        "inferred from what was said, so treat the names — not the voice "
+        "separation — as best-effort."
+        if acoustic
+        else "Turns were split on pauses in the recording and attributed "
+        "from the conversation, without voice identification, so treat the "
+        "speaker labels as best-effort."
+    )
     return (
         f"# Transcript — {source.stem}\n\n"
         f"Source: {source}\n\n"
-        "Corrected for likely mis-hearings and split into speaker turns. "
-        "Names are inferred from the conversation, not from voice "
-        "identification, so treat them as best-effort.\n\n"
-        f"## Speakers\n\n{key}\n\n## Transcript\n\n" + "\n\n".join(blocks) + "\n"
+        + how
+        + "\n\n"
+        + f"## Speakers\n\n{key}\n\n## Transcript\n\n"
+        + "\n\n".join(blocks)
+        + "\n"
     )
 
 
@@ -453,7 +503,8 @@ class AudioToolsMixin:
 
             destination = self._write_transcript(transcript, source, output_path)
             saved_path = destination
-            _write_timings(destination, transcript)
+            speaker_spans = self._diarize_if_possible(wav_path)
+            _write_timings(destination, transcript, speaker_spans)
             spans = transcript.low_confidence_spans(
                 threshold=DEFAULT_CONFIDENCE_THRESHOLD
             )
@@ -572,17 +623,42 @@ class AudioToolsMixin:
                 ),
             }
 
-        turns = _turns_from_gaps(segments, TURN_GAP_SECONDS)
+        speaker_spans = []
+        if timings_file.is_file():
+            try:
+                speaker_spans = json.loads(
+                    timings_file.read_text(encoding="utf-8")
+                ).get("speakers", [])
+            except (OSError, ValueError):
+                speaker_spans = []
+
+        if speaker_spans:
+            # Real voices: identity is consistent across the whole recording,
+            # which is the part text can never recover.
+            turns, acoustic_labels = _turns_from_speakers(segments, speaker_spans)
+        else:
+            turns, acoustic_labels = _turns_from_gaps(segments, TURN_GAP_SECONDS), None
         batches = _batch_turns(turns, REFINE_TURNS_PER_CALL)
         named: List[tuple] = []
         speaker_notes: List[str] = []
         try:
-            for index, batch in enumerate(batches, 1):
+            if acoustic_labels is not None:
+                # Voices are already separated; only the names are unknown.
+                named = [
+                    (label, " ".join(seg["text"] for seg in turn).strip())
+                    for turn, label in zip(turns, acoustic_labels)
+                ]
                 raise_if_cancelled()
-                self._report_progress(
-                    f"Identifying speakers — batch {index} of {len(batches)}"
-                )
-                named.extend(self._name_turns(batch, speaker_notes))
+                self._report_progress("Matching names to voices...")
+                named = self._name_known_voices(named)
+                speaker_notes = list(dict.fromkeys(n for n, _ in named))
+            else:
+                for index, batch in enumerate(batches, 1):
+                    raise_if_cancelled()
+                    self._report_progress(
+                        f"Identifying speakers — batch {index} of {len(batches)}"
+                    )
+                    named.extend(self._name_turns(batch, speaker_notes))
         except ToolCancelled:
             logger.warning("Refinement of %s cancelled after timeout", source)
             raise
@@ -590,13 +666,20 @@ class AudioToolsMixin:
             logger.error("Refinement failed for %s: %s", source, e)
             return {"status": "error", "error": str(e)}
 
-        self._report_progress("Consolidating speakers...")
-        named = self._consolidate_speakers(named)
+        if acoustic_labels is None:
+            # Only the text-only path over-splits. Merging voices
+            # separated acoustically undoes real evidence — it
+            # collapsed four measured voices into two.
+            self._report_progress("Consolidating speakers...")
+            named = self._consolidate_speakers(named)
         blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
         speakers = list(dict.fromkeys(name for name, _ in named))
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
-            _render_refined(source, speakers, blocks), encoding="utf-8"
+            _render_refined(
+                source, speakers, blocks, acoustic=acoustic_labels is not None
+            ),
+            encoding="utf-8",
         )
 
         self._report_progress("Indexing transcript for questions...")
@@ -654,6 +737,42 @@ class AudioToolsMixin:
         if not ok:
             logger.warning("Indexing %s did not succeed: %s", path, result)
         return ok
+
+    def _name_known_voices(self, named):
+        """Map diarized voice labels to real names where the text supports it.
+
+        The voices are already separated, so this is only a naming problem —
+        the stage the reference pipeline also ran after pyannote.
+        """
+        roster = {}
+        for label, text in named:
+            roster.setdefault(label, []).append(text)
+
+        sample = "\n".join(
+            f"{label}: " + " / ".join(t[:150] for t in texts[:4])
+            for label, texts in roster.items()
+        )
+        prompt = (
+            "Each label below is a distinct voice from a meeting recording, "
+            "with a few things that voice said.\n\nGive each one a real name "
+            "ONLY if the transcript supports it — the person introduces "
+            "themselves, or someone addresses them by name. If there is no "
+            "evidence, keep the label exactly as it is. A confidently wrong "
+            "name is worse than an anonymous one.\n\nOutput ONLY lines of the "
+            "form `Label -> Name`, one per label, including labels that stay "
+            "unchanged.\n\nVoices:\n" + sample
+        )
+        try:
+            mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
+        except Exception as e:  # noqa: BLE001 — anonymous labels still work
+            logger.info("Could not put names to voices (%s)", e)
+            return named
+        # Never let naming merge two distinct voices into one person.
+        collisions = {
+            v for v in mapping.values() if list(mapping.values()).count(v) > 1
+        }
+        mapping = {k: v for k, v in mapping.items() if v not in collisions}
+        return [(mapping.get(label, label), text) for label, text in named]
 
     def _name_turns(
         self, batch: List[List[dict]], speaker_notes: List[str]
@@ -782,6 +901,29 @@ class AudioToolsMixin:
                 "or transcribe a shorter recording."
             )
         return text
+
+    def _diarize_if_possible(self, wav_path):
+        """Work out who spoke when, from the audio, while the WAV still exists.
+
+        Runs here rather than in refine_transcript because this is the only
+        point where the decoded audio is on disk — refinement sees text. A
+        failure is reported and skipped rather than fatal: an unattributed
+        transcript is still worth having, and the caller is told which one it
+        got.
+        """
+        from gaia.audio import diarize as diarization
+
+        try:
+            if not diarization.is_available():
+                self._report_progress(
+                    "Setting up speaker identification (one-time download)..."
+                )
+                diarization.ensure_ready(self._report_progress)
+            return diarization.diarize(wav_path, progress=self._report_progress)
+        except Exception as e:  # noqa: BLE001 — transcription still succeeded
+            logger.warning("Speaker identification unavailable: %s", e)
+            self._diarization_error = str(e)
+            return []
 
     def _write_transcript(self, transcript, source: Path, output_path: Optional[str]):
         """Persist the transcript before any later stage can fail."""
