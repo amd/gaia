@@ -65,9 +65,10 @@ method. To transcribe a recording you already have, use the agent's
 which runs on Lemonade and writes a plain-text transcript to disk. It returns
 the transcript's path, duration, language, and the words Whisper itself was
 least confident about — not timestamps or speaker labels in the result itself.
-Speaker labels come from a separate `refine_transcript` call, which infers
-who's speaking from the conversation's text rather than from voice
-identification.
+`transcribe_media` also runs acoustic speaker diarization on the same audio
+(see [Speaker Diarization](#speaker-diarization-who-spoke-when) below); a
+separate `refine_transcript` call then attaches real names to those voices,
+inferred from what's said, and writes the speaker-labelled transcript.
 </Note>
 
 ```python
@@ -101,6 +102,48 @@ while True:
         print(f"Transcribed: {text}")
         # Process text...
 ```
+
+---
+
+## Speaker Diarization (Who Spoke When)
+
+**Import:** `from gaia.audio.diarize import diarize, is_available, ensure_ready`
+
+<Note>
+`diarize()` runs pyannote's segmentation network and a WeSpeaker embedding
+model — both ONNX, executed via `sherpa-onnx`. No PyTorch, no HuggingFace
+account or gated licence: the models are plain GitHub release downloads
+(~33 MB total), redistributed under their original MIT terms. Everything
+installs on first call, never at import time — the `sherpa-onnx` wheel
+(~40 MB) plus the two models. A failed install is not silently swallowed:
+`ensure_ready` and `diarize` raise `DiarizationError` with the command that
+fixes it. `transcribe_media` catches that error and falls back to text-only
+speaker inference rather than failing the transcription.
+</Note>
+
+```python
+from gaia.audio.diarize import diarize, ensure_ready, is_available
+
+if not is_available():
+    ensure_ready(progress=print)   # downloads sherpa-onnx + models, once
+
+# wav_path must be 16 kHz mono — the same file transcription reads
+spans = diarize("meeting.wav", num_speakers=4)   # pass the count when known
+for span in spans:
+    print(f"{span.speaker}: {span.start:.1f}s - {span.end:.1f}s")
+```
+
+Measured on a real 46-minute, 4-speaker meeting: 4 speakers found against a
+ground truth of 4. `num_speakers` is more accurate than auto-detection
+whenever the count is known; auto-detection instead uses a clustering
+threshold (`cluster_threshold`, default `0.65`) that is sensitive to tune —
+`0.50` over-split the same recording into 10 clusters, `0.75` collapsed it to
+2. Very short clips can miss a voice entirely: a 90-second clip where a
+second speaker only interjected a few words came back as one speaker.
+
+`diarize()` returns acoustic labels only — `Speaker 1`, `Speaker 2`, and so
+on. Turning those into real names is a separate, text-based inference step
+built on top; see [Transcription & Meeting Notes](/guides/transcription#how-speakers-are-separated-and-named).
 
 ---
 
