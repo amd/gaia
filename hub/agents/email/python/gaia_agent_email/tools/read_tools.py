@@ -1847,7 +1847,7 @@ def _finalize_needs_you_item(
 
     ``age_seconds`` is computed here, uniformly, from the working-only
     ``internal_date`` field every candidate carries by this point (never
-    part of the public contract, see ``_drop_internal_date`` below) — the
+    part of the public contract, see ``_drop_working_fields`` below) — the
     ONE place this computation happens, so a merge-level candidate (added
     after a per-backend view is already built, see
     ``merge_pre_scan_backends``) gets the identical treatment.
@@ -2301,9 +2301,11 @@ def pre_scan_inbox_impl(
         bulk_count = len(informational) + len(suggested_archives)
         bulk_view = {"count": bulk_count, "filter_tests": sorted(filter_test_ids)}
 
-        def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            # ``internal_date`` is a needs_you-only working field (#2743) —
-            # never part of the public PreScanItem shape (extra="forbid").
+        def _drop_working_fields(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            # ``internal_date`` is a needs_you-only working field (#2743) and
+            # ``preference_applied`` is the sort-key tag consumed by
+            # _preference_sort_key — neither is part of the public
+            # PreScanItem shape (extra="forbid").
             return [
                 {
                     k: v
@@ -2317,20 +2319,20 @@ def pre_scan_inbox_impl(
         inbox_counts = _fetch_inbox_counts(gmail)
         out = {
             "kind": "email_pre_scan",
-            "urgent": _drop_internal_date(urgent[: max(0, urgent_cap)]),
-            "actionable": _drop_internal_date(actionable[: max(0, actionable_cap)]),
+            "urgent": _drop_working_fields(urgent[: max(0, urgent_cap)]),
+            "actionable": _drop_working_fields(actionable[: max(0, actionable_cap)]),
             "informational_count": len(informational),
             # #2633: empty unless the caller opted in — the full list was
             # already computed above, so honoring the flag costs nothing
             # beyond what this call already did.
             "informational": (
-                _drop_internal_date(informational) if include_informational else []
+                _drop_working_fields(informational) if include_informational else []
             ),
-            "suggested_archives": _drop_internal_date(
+            "suggested_archives": _drop_working_fields(
                 suggested_archives[: max(0, archive_cap)]
             ),
             "suggested_drafts": [],
-            "needs_review": _drop_internal_date(
+            "needs_review": _drop_working_fields(
                 needs_review[: max(0, needs_review_cap)]
             ),
             "preferences_applied": {
@@ -2364,7 +2366,7 @@ def pre_scan_inbox_impl(
             # into ``scanned`` (every flagged row is already counted once
             # via ``actionable``'s own total — adding it again here would
             # double-count the same message in the coverage figure).
-            "suspicious": _drop_internal_date(suspicious[: max(0, suspicious_cap)]),
+            "suspicious": _drop_working_fields(suspicious[: max(0, suspicious_cap)]),
             "suspicious_total": len(suspicious),
         }
         st["result_summary"] = {

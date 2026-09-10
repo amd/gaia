@@ -54,6 +54,7 @@ from gaia_agent_email.tools.organize_tools import (  # noqa: E402
 from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
+    _preference_sort_key,
     extract_sender_email,
     list_inbox_impl,
     pre_scan_inbox_impl,
@@ -320,9 +321,13 @@ class TestPreScanInbox:
         )
 
     def test_low_priority_sender_is_last_within_a_section(self, fake_gmail):
+        # Explicit cap (mirrors test_priority_sender_is_first_within_a_section)
+        # so the muted sender can't be truncated out of the section by
+        # PRE_SCAN_ACTIONABLE_CAP as the fixture grows.
         out = pre_scan_inbox_impl(
             fake_gmail,
             max_messages=50,
+            actionable_cap=100,
             session_preferences={
                 "priority_senders": set(),
                 "low_priority_senders": {"boss@company.example"},
@@ -332,6 +337,19 @@ class TestPreScanInbox:
         assert len(out["actionable"]) >= 2
         assert extract_sender_email(out["actionable"][-1]["sender"]) == (
             "boss@company.example"
+        )
+
+    def test_phishing_skip_tag_sorts_neutrally(self):
+        """A phishing/spam-flagged message from a preferred or muted sender
+        is tagged ``skipped_phishing_or_spam`` by _apply_session_preferences
+        (the safety override wins), so it must fall into the same neutral
+        bucket as an untagged message rather than being promoted or demoted
+        by _preference_sort_key.
+        """
+        assert (
+            _preference_sort_key({"preference_applied": "skipped_phishing_or_spam"})
+            == _preference_sort_key({})
+            == 1
         )
 
     def test_low_priority_sender_is_first_in_archive_suggestions(self, fake_gmail):
