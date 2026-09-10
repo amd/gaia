@@ -156,11 +156,13 @@ today (§9).
 ## §5 First-run setup: reused, not reinvented
 
 The TUI's first-boot gate (`tui/internal/ui/chat/setup.go`) shells out to
-`gaia init --check --profile chat` (and `gaia init --profile chat --yes` if that
+`gaia init --check --profile gaia` (and `gaia init --profile gaia --yes` if that
 comes back not-ready) instead of re-deriving GAIA's setup logic in Go.
-`src/gaia/installer/init_command.py`'s `INIT_PROFILES["chat"]` is the single source
+`src/gaia/installer/init_command.py`'s `INIT_PROFILES["gaia"]` is the single source
 of truth for what "set up" means: the `Gemma-4-E4B-it-GGUF` chat model, the
-`user.embeddinggemma-300m-GGUF` embedder, and the `[rag]` pip extras.
+`user.embeddinggemma-300m-GGUF` embedder, the `[rag]` pip extras, and the flagship
+wheel itself. It is also `gaia init`'s default, so a bare `gaia init` and the TUI's
+one-key fix do exactly the same thing.
 
 The bug this issue specifically flagged — an older, already-installed `gaia` that
 predates the `--check` flag exits 2 ("unrecognized arguments"), and that 2 used to
@@ -175,7 +177,7 @@ silently skipping setup. There's a dedicated regression test for this
 The constraint as given ("a Mac has no Lemonade NPU/GPU path") is half right: Mac has
 no **NPU** path — the `npu` init profile is XDNA2-specific, Ryzen AI hardware that
 doesn't exist on Apple Silicon. But Lemonade itself **does** support macOS (the
-`chat` profile has no `required_device` and no NPU-specific `recipe`/`backend` keys;
+`gaia` profile has no `required_device` and no NPU-specific `recipe`/`backend` keys;
 `LemonadeInstaller` has explicit `darwin` install/upgrade handling). So the actual
 decision already made and shipped is:
 
@@ -186,7 +188,7 @@ decision already made and shipped is:
   starts the local server. Running an installer that launches Lemonade would
   defeat the one flag whose purpose is to avoid it, and would hold the first
   answer behind a multi-minute install. The session says on screen that setup
-  was skipped and names `gaia init --profile chat --skip-chat-model` (or
+  was skipped and names `gaia init --skip-chat-model` (or
   `/setup`) as the way to get the local half.
 - There is **no** "refuse entirely, Claude-only, no local component" mode. I agree
   with this — memory and RAG are core to what makes this agent "the flagship," and

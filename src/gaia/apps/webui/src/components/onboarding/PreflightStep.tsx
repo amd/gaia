@@ -113,7 +113,9 @@ export function PreflightStep({ onGuardChange, onReport }: PreflightStepProps) {
                             ? 'Detected'
                             : report.npu_detected === false
                                 ? 'Not found'
-                                : 'Unknown'
+                                : report.lemonade_error
+                                    ? 'Unknown (query failed)'
+                                    : 'Unknown'
                     }
                 />
                 {report.gpu_name && (

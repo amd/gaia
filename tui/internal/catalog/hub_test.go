@@ -244,6 +244,70 @@ func TestInstalledSeededSubprocessAgentBecomesDaemonTransport(t *testing.T) {
 	}
 }
 
+// A wheel install can share the flagship id without being a daemon sidecar.
+// The sentinel proves that the package is installed, but it must not override
+// the seeded subprocess transport the flagship uses.
+func TestInstalledSeededSubprocessAgentKeepsItsTransportForWheel(t *testing.T) {
+	sentinel := `{"id":"gaia","version":"0.1.1","language":"python","artifact_kind":"wheel"}`
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	c := NewCatalog()
+	if seeded := c.Get("gaia"); seeded == nil || seeded.Transport != TransportSubprocess {
+		t.Skip("gaia is no longer seeded as a subprocess agent; this regression cannot recur")
+	}
+
+	c.LoadInstalledAgents()
+
+	gaia := c.Get("gaia")
+	if gaia == nil {
+		t.Fatal("gaia disappeared from the catalog after loading its sentinel")
+	}
+	if gaia.Transport != TransportSubprocess {
+		t.Errorf("transport = %v, want TransportSubprocess: a wheel install must not turn the flagship into a daemon sidecar", gaia.Transport)
+	}
+}
+
+func TestInstalledSeededSubprocessAgentKeepsItsTransportWithoutArtifactKind(t *testing.T) {
+	sentinel := `{"id":"gaia","version":"0.1.1","language":"python"}`
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	c := NewCatalog()
+	if seeded := c.Get("gaia"); seeded == nil || seeded.Transport != TransportSubprocess {
+		t.Skip("gaia is no longer seeded as a subprocess agent; this regression cannot recur")
+	}
+
+	c.LoadInstalledAgents()
+	gaia := c.Get("gaia")
+	if gaia == nil {
+		t.Fatal("gaia disappeared from the catalog after loading its sentinel")
+	}
+	if gaia.Transport != TransportSubprocess {
+		t.Errorf("transport = %v, want TransportSubprocess: missing artifact_kind defaults to a wheel install", gaia.Transport)
+	}
+}
+
 func TestLoadInstalledAgentsReadsSentinels(t *testing.T) {
 	// InstallRoot mirrors the Python installer exactly (<home>/.gaia/agents),
 	// so the fixture is a fake home rather than an env override.

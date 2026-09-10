@@ -49,10 +49,8 @@ permissions:
 jobs:
   test-api:
     name: API Tests
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 

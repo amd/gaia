@@ -30,6 +30,7 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
+from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
@@ -692,6 +693,12 @@ async def async_main(action, **kwargs):
             # Create Chat Agent with configuration
             agent = ChatAgent(config)
 
+            # Set on the instance, not through ChatAgentConfig: the attribute is
+            # core-owned, but gaia-agent-chat is an independently-versioned
+            # wheel — an unknown config kwarg would crash `gaia chat` outright.
+            if kwargs.get("no_learned_skills", False):
+                agent._learned_skills_enabled = False
+
             # Create initial session if not loading one. ``_ensure_tool_loader_reset``
             # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
             # and gaia-agent-chat (an independently-versioned hub wheel) can drift —
@@ -844,9 +851,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print()
         if not base_url:
             print("   Prerequisites:")
-            print(
-                "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
-            )
+            print("     1. Models downloaded  : gaia init  (first time only, ~4 GB)")
             print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
             print()
 
@@ -1357,6 +1362,14 @@ def build_parser():
         "Workflows with >50 tools warrant a fresh eval run on the target model.",
     )
 
+    chat_parser.add_argument(
+        "--no-learned-skills",
+        action="store_true",
+        help="Run this session with no learned skill changes applied. Skills are "
+        "composed exactly as authored, so the prompt is byte-identical to a build "
+        "with no overlay.",
+    )
+
     # Agent UI
     chat_parser.add_argument(
         "--ui",
@@ -1621,9 +1634,16 @@ def build_parser():
         "start", help="Start the Telegram adapter (polling)"
     )
     t_start.add_argument("--token", required=True, help="Telegram bot token")
+    # Not argparse-required: the adapter's own refusal explains *why* an
+    # allowlist is mandatory and how to build one, which "the following
+    # arguments are required" does not.
     t_start.add_argument(
         "--allowed-users",
-        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
+        help=(
+            "Comma-separated numeric Telegram user IDs allowed to interact "
+            "(required — a bot with no allowlist is reachable by every "
+            "Telegram user). Find your id via @userinfobot."
+        ),
     )
     t_start.add_argument(
         "--background",
@@ -2928,8 +2948,12 @@ Examples:
     init_parser.add_argument(
         "--profile",
         "-p",
-        default="chat",
+        # Literal, not an import: gaia.installer.init_command costs ~3s to
+        # import and build_parser() runs on every `gaia` invocation. Pinned to
+        # init_command.DEFAULT_INIT_PROFILE by a test so it cannot drift.
+        default="gaia",
         choices=[
+            "gaia",
             "minimal",
             "sd",
             "chat",
@@ -2940,7 +2964,9 @@ Examples:
             "npu",
             "all",
         ],
-        help="Profile to initialize: minimal, sd (image gen), chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
+        help="Profile to initialize: gaia (the flagship agent), minimal, sd (image gen), "
+        "chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), "
+        "all (default: gaia)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -3216,6 +3242,17 @@ def main():
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
+        if getattr(args, "no_learned_skills", False):
+            print(
+                "❌ --no-learned-skills has no effect with --ui: the Agent UI "
+                "builds its own agents per session, so the CLI flag never "
+                "reaches them.\n"
+                "   Run `gaia chat --no-learned-skills` without --ui, or turn "
+                "memory off for the session in the UI (learned skills are "
+                "disabled whenever memory is).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         max_files = getattr(args, "max_indexed_files", 0)
         if max_files:
             os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
@@ -3234,7 +3271,10 @@ def main():
         action = getattr(args, "telegram_action", None)
         if action == "start":
             try:
-                from gaia.messaging.telegram import run_telegram
+                from gaia.messaging.telegram import (
+                    TelegramAllowlistError,
+                    run_telegram,
+                )
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -3254,11 +3294,19 @@ def main():
                     )
                     sys.exit(2)
 
-            run_telegram(
-                token=args.token,
-                allowed_users=allowed,
-                background=getattr(args, "background", False),
-            )
+            try:
+                run_telegram(
+                    token=args.token,
+                    allowed_users=allowed,
+                    background=getattr(args, "background", False),
+                )
+            except TelegramAllowlistError as e:
+                # Show the remedy rather than a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(1)
             return
 
         if action == "stop":
@@ -3529,7 +3577,8 @@ Let me know your answer!
             # would otherwise run next-step having killed nothing.
             print("❌ gaia kill needs a target:")
             print("     --lemonade        stop Lemonade Server (port 13305)")
-            print("     --port <number>   kill whatever is listening on <number>")
+            print("     --port <number>   kill the GAIA/Lemonade process")
+            print("                       listening on <number>")
             print(
                 "   Both target a port. A stray GAIA process that is not "
                 "holding a port must be killed by PID."
@@ -4426,117 +4475,67 @@ Let me know your answer!
 
 
 def kill_process_by_port(port):
-    """Find and kill a process running on a specific port."""
+    """Kill the GAIA/Lemonade process listening on ``port``.
+
+    Targeting rules live in :mod:`gaia.ports` so every "stop what's on this
+    port" path in GAIA shares one implementation.
+    """
     try:
         port = int(port)
     except (ValueError, TypeError):
         return {"success": False, "message": f"Invalid port number: {port!r}"}
-    try:
-        if sys.platform.startswith("win"):
-            # Windows implementation (filter netstat output in Python, no shell pipe)
-            output = subprocess.check_output(["netstat", "-ano"]).decode()
-            if output:
-                # Split output into lines and process each line
-                for line in output.strip().split("\n"):
-                    # Only process lines that contain the specific port
-                    if f":{port}" in line:
-                        parts = line.strip().split()
-                        # Get the last part which should be the PID
-                        try:
-                            pid = int(parts[-1])
-                            if pid > 0:  # Ensure we don't try to kill PID 0
-                                subprocess.run(
-                                    ["taskkill", "/PID", str(pid), "/F"],
-                                    shell=False,
-                                    check=True,
-                                )
-                                return {
-                                    "success": True,
-                                    "message": f"Killed process {pid} running on port {port}",
-                                }
-                        except (IndexError, ValueError):
-                            continue
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-        else:
-            # Linux/Unix implementation
-            try:
-                # Use lsof to find process using the port
-                output = (
-                    subprocess.check_output(["lsof", f"-ti:{port}"]).decode().strip()
-                )
-                if output:
-                    pids = output.split("\n")
-                    killed_pids = []
-                    for pid_str in pids:
-                        try:
-                            pid = int(pid_str.strip())
-                            if pid > 0:
-                                subprocess.run(
-                                    ["kill", "-9", str(pid)], shell=False, check=True
-                                )
-                                killed_pids.append(str(pid))
-                        except (ValueError, subprocess.CalledProcessError):
-                            continue
-                    if killed_pids:
-                        return {
-                            "success": True,
-                            "message": f"Killed process(es) {', '.join(killed_pids)} running on port {port}",
-                        }
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-            except subprocess.CalledProcessError:
-                # If lsof is not available, try netstat + ps approach
-                try:
-                    # Use netstat to find the port, then extract PID
-                    # (filter output in Python, no shell pipe)
-                    output = subprocess.check_output(["netstat", "-tulpn"]).decode()
-                    if output:
-                        for line in output.strip().split("\n"):
-                            if f":{port}" in line:
-                                parts = line.strip().split()
-                                # Look for PID/process_name pattern in the last column
-                                for part in parts:
-                                    if "/" in part:
-                                        try:
-                                            pid = int(part.split("/")[0])
-                                            if pid > 0:
-                                                subprocess.run(
-                                                    ["kill", "-9", str(pid)],
-                                                    shell=False,
-                                                    check=True,
-                                                )
-                                                return {
-                                                    "success": True,
-                                                    "message": f"Killed process {pid} running on port {port}",
-                                                }
-                                        except (
-                                            ValueError,
-                                            subprocess.CalledProcessError,
-                                        ):
-                                            continue
-                    return {
-                        "success": False,
-                        "message": f"Could not find valid PID for port {port}",
-                    }
-                except subprocess.CalledProcessError:
-                    return {
-                        "success": False,
-                        "message": f"No process found running on port {port} (lsof and netstat methods failed)",
-                    }
 
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except subprocess.CalledProcessError:
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except Exception as e:
+    try:
+        listeners = listeners_on_port(port)
+    except FileNotFoundError as e:
+        # Not "nothing is listening" — we could not look. Say which tool is missing.
         return {
             "success": False,
-            "message": f"Error killing process on port {port}: {str(e)}",
+            "message": (
+                f"Cannot inspect port {port}: {e.filename or 'the port-listing tool'} "
+                f"is not on PATH. Install lsof or net-tools, or stop the process "
+                f"by PID."
+            ),
         }
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"success": False, "message": f"Could not inspect port {port}: {e}"}
+
+    if not listeners:
+        return {"success": False, "message": f"No process is listening on port {port}"}
+
+    killed = []
+    refused = []
+    failed = []
+    for pid, name in listeners:
+        if not is_killable_process(name):
+            refused.append(f"{pid} ({name or 'unknown process'})")
+            continue
+        try:
+            terminate_pid(pid)
+            killed.append(str(pid))
+        except (subprocess.CalledProcessError, OSError) as e:
+            failed.append(f"{pid}: {e}")
+
+    if killed:
+        return {
+            "success": True,
+            "message": f"Killed process(es) {', '.join(killed)} listening on port {port}",
+        }
+
+    if refused:
+        return {
+            "success": False,
+            "message": (
+                f"Refusing to kill {', '.join(refused)} on port {port}: not a "
+                f"GAIA or Lemonade process. Stop it with its own tooling, or "
+                f"kill it by PID if that is really what you want."
+            ),
+        }
+
+    return {
+        "success": False,
+        "message": f"Failed to kill the process on port {port} ({'; '.join(failed)})",
+    }
 
 
 def handle_email_command(args):
@@ -4918,8 +4917,12 @@ def handle_api_command(args):
     elif args.subcommand == "stop":
         print(f"🛑 Stopping API server on port {args.port}...")
         try:
-            kill_process_by_port(args.port)
-            print("✅ API server stopped")
+            result = kill_process_by_port(args.port)
+            if result.get("success"):
+                print("✅ API server stopped")
+            else:
+                print(f"❌ {result.get('message', 'API server was not running')}")
+                sys.exit(1)
         except Exception as e:
             print(f"❌ Error stopping server: {e}")
             sys.exit(1)

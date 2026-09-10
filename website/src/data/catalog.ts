@@ -456,6 +456,19 @@ export function isSkill(agent: Agent): boolean {
 }
 
 /**
+ * True when an entry ships as an npm client + a frozen binary sidecar — the
+ * agent lane's npm packaging, which is what the "sidecar" wording describes.
+ *
+ * Read off installMethods() rather than `npm_package`, so the packaging text can
+ * never contradict the command beside it: an app/component with an npm_package
+ * installs as a global CLI, not a sidecar (#3298).
+ */
+export function isNpmSidecar(agent: Agent): boolean {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  return keys.has("gaia") && keys.has("npm");
+}
+
+/**
  * Install methods for an agent, derived from the MANIFEST — never from README
  * markup. We only ever show channels that actually work:
  *
@@ -547,6 +560,27 @@ export function installMethods(agent: Agent): InstallMethod[] {
     note: "Build from the GAIA repository — clone, then follow the agent README to install it.",
   });
   return methods;
+}
+
+/** Which buttons the detail card's install CTA row shows. */
+export type InstallCta = "gaia" | "gaia+npm" | "npm";
+
+/**
+ * The install buttons for an entry, read off the methods the card already
+ * shows — so a button can never offer a path the command above it did not.
+ *
+ * `gaia://hub/install/<id>` installs INTO the GAIA app, which only the agent
+ * and skill lanes do. A component/app is a per-platform download, so when it
+ * ships an npm CLI that npm page is its only real CTA (#3231).
+ *
+ * A download-only entry keeps the GAIA link it has always had — the deep link
+ * for a component is a separate, pre-existing question.
+ */
+export function installCta(agent: Agent): InstallCta {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  const gaia = keys.has("gaia") || keys.has("skill");
+  if (keys.has("npm")) return gaia ? "gaia+npm" : "npm";
+  return "gaia";
 }
 
 // Describe only what the hub actually enforces — there is no publisher-signing
