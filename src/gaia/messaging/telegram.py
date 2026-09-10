@@ -367,7 +367,16 @@ class TelegramAdapter:
                         # Silence default logging
                         return
 
-                server = HTTPServer(("127.0.0.1", health_port), HealthHandler)
+                try:
+                    server = HTTPServer(("127.0.0.1", health_port), HealthHandler)
+                except OSError as e:
+                    log.error(
+                        "Failed to bind Telegram health server on 127.0.0.1:%s "
+                        "(%s). Pass --health-port <port> to use a different port.",
+                        health_port,
+                        e,
+                    )
+                    raise
                 # Run until stop_event is set
                 while not stop_event.is_set():
                     server.handle_request()
@@ -443,6 +452,12 @@ def run_telegram(
     This builds the `Application`, registers handlers, and runs polling.
     Pass `background=True` to return control without blocking (caller must
     call `adapter.application.run_polling()` or `await adapter.application.initialize()`).
+
+    Args:
+        token: Telegram bot token.
+        allowed_users: Set of numeric user IDs permitted to interact.
+        background: If True, run as a daemon (writes PID + health endpoint).
+        health_port: Health server port used in background mode.
 
     Raises:
         TelegramAllowlistError: if `allowed_users` is empty or None. A bot with

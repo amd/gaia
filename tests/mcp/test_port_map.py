@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from gaia.cli import build_parser  # noqa: E402
 from gaia.mcp import ports  # noqa: E402
+from gaia.mcp import mcp_bridge  # noqa: E402
 from gaia.mcp.servers import agent_ui_mcp, tui_mcp  # noqa: E402
 from gaia.messaging import telegram  # noqa: E402
 
@@ -28,7 +29,14 @@ def test_canonical_port_map_values():
     assert ports.MCP_BRIDGE_PORT == 8765
     assert ports.AGENT_UI_MCP_PORT == 8766
     assert ports.TUI_MCP_PORT == 8767
-    assert ports.TELEGRAM_HEALTH_PORT == 8765
+    assert ports.TELEGRAM_HEALTH_PORT == 8768
+
+
+def test_mcp_bridge_module_defaults_match_cli():
+    """The standalone ``gaia-mcp`` console script must not drift from the map."""
+    assert mcp_bridge.start_server.__defaults__[1] == ports.MCP_BRIDGE_PORT
+    parser = mcp_bridge.build_parser()
+    assert parser.parse_args([]).port == ports.MCP_BRIDGE_PORT
 
 
 def test_agent_ui_mcp_module_default_matches_cli():
@@ -107,12 +115,14 @@ def _run_background_capture_health_port(monkeypatch, tmp_path, health_port_kwarg
 
     monkeypatch.setattr(http.server, "HTTPServer", FakeHTTPServer)
 
+    before = set(threading.enumerate())
     adapter = telegram.TelegramAdapter(token="fake", allowed_users={12345})
     adapter.start(token="fake", background=True, **health_port_kwargs)
     # The daemon threads shut themselves down once the stubbed
-    # ``run_polling`` returns; join briefly so the bind is observed.
+    # ``run_polling`` returns; join only the threads this test spawned so we
+    # don't block on unrelated long-lived threads from earlier in the session.
     for thread in threading.enumerate():
-        if thread is threading.main_thread():
+        if thread in before or thread is threading.main_thread():
             continue
         thread.join(timeout=5)
     return bound.get("address")

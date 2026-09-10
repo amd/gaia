@@ -8,12 +8,12 @@ Port map (each surface binds loopback by default):
 - 8765 ``MCP_BRIDGE_PORT`` — MCP bridge (``gaia mcp start``/``status``/``test``/``agent``).
 - 8766 ``AGENT_UI_MCP_PORT`` — Agent UI MCP server (``gaia mcp serve``).
 - 8767 ``TUI_MCP_PORT`` — TUI control MCP server (``gaia mcp tui``).
-- 8765 ``TELEGRAM_HEALTH_PORT`` — Telegram adapter ``/healthz`` probe. Shares the
-  bridge's numeric value but is a separate constant because it is a different
-  surface; pass ``--health-port`` to move it when both run on one machine.
+- 8768 ``TELEGRAM_HEALTH_PORT`` — Telegram adapter ``/healthz`` probe. Every
+  surface gets its own default so the MCP bridge and the Telegram health
+  server do not collide on one machine; pass ``--health-port`` to move it.
 """
 
 MCP_BRIDGE_PORT = 8765
 AGENT_UI_MCP_PORT = 8766
 TUI_MCP_PORT = 8767
-TELEGRAM_HEALTH_PORT = 8765
+TELEGRAM_HEALTH_PORT = 8768

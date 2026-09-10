@@ -60,7 +60,7 @@ To find your own numeric user ID, message [@userinfobot](https://t.me/userinfobo
 
 ### Run in the background
 
-Use `--background` to run the adapter as a long-lived service. It writes a PID file to `~/.gaia/telegram.pid`, a start marker to `~/.gaia/telegram.log`, and exposes a health endpoint on `127.0.0.1:8765`. Runtime logs — including refusals — go to `~/.gaia/gaia.log`:
+Use `--background` to run the adapter as a long-lived service. It writes a PID file to `~/.gaia/telegram.pid`, a start marker to `~/.gaia/telegram.log`, and exposes a health endpoint on `127.0.0.1:8768`. Runtime logs — including refusals — go to `~/.gaia/gaia.log`:
 
 ```bash
 gaia telegram start \
@@ -103,7 +103,7 @@ gaia telegram stop
 gaia telegram stop --force
 ```
 
-`gaia telegram status` checks `127.0.0.1:8765` by default. If you changed the health binding, point it at the right host and port with `--health-host` and `--health-port`.
+`gaia telegram status` checks `127.0.0.1:8768` by default. If you changed the health binding, point it at the right host and port with `--health-host` and `--health-port`. When running the adapter in the background, `gaia telegram start` also accepts `--health-port` to move the health server (e.g. when the default collides with another local service).
 
 ### Command reference
 

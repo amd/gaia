@@ -24,6 +24,7 @@ sys.path.insert(
 
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
+from gaia.mcp.ports import MCP_BRIDGE_PORT  # pylint: disable=wrong-import-position
 
 # pylint: enable=wrong-import-position
 
@@ -50,7 +51,7 @@ class GAIAMCPBridge:
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 8765,
+        port: int = MCP_BRIDGE_PORT,
         base_url: str = None,
         verbose: bool = False,
         auth_token: str = None,
@@ -495,7 +496,7 @@ def resolve_bind_host(host, authenticated=False):
 
 
 def start_server(
-    host="localhost", port=8765, base_url=None, verbose=False, auth_token=None
+    host="localhost", port=MCP_BRIDGE_PORT, base_url=None, verbose=False, auth_token=None
 ):
     """Start the HTTP MCP server."""
     # Fix Windows Unicode
@@ -565,12 +566,13 @@ def start_server(
         print("\n✅ Server stopped")
 
 
-def main():
+def build_parser():
+    """Build the ``gaia-mcp`` console-script argument parser."""
     import argparse
 
     parser = argparse.ArgumentParser(description="GAIA MCP Bridge - HTTP Native")
     parser.add_argument("--host", default="localhost", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=MCP_BRIDGE_PORT, help="Port to listen on")
     parser.add_argument(
         "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
     )
@@ -584,7 +586,11 @@ def main():
             f"/health. Defaults to ${AUTH_TOKEN_ENV_VAR}."
         ),
     )
+    return parser
 
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     start_server(
         args.host, args.port, args.base_url, args.verbose, auth_token=args.auth_token
