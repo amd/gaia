@@ -13,6 +13,19 @@ contract version is tracked separately as
   INBOX (#2626). Batch moves used to add the inbox label and then archive
   each message again, reporting success while leaving every message outside
   the inbox.
+- **A calendar listing no longer looks complete when it isn't (#2664).**
+  `list_calendar_events` returned the provider's first page as if it were the
+  whole window, so a busy week silently lost everything past the 25th event.
+  The result now carries `count` and `truncated`, derived from the provider's
+  own continuation token (Google `nextPageToken`, Graph `@odata.nextLink`), on
+  both the agent tool and `GET /v1/email/calendar/events`. The tool description
+  tells the model to disclose a partial page rather than present it as the
+  full window.
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
 - **Scheduled briefings now expose cache age on every surface (#2759).**
   `GET /v1/email/briefing` and the agent `get_briefing` tool now return
   `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled

@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Listing calendar events now tells you how many came back, and whether
+  there were more.** `GET /v1/email/calendar/events` returned only the
+  events list, so a caller couldn't tell a short calendar from a truncated
+  page. The response now also carries `count` and `truncated`.
+
 - **A daily briefing now tells you how old it is, so a cached one can't be
   shown as this morning's.** `GET /v1/email/briefing` and the agent's own
   `get_briefing` returned the last scheduled run with nothing to say when it
