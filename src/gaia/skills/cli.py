@@ -52,6 +52,7 @@ from gaia.skills.migrate import (
     install_migrated,
     migrate_skill_dir,
 )
+from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
 
@@ -110,6 +111,11 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_info.add_argument(
         "--body", action="store_true", help="Also print the Markdown instructions"
     )
+
+    # Adaptive skills (#2674): inspect/approve/revert the learned overlay.
+    from gaia.skills.deltas_cli import add_deltas_parser
+
+    add_deltas_parser(sub)
 
     p_create = sub.add_parser("create", help="Scaffold a new skill directory")
     p_create.add_argument("name", help="Skill name (lowercase-with-hyphens)")
@@ -395,6 +401,7 @@ def handle(args: argparse.Namespace) -> int:
     handlers = {
         "list": _handle_list,
         "info": _handle_info,
+        "deltas": _handle_deltas,
         "create": _handle_create,
         "import": _handle_import,
         "export": _handle_export,
@@ -529,9 +536,17 @@ def _handle_info(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _handle_deltas(args: argparse.Namespace) -> int:
+    """Inspect and control the learned overlay on a skill (#2674)."""
+    from gaia.skills.deltas_cli import handle_deltas
+
+    return handle_deltas(args, _manager().load(args.name))
+
+
 def _handle_create(args: argparse.Namespace) -> int:
     parent = Path(args.directory) if args.directory else _manager().user_root
-    target = parent / args.name
+    name = validated_skill_name(args.name, source="create")
+    target = skill_directory(parent, name, source="create")
 
     if target.exists() and not args.force:
         sys.stderr.write(
@@ -552,18 +567,18 @@ def _handle_create(args: argparse.Namespace) -> int:
         ]
 
     skill = Skill(
-        name=args.name,
+        name=name,
         description=args.description or _DEFAULT_DESCRIPTION,
         version="0.1.0",
         license="MIT",
         gaia=gaia_meta,
-        body=_scaffold_body(args.name, with_tools=args.with_tools),
+        body=_scaffold_body(name, with_tools=args.with_tools),
     )
     # Validate the scaffold through the real parser before writing it, so
     # 'gaia skill create' can never emit a SKILL.md that 'gaia skill info' rejects.
     from gaia.skills.format import parse_skill
 
-    parse_skill(skill.to_markdown(), source=f"<scaffold {args.name}>")
+    parse_skill(skill.to_markdown(), source=f"<scaffold {name}>")
 
     if target.exists() and args.force:
         shutil.rmtree(target)
@@ -572,8 +587,8 @@ def _handle_create(args: argparse.Namespace) -> int:
     if args.with_tools:
         (target / SKILL_TOOLS_FILENAME).write_text(_SCAFFOLD_TOOLS, encoding="utf-8")
 
-    print(f"✅ Created skill '{args.name}' at {target}")
-    print(f"   Edit {target / SKILL_FILENAME}, then: gaia skill info {args.name}")
+    print(f"✅ Created skill '{name}' at {target}")
+    print(f"   Edit {target / SKILL_FILENAME}, then: gaia skill info {name}")
     return EXIT_OK
 
 
@@ -584,8 +599,11 @@ def _handle_import(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
         skill = parse_skill_file(source_dir, check_directory_name=False)
-        name = args.name or skill.name
-        target = destination_root / name
+        # Without --name the name comes from the imported bundle's own SKILL.md,
+        # which nothing validated on the way in.
+        origin = "--name" if args.name else f"{source_dir / SKILL_FILENAME}"
+        name = validated_skill_name(args.name or skill.name, source=origin)
+        target = skill_directory(destination_root, name, source=origin)
 
         if target.exists():
             if not args.force:

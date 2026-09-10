@@ -671,12 +671,21 @@ def _wait(
 
 
 def _wait_for(
-    contains: str = "", absent: str = "", timeout_ms: int = 30000
+    contains: str = "",
+    absent: str = "",
+    state: Optional[Dict[str, Any]] = None,
+    timeout_ms: int = 30000,
 ) -> Dict[str, Any]:
     info, error = _discovered()
     if error:
         return error
-    return _wait(info, contains=contains, absent=absent, timeout_ms=timeout_ms)
+    return _wait(
+        info,
+        contains=contains,
+        absent=absent,
+        state=state,
+        timeout_ms=timeout_ms,
+    )
 
 
 def _resize(cols: int, rows: int) -> Dict[str, Any]:
@@ -786,20 +795,34 @@ def create_tui_mcp() -> "MCPServer":
 
     @mcp.tool()
     def tui_wait_for(
-        contains: str = "", absent: str = "", timeout_ms: int = 30000
+        contains: str = "",
+        absent: str = "",
+        state: Optional[Dict[str, Any]] = None,
+        timeout_ms: int = 30000,
     ) -> Dict[str, Any]:
         """Block until the GAIA TUI's screen matches, instead of polling it.
 
-        Pass at least one matcher; both are ANDed and matched against the plain
-        (ANSI-stripped) screen. On timeout this returns an error containing the
-        text the screen actually had, so you can see why the match never landed.
+        Pass at least one matcher. Text matchers are ANDed against the plain
+        (ANSI-stripped) screen; state matchers are ANDed against the TUI's
+        structured state. On timeout this returns an error containing the text
+        and state the TUI actually had, so you can see why the match never
+        landed.
 
         Args:
             contains: Text that must appear on screen.
             absent: Text that must have disappeared from the screen.
+            state: State fields that must match — supported keys are view, agent,
+                overlay, blocker (strings) and streaming (bool), e.g.
+                {"view": "chat"} or {"streaming": False}. Other keys are
+                rejected by the control server.
             timeout_ms: How long to wait before giving up (default 30000).
         """
-        return _wait_for(contains=contains, absent=absent, timeout_ms=timeout_ms)
+        return _wait_for(
+            contains=contains,
+            absent=absent,
+            state=state,
+            timeout_ms=timeout_ms,
+        )
 
     @mcp.tool()
     def tui_resize(cols: int, rows: int) -> Dict[str, Any]:

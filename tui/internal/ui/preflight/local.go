@@ -1,12 +1,14 @@
 package preflight
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +25,11 @@ import (
 // answer "not installed" for a launch that works. That is exactly why this
 // launch used to have NO gate at all.
 //
-// Three rows, each probed directly on this machine:
+// Three rows, each probed directly on this machine for a local session, plus
+// the Claude credential row when --use-claude is active:
 //
 //	GAIA agent  is the program on disk?      catalog.Find
+//	Claude      is the Anthropic credential set?  process environment
 //	Local AI    is the model server up?      one GET on loopback
 //	AI model    are the models downloaded?   gaia init --check
 //
@@ -49,6 +53,11 @@ var lemonadePorts = []string{"13305", "8000"}
 // machine. When it is set it is the ONLY thing probed: finding a local server
 // on 13305 would prove nothing about the one the agent will actually use.
 const lemonadeBaseURLEnv = "LEMONADE_BASE_URL"
+
+// claudeAPIKeyEnv is the credential the agent's Claude provider reads before
+// constructing its first client. The preflight only checks presence; it never
+// prints the value or makes a remote request that could validate a secret.
+const claudeAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 var (
 	errFixFailed = errors.New("the fix did not succeed")
@@ -76,9 +85,14 @@ func (l localRunner) Label() string { return "local" }
 func (l localRunner) Rows(cfg Config) []Row {
 	rows := []Row{
 		{Key: KeyBinary, Label: cfg.AgentName + " agent"},
-		{Key: KeyLemonade, Label: lemonadeRowLabel},
-		{Key: KeyModel, Label: "AI model"},
 	}
+	if l.opts.ClaudeMode {
+		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
+	}
+	rows = append(rows,
+		Row{Key: KeyLemonade, Label: lemonadeRowLabel},
+		Row{Key: KeyModel, Label: modelRowLabel},
+	)
 	for i := range rows {
 		rows[i].State = StatePending
 		rows[i].Line = "—"
@@ -86,18 +100,18 @@ func (l localRunner) Rows(cfg Config) []Row {
 	return rows
 }
 
-// Check walks the three rows in dependency order and STOPS at the first
+// Check walks the rows in dependency order and STOPS at the first
 // failure, the same way the daemon walk does: "the models are not downloaded"
 // is meaningless when the program that would use them is not on the machine.
 func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	cfg = cfg.withDefaults()
 	rep := Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: l.Rows(cfg)}
 
-	steps := []func(context.Context, Config) Row{
-		l.checkBinary,
-		l.checkLemonade,
-		l.checkModels,
+	steps := []func(context.Context, Config) Row{l.checkBinary}
+	if l.opts.ClaudeMode {
+		steps = append(steps, l.checkClaudeCredential)
 	}
+	steps = append(steps, l.checkLemonade, l.checkModels)
 	for _, step := range steps {
 		row := step(ctx, cfg)
 		setRow(&rep, row)
@@ -107,6 +121,96 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 		}
 	}
 	return rep
+}
+
+// --- 1.5. the Claude credential --------------------------------------------
+
+// claudeCredentialConfigured mirrors the agent's credential sources that are
+// available before the child starts: an inherited process variable or a .env
+// file discoverable from the TUI's working directory. The subprocess inherits
+// that same working directory, so accepting a .env here cannot turn a launch
+// into a false pass that the child would reject.
+func claudeCredentialConfigured() bool {
+	if strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != "" {
+		return true
+	}
+
+	dir, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	for {
+		if dotenvHasNonEmptyValue(filepath.Join(dir, ".env"), claudeAPIKeyEnv) {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+}
+
+// dotenvHasNonEmptyValue reads only the named key. It is intentionally a
+// small presence check rather than a general dotenv loader: preflight must not
+// mutate the TUI environment or expose a credential in a report.
+func dotenvHasNonEmptyValue(path, key string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		if strings.TrimSpace(dotenvValue(value)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func dotenvValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			return unquoted
+		}
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func (l localRunner) checkClaudeCredential(_ context.Context, _ Config) Row {
+	row := Row{Key: KeyClaudeCredential}
+	if claudeCredentialConfigured() {
+		row.State = StateOK
+		row.Line = "set"
+		return row
+	}
+
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = "not set"
+	row.Detail = "Claude needs an Anthropic credential before the first message."
+	row.Remedy = Remedy{
+		Action: "Set " + claudeAPIKeyEnv + " (or put it in .env), then relaunch — this session cannot pick up a variable exported after it started.",
+		Where:  "https://docs.anthropic.com/en/api/getting-started",
+	}
+	// Keep the raw answer diagnostic but never include the value of the secret.
+	row.Raw = claudeAPIKeyEnv + " is not set"
+	return row
 }
 
 // --- 1. the agent's own program --------------------------------------------
@@ -214,10 +318,30 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.Detail = "GAIA needs a local model server. It runs on your machine; no message " +
 		"text ever leaves it."
 	row.Remedy = lemonadeStartRemedy()
-	// Starting Lemonade is `gaia init`'s job, and that is the AI model row's
-	// fix — offering it twice would run the same multi-minute command from two
-	// rows.
-	row.Fix = FixNone
+	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
+	// the same one-key setup the model row does. It cannot run twice: Check
+	// stops at the FIRST failure, so whenever this row is the blocker the model
+	// row below it is pending and unfocusable. Withholding the key here left
+	// the commonest first-run failure with nothing to press.
+	//
+	// Two states are excluded because `gaia init` provably cannot fix them:
+	//
+	//   - a bad LEMONADE_SERVER_PATH: setup would inherit the same bad value,
+	//     so the key would fail every time while the step that DOES fix it
+	//     (unset the variable) sat below as the optional alternative;
+	//   - a non-loopback LEMONADE_BASE_URL: `gaia init` auto-detects remote
+	//     mode from it and then refuses to install or start anything. The
+	//     daemon runner already special-cases this (check.go); matching it here
+	//     is what keeps the two screens from diverging.
+	if resolveLemonade().BadOverride == "" && isLoopback(base) {
+		row.Fix = FixRunSetup
+		// The shared remedy's Action describes starting Lemonade BY HAND, which
+		// is right where there is no `f`. Here there is one, so say what it does
+		// first — otherwise the row explains the manual route while the key that
+		// automates it sits directly underneath.
+		row.Remedy.Action = "Press f and setup installs and starts it. Already have it? " +
+			row.Remedy.Action
+	}
 	return row
 }
 
@@ -311,7 +435,7 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 		"GAIA session."
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
-		Action:  "Download them — press f to run setup here, or run the command.",
+		Action:  "Setup downloads what is missing and starts the local server.",
 		Command: gaiainit.RunCommand(l.opts.ClaudeMode),
 		Where:   "https://amd-gaia.ai/docs/guides/install",
 	}

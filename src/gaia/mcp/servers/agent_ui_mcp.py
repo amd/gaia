@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
+
+# The backend refuses any mutating /api request that does not carry this
+# header — it is what stops a web page the user visits from driving the
+# Agent UI (see gaia/ui/security.py). Sent on reads too so no call site
+# has to decide.
+UI_HEADER = {"X-Gaia-UI": "1"}
 MCP_DEFAULT_PORT = 8765
 MCP_DEFAULT_HOST = "localhost"
 
@@ -78,8 +84,9 @@ def _normalize_error(
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
+    headers = {**UI_HEADER, **kwargs.pop("headers", {})}
     try:
-        r = getattr(requests, method)(url, timeout=120, **kwargs)
+        r = getattr(requests, method)(url, timeout=120, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError as e:
@@ -112,7 +119,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     }
 
     try:
-        r = requests.post(url, json=payload, stream=True, timeout=180)
+        r = requests.post(
+            url, json=payload, stream=True, timeout=180, headers=UI_HEADER
+        )
         r.raise_for_status()
     except requests.exceptions.ConnectionError as e:
         return _normalize_error(e, base_url)
@@ -288,7 +297,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     def delete_session(session_id: str) -> Dict[str, Any]:
         """Delete a chat session and all its messages."""
         try:
-            r = requests.delete(f"{backend_url}/api/sessions/{session_id}", timeout=30)
+            r = requests.delete(
+                f"{backend_url}/api/sessions/{session_id}",
+                timeout=30,
+                headers=UI_HEADER,
+            )
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
         except Exception as e:

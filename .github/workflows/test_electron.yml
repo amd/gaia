@@ -218,46 +218,88 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ${{ matrix.app.path }}/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install app dependencies
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Fill hoisted modules into the app node_modules
         run: |
-          cd ${{ matrix.app.path }}
-          npm ci --prefix .
+          python3 - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          app = Path("${{ matrix.app.path }}")
+          app_nm = app / "node_modules"
+          root_nm = Path("node_modules")
+          app_nm.mkdir(parents=True, exist_ok=True)
+          prod_deps = set(json.loads((app / "package.json").read_text()).get("dependencies", {}))
+
+          def replace_dir(src: Path, dest: Path) -> None:
+              if dest.is_symlink() or dest.is_file():
+                  dest.unlink()
+              elif dest.exists():
+                  shutil.rmtree(dest)
+              shutil.copytree(src, dest, symlinks=False)
+
+          def link_missing(src: Path, dest: Path) -> None:
+              if dest.exists() or dest.is_symlink():
+                  return
+              dest.symlink_to(src.resolve())
+
+          for name in prod_deps:
+              src = root_nm / name
+              if src.exists():
+                  replace_dir(src, app_nm / name)
+
+          for item in root_nm.iterdir():
+              if item.name == ".bin" and item.is_dir():
+                  dest_bin = app_nm / ".bin"
+                  dest_bin.mkdir(exist_ok=True)
+                  for bin_item in item.iterdir():
+                      link_missing(bin_item, dest_bin / bin_item.name)
+                  continue
+              if item.name.startswith("@") and item.is_dir():
+                  scope = app_nm / item.name
+                  scope.mkdir(exist_ok=True)
+                  for sub in item.iterdir():
+                      link_missing(sub, scope / sub.name)
+                  continue
+              if item.name in prod_deps:
+                  continue
+              link_missing(item, app_nm / item.name)
+          PY
 
       - name: Check for high-severity vulnerabilities
         run: |
-          cd ${{ matrix.app.path }}
           # Allow command to fail but capture output
-          npm audit --json > audit-results.json || true
+          npm audit --workspace=${{ matrix.app.path }} --json > ${{ matrix.app.path }}/audit-results.json || true
 
           # Check for high/critical vulnerabilities
-          HIGH=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.high // 0')
-          CRITICAL=$(cat audit-results.json | jq -r '.metadata.vulnerabilities.critical // 0')
+          HIGH=$(cat ${{ matrix.app.path }}/audit-results.json | jq -r '.metadata.vulnerabilities.high // 0')
+          CRITICAL=$(cat ${{ matrix.app.path }}/audit-results.json | jq -r '.metadata.vulnerabilities.critical // 0')
 
           echo "High severity vulnerabilities: $HIGH"
           echo "Critical severity vulnerabilities: $CRITICAL"
 
           if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
             echo "::warning::Found $HIGH high and $CRITICAL critical vulnerabilities in ${{ matrix.app.name }}"
-            cat audit-results.json | jq '.vulnerabilities'
+            cat ${{ matrix.app.path }}/audit-results.json | jq '.vulnerabilities'
           fi
         continue-on-error: true
 
       - name: Verify package scripts
-        run: |
-          cd ${{ matrix.app.path }}
-          npm run --if-present lint || echo "No lint script"
+        run: npm run --workspace=${{ matrix.app.path }} --if-present lint || echo "No lint script"
 
       - name: Test app packaging (Linux)
         if: matrix.app.has_package_script
         run: |
-          cd ${{ matrix.app.path }}
           # Package the app for Linux - validates dependencies work together
           # Note: This runs on ubuntu-latest, so only Linux packaging is tested.
           # Windows/macOS packaging is tested separately in build-electron-apps.yml
           # BLOCKING: Packaging failures indicate broken dependencies from Dependabot updates
-          npm run package
+          npm run --workspace=${{ matrix.app.path }} package
         env:
           # Electron Forge will auto-detect Linux platform
           DEBUG: electron-forge:*
@@ -274,6 +316,52 @@ jobs:
             echo "This indicates a dependency compatibility issue from the update."
             exit 1
           fi
+
+      - name: Confirm packaged app keeps production modules and launches
+        if: matrix.app.has_package_script
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app = Path("${{ matrix.app.path }}")
+          deps = json.loads((app / "package.json").read_text()).get("dependencies", {})
+          missing = []
+          for name in deps:
+              hits = list(app.glob(f"out/**/node_modules/{name}/package.json"))
+              if not hits:
+                  missing.append(name)
+          if missing:
+              print("Packaged app is missing production modules:", ", ".join(missing))
+              sys.exit(1)
+          for name in deps:
+              print("Packaged", name)
+
+          exe = None
+          for cand in app.glob("out/**/example"):
+              if cand.is_file() and os.access(cand, os.X_OK):
+                  exe = cand
+                  break
+          if exe is None:
+              print("No packaged example binary found")
+              sys.exit(1)
+          print("Launching", exe)
+          proc = subprocess.run(
+              ["xvfb-run", "-a", "timeout", "8", str(exe)],
+              cwd=str(app),
+              capture_output=True,
+              text=True,
+          )
+          log = (proc.stdout or "") + (proc.stderr or "")
+          print(log[-4000:])
+          if "Cannot find module" in log:
+              sys.exit(1)
+          PY
 
   dependency-audit:
     name: Audit Dependencies
@@ -297,12 +385,16 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace dependencies
+        run: npm ci
 
       - name: Audit ${{ matrix.package.name }} dependencies
         run: |
-          cd ${{ matrix.package.path }}
-          npm audit --audit-level=high || true
-          npm audit --json > audit-results.json || true
+          npm audit --workspace=${{ matrix.package.path }} --audit-level=high || true
+          npm audit --workspace=${{ matrix.package.path }} --json > ${{ matrix.package.path }}/audit-results.json || true
         continue-on-error: true
 
       - name: Upload audit results
@@ -337,12 +429,58 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ${{ matrix.app.path }}/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install app dependencies
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Fill hoisted modules into the app node_modules
         run: |
-          cd ${{ matrix.app.path }}
-          npm ci --prefix .
+          python3 - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          app = Path("${{ matrix.app.path }}")
+          app_nm = app / "node_modules"
+          root_nm = Path("node_modules")
+          app_nm.mkdir(parents=True, exist_ok=True)
+          prod_deps = set(json.loads((app / "package.json").read_text()).get("dependencies", {}))
+
+          def replace_dir(src: Path, dest: Path) -> None:
+              if dest.is_symlink() or dest.is_file():
+                  dest.unlink()
+              elif dest.exists():
+                  shutil.rmtree(dest)
+              shutil.copytree(src, dest, symlinks=False)
+
+          def link_missing(src: Path, dest: Path) -> None:
+              if dest.exists() or dest.is_symlink():
+                  return
+              dest.symlink_to(src.resolve())
+
+          for name in prod_deps:
+              src = root_nm / name
+              if src.exists():
+                  replace_dir(src, app_nm / name)
+
+          for item in root_nm.iterdir():
+              if item.name == ".bin" and item.is_dir():
+                  dest_bin = app_nm / ".bin"
+                  dest_bin.mkdir(exist_ok=True)
+                  for bin_item in item.iterdir():
+                      link_missing(bin_item, dest_bin / bin_item.name)
+                  continue
+              if item.name.startswith("@") and item.is_dir():
+                  scope = app_nm / item.name
+                  scope.mkdir(exist_ok=True)
+                  for sub in item.iterdir():
+                      link_missing(sub, scope / sub.name)
+                  continue
+              if item.name in prod_deps:
+                  continue
+              link_missing(item, app_nm / item.name)
+          PY
 
       - name: Install xvfb for headless display
         run: |

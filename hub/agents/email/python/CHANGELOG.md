@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Scheduled briefings now expose cache age on every surface (#2759).**
+  `GET /v1/email/briefing` and the agent `get_briefing` tool now return
+  `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled
+  as stale for the user, but are not refused or regenerated automatically.
+
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,
@@ -76,6 +81,16 @@ contract version is tracked separately as
   `outlook_backend.py` never parses Gmail operator syntax, so converting
   `w` to days has no effect there. Quoted Outlook `$search` values are
   escaped separately (see the Graph quote escape entry above).
+- **An Outlook search using `is:starred`, `after:`, `before:`, `label:`,
+  `has:`, or `in:` returned nothing instead of an error (#2996).** These
+  Gmail-style operators have no Microsoft Graph translation, so
+  `translate_query` let each one fall through to the `$search` bucket and
+  reach Graph as inert literal text: Graph never errors on an unrecognised
+  `$search` token, so the search silently matched nothing. The agent's own
+  tool description recommends several of these (`label:promotions`,
+  `after:YYYY/MM/DD`), so a model following its own instructions could hit
+  this. `translate_query` now raises an actionable error naming the
+  unsupported operator instead of degrading to a phrase match.
 
 ### Changed
 
