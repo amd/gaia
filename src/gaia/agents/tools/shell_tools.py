@@ -193,6 +193,15 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
     r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
 )
 
+#: Binaries an agent reaches for when it means "change this file". None are on
+#: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
+#: says "only read-only commands are allowed" and lists read-only examples,
+#: which leaves no route to the thing the agent was trying to do. Naming these
+#: lets the refusal point at edit_file instead of dead-ending (#3600).
+FILE_REWRITE_BINARIES = frozenset(
+    {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
+)
+
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
 #: only one a ``shell:execute`` grant may exempt from confirmation.
@@ -727,6 +736,24 @@ class ShellToolsMixin:
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
                 }
         elif cmd_base not in ALLOWED_COMMANDS:
+            # Refusing a file rewrite with "only read-only commands are allowed"
+            # is a dead end: the agent wanted to change a file and the message
+            # names nothing that can. Point at the tool that does the job.
+            if cmd_base in FILE_REWRITE_BINARIES:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_base}' rewrites files and is not available. Use the "
+                        f"edit tools instead — they are not blocked."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Call edit_file with the exact existing text as old_content, "
+                        "or edit_python_file for .py to have the edit syntax-checked. "
+                        "Use write_file to create a file that does not exist yet."
+                    ),
+                    "examples": "edit_file(file_path=..., old_content=..., new_content=...)",
+                }
             return {
                 "status": "error",
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
