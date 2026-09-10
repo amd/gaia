@@ -188,10 +188,22 @@ func TestTheLemonadeRemedyIsSharedWithTheDaemonRunner(t *testing.T) {
 		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
 	}
 
+	// The COMMAND and the docs link are what must never drift — sending two
+	// screens to different start instructions for the same server is the bug
+	// this reuse exists to prevent. The Action legitimately differs: only this
+	// runner offers `f`, so only it leads with what that key does.
 	want := lemonadeStartRemedy()
-	if row.Remedy != want {
+	if row.Remedy.Command != want.Command || row.Remedy.Where != want.Where {
 		t.Errorf("the local runner's Lemonade remedy has drifted from the shared one:\n"+
 			" local: %+v\nshared: %+v", row.Remedy, want)
+	}
+	if !strings.Contains(row.Remedy.Action, want.Action) {
+		t.Errorf("the shared start instruction was dropped rather than prefixed:\n"+
+			" local: %q\nshared: %q", row.Remedy.Action, want.Action)
+	}
+	if !strings.HasPrefix(row.Remedy.Action, "Press f and setup installs") {
+		t.Errorf("the row explains the manual route before the key that automates "+
+			"it:\n%q", row.Remedy.Action)
 	}
 }
 
@@ -214,6 +226,118 @@ func TestClaudeModeDoesNotLetADownLemonadeRefuseTheLaunch(t *testing.T) {
 	}
 	if !strings.Contains(row.Detail, "memory") {
 		t.Errorf("the row does not say what stops working without it:\n%s", row.Detail)
+	}
+}
+
+func TestClaudeCredentialIsRequiredBeforeTheFirstMessage(t *testing.T) {
+	t.Setenv(claudeAPIKeyEnv, "")
+	t.Chdir(t.TempDir())
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateFailed {
+		t.Fatalf("missing Claude credential is %s, want failed", row.State.Word())
+	}
+	if row.Disposition != status.DispositionHalt {
+		t.Fatalf("disposition = %v, want halt", row.Disposition)
+	}
+	if row.Line != "not set" {
+		t.Errorf("line = %q, want not set", row.Line)
+	}
+	for _, text := range []string{claudeAPIKeyEnv, "first message", ".env", "relaunch"} {
+		if !strings.Contains(row.Detail+row.Remedy.Action+row.Raw, text) {
+			t.Errorf("missing %q from credential guidance: %+v", text, row)
+		}
+	}
+	if strings.Contains(row.Detail+row.Remedy.Action+row.Raw, "sk-ant-") {
+		t.Error("credential guidance must not suggest or expose a token value")
+	}
+}
+
+func TestClaudeCredentialAcceptsTheWorkingDirectoryDotenv(t *testing.T) {
+	t.Setenv(claudeAPIKeyEnv, "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("# local fixture\nexport ANTHROPIC_API_KEY=sk-ant-from-dotenv\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateOK {
+		t.Fatalf("working-directory .env credential is %s, want ok: %+v", row.State.Word(), row)
+	}
+	if strings.Contains(row.Line+row.Detail+row.Remedy.Action+row.Raw, "sk-ant-from-dotenv") {
+		t.Error("dotenv credential was echoed")
+	}
+}
+
+func TestClaudeCredentialPassesWithoutEchoingTheSecret(t *testing.T) {
+	const secret = "sk-ant-test-only"
+	t.Setenv(claudeAPIKeyEnv, secret)
+
+	row := localRunner{opts: LocalOptions{ClaudeMode: true}}.
+		checkClaudeCredential(context.Background(), localCfg())
+
+	if row.State != StateOK {
+		t.Fatalf("set Claude credential is %s, want ok", row.State.Word())
+	}
+	if strings.Contains(row.Line+row.Detail+row.Remedy.Action+row.Raw, secret) {
+		t.Error("credential row echoed the secret")
+	}
+}
+
+func TestClaudeCredentialRowOnlyAppearsInClaudeMode(t *testing.T) {
+	localRows := localRunner{}.Rows(localCfg())
+	for _, row := range localRows {
+		if row.Key == KeyClaudeCredential {
+			t.Fatal("local mode unexpectedly added a Claude credential row")
+		}
+	}
+
+	claudeRows := localRunner{opts: LocalOptions{ClaudeMode: true}}.Rows(localCfg())
+	if len(claudeRows) != len(localRows)+1 {
+		t.Fatalf("Claude mode has %d rows, local mode has %d; want one extra row", len(claudeRows), len(localRows))
+	}
+	if claudeRows[1].Key != KeyClaudeCredential {
+		t.Fatalf("Claude row order = %q, want credential immediately after the binary", claudeRows[1].Key)
+	}
+}
+
+func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) {
+	isolateHome(t)
+	t.Setenv(claudeAPIKeyEnv, "")
+	t.Chdir(t.TempDir())
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+	stubGaiaInit(t, func() (string, error) {
+		t.Error("the model row was probed even though the Claude credential is missing")
+		return "", errors.New("must not be called")
+	})
+
+	dir := t.TempDir()
+	name := "fixture-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := localRunner{opts: LocalOptions{Binary: path, ClaudeMode: true}}.
+		Check(context.Background(), localCfg())
+
+	blocker, ok := rep.Blocker()
+	if !ok || blocker.Key != KeyClaudeCredential {
+		t.Fatalf("blocker = %q, found=%v; want Claude credential", blocker.Key, ok)
+	}
+	if row, _ := rep.Find(KeyLemonade); row.State != StatePending {
+		t.Errorf("Lemonade row is %s, want pending behind credential failure", row.State.Word())
+	}
+	if row, _ := rep.Find(KeyModel); row.State != StatePending {
+		t.Errorf("model row is %s, want pending behind credential failure", row.State.Word())
 	}
 }
 
@@ -314,12 +438,14 @@ func TestRowsMatchWhatCheckProduces(t *testing.T) {
 // silently proceeds instead of loudly halting — see Row.needsHalt.
 func TestEveryNonOKLocalRowDeclaresADisposition(t *testing.T) {
 	isolateHome(t)
+	t.Setenv(claudeAPIKeyEnv, "")
 	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
 	stubGaiaInit(t, func() (string, error) { return exitStub(t, 1), nil })
 
 	r := localRunner{opts: LocalOptions{Binary: "gaia-agent-absent-fixture"}}
 	rows := []Row{
 		r.checkBinary(context.Background(), localCfg()),
+		r.checkClaudeCredential(context.Background(), localCfg()),
 		r.checkLemonade(context.Background(), localCfg()),
 		r.checkModels(context.Background(), localCfg()),
 	}
@@ -350,4 +476,90 @@ func exitStub(t *testing.T, code int) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A down Lemonade is the commonest first-run failure, and Check stops at the
+// FIRST failure — so when this row blocks, the model row below it is pending
+// and cannot be focused. Withholding the setup key here left the screen with
+// nothing to press and a command the user had to go type somewhere else.
+func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State != StateFailed {
+		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
+	}
+	if row.Fix != FixRunSetup {
+		t.Errorf("fix = %v, want FixRunSetup — `gaia init` installs and starts "+
+			"Lemonade, so this row is fixable from the screen", row.Fix)
+	}
+}
+
+// The guard the comment on that Fix depends on: rows after the first failure
+// are PENDING, so two rows can never offer setup at once.
+//
+// Asserting on the Fix fields directly would pass vacuously wherever `gaia` is
+// absent from PATH (every CI runner): checkModels would report StateUnknown,
+// not StateFailed, so the count would be 1 whether or not the halt existed.
+// Asserting the halt itself needs nothing external.
+func TestCheckHaltsAtTheFirstFailureSoOnlyOneRowCanOfferSetup(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+
+	dir := t.TempDir()
+	name := "fixture-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := localRunner{opts: LocalOptions{Binary: path}}.
+		Check(context.Background(), localCfg())
+
+	seenFailure := false
+	for _, r := range rep.Rows {
+		if seenFailure && r.State != StatePending {
+			t.Errorf("row %q is %s after an earlier failure; the walk did not halt, "+
+				"so two rows could offer setup at once:\n%s",
+				r.Key, r.State.Word(), rep)
+		}
+		if r.State == StateFailed {
+			seenFailure = true
+		}
+	}
+	if !seenFailure {
+		t.Fatalf("expected a failed row with Lemonade pointed at a dead port:\n%s", rep)
+	}
+}
+
+// `gaia init` inherits the same bad LEMONADE_SERVER_PATH, so pressing f would
+// fail every time — while the step that actually fixes it (unset the variable)
+// sat below as the optional alternative.
+func TestABadServerPathOverrideOffersNoSetupKey(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+	t.Setenv(serverPathEnv, filepath.Join(t.TempDir(), "not-here"))
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v, want FixNone — setup cannot repair an override it "+
+			"would inherit", row.Fix)
+	}
+}
+
+// `gaia init` auto-detects remote mode from a non-loopback LEMONADE_BASE_URL and
+// then refuses to install or start anything, so the key provably cannot work.
+// The daemon runner already special-cases this; the two screens must not differ.
+func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
+	t.Setenv(lemonadeBaseURLEnv, "http://192.168.1.50:13305/api/v1")
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State != StateFailed {
+		t.Fatalf("an unreachable remote Lemonade is %s, want failed", row.State.Word())
+	}
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v, want FixNone — `gaia init` refuses to install or "+
+			"start anything in remote mode", row.Fix)
+	}
 }

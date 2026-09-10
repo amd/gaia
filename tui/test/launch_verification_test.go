@@ -207,6 +207,9 @@ func writeStub(t *testing.T, path, body string) {
 // not off it having passed.
 func TestAnIndeterminateSetupRowIsNotReAskedInTheChat(t *testing.T) {
 	isolateGaiaHome(t)
+	// This test exercises the later setup row; satisfy the earlier Claude
+	// credential precondition with a non-secret fixture value.
+	t.Setenv("ANTHROPIC_API_KEY", "test-credential")
 	// Exit 2 is what an installed gaia older than --check returns, and a
 	// missing gaia produces the same "unanswered" shape.
 	stubSetupCheck(t, 2)

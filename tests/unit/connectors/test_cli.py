@@ -17,6 +17,8 @@ import pytest
 from gaia.connectors import cli as connections_cli
 from gaia.connectors.providers import _registry
 
+pytestmark = pytest.mark.allow_network
+
 
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
@@ -154,7 +156,6 @@ class TestConnectGrantAgent:
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
         )
-
         rc, _out, err = _run(
             "connectors", "connect", "google", "--grant-agent", "installed:email"
         )
@@ -190,6 +191,12 @@ class TestConnectGrantAgent:
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
         )
+        monkeypatch.setattr(
+            "gaia.connectors.grants.list_agent_grants",
+            lambda _connector_id: {
+                "installed:email": ["https://www.googleapis.com/auth/gmail.modify"]
+            },
+        )
 
         # --scopes is explicit here, so resolve_declared_scopes must never run.
         def _must_not_run(*_a, **_k):
@@ -207,16 +214,31 @@ class TestConnectGrantAgent:
             "google",
             "--scopes",
             "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
             "--grant-agent",
             "installed:email",
         )
         assert rc == 0
         # The grant rides the SAME scopes as the connect — no drift possible.
         assert captured["grant_agents"] == {
-            "installed:email": ["https://www.googleapis.com/auth/gmail.modify"]
+            "installed:email": [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+            ]
         }
         assert "Connected as alice@example.com" in out
         assert "granted google → installed:email" in out
+        assert "gmail.modify" in out
+        assert "gmail.send" not in out
+
+    @pytest.mark.allow_network
+    def test_explicit_scope_outside_catalog_is_rejected_by_the_flow(self):
+        bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
+
+        rc, _out, err = _run("connectors", "connect", "google", "--scopes", bogus_scope)
+
+        assert rc == 5
+        assert bogus_scope in err
 
     def test_device_grant_matches_browser_scope_and_grant_contract(self, monkeypatch):
         declared = [
@@ -459,14 +481,14 @@ class TestGrants:
             "google",
             "builtin:chat",
             "--scopes",
-            "gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.readonly",
         )
         assert rc == 0
 
         rc2, out2, _err2 = _run("connectors", "grants", "list", "google")
         assert rc2 == 0
         assert "builtin:chat" in out2
-        assert "gmail.readonly" in out2
+        assert "https://www.googleapis.com/auth/gmail.readonly" in out2
 
     def test_grants_revoke(self):
         _run(
@@ -476,7 +498,7 @@ class TestGrants:
             "google",
             "builtin:chat",
             "--scopes",
-            "gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.readonly",
         )
         rc, _out, _err = _run(
             "connectors", "grants", "revoke", "google", "builtin:chat"

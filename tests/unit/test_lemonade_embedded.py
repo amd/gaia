@@ -10,6 +10,7 @@ import stat
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -462,3 +463,40 @@ class TestFailureMessages:
         with pytest.raises(EmbeddedLemonadeError) as exc:
             manager.install_backend("llamacpp:vulkan")
         assert "gaia lemonade embedded start" in str(exc.value)
+
+    def test_backend_install_passes_the_client_cli_contract(self, manager, monkeypatch):
+        """The bundled client receives the documented argv and API key."""
+        manager._write_state(
+            {
+                "pid": 4321,
+                "port": 13305,
+                "api_key": "secret",
+                "version": manager.version,
+            }
+        )
+        monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: {"ok": True})
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.run", fake_run)
+
+        manager.install_backend("llamacpp:cpu", timeout=37.0)
+
+        assert len(calls) == 1
+        command, kwargs = calls[0]
+        assert command == [
+            str(manager.client_path),
+            "--port",
+            "13305",
+            "backends",
+            "install",
+            "llamacpp:cpu",
+        ]
+        assert kwargs["env"]["LEMONADE_API_KEY"] == "secret"
+        assert kwargs["timeout"] == 37.0
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        assert kwargs["check"] is False
