@@ -9,9 +9,9 @@ metadata:
     tools_required:
       - transcribe_media
       - refine_transcript
-      - index_document
       - summarize_document
       - query_documents
+      - remember
     provenance:
       source: starter-pack
 ---
@@ -26,8 +26,8 @@ built from the truncated half looks finished rather than truncated.
 | # | Call | Produces |
 |---|---|---|
 | 1 | `transcribe_media(file_path)` | Raw transcript at `~/.gaia/transcripts/<name>.txt`. Returns `transcript_path`, never the text. |
-| 2 | `refine_transcript(transcript_path)` | `<name>.transcript.md` — mis-hearings repaired, split into speaker turns. Returns `refined_path`, `speakers`, `sections`. |
-| 3 | `index_document(refined_path)`, then `summarize_document(refined_path, summary_type='detailed')` | The brief. |
+| 2 | `refine_transcript(transcript_path)` | A speaker-labelled markdown transcript, **already indexed**. Returns `refined_path`, `speakers`, `turns`. |
+| 3 | `summarize_document(refined_path, summary_type='detailed')` | The brief. |
 
 ## Procedure
 
@@ -48,24 +48,43 @@ built from the truncated half looks finished rather than truncated.
    step 3 does the correcting. Do not repair them yourself.
 
 3. **Refine — one call, and it is not your work to redo.**
-   `refine_transcript(transcript_path)` walks the transcript section by section,
-   fixes mis-hearings, labels the speaker turns and writes the result. You do
-   not hand-correct wording, do not work out the speakers yourself, and do not
-   write a transcript file. Summarizing the raw transcript instead produces a
-   brief with no owners on the action items and mis-heard names in the facts.
+   `refine_transcript(transcript_path)` cuts the transcript into speaker turns
+   using the pauses in the recording, names them, writes the result and indexes
+   it. You do not work out the speakers yourself, do not rewrite wording, and do
+   not write a transcript file. Summarizing the raw transcript instead produces
+   a brief with no owners on the action items.
+
+   It needs the timings saved alongside the raw transcript. If it reports they
+   are missing, re-run `transcribe_media` on the original media rather than
+   trying to segment the text yourself — turn boundaries guessed from prose are
+   invented, not observed.
 
 4. **Report both paths, every time.** State the raw `transcript_path` *and* the
    `refined_path` in your reply — even when the user only asked for action
    items, even if a later step fails. Transcription costs minutes of compute; a
    user who does not know the files exist pays for it twice.
 
-5. **Index, then summarize.** `index_document(refined_path)` is required before
-   `summarize_document` — and it is also what lets the user ask questions about
-   this meeting afterwards, so never skip it. Then
-   `summarize_document(refined_path, summary_type='detailed')`, which folds the
-   whole transcript forward in sections so the brief covers the entire meeting.
+5. **Summarize.** `refine_transcript` already indexed the file, so go straight
+   to `summarize_document(refined_path, summary_type='detailed')`, which folds
+   the whole transcript forward in sections so the brief covers the entire
+   meeting.
 
-6. **Invite the follow-up.** Close by telling the user they can ask questions
+6. **Remember the outcome, not the transcript.** `remember` a short record of
+   the meeting: what it was, when, who was in it, the decisions, and any action
+   item the user personally owes. Two or three sentences.
+
+   The transcript is already indexed — that is what detailed questions read
+   from. Memory is for the durable facts that should surface *without* being
+   asked, weeks later, when the user says "what did I commit to?" or a related
+   topic comes up in a different conversation.
+
+   Do not store the transcript, long quotes, or the full brief in memory. That
+   duplicates the index, crowds out everything else the user asked to be
+   remembered, and gets recalled in conversations it has nothing to do with.
+   Store nothing when the recording turned out to be something other than a
+   meeting.
+
+7. **Invite the follow-up.** Close by telling the user they can ask questions
    about the meeting and you will answer from the indexed transcript. They will
    not discover this on their own.
 

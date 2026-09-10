@@ -14,6 +14,7 @@ The endpoint accepts WAV only; decode other containers with
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -217,6 +218,11 @@ def _resolve_base_url(base_url: Optional[str]) -> str:
     return normalized
 
 
+def _log_slot_wait(reason: str) -> None:
+    """Surface a queued model-slot grant instead of looking hung."""
+    log.info("Transcription waiting on the model slot — %s", reason)
+
+
 class LemonadeASRClient:
     """Speech-to-text against a running Lemonade Server."""
 
@@ -331,15 +337,37 @@ class LemonadeASRClient:
             data["language"] = language
 
         log.debug(
-            "transcribing %s with %s (language=%s)", path, self.model, language or "auto"
+            "transcribing %s with %s (language=%s)",
+            path,
+            self.model,
+            language or "auto",
         )
-        with path.open("rb") as handle:
-            payload = self._post_multipart(
-                self.transcriptions_url,
-                files={"file": (path.name, handle, "audio/wav")},
-                data=data,
-            )
+        # Hold the model-slot lease across the whole request. Loading Whisper
+        # and transcribing share Lemonade's single-tenant slot machinery with
+        # every other sidecar, and a 46-minute file spends minutes inside this
+        # call — long enough for another process to evict it mid-flight. A
+        # no-op in standalone mode, where there is no broker to coordinate.
+        with self._slot_lease():
+            with path.open("rb") as handle:
+                payload = self._post_multipart(
+                    self.transcriptions_url,
+                    files={"file": (path.name, handle, "audio/wav")},
+                    data=data,
+                )
         return self._parse_transcript(payload)
+
+    @contextlib.contextmanager
+    def _slot_lease(self):
+        """Serialize this transcription against other users of the model slot."""
+        try:
+            from gaia.daemon.broker_client import model_lease
+        except ImportError:
+            # Standalone install without the daemon package — no broker to
+            # coordinate with, so there is nothing to serialize against.
+            yield None
+            return
+        with model_lease(self.model, on_wait=_log_slot_wait) as lease:
+            yield lease
 
     def _parse_transcript(self, payload: Dict[str, Any]) -> Transcript:
         raw_segments = payload.get("segments") or []
@@ -368,7 +396,9 @@ class LemonadeASRClient:
         ]
         return Transcript(
             segments=segments,
-            language=str(payload.get("language") or payload.get("detected_language") or ""),
+            language=str(
+                payload.get("language") or payload.get("detected_language") or ""
+            ),
             duration=float(payload.get("duration") or 0.0),
             model=self.model,
             raw_text=str(payload.get("text") or ""),
