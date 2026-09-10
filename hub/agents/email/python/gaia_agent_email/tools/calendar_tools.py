@@ -952,7 +952,7 @@ def list_calendar_events_impl(
                     "attendees": _extract_attendees(e),
                 }
             )
-        truncated = bool(data.get("nextPageToken") or data.get("nextLink"))
+        truncated = bool(data.get("nextPageToken"))
         st["result_summary"] = {"count": len(events), "truncated": truncated}
         return {"events": events, "count": len(events), "truncated": truncated}
 
