@@ -264,8 +264,13 @@ class LiveOutlookCalendarBackend:
             data = self._get("/me/events", params=params)
         items = [graph_event_to_google(e) for e in data.get("value", [])]
         # Wrap in the Google ``items`` envelope so the calendar tool reads it
-        # exactly as a Google list response.
-        return {"items": items}
+        # exactly as a Google list response — including Graph's
+        # ``@odata.nextLink`` as the continuation token, without which a
+        # partial scan is indistinguishable from a complete one (#3610).
+        return {
+            "items": items,
+            "nextPageToken": data.get("@odata.nextLink"),
+        }
 
     def get_event(  # pylint: disable=unused-argument
         self, *, calendar_id: str = "primary", event_id: str

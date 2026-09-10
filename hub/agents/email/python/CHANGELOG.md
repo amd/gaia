@@ -9,6 +9,15 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A conflict check that could only see the calendar's first page no longer
+  reports a busy slot as free (#3610).** `detect_calendar_conflicts` scanned
+  the provider's first page (25 events) and said nothing about the rest, so a
+  meeting sitting past that page came back as `has_conflict: false`. The tool
+  now returns `truncated`, derived from the provider's own continuation token;
+  when it is true the "no conflict" answer is explicitly unverified, and the
+  agent is instructed to say the slot could not be checked rather than call it
+  free. Fully-scanned windows are unchanged (`truncated: false`).
+
 - **Scheduled briefings now expose cache age on every surface (#2759).**
   `GET /v1/email/briefing` and the agent `get_briefing` tool now return
   `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled
