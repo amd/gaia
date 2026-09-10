@@ -20,20 +20,36 @@ wheel is a legitimate thing to do, it just must not happen by accident.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-#: Source roots this repo owns, in the order they should shadow anything else.
-#: For a hub agent the importable root is the directory CONTAINING the package
-#: (``hub/agents/gaia/python``), not the package itself — putting the package
-#: dir on sys.path makes ``import gaia_agent`` miss it entirely and silently
-#: fall through to whatever the editable install points at.
-_SOURCE_ROOTS = [REPO_ROOT / "src"] + sorted(
-    {p.parent.parent for p in REPO_ROOT.glob("hub/agents/*/python/*/__init__.py")}
-)
+
+def _source_roots():
+    """Directories to shadow with, newest-wins order handled by the caller.
+
+    For a hub agent the importable root is the directory CONTAINING the package
+    (``hub/agents/gaia/python``), not the package itself — putting the package
+    dir on sys.path makes ``import gaia_agent`` miss it entirely.
+
+    A hub agent is included ONLY when its package already resolves somewhere.
+    This redirects an existing install to this checkout; it must not *create*
+    one. Tests for an agent nobody installed guard themselves with
+    ``importorskip``, and forcing those onto the path turns a deliberate skip
+    into a wall of failures for dependencies the developer never asked for.
+    """
+    roots = [REPO_ROOT / "src"]
+    for init in sorted(REPO_ROOT.glob("hub/agents/*/python/*/__init__.py")):
+        package = init.parent.name
+        if importlib.util.find_spec(package) is not None:
+            roots.append(init.parent.parent)
+    return roots
+
+
+_SOURCE_ROOTS = _source_roots()
 
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
@@ -42,12 +58,18 @@ _ANCHOR_MODULES = ("gaia", "gaia_agent", "gaia_agent_chat")
 
 
 def _prepend_source_roots() -> None:
-    for root in reversed(_SOURCE_ROOTS):
-        entry = str(root)
-        if root.is_dir():
-            if entry in sys.path:
-                sys.path.remove(entry)
-            sys.path.insert(0, entry)
+    present = [str(root) for root in _SOURCE_ROOTS if root.is_dir()]
+    for entry in reversed(present):
+        if entry in sys.path:
+            sys.path.remove(entry)
+        sys.path.insert(0, entry)
+
+    # Tests that shell out to `python -c "import ..."` get a fresh interpreter
+    # that inherits none of the above, so the child would resolve to whatever
+    # the editable install points at — or find nothing at all.
+    inherited = os.environ.get("PYTHONPATH", "")
+    tail = [p for p in inherited.split(os.pathsep) if p and p not in present]
+    os.environ["PYTHONPATH"] = os.pathsep.join(present + tail)
 
 
 def _assert_local(session_warn) -> None:
