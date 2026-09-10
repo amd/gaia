@@ -495,6 +495,20 @@ class TestPrettyPrintJsonToolResults:
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)
         assert events[0]["success"] is True
+        assert "summary_truncated" not in events[0]
+
+    def test_long_string_result_marks_summary_truncated(self, handler):
+        data = '{"succeeded": ["message-1"], "failed": [{"error": "already archived"}]}'
+        handler.pretty_print_json(data + "x" * 300, title="Result")
+        event = _drain(handler)[0]
+        assert event["summary_truncated"] is True
+        assert len(event["summary"]) == 300
+
+    def test_long_non_dict_result_marks_summary_truncated(self, handler):
+        handler.pretty_print_json(["result"] * 100, title="Result")
+        event = _drain(handler)[0]
+        assert event["summary_truncated"] is True
+        assert len(event["summary"]) == 300
 
     def test_command_output_included(self, handler):
         data = {

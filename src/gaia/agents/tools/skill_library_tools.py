@@ -36,10 +36,10 @@ a model that would happily approve itself:
   gate of its own (verified, not assumed) — so it would import that Python on a
   model-issued call. Instruction-only imports still load.
 * Every disk-touching tool refuses a **name that is not a bare skill name**.
-  ``gaia.skills.install.remove_skill`` joins the caller's string onto the skills
-  root and ``rmtree``\\ s it unvalidated, so ``../notes`` escapes the root. That
-  is a substrate flaw reported upstream; until it is fixed there, these tools
-  will not hand it a path.
+  :mod:`gaia.skills.naming` guards the substrate's own joins now, but this layer
+  keeps its check: ``load_skill`` resolves through the manager and never reaches
+  those joins, and the model needs a structured tool error naming the fix rather
+  than a raised ``SkillValidationError``.
 
 Each surfaces as an error naming what would proceed instead.
 
@@ -108,10 +108,10 @@ def _failure(action: str, exc: Exception) -> Dict[str, Any]:
 def _reject_bad_name(action: str, name: str) -> Dict[str, Any] | None:
     """Refuse anything that is not a bare skill name; ``None`` when it is fine.
 
-    ``remove_skill`` in the substrate does ``rmtree(root / name)`` with no
-    validation, so a model-supplied ``../documents`` deletes outside the skills
-    root. Validated against the canonical ``NAME_PATTERN`` rather than a
-    hand-rolled check, so the two can't drift.
+    The substrate validates the same names now (:mod:`gaia.skills.naming`); this
+    stays so the model gets a structured tool error naming the fix rather than a
+    raised exception. Validated against the canonical ``NAME_PATTERN`` rather
+    than a hand-rolled check, so the two can't drift.
     """
     from gaia.skills.format import NAME_PATTERN
 

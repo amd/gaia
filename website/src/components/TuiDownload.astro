@@ -12,9 +12,11 @@
 //
 // Every published platform is rendered server-side, so a no-JS visitor gets the
 // whole list and a working link. JS reveals the block for the platform this
-// machine can run and collapses the list behind a disclosure; a machine it
-// cannot place (Apple Silicon behind Safari, an unknown arch) keeps the full
-// list rather than guessing — see scripts/download-target.ts.
+// machine can run and collapses the list behind a disclosure. A Mac behind
+// Safari reports no architecture, so both Mac builds are offered side by side;
+// a machine we publish nothing for (an iPad sending the Mac UA, an unknown
+// arch) keeps the full list rather than guessing — see
+// scripts/download-target.ts.
 //
 // Nothing here builds a URL. Each link is the `url` the hub manifest published
 // for an artifact whose filename matched a key exactly, so a platform the hub
@@ -116,7 +118,10 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       outranks Tailwind's preflight `[hidden]` rule and would show them all. */}
   {rows.map((row) => (
     <div data-dl-cta data-platform={row.platform} hidden>
-      <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
+      <div
+        data-dl-buttons
+        class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}
+      >
         {row.installers.length > 0
           ? row.installers.map((i) => (
               <a href={i.artifact.url} class="g-btn g-btn-primary px-6 py-3 text-[15px]">
@@ -132,29 +137,46 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             )}
       </div>
 
+      {/* Every sentence here is written for ONE architecture — it names a chip,
+          or links the one standalone binary this block owns. When two blocks
+          merge, the script drops `[data-dl-one-arch]` and reveals the
+          `[data-dl-multi-arch]` wording instead. */}
       <p class:list={['g-body mt-3 max-w-[440px] text-[13px]', centered && 'mx-auto']}>
         {row.installers.length > 0 ? (
           <Fragment>
             Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
             {row.binary && (
-              <Fragment>
+              <span data-dl-one-arch>
                 {' '}Or take the{' '}
                 <a href={row.binary.url} class="text-g-gold-text underline-offset-2 hover:underline">
                   standalone binary
                 </a>{' '}— one file, no PATH entry and no agent alongside it.
-              </Fragment>
+              </span>
             )}
           </Fragment>
         ) : anyInstaller ? (
           <Fragment>
-            No installer is published for {PLATFORM_LABELS[row.platform]} — the agent has no
-            build for that architecture. This is the standalone binary: put it on your PATH
-            yourself.
+            <span data-dl-one-arch>
+              No installer is published for {PLATFORM_LABELS[row.platform]} — the agent has no
+              build for that architecture. This is the standalone binary: put it on your PATH
+              yourself.
+            </span>
+            <span data-dl-multi-arch hidden>
+              No installer is published for either architecture — the agent has no build for
+              them. These are the standalone binaries: put the one you pick on your PATH
+              yourself.
+            </span>
           </Fragment>
         ) : (
           <Fragment>
-            The standalone binary — put it on your PATH and run{' '}
-            <code class="text-g-text">gaia-tui</code>.
+            <span data-dl-one-arch>
+              The standalone binary — put it on your PATH and run{' '}
+              <code class="text-g-text">gaia-tui</code>.
+            </span>
+            <span data-dl-multi-arch hidden>
+              Standalone binaries — put the one you pick on your PATH and run{' '}
+              <code class="text-g-text">gaia-tui</code>.
+            </span>
           </Fragment>
         )}
       </p>
@@ -197,19 +219,49 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
 </div>
 
 <script>
-  import { resolvePlatform } from '../scripts/download-target';
+  import { resolveTargets } from '../scripts/download-target';
 
   document.querySelectorAll<HTMLElement>('[data-tui-download]').forEach(async (root) => {
     const blocks = Array.from(root.querySelectorAll<HTMLElement>('[data-dl-cta]'));
     if (!blocks.length) return;
 
-    const platform = await resolvePlatform(navigator).catch(() => null);
-    if (!platform) return;   // Unplaceable machine: the full list stays as-is.
+    const targets = await resolveTargets(navigator).catch(() => []);
+    // Unplaceable machine, or none of its platforms are published: the full
+    // list stays as-is.
+    const matched = targets.flatMap((t) => {
+      const block = blocks.find((b) => b.dataset.platform === t);
+      return block ? [block] : [];
+    });
+    if (!matched.length) return;
 
-    const match = blocks.find((b) => b.dataset.platform === platform);
-    if (!match) return;      // A platform the hub does not publish for.
+    const [primary, ...rest] = matched;
+    primary.hidden = false;
 
-    match.hidden = false;
+    // More than one target means a Mac whose architecture Safari will not
+    // report. Fold the others' buttons into the first block's row so they read
+    // as one choice — the same side-by-side shape Linux already uses for .deb
+    // and .rpm — instead of two near-identical blocks with duplicate copy.
+    const buttons = primary.querySelector('[data-dl-buttons]');
+    for (const extra of rest) {
+      const extraButtons = extra.querySelector('[data-dl-buttons]');
+      // Both wrappers are rendered above, so a miss means the markup changed
+      // out from under this — say so rather than drop an install button.
+      if (!buttons || !extraButtons) {
+        console.warn('[tui-download] no [data-dl-buttons]; dropped', extra.dataset.platform);
+        continue;
+      }
+      buttons.append(...extraButtons.children);
+    }
+
+    // The copy under the buttons names ONE architecture — its chip, its own
+    // standalone binary. With two merged in, that link hands half of these
+    // visitors a binary that cannot run; the disclosure lists both, labelled.
+    if (rest.length) {
+      primary.querySelectorAll('[data-dl-one-arch]').forEach((el) => el.remove());
+      primary
+        .querySelectorAll<HTMLElement>('[data-dl-multi-arch]')
+        .forEach((el) => (el.hidden = false));
+    }
 
     // Every platform stays reachable, one disclosure away — including this
     // machine's other options, so the standalone binary is never hidden from

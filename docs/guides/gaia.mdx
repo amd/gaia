@@ -108,10 +108,10 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 ### Tools that need your approval
 
-Six tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, all six are refused rather than prompted.** That
+  **Over the sidecar's `/query` stream, all seven are refused rather than prompted.** That
   surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
@@ -227,5 +227,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, all seven [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
 - **No image generation** — deliberately, so the chat model is never evicted mid-conversation.

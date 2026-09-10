@@ -599,6 +599,12 @@ async def query(request: QueryRequest):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
+            # The caller chose this text, not the user — so it must not count as
+            # the user speaking when the agent decides what it is allowed to
+            # learn permanently (Agent.turn_content_provenance).
+            mark = getattr(agent, "mark_external_content", None)
+            if callable(mark):
+                mark()
 
         run = _QueryRun(request.run_id, agent, handler)
         precancelled = _registry.add(run)

@@ -145,7 +145,10 @@ You only need to declare the scopes the agents you actually use will
 request — the [Email Triage agent](/guides/email) needs `gmail.modify`,
 `gmail.send`, `calendar.events`, and `calendar.readonly`; `openid` /
 `email` / `profile` are requested on every connection regardless of
-agent.
+agent. `email` is listed twice, once as the short OIDC name and once as
+its `userinfo.email` URL equivalent — Google treats them as the same
+permission, and GAIA asks for whichever the connecting surface uses, so
+declare both.
 
 {/* google-scopes:start */}
 | Scope | Tier | What it buys |
@@ -153,6 +156,7 @@ agent.
 | `openid` | Non-sensitive | Verify your identity |
 | `email` | Non-sensitive | See your email address |
 | `profile` | Non-sensitive | See your basic profile |
+| `https://www.googleapis.com/auth/userinfo.email` | Non-sensitive | See your email address — Google's URL spelling of `email` |
 | `https://www.googleapis.com/auth/gmail.readonly` | Restricted | Read your email |
 | `https://www.googleapis.com/auth/gmail.send` | Sensitive | Send email on your behalf |
 | `https://www.googleapis.com/auth/gmail.modify` | Restricted | Read, modify, and send email on your behalf |
