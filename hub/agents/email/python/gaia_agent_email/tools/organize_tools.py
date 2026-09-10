@@ -278,7 +278,7 @@ def move_to_label_impl(
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call first (ordering invariant: DB write only on success).
         gmail.add_label(message_id, label_id)
-        if label_id != "INBOX":
+        if label_id != _INBOX_LABEL:
             gmail.archive_message(message_id)
         action_id = action_store.record_action(
             db,
@@ -828,8 +828,9 @@ class OrganizeToolsMixin:
 
             ``label_id`` may be the label's display name or its id; the name is
             resolved to an id automatically. Use ``INBOX`` to restore a message
-            to the inbox. ``mailbox`` (optional) routes when multiple mailboxes
-            are connected.
+            to the inbox — Gmail only, since a folder-based mailbox (Outlook)
+            has no ``INBOX`` label to resolve and will reject it. ``mailbox``
+            (optional) routes when multiple mailboxes are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
@@ -1158,10 +1159,12 @@ class OrganizeToolsMixin:
 
         @tool
         def move_to_label_batch(message_ids: list[str], label_id: str) -> str:
-            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages.
+            """Move multiple messages to a label, or restore them to INBOX. Use for 3+ messages.
 
             ``label_id`` may be a label display name or an id; the name is
-            resolved to each message's provider id automatically.
+            resolved to each message's provider id automatically. Use ``INBOX``
+            to restore the messages to the inbox — Gmail only, same as
+            ``move_to_label``.
             """
             if not message_ids:
                 return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
