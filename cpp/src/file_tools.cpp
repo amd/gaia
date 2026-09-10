@@ -404,6 +404,79 @@ json staleRejection(const std::string& path,
     };
 }
 
+/// 1-based line number of a character offset.
+int lineOfOffset(const std::string& content, std::string::size_type offset) {
+    return 1 + static_cast<int>(
+                   std::count(content.begin(),
+                              content.begin() + static_cast<std::ptrdiff_t>(offset),
+                              '\n'));
+}
+
+/// Every offset at which `needle` occurs, non-overlapping.
+std::vector<std::string::size_type> matchOffsets(const std::string& content,
+                                                 const std::string& needle) {
+    std::vector<std::string::size_type> offsets;
+    if (needle.empty()) return offsets;
+    for (std::string::size_type pos = content.find(needle); pos != std::string::npos;
+         pos = content.find(needle, pos + needle.size())) {
+        offsets.push_back(pos);
+    }
+    return offsets;
+}
+
+/// Line the caller was most likely aiming at: the first non-blank line of
+/// `oldStr`, matched ignoring indentation — a wrong indent is the commonest
+/// reason a match fails, and the excerpt is useless if it lands on line 1 of a
+/// thousand-line file. Falls back to the top when nothing resembles it.
+int anchorLineFor(const std::string& content, const std::string& oldStr) {
+    std::istringstream probeStream(oldStr);
+    std::string line;
+    std::string probe;
+    while (std::getline(probeStream, line)) {
+        const auto first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos) continue;
+        const auto last = line.find_last_not_of(" \t\r");
+        probe = line.substr(first, last - first + 1);
+        break;
+    }
+    if (probe.empty()) return 1;
+
+    const auto pos = content.find(probe);
+    return pos == std::string::npos ? 1 : lineOfOffset(content, pos);
+}
+
+/// Lines around `centerLine` (1-based), so a rejected edit hands back the
+/// current text instead of costing the model a second read to find it.
+json excerptAround(const std::string& content, int centerLine) {
+    constexpr int kRadius = 12;
+    constexpr std::size_t kMaxChars = 4000;
+
+    std::vector<std::string> lines;
+    std::string line;
+    std::istringstream stream(content);
+    while (std::getline(stream, line)) lines.push_back(line);
+
+    const int total = static_cast<int>(lines.size());
+    const int start = std::max(1, centerLine - kRadius);
+    const int end = std::min(total, centerLine + kRadius);
+
+    std::string excerpt;
+    for (int i = start; i <= end; ++i) {
+        if (!excerpt.empty()) excerpt += "\n";
+        excerpt += lines[static_cast<std::size_t>(i - 1)];
+    }
+    const bool truncated = excerpt.size() > kMaxChars;
+    if (truncated) excerpt.resize(kMaxChars);
+
+    return json{
+        {"current_content", excerpt},
+        {"current_content_start_line", start},
+        {"current_content_end_line", end},
+        {"current_content_total_lines", total},
+        {"current_content_truncated", truncated},
+    };
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -635,10 +708,11 @@ ToolInfo FileIOTools::fileEdit() {
     ToolInfo info;
     info.name = "file_edit";
     info.description =
-        "Perform surgical string replacement in a file. Finds all occurrences "
-        "of old_string and replaces them with new_string. Rejected if the file "
-        "changed on disk after the last file_read, or if old_string does not "
-        "appear verbatim — in both cases the file is left untouched.";
+        "Perform surgical string replacement in a file. old_string must match "
+        "exactly one place — include enough surrounding lines to make it "
+        "unique. Rejected if it matches nowhere, if it matches more than once, "
+        "or if the file changed on disk after the last file_read — in every "
+        "case the file is left untouched.";
     info.policy = ToolPolicy::CONFIRM;
     info.parameters = {
         {"path", ToolParamType::STRING, /*required=*/true,
@@ -674,19 +748,22 @@ json FileIOTools::doFileEdit(const json& args) {
         FileStateTracker& tracker = FileStateTracker::instance();
         const auto divergence = tracker.check(path, content);
         if (divergence.diverged) {
-            return staleRejection(path, "file_edit", divergence);
+            json rejection = staleRejection(path, "file_edit", divergence);
+            rejection.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            // Handing the content back is a read, so re-anchor — otherwise the
+            // ledger keeps the superseded hash and the corrected retry is
+            // rejected as stale too. file_write stays strict: it names no
+            // old_string, so a blind retry would clobber the newer contents.
+            tracker.recordRead(path, content);
+            return rejection;
         }
 
-        // Replace all occurrences
-        int replacements = 0;
-        std::string::size_type pos = 0;
-        while ((pos = content.find(oldStr, pos)) != std::string::npos) {
-            content.replace(pos, oldStr.size(), newStr);
-            pos += newStr.size();
-            ++replacements;
-        }
+        // old_string must identify exactly one place. Replacing the first of
+        // several edits the wrong region; replacing all of them edits regions
+        // the model never named. Both report success, so ambiguity is an error.
+        const auto offsets = matchOffsets(content, oldStr);
 
-        if (replacements == 0) {
+        if (offsets.empty()) {
             // A silent no-op is the failure mode this tool exists to avoid:
             // say what did not match and what to do about it.
             std::string hint;
@@ -696,16 +773,48 @@ json FileIOTools::doFileEdit(const json& args) {
                        "indentation, tabs-vs-spaces, or line endings in "
                        "old_string differ from the file.";
             }
-            return json{
+            json result = json{
                 {"error", "old_string not found in file: " + path +
                               " — no replacement was made and the file is "
                               "unchanged." + hint +
-                              " Re-read the file with file_read and copy "
-                              "old_string verbatim from its contents."},
+                              " The current content is included as "
+                              "current_content; copy old_string verbatim "
+                              "from it."},
                 {"path", path},
                 {"replacements", 0},
             };
+            result.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            return result;
         }
+
+        if (offsets.size() > 1) {
+            std::string lineList;
+            json matchLines = json::array();
+            for (const auto offset : offsets) {
+                const int lineNo = lineOfOffset(content, offset);
+                matchLines.push_back(lineNo);
+                if (!lineList.empty()) lineList += ", ";
+                lineList += std::to_string(lineNo);
+            }
+            json result = json{
+                {"error", "Ambiguous edit: old_string matches " +
+                              std::to_string(offsets.size()) + " locations in " +
+                              path + " (lines " + lineList +
+                              ") — nothing was written, because there is no way "
+                              "to tell which one you meant. Extend old_string "
+                              "with enough surrounding lines to match exactly "
+                              "one location, then reissue the edit."},
+                {"ambiguous", true},
+                {"path", path},
+                {"replacements", 0},
+                {"match_lines", matchLines},
+            };
+            result.update(excerptAround(content, lineOfOffset(content, offsets[0])));
+            return result;
+        }
+
+        content.replace(offsets[0], oldStr.size(), newStr);
+        const int replacements = 1;
 
         // Write back
         std::ofstream outFile(path, std::ios::binary);

@@ -24,7 +24,11 @@ import urllib.request
 
 import pytest
 
-from gaia.llm.lemonade_embedded import EmbeddedLemonade, UnsupportedPlatformError
+from gaia.llm.lemonade_embedded import (
+    EmbeddedLemonade,
+    EmbeddedLemonadeError,
+    UnsupportedPlatformError,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -132,6 +136,14 @@ def test_stop_is_idempotent_and_clears_state(running_instance):
     assert not running_instance.state_path.exists()
     assert running_instance.stop() is False
     assert running_instance.status().running is False
+
+
+def test_backend_install_command_is_accepted(running_instance):
+    """The real bundled client can install a backend through the live server."""
+    try:
+        running_instance.install_backend("llamacpp:cpu", timeout=600.0)
+    except EmbeddedLemonadeError as exc:
+        pytest.fail(f"embedded Lemonade rejected the backend install: {exc}")
 
 
 def test_install_is_reentrant_without_force(tmp_path):

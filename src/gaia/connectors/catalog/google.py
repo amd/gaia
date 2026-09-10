@@ -35,6 +35,10 @@ GOOGLE_SPEC = ConnectorSpec(
         "openid",
         "email",
         "profile",
+        # GoogleOAuthProvider.default_scopes requests this URL spelling of
+        # "email" on a first connect, so it lands in stored connections and
+        # in the reconnect command prior_state.py prints back to the user.
+        "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
         # gmail.modify is required by the email triage agent (#962) for label

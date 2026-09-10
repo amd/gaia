@@ -53,7 +53,7 @@ def seeded(google_provider):
         provider="google",
         account_email="alice@example.com",
         refresh_token="seed-rt",
-        scopes=["gmail.readonly"],
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         client_id_hash=google_provider.client_id_hash,
     )
     return google_provider
@@ -73,7 +73,9 @@ class TestThreadPoolBridge:
     @respx.mock
     def test_contextvar_propagates_via_asyncio_run(self, seeded):
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
 
         results: dict = {}
 
@@ -82,7 +84,8 @@ class TestThreadPoolBridge:
                 # Sanity: the ctx is set in this thread.
                 results["before"] = current_agent_id()
                 results["token"] = get_access_token_sync(
-                    provider="google", scopes=["gmail.readonly"]
+                    provider="google",
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 )
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -101,7 +104,10 @@ class TestThreadPoolBridge:
         def worker():
             with _agent_context("builtin:chat"):
                 try:
-                    get_access_token_sync(provider="google", scopes=["gmail.readonly"])
+                    get_access_token_sync(
+                        provider="google",
+                        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                    )
                 except AuthRequiredError as e:
                     captured["err"] = e
 
@@ -118,7 +124,11 @@ class TestThreadPoolBridge:
     def test_kwarg_overrides_contextvar(self, seeded):
         # Plan: kwarg agent_id wins over the contextvar (explicit over implicit).
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "explicit:agent", ["gmail.readonly"])
+        grant_agent(
+            "google",
+            "explicit:agent",
+            ["https://www.googleapis.com/auth/gmail.readonly"],
+        )
 
         results = {}
 
@@ -127,7 +137,7 @@ class TestThreadPoolBridge:
                 # Pass an explicit different agent_id — it must win.
                 results["token"] = get_access_token_sync(
                     provider="google",
-                    scopes=["gmail.readonly"],
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                     agent_id="explicit:agent",
                 )
 
@@ -172,12 +182,15 @@ class TestSequentialAgentInvocations:
     @respx.mock
     def test_two_sequential_invocations_in_thread_pool(self, seeded):
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
 
         def worker():
             with _agent_context("builtin:chat"):
                 return get_access_token_sync(
-                    provider="google", scopes=["gmail.readonly"]
+                    provider="google",
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 )
 
         with ThreadPoolExecutor(max_workers=1) as pool:

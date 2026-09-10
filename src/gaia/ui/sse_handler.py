@@ -25,9 +25,12 @@ from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
+from gaia.agents.base.verification import strip_verification_scope
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_CHAR_CAP = 300
 
 #: Seconds the agent thread waits for a tool-confirm response from the frontend.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 60
@@ -399,6 +402,11 @@ class SSEOutputHandler(OutputHandler):
                 data.get("status") != "error" if isinstance(data, dict) else True
             ),
         }
+        # String-returning tools (notably email envelopes) are summarized by a
+        # hard character cap. Tell downstream classifiers that an unparsable
+        # summary may be incomplete instead of making them infer truncation.
+        if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
+            event["summary_truncated"] = True
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
@@ -601,6 +609,14 @@ class SSEOutputHandler(OutputHandler):
         ttft_seconds: Optional[float] = None,
     ):
         if answer:
+            scope_line = ""
+            # Set aside the verification-scope line before the cleaners run: an
+            # answer they strip to nothing (a card-echo) must stay empty, not
+            # arrive as a message consisting only of the scope line (#3376).
+            cleaned_of_scope = strip_verification_scope(answer)
+            if cleaned_of_scope != answer:
+                scope_line = answer[len(cleaned_of_scope) :].strip()
+                answer = cleaned_of_scope
             answer = _THINK_TAG_SUB_RE.sub("", answer)
             # Extract answer text from {"thought":..., "answer":...} JSON before
             # the regex cleaners run.  _THOUGHT_JSON_SUB_RE would otherwise strip
@@ -613,6 +629,8 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
+            if answer and scope_line:
+                answer = f"{answer}\n\n{scope_line}"
         event: Dict[str, Any] = {
             "type": "answer",
             "content": _fix_double_escaped(answer) if answer else answer,
@@ -1335,7 +1353,7 @@ def _count_summary(data: Dict[str, Any]) -> Optional[str]:
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
-        return str(data)[:300]
+        return str(data)[:_SUMMARY_CHAR_CAP]
 
     # Command execution results
     if "command" in data and "stdout" in data:

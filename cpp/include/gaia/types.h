@@ -403,6 +403,22 @@ struct AgentConfig {
     /// Native OpenAI tool-calling policy. Auto consults isToolCallingModel().
     NativeToolCalls nativeToolCalls = NativeToolCalls::Auto;
 
+    /// The skill set to activate for this launch — the `--skill-set` flag's
+    /// home. Empty means "no explicit choice": the agent's selectSkillSet()
+    /// hook decides, else the manifest's `default_skill_set`. A name the
+    /// manifest does not declare throws; it is never downgraded to the default.
+    ///
+    /// Read when the agent calls Agent::loadSkillSet() — the base Agent does
+    /// not call it for you, so setting this alone loads nothing. See
+    /// gaia/skill_sets.h.
+    std::string skillSet;
+
+    /// Path to the agent's gaia-agent.yaml, whose `skills:` / `skill_sets:` /
+    /// `default_skill_set` blocks this agent loads. Empty auto-detects one
+    /// beside the running executable (then its parent directory), which is the
+    /// layout a packaged agent ships.
+    std::string skillManifest;
+
     /// Value sent as ``tool_choice`` when native tool calling is active.
     /// "auto" lets the model decide; "required" forces a call. To disable
     /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.

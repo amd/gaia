@@ -278,6 +278,8 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.structuredEvents      = j.value("structuredEvents",      c.structuredEvents);
     c.temperature           = j.value("temperature",           c.temperature);
     c.toolChoice            = j.value("toolChoice",            c.toolChoice);
+    c.skillSet              = j.value("skillSet",              c.skillSet);
+    c.skillManifest         = j.value("skillManifest",         c.skillManifest);
     if (j.contains("responseMode")) {
         c.responseMode = responseModeFromString(j.at("responseMode").get<std::string>());
     }
@@ -322,7 +324,9 @@ json AgentConfig::toJson() const {
         {"temperature",           temperature},
         {"responseMode",          responseModeToString(responseMode)},
         {"nativeToolCalls",       nativeToolCallsToString(nativeToolCalls)},
-        {"toolChoice",            toolChoice}
+        {"toolChoice",            toolChoice},
+        {"skillSet",              skillSet},
+        {"skillManifest",         skillManifest}
     };
 }
 

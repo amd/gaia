@@ -3,7 +3,7 @@
 //
 // It exists so the readiness screen and the chat view cannot disagree about
 // what "set up" means. Both ask the SAME `gaia init --check`, read the SAME
-// exit codes, and start the SAME `gaia init --profile chat --yes`. Re-deriving
+// exit codes, and start the SAME `gaia init --profile gaia --yes`. Re-deriving
 // those checks in Go was never on the table either: src/gaia/installer/
 // init_command.py is the single source of truth for what setup is, and a Go
 // copy of it would go stale the first time a profile changed.
@@ -28,9 +28,16 @@ import (
 )
 
 // Profile is the `gaia init` profile the flagship agent needs — see
-// INIT_PROFILES["chat"] in src/gaia/installer/init_command.py: the chat model,
-// the RAG/memory embedder, and the [rag] pip extras.
-const Profile = "chat"
+// INIT_PROFILES["gaia"] in src/gaia/installer/init_command.py: the chat model,
+// the RAG/memory embedder, the [rag] pip extras, and the flagship agent binary
+// this TUI actually spawns. It is also `gaia init`'s own default, so a user who
+// types the bare command gets exactly what the TUI would have run.
+//
+// Passed explicitly rather than relying on that default: against a gaia CLI too
+// old to know the profile, argparse exits 2, which Check reports as
+// ErrUnanswered. Omitting the flag would instead silently set up the wrong
+// agent — the `chat` wheel, which cannot serve this TUI.
+const Profile = "gaia"
 
 // CheckTimeout bounds the read-only readiness probe. It runs a fresh Python
 // interpreter plus one Lemonade health check, so a few seconds is normal; this
@@ -84,7 +91,14 @@ func RunArgs(claudeMode bool) []string {
 	// --yes: nothing here can answer an interactive prompt. The child's stdin is
 	// not connected to the terminal, so a prompt gaia init tried to read would
 	// hang forever with no way to answer it.
-	args := []string{"init", "--profile", Profile, "--yes"}
+	//
+	// --skip-webui-build: this is the TERMINAL ui; it never loads the browser
+	// Agent UI. That build step only runs in a source checkout, and a failure in
+	// it makes `gaia init` exit non-zero AFTER Lemonade and every model already
+	// installed — so setup from this screen dead-ended on a component the screen
+	// does not use. Released installs skip the step anyway, so this changes
+	// nothing for them.
+	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build"}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}

@@ -2838,6 +2838,13 @@ class ReadToolsMixin:
               - status / recency → ``is:unread``, ``newer_than:7d``,
                 ``label:promotions``
 
+            On an Outlook-only mailbox, only ``from:``, ``subject:``,
+            ``is:unread``, ``is:read``, ``newer_than:``, and ``older_than:``
+            are supported; any other operator (``label:``, ``has:``,
+            ``after:``, ``before:``, ``in:``, ``is:starred``, ...) raises an
+            error naming the unsupported operator instead of matching
+            nothing silently.
+
             Combine them: ``"from:boss@example.com is:unread newer_than:7d"``.
             Date operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
             before:2026/07/08``, never ``after:July 1``. If a bare phrase is
