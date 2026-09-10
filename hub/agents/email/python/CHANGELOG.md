@@ -9,10 +9,14 @@ contract version is tracked separately as
 
 ### Fixed
 
-- **The calendar view now reports provider pagination to callers (#2664).**
-  `GET /v1/email/calendar/events` includes the returned-page `count` and a
-  `truncated` flag, so the app's calendar view no longer presents a partial
-  busy window as complete.
+- **A calendar listing no longer looks complete when it isn't (#2664).**
+  `list_calendar_events` returned the provider's first page as if it were the
+  whole window, so a busy week silently lost everything past the 25th event.
+  The result now carries `count` and `truncated`, derived from the provider's
+  own continuation token (Google `nextPageToken`, Graph `@odata.nextLink`), on
+  both the agent tool and `GET /v1/email/calendar/events`. The tool description
+  tells the model to disclose a partial page rather than present it as the
+  full window.
 - **Scheduled briefings now expose cache age on every surface (#2759).**
   `GET /v1/email/briefing` and the agent `get_briefing` tool now return
   `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled
