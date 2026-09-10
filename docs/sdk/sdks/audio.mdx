@@ -58,6 +58,18 @@ To list available input devices, use `WhisperAsr.list_audio_devices()` directly 
 
 **Import:** `from gaia.audio.whisper_asr import WhisperAsr`
 
+<Note>
+`WhisperAsr` is the **live microphone** path only — it has no file-transcription
+method. To transcribe a recording you already have, use the agent's
+`transcribe_media` tool ([Transcription & Meeting Notes](/guides/transcription)),
+which runs on Lemonade and writes a plain-text transcript to disk. It returns
+the transcript's path, duration, language, and the words Whisper itself was
+least confident about — not timestamps or speaker labels in the result itself.
+Speaker labels come from a separate `refine_transcript` call, which infers
+who's speaking from the conversation's text rather than from voice
+identification.
+</Note>
+
 ```python
 from gaia.audio.whisper_asr import WhisperAsr
 from queue import Queue
@@ -88,9 +100,6 @@ while True:
         text = transcription_queue.get()
         print(f"Transcribed: {text}")
         # Process text...
-
-# Transcribe a pre-recorded WAV file instead
-# text = asr.transcribe_file("recording.wav")
 ```
 
 ---

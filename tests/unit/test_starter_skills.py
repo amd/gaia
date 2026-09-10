@@ -151,6 +151,7 @@ def registry_tool_names() -> frozenset[str]:
     """
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -182,6 +183,7 @@ def registry_tool_names() -> frozenset[str]:
         (FileSystemToolsMixin, "register_filesystem_tools"),
         (ShellToolsMixin, "register_shell_tools"),
         (CodeIndexToolsMixin, "register_code_index_tools"),
+        (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
     ]
 

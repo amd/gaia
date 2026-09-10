@@ -41,6 +41,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioToolsMixin,
     BrowserToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
@@ -201,6 +202,7 @@ class ChatAgent(
     VLMToolsMixin,
     ScreenshotToolsMixin,
     SDToolsMixin,
+    AudioToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -463,9 +465,10 @@ class ChatAgent(
         # never register RAG tools and can't use this restore — never trigger
         # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
         # before evaluating it.
-        _uses_rag = "doc_rag" in get_profile_spec(
-            getattr(config, "prompt_profile", "full")
-        ).tool_groups
+        _uses_rag = (
+            "doc_rag"
+            in get_profile_spec(getattr(config, "prompt_profile", "full")).tool_groups
+        )
         if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:

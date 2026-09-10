@@ -844,8 +844,68 @@ def build_app() -> FastAPI:
     async def agent_version() -> Dict[str, str]:
         return {"apiVersion": API_VERSION, "version": __version__, "agent": AGENT_ID}
 
+    @app.on_event("startup")
+    async def _warm_model() -> None:
+        """Load the model before the first question instead of during it.
+
+        Without this the first turn pays the model load *and* the first pass
+        over a large system prompt, which reads as a 60-90s "Getting started"
+        hang on a freshly opened chat. Backgrounded so readiness is not
+        delayed, and never fatal — a cold first turn is slow, not broken.
+        """
+        asyncio.create_task(asyncio.to_thread(_warmup_blocking))
+
     app.include_router(router, prefix=f"/v1/{AGENT_ID}")
     return app
+
+
+def _warmup_blocking() -> None:
+    """Make the first real question cheap.
+
+    Three costs move off the first turn: importing the agent stack (faiss,
+    RAG, tool mixins), loading the model into its Lemonade slot, and the
+    first pass over the system prompt. The last one is why the warm-up sends
+    the agent's *real* system prompt rather than a bare "hi" — Lemonade
+    prefix-caches it, so the first question reuses the cache instead of
+    reprocessing ~10K tokens.
+    """
+    import time
+
+    started = time.time()
+    try:
+        from gaia.llm.lemonade_client import create_lemonade_client
+        from gaia_agent.session_registry import build_session_agent
+
+        agent = build_session_agent()
+        try:
+            system_prompt = agent._get_system_prompt()  # noqa: SLF001
+            model = getattr(agent, "model_id", None)
+        finally:
+            close_agent(agent)
+
+        if not system_prompt or not model:
+            logger.info("GAIA sidecar: warm-up skipped (no prompt/model resolved)")
+            return
+
+        client = create_lemonade_client(auto_start=False, verbose=False)
+        response = client.chat_completions(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Reply with OK."},
+            ],
+            max_completion_tokens=1,
+        )
+        cached = (response.get("usage") or {}).get("prompt_tokens_details") or {}
+        logger.info(
+            "GAIA sidecar: warmed %s in %.1fs (system prompt %d chars, %s cached)",
+            model,
+            time.time() - started,
+            len(system_prompt),
+            cached.get("cached_tokens", "?"),
+        )
+    except Exception as e:  # noqa: BLE001 — warm-up is best-effort by design
+        logger.info("GAIA sidecar: model warm-up skipped (%s)", e)
 
 
 app = build_app()
