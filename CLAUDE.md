@@ -523,7 +523,7 @@ gaia/
 │   │   ├── llm/        # LLM standalone app
 │   │   ├── example/    # Reference/starter app
 │   │   └── _shared/    # Shared assets for apps
-│   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
+│   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
@@ -645,6 +645,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
