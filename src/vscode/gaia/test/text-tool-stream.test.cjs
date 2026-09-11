@@ -125,3 +125,118 @@ test('SSE content deltas dispatch a split invocation and subsequent answer', asy
     assert.equal(parts.filter((part) => part instanceof LanguageModelTextPart)
         .map((part) => part.value).join(''), 'Before.  After.');
 });
+
+async function streamResponse(chunks, ending, {
+    token = { isCancellationRequested: false }, fail = false, keepOpen = false, cancelError = false,
+} = {}) {
+    const provider = new GaiaChatModelProvider({}, 'stream-completion-regression');
+    const parts = [];
+    const frames = chunks.map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+    if (ending === 'stop') {
+        frames.push('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+    }
+    if (ending === 'done') { frames.push('data: [DONE]\n\n'); }
+    let index = 0;
+    let cancelled = false;
+    const body = new ReadableStream({
+        pull(controller) {
+            if (index < frames.length) { controller.enqueue(new TextEncoder().encode(frames[index++])); }
+            else if (fail) { controller.error(new Error('stream disconnected')); }
+            else if (keepOpen) { return new Promise(() => {}); }
+            else { controller.close(); }
+        },
+        cancel() {
+            cancelled = true;
+            if (cancelError) { throw new Error('cleanup failed'); }
+        },
+    });
+    let error;
+    try {
+        await provider.processStreamingResponse(body, { report: (part) => parts.push(part) }, token);
+    } catch (caught) { error = caught; }
+    assert.equal(body.locked, false);
+    assert.equal(provider._textToolParserBuffer, '');
+    assert.equal(provider._controlTokenBuffer, '');
+    assert.equal(provider._textToolActive, undefined);
+    return {
+        text: parts.filter((part) => part instanceof LanguageModelTextPart).map((part) => part.value).join(''),
+        calls: parts.filter((part) => part instanceof LanguageModelToolCallPart),
+        error,
+        cancelled,
+    };
+}
+
+for (const ending of ['eof', 'stop', 'done']) {
+    test(`full SSE ${ending} completion preserves visible partial marker suffixes`, async (t) => {
+        t.mock.method(console, 'log', () => {});
+        for (const chunks of [['Compare a ', '<'], ['done <|tool'], ['literal <function=x'], ['<function=x', '<|tool']]) {
+            const result = await streamResponse(chunks, ending);
+            assert.equal(result.error, undefined);
+            assert.equal(result.text, chunks.join(''));
+            assert.equal(result.calls.length, 0);
+        }
+    });
+}
+
+test('full SSE completion does not expose active tool arguments or terminator prefixes', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    for (const ending of ['eof', 'done']) {
+        for (const args of ['{"path":"README.md"}', '{"path":']) {
+            const result = await streamResponse([`${BEGIN}read_file${ARG}${args}<|tool_call_`], ending);
+            assert.equal(result.error, undefined);
+            assert.equal(result.text, '');
+            assert.equal(result.calls.length, args.endsWith('}') ? 1 : 0);
+        }
+    }
+});
+
+test('full SSE response emits tool call and final partial text exactly once', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const result = await streamResponse([invocation, ' Compare <'], 'done');
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, ' Compare <');
+    assert.equal(result.calls.length, 1);
+});
+
+test('stream errors do not flush a pending suffix as successful completion', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const result = await streamResponse(['Compare <'], 'eof', { fail: true });
+    assert.match(result.error.message, /stream disconnected/);
+    assert.equal(result.text, 'Compare ');
+});
+
+test('[DONE] completes without waiting for a later transport error', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    const result = await streamResponse(['Compare <'], 'done', { fail: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, 'Compare <');
+});
+
+test('[DONE] cancels the undrained response body', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const result = await streamResponse(['Compare <'], 'done', { keepOpen: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, 'Compare <');
+    assert.equal(result.cancelled, true);
+});
+
+test('[DONE] reports cleanup errors without failing a completed response', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const logged = t.mock.method(console, 'error', () => {});
+    const result = await streamResponse(['Compare <'], 'done', { keepOpen: true, cancelError: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, 'Compare <');
+    assert.equal(result.cancelled, true);
+    assert.equal(logged.mock.callCount(), 1);
+    assert.match(logged.mock.calls[0].arguments[0], /Failed to close completed stream/);
+});
+
+test('cancellation cleans up pending suffixes without completion output', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    let checks = 0;
+    const token = { get isCancellationRequested() { return checks++ > 0; } };
+    const result = await streamResponse(['Compare <'], 'eof', { token });
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, 'Compare ');
+});

@@ -475,9 +475,15 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                     if (data === "[DONE]") {
                         // Do not throw on [DONE]; any incomplete/empty buffers are ignored.
                         await this.flushToolCallBuffers(progress, /*throwOnInvalid*/ false);
-                        // Flush any in-progress text-embedded tool call (silent if incomplete)
-                        await this.flushActiveTextToolCall(progress);
-                        continue;
+                        await this.finishStreamingText(progress);
+                        try {
+                            await reader.cancel();
+                        } catch (error) {
+                            // Completion already succeeded; report cleanup failure
+                            // without replacing it with a later transport error.
+                            console.error("[GAIA Model Provider] Failed to close completed stream", error);
+                        }
+                        return;
                     }
 
 					try {
@@ -487,6 +493,9 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                         // Silently ignore malformed SSE lines temporarily
                     }
                 }
+            }
+            if (!token.isCancellationRequested) {
+                await this.finishStreamingText(progress);
             }
         } finally {
             reader.releaseLock();
@@ -501,6 +510,21 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			this._emittedTextToolCallIds.clear();
 			this._controlTokenBuffer = "";
         }
+    }
+
+    /** Flush visible suffixes on normal completion, never on cancellation/error. */
+    private async finishStreamingText(
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    ): Promise<void> {
+        // Check before flushing the active call: its pending END prefix belongs
+        // to the tool protocol even if flushing clears the active-call state.
+        if (!this._textToolActive) {
+            const text = this._controlTokenBuffer + this._textToolParserBuffer;
+            this._controlTokenBuffer = "";
+            this._textToolParserBuffer = "";
+            if (text) { progress.report(new vscode.LanguageModelTextPart(text)); }
+        }
+        await this.flushActiveTextToolCall(progress);
     }
 
 	/**
