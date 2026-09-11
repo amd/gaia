@@ -17,9 +17,11 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import tempfile
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
@@ -50,6 +52,20 @@ DEFAULT_TRANSCRIBE_TIMEOUT = 1800
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 DEFAULT_CONTEXT_WORDS = 6
+
+# Lemonade's live server rejects any request body over 104,857,600 bytes
+# (100 MiB) with HTTP 413 — confirmed by probing /api/v1/audio/transcriptions
+# directly with synthetic WAVs at several sizes. Chunk well under that wall:
+# 40-minute spans are ~73 MiB of 16 kHz mono 16-bit PCM, leaving comfortable
+# margin for multipart overhead and any stricter limit on another Lemonade
+# version.
+MAX_CHUNK_SECONDS = 40 * 60
+
+# Real acoustic context on both sides of a cut, so a word never lands split
+# across two independently-decoded chunks. 15s is enough pause-and-context for
+# the model to fully capture boundary words; the overhead (15s re-transcribed
+# per seam) is negligible against a 40-minute chunk.
+CHUNK_OVERLAP_SECONDS = 15.0
 
 _FLM_RE = re.compile(r"(?:^|[-_.])flm(?:$|[-_.])", re.IGNORECASE)
 
@@ -223,6 +239,121 @@ def _log_slot_wait(reason: str) -> None:
     log.info("Transcription waiting on the model slot — %s", reason)
 
 
+def _fmt_minutes(seconds: float) -> str:
+    """Render a duration in minutes, for a chunk-progress message."""
+    return f"{seconds / 60:.1f}m"
+
+
+@dataclass(frozen=True)
+class _Chunk:
+    """One span of the source recording, in its own timeline (seconds)."""
+
+    index: int
+    start: float
+    end: float
+
+
+def _chunk_plan(path: os.PathLike | str) -> List[_Chunk]:
+    """Decide how to split *path* for upload, so each request stays under
+    Lemonade's request-size wall.
+
+    A file at or under ``MAX_CHUNK_SECONDS`` is a single chunk spanning the
+    whole file — the unchanged, single-request path. A longer file is split
+    into overlapping spans (see ``CHUNK_OVERLAP_SECONDS``) so a word never
+    lands split across two independently-decoded chunks.
+    """
+    with wave.open(str(path), "rb") as handle:
+        duration = handle.getnframes() / handle.getframerate()
+
+    stride = MAX_CHUNK_SECONDS - CHUNK_OVERLAP_SECONDS
+    chunks: List[_Chunk] = []
+    start = 0.0
+    index = 0
+    while True:
+        end = min(start + MAX_CHUNK_SECONDS, duration)
+        chunks.append(_Chunk(index=index, start=start, end=end))
+        if end >= duration:
+            break
+        start += stride
+        index += 1
+    return chunks
+
+
+def _write_chunk_wav(source: Path, chunk: _Chunk, dest: Path) -> None:
+    """Write the sample range *chunk* covers to a standalone WAV at *dest*."""
+    with wave.open(str(source), "rb") as reader:
+        rate = reader.getframerate()
+        start_frame = int(chunk.start * rate)
+        frame_count = int(chunk.end * rate) - start_frame
+        reader.setpos(start_frame)
+        frames = reader.readframes(frame_count)
+        params = reader.getparams()
+
+    with wave.open(str(dest), "wb") as writer:
+        writer.setnchannels(params.nchannels)
+        writer.setsampwidth(params.sampwidth)
+        writer.setframerate(params.framerate)
+        writer.writeframes(frames)
+
+
+def _merge_chunks(
+    transcripts: List["Transcript"], chunks: List[_Chunk]
+) -> "Transcript":
+    """Reassemble one per-chunk ``Transcript`` per chunk into a single one.
+
+    Each chunk's segments arrive in ITS OWN timeline, so every segment and
+    word is shifted by that chunk's ``start`` offset first. The overlap
+    between consecutive chunks is then resolved at its midpoint — a segment
+    belongs to whichever chunk's side of that cutpoint its (offset) start
+    falls on — rather than duplicating whatever both chunks transcribed for
+    the shared span. This works because the overlap gave both chunks real
+    audio on either side of the true cut, so whichever one claims a boundary
+    segment saw it in full context, not truncated.
+    """
+    if len(transcripts) == 1:
+        return transcripts[0]
+
+    cutpoints = [
+        (earlier.end + later.start) / 2 for earlier, later in zip(chunks, chunks[1:])
+    ]
+
+    merged_segments: List[Segment] = []
+    for i, (transcript, chunk) in enumerate(zip(transcripts, chunks)):
+        left_bound = cutpoints[i - 1] if i > 0 else None
+        right_bound = cutpoints[i] if i < len(chunks) - 1 else None
+        for segment in transcript.segments:
+            start = segment.start + chunk.start
+            if left_bound is not None and start < left_bound:
+                continue
+            if right_bound is not None and start >= right_bound:
+                continue
+            merged_segments.append(
+                Segment(
+                    start=start,
+                    end=segment.end + chunk.start,
+                    text=segment.text,
+                    avg_logprob=segment.avg_logprob,
+                    words=[
+                        Word(
+                            word=word.word,
+                            start=word.start + chunk.start,
+                            end=word.end + chunk.start,
+                            probability=word.probability,
+                        )
+                        for word in segment.words
+                    ],
+                )
+            )
+
+    first = transcripts[0]
+    return Transcript(
+        segments=merged_segments,
+        language=first.language,
+        duration=chunks[-1].end,
+        model=first.model,
+    )
+
+
 class LemonadeASRClient:
     """Speech-to-text against a running Lemonade Server."""
 
@@ -284,6 +415,7 @@ class LemonadeASRClient:
         wav_path: os.PathLike | str,
         language: Optional[str] = None,
         require_timestamps: bool = True,
+        progress: Optional[Callable[[str], None]] = None,
     ) -> Transcript:
         """Transcribe a 16 kHz mono WAV file.
 
@@ -295,14 +427,20 @@ class LemonadeASRClient:
                 where segment and word timing is not needed. Leaving it ``True``
                 makes an FLM model fail up front instead of silently returning a
                 transcript with no timing.
+            progress: Called once per chunk when the file is too large for one
+                request (see ``MAX_CHUNK_SECONDS``) — a multi-chunk upload of a
+                long recording can run for many minutes otherwise silent.
+                Never called for a file that fits in a single request.
 
         Returns:
             Transcript: Segments, words, confidence, detected language, duration.
 
         Raises:
             FileNotFoundError: ``wav_path`` does not exist.
-            ValueError: The file is not a WAV, or the model cannot satisfy
-                ``require_timestamps``.
+            ValueError: The file is not a WAV, the model cannot satisfy
+                ``require_timestamps``, or the file needs chunking but
+                ``require_timestamps=False`` was requested (chunking depends on
+                the segment timing a no-timestamps model does not return).
             ConnectionError: Lemonade Server is not reachable.
             LemonadeASRError: The server rejected the request or returned an
                 unusable body.
@@ -329,6 +467,17 @@ class LemonadeASRClient:
                 "gaia.audio.media.to_wav16k_mono()."
             )
 
+        chunks = _chunk_plan(path)
+        if len(chunks) > 1 and not require_timestamps:
+            raise ValueError(
+                f"{path.name} is too large for one request and must be split "
+                "into chunks, but require_timestamps=False was requested — "
+                "chunking depends on the segment timing a no-timestamps model "
+                f"does not return. Use '{DEFAULT_ASR_MODEL}' (or another "
+                "whispercpp model) for a file this large, or pass a shorter "
+                "recording."
+            )
+
         data: Dict[str, str] = {
             "model": self.model,
             "response_format": TRANSCRIPTION_RESPONSE_FORMAT,
@@ -337,24 +486,54 @@ class LemonadeASRClient:
             data["language"] = language
 
         log.debug(
-            "transcribing %s with %s (language=%s)",
+            "transcribing %s with %s (language=%s) in %d chunk(s)",
             path,
             self.model,
             language or "auto",
+            len(chunks),
         )
-        # Hold the model-slot lease across the whole request. Loading Whisper
-        # and transcribing share Lemonade's single-tenant slot machinery with
-        # every other sidecar, and a 46-minute file spends minutes inside this
-        # call — long enough for another process to evict it mid-flight. A
-        # no-op in standalone mode, where there is no broker to coordinate.
+        # Hold the model-slot lease across the WHOLE call, every chunk
+        # included. Loading Whisper and transcribing share Lemonade's
+        # single-tenant slot machinery with every other sidecar, and a long
+        # file spends minutes inside this call — long enough for another
+        # process to evict it mid-flight, or to interleave its own request
+        # between two of ours if we re-acquired per chunk. A no-op in
+        # standalone mode, where there is no broker to coordinate.
         with self._slot_lease():
-            with path.open("rb") as handle:
-                payload = self._post_multipart(
-                    self.transcriptions_url,
-                    files={"file": (path.name, handle, "audio/wav")},
-                    data=data,
-                )
-        return self._parse_transcript(payload)
+            if len(chunks) == 1:
+                # The common case, byte-for-byte unchanged: the original file
+                # goes straight over the wire, not a rewritten copy.
+                with path.open("rb") as handle:
+                    payload = self._post_multipart(
+                        self.transcriptions_url,
+                        files={"file": (path.name, handle, "audio/wav")},
+                        data=data,
+                    )
+                return self._parse_transcript(payload)
+
+            transcripts = []
+            for chunk in chunks:
+                if progress:
+                    progress(
+                        f"Transcribing chunk {chunk.index + 1} of {len(chunks)} "
+                        f"({_fmt_minutes(chunk.start)}-{_fmt_minutes(chunk.end)} "
+                        f"of {_fmt_minutes(chunks[-1].end)})..."
+                    )
+                fd, tmp_name = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                tmp_path = Path(tmp_name)
+                try:
+                    _write_chunk_wav(path, chunk, tmp_path)
+                    with tmp_path.open("rb") as handle:
+                        payload = self._post_multipart(
+                            self.transcriptions_url,
+                            files={"file": (path.name, handle, "audio/wav")},
+                            data=data,
+                        )
+                    transcripts.append(self._parse_transcript(payload))
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+        return _merge_chunks(transcripts, chunks)
 
     @contextlib.contextmanager
     def _slot_lease(self):

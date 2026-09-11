@@ -511,7 +511,9 @@ class AudioToolsMixin:
                 f"Transcribing {_clock(media_seconds)} of audio with {client.model} "
                 f"— around {_clock(media_seconds / REALTIME_FACTOR)} to go"
             )
-            transcript = client.transcribe(wav_path, language=language)
+            transcript = client.transcribe(
+                wav_path, language=language, progress=self._report_progress
+            )
 
             destination = self._write_transcript(transcript, source, output_path)
             saved_path = destination

@@ -12,8 +12,10 @@ it,' not 'the call is valid'".
 ``TestRealServer`` closes the loop with one live round-trip.
 """
 
+import contextlib
 import json
 import re
+import struct
 import subprocess
 import sys
 import wave
@@ -32,6 +34,10 @@ from gaia.audio.lemonade_asr import (
     Segment,
     Transcript,
     Word,
+    _Chunk,
+    _chunk_plan,
+    _merge_chunks,
+    _write_chunk_wav,
     is_flm_model,
 )
 
@@ -193,21 +199,419 @@ def parse_multipart(request):
     return fields, files
 
 
-@pytest.fixture
-def wav_file(tmp_path):
-    """A real, if silent, 16 kHz mono WAV — valid RIFF bytes, not a stub."""
-    path = tmp_path / "probe.wav"
+def _write_silent_wav(path: Path, seconds: float) -> Path:
+    """A real, if silent, 16 kHz mono WAV of an exact duration."""
+    frames = int(seconds * 16000)
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
         handle.setframerate(16000)
-        handle.writeframes(b"\x00\x00" * 16000)
+        handle.writeframes(b"\x00\x00" * frames)
     return path
+
+
+def _write_ramp_wav(path: Path, seconds: float) -> Path:
+    """A 16 kHz mono WAV whose sample values are their own frame index (mod
+    32768), so extracting a chunk's sample range can be verified exactly."""
+    frames = int(seconds * 16000)
+    samples = [i % 32768 for i in range(frames)]
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(struct.pack(f"<{frames}h", *samples))
+    return path
+
+
+@pytest.fixture
+def wav_file(tmp_path):
+    """A real, if silent, 16 kHz mono WAV — valid RIFF bytes, not a stub."""
+    return _write_silent_wav(tmp_path / "probe.wav", seconds=1.0)
 
 
 @pytest.fixture
 def client():
     return LemonadeASRClient(base_url="http://localhost:13305")
+
+
+# ---------------------------------------------------------------------------
+# Chunk planning
+# ---------------------------------------------------------------------------
+
+
+class TestChunkPlan:
+    """Deciding how to split a WAV that is too big for one request."""
+
+    def test_file_under_budget_is_a_single_chunk(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 10.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 2.0)
+        wav = _write_silent_wav(tmp_path / "short.wav", seconds=5.0)
+
+        chunks = _chunk_plan(wav)
+
+        assert len(chunks) == 1
+        assert chunks[0].index == 0
+        assert chunks[0].start == pytest.approx(0.0)
+        assert chunks[0].end == pytest.approx(5.0)
+
+    def test_file_at_exactly_the_budget_is_a_single_chunk(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 5.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 1.0)
+        wav = _write_silent_wav(tmp_path / "exact.wav", seconds=5.0)
+
+        assert len(_chunk_plan(wav)) == 1
+
+    def test_oversized_file_is_split_with_overlap(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+
+        chunks = _chunk_plan(wav)
+
+        # stride = 2.0 - 0.5 = 1.5
+        assert [(c.index, c.start, c.end) for c in chunks] == [
+            (0, pytest.approx(0.0), pytest.approx(2.0)),
+            (1, pytest.approx(1.5), pytest.approx(3.5)),
+            (2, pytest.approx(3.0), pytest.approx(5.0)),
+        ]
+
+    def test_last_chunk_is_capped_at_the_real_duration(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+
+        assert _chunk_plan(wav)[-1].end == pytest.approx(5.0)
+
+    def test_consecutive_chunks_overlap_by_the_configured_amount(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+
+        chunks = _chunk_plan(wav)
+        for earlier, later in zip(chunks, chunks[1:]):
+            assert earlier.end - later.start == pytest.approx(0.5)
+
+    def test_no_gap_between_consecutive_chunks(self, monkeypatch, tmp_path):
+        """Every instant in the recording must be covered by some chunk."""
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+
+        chunks = _chunk_plan(wav)
+        for earlier, later in zip(chunks, chunks[1:]):
+            assert later.start <= earlier.end
+
+
+class TestWriteChunkWav:
+    """Extracting one chunk's sample range to a standalone WAV file."""
+
+    def _samples(self, path: Path):
+        with wave.open(str(path), "rb") as handle:
+            assert handle.getframerate() == 16000
+            assert handle.getnchannels() == 1
+            assert handle.getsampwidth() == 2
+            frames = handle.readframes(handle.getnframes())
+        return list(struct.unpack(f"<{len(frames) // 2}h", frames))
+
+    def test_extracts_the_right_sample_range(self, tmp_path):
+        source = _write_ramp_wav(tmp_path / "source.wav", seconds=5.0)
+        dest = tmp_path / "chunk.wav"
+
+        _write_chunk_wav(source, _Chunk(index=0, start=1.0, end=3.0), dest)
+
+        # 1.0s..3.0s at 16000 Hz is sample indices 16000..48000.
+        assert self._samples(dest) == [i % 32768 for i in range(16000, 48000)]
+
+    def test_chunk_duration_matches_requested_span(self, tmp_path):
+        source = _write_ramp_wav(tmp_path / "source.wav", seconds=5.0)
+        dest = tmp_path / "chunk.wav"
+
+        _write_chunk_wav(source, _Chunk(index=0, start=0.0, end=2.5), dest)
+
+        with wave.open(str(dest), "rb") as handle:
+            assert handle.getnframes() / handle.getframerate() == pytest.approx(2.5)
+
+    def test_second_chunk_starts_where_requested_not_at_the_file_start(self, tmp_path):
+        source = _write_ramp_wav(tmp_path / "source.wav", seconds=5.0)
+        dest = tmp_path / "chunk.wav"
+
+        _write_chunk_wav(source, _Chunk(index=1, start=3.0, end=5.0), dest)
+
+        assert self._samples(dest)[0] == 48000 % 32768
+
+
+# ---------------------------------------------------------------------------
+# Merging chunked results
+# ---------------------------------------------------------------------------
+
+
+def _seg(start, end, text, words=None):
+    return Segment(start=start, end=end, text=text, avg_logprob=-0.1, words=words or [])
+
+
+class TestMergeChunks:
+    """Reassembling per-chunk transcripts into one, resolving the overlaps.
+
+    Two chunks, [0.0, 10.0) and [8.0, 20.0) — an 8.0..10.0 overlap, so the
+    cutpoint (its midpoint) is 9.0. Each chunk's own segments are in ITS
+    timeline (chunk 1's are local to its own [0, 12) span, offset +8.0 to
+    become absolute) — exactly what a real per-chunk Lemonade response looks
+    like before merging.
+    """
+
+    CHUNKS = [
+        _Chunk(index=0, start=0.0, end=10.0),
+        _Chunk(index=1, start=8.0, end=20.0),
+    ]
+
+    def test_offsets_are_applied_to_segments_and_words(self):
+        word = Word(word=" end", start=4.0, end=4.5, probability=0.9)
+        transcripts = [
+            Transcript(
+                segments=[_seg(0.0, 2.0, "hello")],
+                language="en",
+                duration=10.0,
+                model="m",
+            ),
+            Transcript(
+                segments=[_seg(4.0, 6.0, "end", words=[word])],
+                language="en",
+                duration=12.0,
+                model="m",
+            ),
+        ]
+
+        merged = _merge_chunks(transcripts, self.CHUNKS)
+
+        last = merged.segments[-1]
+        assert last.start == pytest.approx(12.0)  # 4.0 + chunk offset 8.0
+        assert last.end == pytest.approx(14.0)
+        assert last.words[0].start == pytest.approx(12.0)
+        assert last.words[0].end == pytest.approx(12.5)
+
+    def test_overlap_is_resolved_by_the_cutpoint_not_duplicated(self):
+        transcripts = [
+            Transcript(
+                segments=[
+                    _seg(0.0, 2.0, "hello"),
+                    _seg(8.0, 8.9, "world"),
+                    _seg(9.3, 9.9, "extra"),  # >= cutpoint: must be dropped
+                ],
+                language="en",
+                duration=10.0,
+                model="m",
+            ),
+            Transcript(
+                segments=[
+                    _seg(
+                        0.0, 0.9, "world"
+                    ),  # local 0-0.9 -> abs 8-8.9: duplicate, dropped
+                    _seg(1.3, 2.0, "later"),  # local -> abs 9.3-10.0: kept
+                    _seg(4.0, 6.0, "end"),  # local -> abs 12-14: kept
+                ],
+                language="en",
+                duration=12.0,
+                model="m",
+            ),
+        ]
+
+        merged = _merge_chunks(transcripts, self.CHUNKS)
+
+        assert [s.text for s in merged.segments] == ["hello", "world", "later", "end"]
+        assert [round(s.start, 2) for s in merged.segments] == [0.0, 8.0, 9.3, 12.0]
+
+    def test_duration_is_the_last_chunks_end(self):
+        transcripts = [
+            Transcript(segments=[], language="en", duration=10.0, model="m"),
+            Transcript(segments=[], language="en", duration=12.0, model="m"),
+        ]
+        merged = _merge_chunks(transcripts, self.CHUNKS)
+        assert merged.duration == pytest.approx(20.0)
+
+    def test_language_and_model_come_from_the_first_chunk(self):
+        transcripts = [
+            Transcript(
+                segments=[], language="french", duration=10.0, model="Whisper-X"
+            ),
+            Transcript(
+                segments=[], language="english", duration=12.0, model="Whisper-X"
+            ),
+        ]
+        merged = _merge_chunks(transcripts, self.CHUNKS)
+        assert merged.language == "french"
+        assert merged.model == "Whisper-X"
+
+    def test_single_chunk_passes_through_unchanged(self):
+        only = Transcript(
+            segments=[_seg(0.0, 1.0, "hi")], language="en", duration=1.0, model="m"
+        )
+        merged = _merge_chunks([only], [_Chunk(index=0, start=0.0, end=1.0)])
+        assert merged.segments == only.segments
+        assert merged.duration == only.duration
+
+
+# ---------------------------------------------------------------------------
+# Chunked transcription end-to-end
+# ---------------------------------------------------------------------------
+
+
+def _chunk_body(text, start=1.0, end=1.8):
+    """A fake per-chunk response body.
+
+    ``start``/``end`` are LOCAL to that chunk's own request. Default values
+    sit safely inside a 2.0s test chunk's own (non-overlap) territory — a
+    segment placed too close to a chunk's own start would fall in the
+    previous chunk's overlap region and be correctly dropped by the merge,
+    which is a real behavior these fixtures should not accidentally trigger.
+    """
+    return {
+        "language": "english",
+        "duration": end,
+        "text": f" {text}",
+        "segments": [
+            {"start": start, "end": end, "text": f" {text}", "avg_logprob": -0.1}
+        ],
+    }
+
+
+class TestChunkedTranscription:
+    """transcribe() splits an oversized file, uploads each piece, and
+    reassembles one continuous transcript — transparently to the caller."""
+
+    def test_oversized_file_sends_one_request_per_chunk(
+        self, monkeypatch, client, tmp_path
+    ):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+        recorder = Recorder(
+            monkeypatch,
+            [
+                FakeResponse(body=_chunk_body("a")),
+                FakeResponse(body=_chunk_body("b")),
+                FakeResponse(body=_chunk_body("c")),
+            ],
+        )
+
+        transcript = client.transcribe(wav)
+
+        assert len(recorder.requests) == 3
+        for request in recorder.requests:
+            assert request.headers["Content-Type"].startswith("multipart/form-data")
+        assert [s.text.strip() for s in transcript.segments] == ["a", "b", "c"]
+
+    def test_each_request_carries_only_its_own_chunk(
+        self, monkeypatch, client, tmp_path
+    ):
+        """The wire body per request must be that chunk's slice, not the
+        whole file — proves the split actually shrinks what gets uploaded."""
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_ramp_wav(tmp_path / "long.wav", seconds=5.0)
+        recorder = Recorder(
+            monkeypatch,
+            [
+                FakeResponse(body=_chunk_body("a")),
+                FakeResponse(body=_chunk_body("b")),
+                FakeResponse(body=_chunk_body("c")),
+            ],
+        )
+
+        client.transcribe(wav)
+
+        _fields0, files0 = parse_multipart(recorder.requests[0])
+        _fields1, files1 = parse_multipart(recorder.requests[1])
+        assert files0["file"][1] != files1["file"][1]
+        # Chunk 0 spans 2.0s at 16 kHz/16-bit: ~64000 bytes of PCM + header.
+        assert len(files0["file"][1]) == pytest.approx(2.0 * 16000 * 2, abs=100)
+
+    def test_file_under_budget_still_sends_exactly_one_unmodified_request(
+        self, monkeypatch, client, wav_file
+    ):
+        """Regression guard: the common case must not change at all — same
+        one request, same original bytes, same original filename."""
+        recorder = Recorder(monkeypatch, [FakeResponse(body=VERBOSE_JSON)])
+
+        client.transcribe(wav_file)
+
+        assert len(recorder.requests) == 1
+        _fields, files = parse_multipart(recorder.last)
+        assert files["file"][0] == "probe.wav"
+        assert files["file"][1] == wav_file.read_bytes()
+
+    def test_slot_lease_is_acquired_once_not_per_chunk(
+        self, monkeypatch, client, tmp_path
+    ):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+        Recorder(
+            monkeypatch,
+            [
+                FakeResponse(body=_chunk_body("a")),
+                FakeResponse(body=_chunk_body("b")),
+                FakeResponse(body=_chunk_body("c")),
+            ],
+        )
+        real_lease = client._slot_lease
+        acquisitions = []
+
+        @contextlib.contextmanager
+        def counting_lease():
+            acquisitions.append(1)
+            with real_lease():
+                yield
+
+        monkeypatch.setattr(client, "_slot_lease", counting_lease)
+
+        client.transcribe(wav)
+
+        assert len(acquisitions) == 1
+
+    def test_progress_reports_each_chunk(self, monkeypatch, client, tmp_path):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+        Recorder(
+            monkeypatch,
+            [
+                FakeResponse(body=_chunk_body("a")),
+                FakeResponse(body=_chunk_body("b")),
+                FakeResponse(body=_chunk_body("c")),
+            ],
+        )
+        messages = []
+
+        client.transcribe(wav, progress=messages.append)
+
+        assert len(messages) == 3
+        assert "1 of 3" in messages[0]
+        assert "3 of 3" in messages[2]
+
+    def test_no_progress_calls_when_a_single_request_suffices(
+        self, monkeypatch, client, wav_file
+    ):
+        Recorder(monkeypatch, [FakeResponse(body=VERBOSE_JSON)])
+        messages = []
+
+        client.transcribe(wav_file, progress=messages.append)
+
+        assert messages == []
+
+    def test_oversized_file_without_timestamps_is_rejected_before_any_http(
+        self, monkeypatch, client, tmp_path
+    ):
+        monkeypatch.setattr("gaia.audio.lemonade_asr.MAX_CHUNK_SECONDS", 2.0)
+        monkeypatch.setattr("gaia.audio.lemonade_asr.CHUNK_OVERLAP_SECONDS", 0.5)
+        wav = _write_silent_wav(tmp_path / "long.wav", seconds=5.0)
+        recorder = Recorder(monkeypatch, [])
+
+        with pytest.raises(ValueError, match="split"):
+            client.transcribe(wav, require_timestamps=False)
+
+        assert recorder.requests == []
 
 
 # ---------------------------------------------------------------------------
