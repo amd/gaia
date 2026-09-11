@@ -18,7 +18,7 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 | `fixture_hub/` | gaia_skills_lifecycle (search/install) | committed sources only; built + signed per run — see its README |
 | `prepare_fixture_hub.py` | per-run hub build | ephemeral `eval-test-publisher` keypair, signs + trust-adds; no key committed |
 | `serve_fixtures.py` | HTTP for web/rss/hub | routed layout (below) |
-| `quality_gate_thresholds.json` / `perf_gate_thresholds.json` | eval gates | all `enforce: false` until the first runner baseline |
+| `quality_gate_thresholds.json` / `perf_gate_thresholds.json` | eval gates | quality: `enforce: true` (0.60 judged pass rate, 5.0 average score); perf: `enforce: false` until the first runner baseline |
 
 ## Serving (routed layout — matches the scenario URLs exactly)
 
