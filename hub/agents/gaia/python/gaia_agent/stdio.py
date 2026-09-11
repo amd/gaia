@@ -1054,6 +1054,9 @@ def run_turn(
         agent.console = previous_console
 
 
+CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
+
+
 def dispatch_query(
     agent: Any,
     query: str,
@@ -1067,6 +1070,10 @@ def dispatch_query(
     the LLM and are never recorded as chat turns (see _record_turn's docstring
     on why a turn's own answer is what gets kept).
     """
+    if query == CLEAR_CONVERSATION_QUERY:
+        agent.conversation_history.clear()
+        _write({"type": "final", "answer": "conversation_cleared"}, out)
+        return
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
         return

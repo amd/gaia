@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import subprocess
 import sys
 
 import pytest
@@ -1323,3 +1324,68 @@ def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     events = [json.loads(line) for line in _lines(wire)]
     assert events[-1]["type"] == "error"
     assert "dispatch bug" in events[-1]["detail"]
+
+
+def test_clear_conversation_resets_only_history(monkeypatch):
+    agent = _FakeAgent()
+    agent.conversation_history = []
+    agent.model_id = "chosen-model"
+    agent.loaded_skills = {"coding": "loaded"}
+    state = stdio.PermissionState(bypass=True)
+    seen = []
+
+    def turn(agent, query, out, **kwargs):
+        seen.append(list(agent.conversation_history))
+        stdio._record_turn(agent, query, "answer")
+        stdio._write({"type": "final", "answer": "answer"}, out)
+
+    monkeypatch.setattr(stdio, "run_turn", turn)
+    wire = io.StringIO()
+    stdio.dispatch_query(agent, "first", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "second", wire, state=state)
+    assert seen == [[], []]
+    assert agent.model_id == "chosen-model"
+    assert agent.loaded_skills == {"coding": "loaded"}
+    assert state.bypass
+    assert json.loads(_lines(wire)[1]) == {
+        "type": "final",
+        "answer": "conversation_cleared",
+    }
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    assert agent.conversation_history == []
+
+
+def test_clear_conversation_over_real_stdio_process():
+    script = r"""
+import json
+import sys
+from gaia_agent import stdio
+class Agent:
+    console = None
+    conversation_history = []
+    loaded_skills = {"coding": "loaded"}
+    def process_query(self, query):
+        return {"answer": json.dumps(self.conversation_history)}
+agent = Agent()
+for line in sys.stdin:
+    stdio.dispatch_query(agent, stdio.parse_query(line.strip()), sys.stdout)
+"""
+    queries = ["first", "followup", "\x00gaia:clear_conversation\x00", "fresh"]
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input="".join(json.dumps({"gaia_query": query}) + "\n" for query in queries),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    events = [
+        json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")
+    ]
+    finals = [e["answer"] for e in events if e["type"] == "final"]
+    assert len(finals) == 4, result.stdout
+    assert json.loads(finals[1])[0]["content"] == "first"
+    assert finals[2] == "conversation_cleared"
+    assert json.loads(finals[3]) == []
