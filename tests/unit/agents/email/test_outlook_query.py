@@ -142,5 +142,26 @@ def test_is_unsupported_value_raises_before_the_mixed_family_check():
         translate_query("is:unread is:starred", now=_NOW)
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        'subject:"check in: monday"',
+        'subject:"Q3 has: numbers"',
+    ],
+)
+def test_colon_word_inside_quoted_phrase_is_not_an_operator(query):
+    # #3592: the colon word is part of the quoted phrase's text, not an
+    # operator, so the guard above must not fire on it.
+    result = translate_query(query, now=_NOW)
+    assert result.filter is None
+
+
+def test_unsupported_operator_after_a_quoted_phrase_still_raises():
+    # A quoted colon word must not blind the guard to a real one that
+    # follows outside the quotes.
+    with pytest.raises(ValueError, match="'has:attachment' is not supported"):
+        translate_query('subject:"check in: monday" has:attachment', now=_NOW)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
