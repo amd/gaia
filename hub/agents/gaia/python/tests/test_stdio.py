@@ -972,7 +972,10 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert events[0]["model_backend"] == provider
     assert events[0]["model_remote"] is True
     assert name in events[1]["answer"]
-    assert "this conversation is sent to" in events[1]["answer"]
+    # The switch message is built from the shared inference-location helper
+    # (#3674), so it says where the conversation goes and what stays here.
+    assert "a cloud provider" in events[1]["answer"]
+    assert "sent there to be answered" in events[1]["answer"]
     assert agent.chat.history is history
     assert agent.embedder is embedder
     assert agent.chat.llm_client is client

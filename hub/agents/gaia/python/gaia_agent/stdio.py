@@ -74,6 +74,7 @@ from typing import Any, Dict, List, Optional
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.llm import create_client
+from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
     LemonadeClient,
@@ -675,23 +676,14 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
-    where = (
-        "Claude API — this conversation is sent to Anthropic"
-        if agent._use_claude
-        else "the local Lemonade backend"
+    location = resolve_inference_location(
+        agent.chat.effective_model, use_claude=bool(agent._use_claude)
     )
-    cloud_provider = cloud_model_provider(agent.chat.effective_model)
-    if cloud_provider and not agent._use_claude:
-        provider_name = {
-            "fireworks": "Fireworks AI",
-            "amd": "AMD LLM Gateway",
-        }.get(cloud_provider, cloud_provider)
-        where = (
-            f"{provider_name} via Lemonade — this conversation is sent to "
-            f"{provider_name}; embeddings stay on Lemonade"
-        )
     _write(
-        {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
+        {
+            "type": "final",
+            "answer": f"Switched to **{display}**. {location.describe()}",
+        },
         out,
     )
 
