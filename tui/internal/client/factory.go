@@ -65,6 +65,9 @@ const ClaudeModelFlag = "--claude-model"
 // finding every launch site. It deliberately lives here rather than on a Bubble
 // Tea model — the headless CLI paths need it without a UI.
 func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
+	if err := CheckBypassSupported(agent, opts.BypassPermissions); err != nil {
+		return nil, err
+	}
 	// A model with no backend switch would be accepted and then change nothing.
 	if opts.ClaudeModel != "" && !opts.UseClaude {
 		return nil, fmt.Errorf(
@@ -128,4 +131,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			"agent %q declares transport %d, which this build does not know how to reach — "+
 				"upgrade GAIA or fix the catalog entry", agent.ID, int(agent.Transport))
 	}
+}
+
+// CheckBypassSupported validates launch options before readiness can connect.
+func CheckBypassSupported(agent catalog.Agent, enabled bool) error {
+	if enabled && agent.Transport == catalog.TransportDaemon {
+		return fmt.Errorf("--bypass-permissions is not supported for agent %q over the daemon transport. Drop --bypass-permissions to keep confirmation prompts enabled", agent.ID)
+	}
+	return nil
 }

@@ -197,7 +197,7 @@ func init() {
 		panic(err) // only fails on a flag name that was never registered
 	}
 	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
-		"run every tool without asking for confirmation — the agent acts fully "+
+		"subprocess agents only: run every tool without asking for confirmation — the agent acts fully "+
 			"autonomously. Off by default; the TUI shows a persistent warning "+
 			"while it is on, and /bypass off turns it off mid-session")
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,

@@ -275,3 +275,29 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 		t.Errorf("the catalog entry now carries %q; --dev leaked into it", got)
 	}
 }
+
+func TestDaemonBypassFailsBeforeConnection(t *testing.T) {
+	for _, id := range []string{"gaia", "email"} {
+		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{BypassPermissions: true})
+		if c != nil {
+			c.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "--bypass-permissions") || !strings.Contains(err.Error(), "Drop") {
+			t.Fatalf("%s ignored bypass: client=%T err=%v", id, c, err)
+		}
+	}
+}
+func TestSubprocessBypassStillReachesAgent(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ForAgent(catalog.Agent{ID: "gaia", Transport: catalog.TransportSubprocess, BinaryPath: self}, ForAgentOptions{BypassPermissions: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !c.(*SubprocessClient).BypassAtLaunch() {
+		t.Fatal("subprocess bypass was dropped")
+	}
+}
