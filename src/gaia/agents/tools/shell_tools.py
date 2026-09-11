@@ -225,13 +225,15 @@ PREFIX_BLOCKED_PS_PARAMS = (
     "executionpolicy",
 )
 
+_SAFE_PS_LEADING_SWITCHES = frozenset({"nologo", "sta", "mta"})
+
 #: Ways a ``-Command`` body reaches code the cmdlet allowlist never sees. The
 #: outer operator scan skips this body by design (``_operator_check_text``), so
 #: every escape it would have caught has to be caught here instead.
 _PS_BODY_ESCAPES = (
     (re.compile(r"::"), "static .NET member access ([Type]::Member)"),
     (re.compile(r"\.\s*[a-z_][a-z0-9_]*\s*\("), "method invocation (.Method(...))"),
-    (re.compile(r"(?:^|\s)\.(?=[\s\\/'\"])"), "dot-sourcing (. script.ps1)"),
+    (re.compile(r"(?:^|\|)\s*\.\s+"), "dot-sourcing (. script.ps1)"),
     # The two below fire in command position only — start of the body or just
     # after a pipe — so a path OPERAND (Get-Content C:/log.txt) is still a read.
     (
@@ -245,7 +247,7 @@ _PS_BODY_ESCAPES = (
     (re.compile(r"&"), "the call operator (& command)"),
     (re.compile(r"\$"), "variables and subexpressions ($var, $(...))"),
     (re.compile(r"[<>]"), "redirection (>, >>, <)"),
-    (re.compile(r";"), "statement separators (;)"),
+    (re.compile(r"[;\r\n]"), "statement separators (; or newline)"),
 )
 
 #: Long-flag names that make a command write a file. Matched on any prefix
@@ -696,6 +698,12 @@ class ShellToolsMixin:
             # A read-only subcommand still writes a caller-chosen path when it
             # is handed an output flag, and the subcommand check never sees it.
             for part in cmd_parts[1:]:
+                if (
+                    len(cmd_parts) > 1
+                    and cmd_parts[1].lower() == "ls-files"
+                    and part == "-o"
+                ):
+                    continue
                 if _is_file_write_flag(part):
                     return {
                         "status": "error",
@@ -740,15 +748,30 @@ class ShellToolsMixin:
                     "hint": "Use -Command to pass a readable cmdlet string",
                     "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
                 }
-            # Extract the PowerShell command text
-            ps_cmd = ""
-            for i, part in enumerate(cmd_parts):
-                if part.lower() in ("-command", "-c"):
-                    ps_cmd = " ".join(cmd_parts[i + 1 :]).lower()
+            body_start = 1
+            while body_start < len(cmd_parts):
+                part = cmd_parts[body_start]
+                if not part.startswith(("-", "/")):
                     break
+                name = part[1:].lower()
+                if name and "command".startswith(name):
+                    body_start += 1
+                    break
+                if name not in _SAFE_PS_LEADING_SWITCHES:
+                    return {
+                        "status": "error",
+                        "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
+                        "has_errors": True,
+                        "hint": "Use -Command with plain read-only cmdlets.",
+                    }
+                body_start += 1
+            ps_cmd = " ".join(cmd_parts[body_start:]).lower()
             if not ps_cmd:
-                # Inline: powershell "Get-Process"
-                ps_cmd = " ".join(cmd_parts[1:]).lower()
+                return {
+                    "status": "error",
+                    "error": "PowerShell requires an explicit read-only command.",
+                    "has_errors": True,
+                }
 
             escape = _powershell_body_escape(ps_cmd)
             if escape is not None:
@@ -782,6 +805,14 @@ class ShellToolsMixin:
                 }
 
             # Verify each cmdlet is safe
+            for segment in ps_cmd.split("|"):
+                head = re.match(r"\s*([a-z]+-[a-z]+)\b", segment)
+                if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
+                    return {
+                        "status": "error",
+                        "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
+                        "has_errors": True,
+                    }
             cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
             for cmdlet in cmdlets:
                 if not any(

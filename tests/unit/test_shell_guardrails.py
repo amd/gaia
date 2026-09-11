@@ -5,6 +5,42 @@
 
 import pytest
 
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo calc.exe",
+        "powershell -Mta calc.exe",
+        "powershell -Sta -NoLogo -com calc.exe",
+        'powershell -comm "calc.exe"',
+        "powershell -InputFormat Text calc.exe",
+        "powershell -ConfigurationName x calc.exe",
+        "powershell -Unknown Get-Process",
+        "powershell -NoLogo",
+        "powershell -NoLogo calc",
+        'powershell -Command "Get-Process | calc"',
+        'powershell -Command "Get-Process\ncalc.exe"',
+    ],
+)
+def test_powershell_switches_cannot_hide_executable_body(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo Get-Process",
+        "powershell -Sta -NoLogo -com Get-Process",
+        'powershell -Command "Get-Content ./a.txt"',
+        'powershell -Command "Get-ChildItem . -Recurse"',
+        "git ls-files -o",
+        "git ls-files --others",
+    ],
+)
+def test_reviewed_switches_and_relative_path_reads_remain_allowed(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is None
+
+
 from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     ShellToolsMixin,

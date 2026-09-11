@@ -302,6 +302,8 @@ _GH_COMMON_VALUE_FLAGS = frozenset(
         "--user",
         "--sort",
         "--order",
+        "--status",
+        "--visibility",
     }
 )
 

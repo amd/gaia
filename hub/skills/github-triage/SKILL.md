@@ -74,8 +74,10 @@ and `gh auth status -t`/`--show-token` (both print the credential), `gh alias`
 the irreversible ones: `gh pr merge`, `gh issue close`, `gh label delete`,
 `gh repo delete`. Also refused on any subcommand: `--body-file` (uploads a local
 file's contents), `--editor`, `--web` (opens a browser, returns you nothing), and
-`--watch` (blocks until the run finishes). Reads take a fixed flag allowlist, so
-a `gh` flag not listed here is refused rather than passed through.
+`--watch` (blocks until the run finishes). The `repo`, `release`, `run`, `search`,
+and `auth` read commands accept only reviewed flags from GAIA's policy table.
+The mixed read/write `issue`, `pr`, and `label` commands use a denylist for flags;
+their supported read actions remain limited to the actions listed above.
 
 A refused command returns an error, not a silent no-op. Report it as a refusal
 and say what you would have run. These commands are refused outright rather than

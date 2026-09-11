@@ -48,6 +48,14 @@ from gaia.skills.permissions import (
 GH = BINARY_POLICIES["gh"]
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["gh run list --status failure", "gh repo list --visibility private"],
+)
+def test_read_filters_remain_allowed(command):
+    assert tier(command) == ALLOW
+
+
 def check(command: str) -> str | None:
     """May this gh command line run with nobody asked? None means yes."""
     return validate_invocation(GH, shlex.split(command))
@@ -1335,7 +1343,7 @@ def _captured_shell_tool(host):
 
     def spy(**kwargs):
         def decorate(fn):
-            captured[kwargs.get("name")] = fn
+            captured[kwargs.get("name", fn.__name__)] = fn
             return original(**kwargs)(fn)
 
         return decorate
@@ -1370,17 +1378,6 @@ def _run_capturing_subprocess(host, command):
     return seen
 
 
-# These four pin the argv-execution contract, which replaces the validated
-# shell string with an explicit built-in table. That is a larger change than
-# this allowlist hardening and lands separately; strict xfail so implementing
-# it forces the marker off rather than leaving the spec silently unenforced.
-_ARGV_PENDING = pytest.mark.xfail(
-    strict=True,
-    reason="argv execution for granted binaries is not implemented yet",
-)
-
-
-@_ARGV_PENDING
 def test_a_granted_cli_is_handed_argv_not_a_shell_string():
     call = _run_capturing_subprocess(
         _Gated("gh"), "gh issue list --search x|echo pwned"
@@ -1391,7 +1388,6 @@ def test_a_granted_cli_is_handed_argv_not_a_shell_string():
     assert "x|echo" in call["args"], call["args"]
 
 
-@_ARGV_PENDING
 def test_an_env_var_in_a_granted_write_reaches_the_process_unexpanded():
     """The prompt showed `%GITHUB_TOKEN%`; the remote must not receive its value."""
     call = _run_capturing_subprocess(
@@ -1401,7 +1397,6 @@ def test_an_env_var_in_a_granted_write_reaches_the_process_unexpanded():
     assert "%GITHUB_TOKEN%" in call["args"]
 
 
-@_ARGV_PENDING
 def test_an_ungranted_command_keeps_the_shell_path():
     """The exemption is for granted CLIs only. `pwd`/`ls` still need cmd.exe on
     Windows to resolve built-ins, and this change must not touch them."""
@@ -1409,7 +1404,6 @@ def test_an_ungranted_command_keeps_the_shell_path():
     assert call["shell"] is (os.name == "nt")
 
 
-@_ARGV_PENDING
 def test_a_pipeline_is_not_run_as_argv():
     """`cmd_parts` has dropped the `|`, so an argv run of a pipeline would
     silently concatenate two commands into one. Only a lone segment qualifies."""
