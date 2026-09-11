@@ -965,7 +965,7 @@ def _after_process_query(self, user_input: str, assistant_response: str) -> None
 ## Memory Tools (5 tools, exposed to the LLM)
 
 ```python
-@tool("remember")
+@tool
 def remember(fact: str, category: str = "fact", domain: str = "",
              due_at: str = "", context: str = "", sensitive: str = "false",
              entity: str = "") -> dict:
@@ -986,7 +986,7 @@ def remember(fact: str, category: str = "fact", domain: str = "",
                entity="person:sarah_chen", sensitive="true")
     """
 
-@tool("recall")
+@tool
 def recall(query: str = "", category: str = "", context: str = "",
            entity: str = "", limit: int = 5,
            time_from: str = "", time_to: str = "") -> dict:
@@ -1007,7 +1007,7 @@ def recall(query: str = "", category: str = "", context: str = "",
       recall(category="note", time_from="2026-04-01")        # today's notes
     """
 
-@tool("update_memory")
+@tool
 def update_memory(knowledge_id: str, content: str = "",
                   category: str = "", domain: str = "",
                   due_at: str = "", reminded_at: str = "",
@@ -1022,11 +1022,11 @@ def update_memory(knowledge_id: str, content: str = "",
       update_memory(knowledge_id="abc-123", sensitive="true")   # mark as sensitive
     """
 
-@tool("forget")
+@tool
 def forget(knowledge_id: str) -> dict:
     """Remove a specific memory entry by ID."""
 
-@tool("search_past_conversations")
+@tool
 def search_past_conversations(query: str = "", days: int = 0,
                               limit: int = 10,
                               time_from: str = "", time_to: str = "") -> dict:

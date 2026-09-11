@@ -167,29 +167,20 @@ class CliSetupToolsMixin:
         """Register the CLI setup tools."""
         from gaia.agents.base.tools import tool
 
-        @tool(
-            atomic=True,
-            name="check_cli_setup",
-            description=(
-                "Check whether a command-line tool a skill needs is installed "
-                "and signed in. Call this BEFORE telling the user anything is "
-                "missing, and before install_cli or sign_in_cli. Returns a "
-                "'state' of: ready (nothing to do), missing (not installed), "
-                "unauthenticated (installed, needs sign-in), insufficient_scopes "
-                "(signed in but lacking a permission), or env_token (signed in "
-                "via an environment variable — working, and NOT fixable by "
-                "signing in). Read-only; it never changes anything."
-            ),
-            parameters={
-                "binary": {
-                    "type": "str",
-                    "description": "The CLI to check, e.g. 'gh'",
-                    "required": True,
-                },
-            },
-        )
+        @tool(atomic=True)
         def check_cli_setup(binary: str) -> Dict[str, Any]:
-            """Report install and sign-in state for one CLI."""
+            """Check whether a skill's CLI is installed and signed in.
+
+            Call this BEFORE telling the user anything is missing, and before
+            install_cli or sign_in_cli. Returns a state of ready (nothing to
+            do), missing (not installed), unauthenticated (needs sign-in),
+            insufficient_scopes (signed in but lacking a permission), or
+            env_token (signed in via an environment variable and NOT fixable
+            by signing in). Read-only; it never changes anything.
+
+            Args:
+                binary: The CLI to check, e.g. 'gh'.
+            """
             policy, error = _resolve_policy(binary)
             if error is not None:
                 return error
@@ -200,37 +191,19 @@ class CliSetupToolsMixin:
             logger.info("CLI setup check: %s is %s", policy.binary, status.state)
             return _status_payload(status, policy)
 
-        @tool(
-            atomic=True,
-            name="install_cli",
-            timeout=_INSTALL_TOOL_TIMEOUT_S,
-            description=(
-                "Install a command-line tool a skill needs, using this "
-                "machine's package manager. Only call this after "
-                "check_cli_setup reports state 'missing'. The user is shown "
-                "the exact command and must approve it before anything runs. "
-                "Pass 'command' exactly as check_cli_setup returned it in "
-                "'install_command' — it is what the user sees in the approval "
-                "prompt, and a value that does not match is refused."
-            ),
-            parameters={
-                "binary": {
-                    "type": "str",
-                    "description": "The CLI to install, e.g. 'gh'",
-                    "required": True,
-                },
-                "command": {
-                    "type": "str",
-                    "description": (
-                        "The exact 'install_command' string from "
-                        "check_cli_setup, copied verbatim."
-                    ),
-                    "required": True,
-                },
-            },
-        )
+        @tool(atomic=True, timeout=_INSTALL_TOOL_TIMEOUT_S)
         def install_cli(binary: str, command: str) -> Dict[str, Any]:
-            """Install a CLI. Reached only after the user approved the command."""
+            """Install a skill's CLI using this machine's package manager.
+
+            Only call this after check_cli_setup reports state 'missing'. The
+            user must approve the exact command before anything runs. Copy
+            check_cli_setup's install_command verbatim into command: it is
+            shown in the approval prompt, and a mismatch is refused.
+
+            Args:
+                binary: The CLI to install, e.g. 'gh'.
+                command: The exact install_command from check_cli_setup.
+            """
             policy, error = _resolve_policy(binary)
             if error is not None:
                 return error
@@ -316,38 +289,21 @@ class CliSetupToolsMixin:
                 "command_output": output,
             }
 
-        @tool(
-            atomic=True,
-            name="sign_in_cli",
-            timeout=_SIGN_IN_TOOL_TIMEOUT_S,
-            description=(
-                "Sign a command-line tool in to the user's account through "
-                "their browser. Only call this after check_cli_setup reports "
-                "state 'unauthenticated' or 'insufficient_scopes' — it is NOT "
-                "the fix for 'env_token'. GAIA cannot complete the sign-in "
-                "alone: it starts the flow, then shows the user a one-time "
-                "code to enter in their browser and waits for them. Pass "
-                "'command' exactly as check_cli_setup returned it in "
-                "'sign_in_command'."
-            ),
-            parameters={
-                "binary": {
-                    "type": "str",
-                    "description": "The CLI to sign in, e.g. 'gh'",
-                    "required": True,
-                },
-                "command": {
-                    "type": "str",
-                    "description": (
-                        "The exact 'sign_in_command' string from "
-                        "check_cli_setup, copied verbatim."
-                    ),
-                    "required": True,
-                },
-            },
-        )
+        @tool(atomic=True, timeout=_SIGN_IN_TOOL_TIMEOUT_S)
         def sign_in_cli(binary: str, command: str) -> Dict[str, Any]:
-            """Drive the browser sign-in, handing the user their one-time code."""
+            """Sign a CLI in to the user's account through their browser.
+
+            Only call this after check_cli_setup reports 'unauthenticated' or
+            'insufficient_scopes'; this is NOT the fix for 'env_token'. GAIA
+            cannot complete sign-in alone: it shows the user a one-time code
+            to enter in their browser and waits for them. The user must approve
+            the command before the flow starts. Copy check_cli_setup's
+            sign_in_command verbatim into command; a mismatch is refused.
+
+            Args:
+                binary: The CLI to sign in, e.g. 'gh'.
+                command: The exact sign_in_command from check_cli_setup.
+            """
             policy, error = _resolve_policy(binary)
             if error is not None:
                 return error
