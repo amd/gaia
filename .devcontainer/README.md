@@ -24,15 +24,16 @@ A fully configured dev container for GAIA with Python 3.12, Claude Code, and AMD
 
 | Port | Service | Notification |
 |------|---------|-------------|
-| 8000 | Lemonade Server | Notify |
+| 13305 | Lemonade Server | Notify |
 | 8080 | GAIA API / MCP Bridge | Notify |
 | 3000 | Eval Visualizer | Silent |
 
 ## Running GAIA
 
 ```bash
-# Start the LLM backend
-lemonade-server serve
+# Install the LLM backend, download models, and start the server.
+# There is no portable "serve" command to run instead.
+gaia init
 
 # Test LLM connectivity
 gaia llm "Hello"
@@ -119,7 +120,7 @@ The `postStartCommand` runs `sudo chown -R gaia:gaia /home/gaia/.cache /home/gai
 Another container may be using the same port. Stop it with `docker ps` and `docker stop <name>`, then restart the dev container.
 
 **Lemonade Server not starting:**
-Lemonade requires AMD hardware (Ryzen AI NPU/GPU) for acceleration. Inside the container, it runs in CPU fallback mode. For full NPU support, run `lemonade-server serve` on the host and point `LEMONADE_BASE_URL` to `http://host.docker.internal:8000`.
+Lemonade requires AMD hardware (Ryzen AI NPU/GPU) for acceleration. Inside the container, it runs in CPU fallback mode. For full NPU support, install and start Lemonade on the host with `gaia init`, then point `LEMONADE_BASE_URL` at `http://host.docker.internal:13305`.
 
 **Claude CLI not found after rebuild:**
 Claude Code is installed by `postStartCommand` which runs on each container start. If `claude` is not on PATH, run:

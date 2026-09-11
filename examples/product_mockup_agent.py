@@ -164,8 +164,8 @@ def main():
         )
     except Exception as e:
         print(f"Error initializing agent: {e}")
-        print("\nMake sure Lemonade server is running:")
-        print("  lemonade-server serve")
+        print("\nMake sure Lemonade Server is running — `gaia init` installs and starts it:")
+        print("  gaia init")
         return
 
     # Interactive loop

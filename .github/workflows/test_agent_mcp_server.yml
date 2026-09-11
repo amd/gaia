@@ -87,11 +87,9 @@ jobs:
           uv pip install --system -e ".[dev,mcp]"
 
       # TODO: Start Lemonade server for integration tests
-      # For now, integration tests requiring LLM will be skipped
-      # - name: Start Lemonade server
-      #   run: |
-      #     lemonade-server serve --ctx-size 32768 &
-      #     sleep 10
+      # For now, integration tests requiring LLM will be skipped.
+      # When enabling, use installer/scripts/start-lemonade.ps1 like
+      # test_api.yml does — there is no `lemonade-server serve` to call.
 
       - name: Run MCPAgent tests (fast tests only)
         run: |

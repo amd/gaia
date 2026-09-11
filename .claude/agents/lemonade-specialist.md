@@ -80,9 +80,9 @@ Always read `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI deployments can r
 ## CLI
 
 ```bash
-# Server lifecycle
-lemonade-server serve
-lemonade-server serve --ctx-size 32768
+# Server lifecycle — GAIA starts Lemonade itself when it needs it.
+gaia init                              # Installs Lemonade and starts it
+gaia lemonade embedded start           # Private, self-contained instance
 
 # Model management (Lemonade's own CLI)
 lemonade pull <model>
@@ -98,11 +98,18 @@ gaia llm "query" --base-url http://remote:13305/api/v1
 
 Lemonade Server ships a browser GUI at `http://localhost:13305` for interactive model management.
 
+There is no cross-platform "serve" command, so never hard-code one. Lemonade removed the
+`lemonade-server` CLI in 10.7; GAIA pins 11.8.1, where Windows runs `LemonadeServer.exe
+--silent`, Linux runs the `lemond` systemd unit, and macOS runs `lemond` directly. Resolve
+it through `gaia.llm.lemonade_launcher` — `resolve_lemonade()` / `build_start_command()` to
+launch, `describe_start_hint()` for anything shown to a user. Context size is the
+`LEMONADE_CTX_SIZE` env var, not a flag, and GAIA pins it per device profile.
+
 ## Troubleshooting matrix
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Connection refused` on port 13305 | Server not running | `lemonade-server serve` |
+| `Connection refused` on port 13305 | Server not running | `gaia init` installs and starts it. To tell a user how to restart it, print `describe_start_hint().instruction` — never hard-code a command |
 | Model 404 | Not downloaded | `lemonade pull <model>` or `gaia download` |
 | NPU unavailable | Not Ryzen AI 300-series or Linux (NPU is Win11 only today) | Fall back to llamacpp |
 | OOM after overriding to a large model | <24 GB system/VRAM for `Qwen3.5-35B-A3B-GGUF` | Drop the override — the default `Gemma-4-E4B-it-GGUF` is ~3 GB |

@@ -104,7 +104,7 @@ def main():
     except Exception as e:
         print(f"Error initializing agent: {e}")
         print("\nMake sure:")
-        print("  1. Lemonade server is running: lemonade-server serve")
+        print("  1. Lemonade Server is running: `gaia init` installs and starts it")
         print("  2. `uv` is installed so `uvx` can fetch the weather MCP server")
         return
 
