@@ -120,6 +120,36 @@ def _forbidden(label: str):
     return fake
 
 
+@pytest.mark.parametrize(
+    "tool_name, expected_timeout, description_fragments",
+    [
+        (
+            "check_cli_setup",
+            None,
+            ("BEFORE", "env_token", "Read-only", "binary:"),
+        ),
+        (
+            "install_cli",
+            cli_setup_tools._INSTALL_TOOL_TIMEOUT_S,
+            ("'missing'", "approve", "install_command", "command:"),
+        ),
+        (
+            "sign_in_cli",
+            cli_setup_tools._SIGN_IN_TOOL_TIMEOUT_S,
+            ("'unauthenticated'", "'env_token'", "one-time code", "command:"),
+        ),
+    ],
+)
+def test_registered_setup_tools_keep_budgets_and_model_instructions(
+    tools, tool_name, expected_timeout, description_fragments
+):
+    """Decorator migration must retain watchdog budgets and model guidance."""
+    registered = _TOOL_REGISTRY[tool_name]
+    assert registered["timeout"] == expected_timeout
+    for fragment in description_fragments:
+        assert fragment in registered["description"]
+
+
 # ---------------------------------------------------------------------------
 # The confirmation gate — the security-critical property
 # ---------------------------------------------------------------------------

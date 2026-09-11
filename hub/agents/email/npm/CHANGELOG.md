@@ -6,6 +6,20 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Listing calendar events now tells you how many came back, and whether
+  there were more.** `GET /v1/email/calendar/events` returned only the
+  events list, so a caller couldn't tell a short calendar from a truncated
+  page. The response now also carries `count` and `truncated`.
+
+- **A daily briefing now tells you how old it is, so a cached one can't be
+  shown as this morning's.** `GET /v1/email/briefing` and the agent's own
+  `get_briefing` returned the last scheduled run with nothing to say when it
+  was produced, so a host had no way to tell a briefing generated an hour ago
+  from one generated last week. Both surfaces now return `cache_age_seconds`
+  and `stale`, and past 24 hours the briefing's own headline opens with the
+  age. An old briefing is still returned — it is labeled, never refused or
+  silently regenerated (#2759).
+
 - **An unexpected sidecar failure now comes back as JSON you can read, not a
   bare "Internal Server Error".** A `500` from an error the sidecar didn't
   anticipate used to arrive as plain text with nothing to act on. It now carries
@@ -34,6 +48,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
   nothing.** Microsoft Graph has no equivalent for these, so they used to be
   sent as plain search text and return zero results with no indication why
   (#2996).
+- **An ordinary Outlook search like `search({ query: 'subject:"check in:
+  monday"' })` no longer fails with the error above.** The colon word was
+  inside the quoted phrase, not an operator, and is now recognized as such
+  (#3592).
 
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the

@@ -515,7 +515,11 @@ def render_endpoint_spec_html() -> str:
             "default 08:00) — and this endpoint returns the most recent run. "
             "The briefing payload is the same email_pre_scan envelope as "
             "POST /v1/email/prescan, produced by the agent's own "
-            "pre_scan_inbox path. 404 until a scheduled run has happened."
+            "pre_scan_inbox path. Every response carries cache_age_seconds "
+            "and stale (#2759) so a host never renders a cached run as "
+            "current; a briefing at least 24 hours old is labeled stale — it "
+            "is neither refused nor regenerated on read. 404 until a "
+            "scheduled run has happened."
         ),
         request_sections=[],
         response_sections=[
