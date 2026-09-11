@@ -172,6 +172,30 @@ jobs:
             exit 1
           fi
 
+      - name: Run Chat Agent Host-Attribute Contract Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "         CHAT AGENT HOST-ATTRIBUTE CONTRACT TESTS"
+          echo "================================================================"
+          echo "Testing ChatAgent/ChatAgentLite are unaffected by the"
+          echo "RAGToolsMixin/FileIOToolsMixin host-attribute contract fix..."
+          echo ""
+
+          python -m pytest tests/test_chat_agent.py::TestChatAgentHostAttributeContract -v --tb=short
+
+          # Store the result
+          CONTRACT_TEST_EXIT=$?
+
+          if [ $CONTRACT_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] Host-attribute contract tests passed"
+          else
+            echo "[FAILURE] Host-attribute contract tests failed"
+            exit 1
+          fi
+
       - name: Test Summary
         if: always()
         run: |
