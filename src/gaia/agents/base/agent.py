@@ -5957,6 +5957,7 @@ Do NOT wrap conversational replies in JSON.
                 any_error = False
                 last_error = None
                 fanout_repeat_break = False
+                post_tool_messages = []
 
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
@@ -6035,7 +6036,9 @@ Do NOT wrap conversational replies in JSON.
                                 "relevant data, OR state that the "
                                 "information was not found in the document."
                             )
-                            messages.append({"role": "user", "content": dedup_msg})
+                            post_tool_messages.append(
+                                {"role": "user", "content": dedup_msg}
+                            )
 
                     # Input-based dedup for mutation tools (#1317): catch an
                     # identical mutation re-issue at the first repeat. Errored
@@ -6045,7 +6048,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_name,
                         tool_args,
                         mutation_call_cache,
-                        messages,
+                        post_tool_messages,
                         tool_result,
                     )
 
@@ -6124,6 +6127,11 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+
+                # Anthropic and other spec-strict providers require all native
+                # tool results to immediately follow the assistant tool-call
+                # turn. Dedup guidance belongs after the complete result group.
+                messages.extend(post_tool_messages)
 
                 if fanout_repeat_break:
                     break  # break outer while

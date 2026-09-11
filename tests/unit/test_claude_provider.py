@@ -252,6 +252,168 @@ def test_empty_messages_after_hoist_fail_loudly(fake_anthropic):
         provider.chat([{"role": "system", "content": "only a system prompt"}])
 
 
+def test_tool_history_translated_to_anthropic_blocks(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "compare these files"},
+            {
+                "role": "assistant",
+                "content": "I'll inspect both.",
+                "tool_calls": [
+                    {
+                        "id": "toolu_a",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "a.txt"}',
+                        },
+                    },
+                    {
+                        "id": "toolu_b",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "b.txt"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_a", "content": "alpha"},
+            {"role": "tool", "tool_call_id": "toolu_b", "content": "beta"},
+        ],
+        tools=OPENAI_TOOLS,
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"] == [
+        {"role": "user", "content": "compare these files"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll inspect both."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_a",
+                    "name": "read_file",
+                    "input": {"path": "a.txt"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_b",
+                    "name": "read_file",
+                    "input": {"path": "b.txt"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_a",
+                    "content": "alpha",
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_b",
+                    "content": "beta",
+                },
+            ],
+        },
+    ]
+
+
+def test_tool_call_only_assistant_turn_is_not_dropped(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "list files"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "a.txt"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "alpha"},
+        ],
+        tools=OPENAI_TOOLS,
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"][1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "read_file",
+            "input": {"path": "a.txt"},
+        }
+    ]
+
+
+def test_unmatched_tool_result_remains_plain_user_text(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "follow the plan"},
+            {"role": "assistant", "content": "Running the planned step."},
+            {
+                "role": "tool",
+                "name": "plan_step",
+                "tool_call_id": "synthetic-id",
+                "content": "complete",
+            },
+        ]
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"][-1] == {
+        "role": "user",
+        "content": "[Tool result: plan_step] complete",
+    }
+
+
+def test_interrupted_native_tool_history_fails_loudly(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    with pytest.raises(ValueError, match="immediately adjacent.*toolu_1"):
+        provider.chat(
+            [
+                {"role": "user", "content": "read it"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Actually use b.txt."},
+                {
+                    "role": "tool",
+                    "name": "read_file",
+                    "tool_call_id": "toolu_1",
+                    "content": "alpha",
+                },
+            ],
+            tools=OPENAI_TOOLS,
+        )
+
+
 # ── response → sentinel envelope ────────────────────────────────────────
 
 
@@ -602,38 +764,52 @@ def test_sdk_no_chatml_stop_tokens_for_claude(monkeypatch):
     assert "stop" not in fake.calls[-1]["kwargs"]
 
 
-def test_sdk_flattens_assistant_tool_call_turn(claude_sdk):
+@pytest.mark.parametrize("stream", [False, True])
+def test_sdk_preserves_claude_tool_history(claude_sdk, stream):
     sdk, fake = claude_sdk
-    sdk.send_messages(
-        [
-            {"role": "user", "content": "list my files"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "toolu_1",
-                        "type": "function",
-                        "function": {
-                            "name": "list_directory",
-                            "arguments": '{"path": "C:/"}',
-                        },
-                    }
-                ],
-            },
-            {"role": "tool", "name": "list_directory", "content": "a.txt"},
-        ]
-    )
-    sent = fake.calls[-1]["messages"]
-    assistant_turns = [m for m in sent if m["role"] == "assistant"]
-    assert assistant_turns == [
+    messages = [
+        {"role": "user", "content": "list my files"},
         {
             "role": "assistant",
-            "content": '[Called tools: list_directory({"path": "C:/"})]',
-        }
+            "content": "Checking now.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "arguments": '{"path": "C:/"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "list_directory",
+            "tool_call_id": "toolu_1",
+            "content": "a.txt",
+        },
     ]
-    # The flattened history never shows the "None" placeholder.
-    assert all(m["content"] != "None" for m in sent)
+    if stream:
+        list(sdk.send_messages_stream(messages))
+    else:
+        sdk.send_messages(messages)
+    sent = fake.calls[-1]["messages"]
+    assert sent[1:] == [
+        {
+            "role": "assistant",
+            "content": "Checking now.",
+            "tool_calls": messages[1]["tool_calls"],
+        },
+        {
+            "role": "tool",
+            "content": "a.txt",
+            "name": "list_directory",
+            "tool_call_id": "toolu_1",
+        },
+    ]
+    assert "[Called tools:" not in str(sent)
+    assert "[Tool result:" not in str(sent)
 
 
 # ── stdio transport flag contract ───────────────────────────────────────
