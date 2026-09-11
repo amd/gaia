@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getMessages } from '../api';
+import { getMessageCount, getMessages } from '../api';
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -36,6 +36,14 @@ afterEach(() => {
 });
 
 describe('complete transcript retrieval', () => {
+    it('probes the count with one minimal page request', async () => {
+        const requests = serveTranscript(transcript(205));
+        expect(await getMessageCount('long-chat')).toBe(205);
+        expect(requests).toHaveLength(1);
+        expect(requests[0].searchParams.get('limit')).toBe('1');
+        expect(requests[0].searchParams.get('offset')).toBe('0');
+    });
+
     it.each([0, 1, 100, 101, 205])('loads all %i messages in order with metadata intact', async (count) => {
         const messages = transcript(count);
         const requests = serveTranscript(messages);

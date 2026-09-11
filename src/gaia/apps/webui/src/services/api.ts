@@ -452,6 +452,13 @@ export async function toggleSessionPrivacy(id: string): Promise<Session> {
     return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
+export async function getMessageCount(sessionId: string): Promise<number> {
+    const { total } = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `/sessions/${sessionId}/messages?limit=1&offset=0`,
+    );
+    return total;
+}
+
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
     const pageSize = 100;
     const path = `/sessions/${sessionId}/messages`;
