@@ -151,3 +151,14 @@ class TestJobSummary:
 
     def test_main_accepts_dir_argument(self, tmp_path):
         assert assert_llm_coverage.main([str(_write_scorecard(tmp_path))]) == 0
+
+
+@pytest.mark.parametrize("value", ["garbage", [], {}, True, float("nan"), float("inf")])
+def test_invalid_classification_count_fails_without_traceback(tmp_path, capsys, value):
+    directory = _write_scorecard(tmp_path)
+    path = directory / "scorecard.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["performance"]["llm_classified_count"] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert assert_llm_coverage.check(directory) == 1
+    assert "finite number" in capsys.readouterr().err

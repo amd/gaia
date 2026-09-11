@@ -188,7 +188,30 @@ env:
   NO_PROXY: "localhost,127.0.0.1"
 
 jobs:
+  plan-timeouts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      benchmark: ${{ steps.budget.outputs.benchmark }}
+      job: ${{ steps.budget.outputs.job }}
+    steps:
+      - name: Calculate timeout budget
+        id: budget
+        shell: python
+        run: |
+          import os
+          limit = int(os.environ["LIMIT"])
+          experiments = int(os.environ["EXPERIMENTS"])
+          if limit < 1 or experiments < 1:
+              raise SystemExit("limit and experiments must be positive integers")
+          benchmark = (210 if limit >= 249 else 45) * experiments
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"benchmark={benchmark}\njob={benchmark + 230}\n")
+
   refresh:
+    needs: plan-timeouts
     name: Re-run eval, refresh-or-reject scorecard
     # Require the WINDOWS stx runners: the bare 'stx' label also matches a
     # Linux box (xsj-aimlab-stxp-04), and this eval is Windows-only (PowerShell
@@ -214,13 +237,14 @@ jobs:
     #     same-version gate, cross-version gate, commit) @ 10 each       -> 60
     #   job full:   210+35+45+25+35+60 = 410 -> timeout-minutes 440 (margin)
     #   job subset:  45+35+45+25+35+60 = 245 -> timeout-minutes 275 (margin)
+    # Benchmark time scales with experiments; the 230-minute overhead is fixed.
     # These are CEILINGS, not expectations — expected wall-clock is ~2.5-3h
     # full, ~100min subset. The job timeout is only the backstop: every step
     # above the "short steps" bucket carries its OWN timeout-minutes so an
     # overrun fails at a NAMED step, never a silent job-level `cancelled`
     # (this is the root fix for #2094 — the old value, 90, wasn't even
     # derived from a measurement).
-    timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 440 || 275 }}
+    timeout-minutes: ${{ fromJSON(needs.plan-timeouts.outputs.job) }}
     steps:
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
@@ -361,7 +385,7 @@ jobs:
           Write-Host "PROFILE: $profileName -- limit=$env:LIMIT experiments=$env:EXPERIMENTS ctx_size=$env:CTX_SIZE rebaseline=$env:REBASELINE | committed: limit=$COMMITTED_LIMIT n_runs=$COMMITTED_N ctx_size=$committedCtxDisplay aggregate=$committedAggDisplay | prev_tag=$PREV"
 
       - name: Run the email-triage benchmark (real eval)
-        timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 210 || 45 }}
+        timeout-minutes: ${{ fromJSON(needs.plan-timeouts.outputs.benchmark) }}
         env:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
