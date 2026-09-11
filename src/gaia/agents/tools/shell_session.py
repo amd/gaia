@@ -42,7 +42,6 @@ import locale
 import logging
 import os
 import re
-import shutil
 import signal
 import subprocess  # nosec B404 - running shell commands is this module's purpose
 import tempfile
@@ -82,6 +81,8 @@ _VOLATILE_ENV_NAMES = frozenset(
         # gawk setenv()s these into its own environment before BEGIN runs.
         "AWKPATH",
         "AWKLIBPATH",
+        "COLUMNS",
+        "LINES",
     }
 )
 
@@ -282,6 +283,7 @@ class ShellSession:
         self._lock = threading.Lock()
         self._closed = False
         self._temp_dir: Optional[str] = None
+        self._temp_directory: Optional[tempfile.TemporaryDirectory] = None
 
         configured = shell if shell is not None else os.environ.get("GAIA_SHELL", "")
         configured = configured.strip()
@@ -361,9 +363,10 @@ class ShellSession:
             )
 
     def _discard_temp_dir(self) -> None:
-        temp_dir, self._temp_dir = self._temp_dir, None
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        directory, self._temp_directory = self._temp_directory, None
+        self._temp_dir = None
+        if directory is not None:
+            directory.cleanup()
 
     @property
     def closed(self) -> bool:
@@ -490,7 +493,8 @@ class ShellSession:
 
     def _ensure_temp_dir(self) -> str:
         if self._temp_dir is None or not os.path.isdir(self._temp_dir):
-            self._temp_dir = tempfile.mkdtemp(prefix="gaia_shell_")
+            self._temp_directory = tempfile.TemporaryDirectory(prefix="gaia_shell_")
+            self._temp_dir = self._temp_directory.name
         return self._temp_dir
 
     @staticmethod
@@ -533,7 +537,7 @@ class ShellSession:
                 + '; awk \'BEGIN { for (k in ENVIRON) printf "%s=%s%c", k, '
                 "ENVIRON[k], 0 }'; } > "
                 + _posix_quote(_generic_path(state_file))
-                + " 2>/dev/null"
+                + " || exit 127"
             )
             lines.append("exit $__gaia_rc")
             return "\n".join(lines) + "\n"

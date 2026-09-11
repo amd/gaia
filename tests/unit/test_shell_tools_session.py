@@ -19,6 +19,18 @@ class _Host(ShellToolsMixin):
     """Minimal host: the mixin only needs its own __init__ for rate limiting."""
 
 
+def test_cwd_absorption_never_prompts_or_widens_path_grants():
+    from unittest.mock import MagicMock
+
+    host = _Host()
+    host.path_validator = MagicMock()
+    host.path_validator.is_path_allowed.return_value = False
+    assert host._session_cwd_guard()("outside") is False
+    host.path_validator.is_path_allowed.assert_called_once_with(
+        "outside", prompt_user=False
+    )
+
+
 @pytest.fixture
 def tools():
     """The registered shell tools, keyed by name, on one fresh host."""

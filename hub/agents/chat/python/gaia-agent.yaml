@@ -11,7 +11,7 @@ icon: message-circle
 # Real registered-tool count for entry_class's default config (prompt_profile
 # defaults to "full") — introspected, drift-guarded by
 # tests/unit/test_chat_fix_contracts.py.
-tools_count: 54
+tools_count: 57
 
 language: python
 min_gaia_version: "0.22.0"
