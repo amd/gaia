@@ -38,30 +38,11 @@ installer/
 
 This is the one you send to a colleague: a single per-user `.exe` that installs
 `gaia-tui` and the GAIA agent on a machine with no Python, no Go and no clone.
-See [the plan](../docs/plans/shareable-custom-build.md) for why it exists.
 
-It packages binaries, it does not build them — build both first, then package:
-
-```powershell
-cd tui; go build -o bin/gaia-tui.exe ./cmd/gaia; cd ..
-python hub/agents/gaia/python/packaging/freeze.py --onefile
-.\installer\scripts\build-gaia-installer.ps1
-```
-
-The result lands in `dist/installer/gaia-setup-<version>.exe`. Needs NSIS 3.x
-(`winget install NSIS.NSIS`); every other input is checked before makensis runs,
-so a missing binary fails with the command that produces it.
-
-What the installer puts where, and why:
-
-| Path | What |
-|---|---|
-| `%LOCALAPPDATA%\Programs\GAIA\gaia-tui.exe` | The terminal UI. Its folder is added to the **user** PATH — no admin rights anywhere in this install. |
-| `%USERPROFILE%\.gaia\agents\gaia\gaia-agent.exe` | The frozen flagship, in the hub install root the TUI searches. One copy, not two. |
-| `%USERPROFILE%\.gaia\agents\gaia\.installed` | The install sentinel. **Load-bearing**: without it the TUI treats the agent as an unverified install and refuses to spawn it (`catalog.findInstalledBinaryIn`, #3062). |
-
-Lemonade and the models are deliberately not bundled — they are gigabytes and
-`gaia init` already owns them.
+**[docs/deployment/shareable-build.mdx](../docs/deployment/shareable-build.mdx)**
+is the guide — build commands, install paths, and how to verify the binary before
+you send it. See [the plan](../docs/plans/shareable-custom-build.md) for why it
+exists.
 
 ### Building the Agent UI installer locally
 

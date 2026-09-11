@@ -374,6 +374,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"
