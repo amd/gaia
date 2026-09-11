@@ -56,6 +56,13 @@ FIXTURE_DIR = (
 _PROFILES_WITHOUT_VLM = frozenset({"chat"})
 
 
+class _FixtureHome(type(Path())):
+    """Keep the fixed Linux prompt's home spelling on Windows hosts too."""
+
+    def __str__(self):
+        return super().__str__().replace("\\", "/")
+
+
 @contextlib.contextmanager
 def chat_agent_build_context(
     profile: str,
@@ -109,6 +116,8 @@ def chat_agent_build_context(
 
         with _isolated_registry():
             stack = contextlib.ExitStack()
+            if enable_sd_tools and cwd is not None:
+                stack.enter_context(patch("gaia.config.GAIA_CONFIG_DIR", cwd))
             stack.enter_context(
                 patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
             )
@@ -125,7 +134,7 @@ def chat_agent_build_context(
             )
             stack.enter_context(patch("platform.machine", return_value="x86_64"))
             stack.enter_context(
-                patch.object(Path, "home", return_value=Path("/fake/home"))
+                patch.object(Path, "home", return_value=_FixtureHome("/fake/home"))
             )
             with stack:
                 agent = ChatAgent.__new__(ChatAgent)
@@ -264,8 +273,7 @@ def test_profile_prompt_and_tools_match_golden(row_id, kwargs, tmp_path):
     """
     build_kwargs = dict(kwargs)
     if build_kwargs.get("enable_sd_tools"):
-        # init_sd() mkdir's a *relative* ".gaia/cache/sd/images" — redirect
-        # into a throwaway dir so this test never litters the real worktree.
+        # Redirect both the working directory and SD's absolute config root.
         build_kwargs["cwd"] = tmp_path
 
     prompt, tools = build_agent_for_row(**build_kwargs)

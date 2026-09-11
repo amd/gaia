@@ -71,12 +71,12 @@ user explicitly wants photorealism and has accepted the wait.
 
 ## Iterate instead of starting over
 
-`get_generation_history()` returns this session's generations with the exact
-prompt, model, size and seed of each. When the user says "same but at sunset"
-or "make it wider", read the previous entry, change the one thing they asked
-about, and keep everything else — including the `seed`. Reusing the seed is
-what makes the second image recognisably the same picture rather than an
-unrelated one that happens to match the words.
+`get_generation_history()` returns this session's prompts, models, sizes and
+requested seeds. When the user says "same but at sunset" or "make it wider",
+read the previous entry and keep the unchanged settings. Reuse a concrete
+`seed` when the entry has one. A null seed means the server chose it without
+reporting it, so the next generation can differ substantially; explain that
+limitation instead of promising the same image with a small edit.
 
 Rewriting the prompt from scratch throws away everything that was already
 working, and the user has to re-explain the parts they liked.
@@ -95,9 +95,10 @@ The common failures and what to say:
 
 - **Cannot reach Lemonade Server** — inference is not running. Tell them to
   start it; nothing here works until it is up.
-- **Timed out** — usually the first use of a model, downloading several GB.
-  The server is fine. Tell them to pre-fetch it (`lemonade-server pull
-  <model>`) and retry, rather than restarting anything.
+- **Timed out** — first use may be downloading several GB; a connection timeout
+  can also mean the server is unreachable. Follow the tool's actual diagnostic
+  and installation-aware remedy command. Do not invent a legacy CLI command or
+  claim the server is healthy when no connection was established.
 - **Invalid model or size** — you passed something outside the supported set.
   Call `list_sd_models()` and pick from what it returned.
 

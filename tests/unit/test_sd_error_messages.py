@@ -64,6 +64,15 @@ def test_a_refused_connection_says_the_server_is_not_running(modern_linux):
     assert "timed out" not in message.lower()
 
 
+def test_connect_timeout_does_not_claim_the_server_is_running(modern_linux):
+    error = LemonadeClientError("Connection to host timed out. (connect timeout=5)")
+    message = SDToolsMixin._describe_client_error(error, model="SDXL-Turbo")
+    assert "Timed out connecting" in message
+    assert "server is running" not in message
+    assert "network connection" in message
+    assert str(error) in message
+
+
 def test_the_remedies_never_name_a_binary_a_modern_install_lacks(modern_linux):
     """`lemonade-server` was removed in Lemonade 10.7 — pointing a user at it
     is advice that fails at the shell. Both branches must route through the

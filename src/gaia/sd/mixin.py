@@ -444,10 +444,16 @@ class SDToolsMixin:
         raw = str(error)
         lowered = raw.lower()
 
+        if "connect timeout" in lowered or "connecttimeout" in lowered:
+            return (
+                f"Timed out connecting to Lemonade Server for {model}. "
+                "Check the server address and network connection, and verify "
+                f"Lemonade is running ({describe_start_hint().instruction}). ({raw})"
+            )
         if "timed out" in lowered or "timeout" in lowered:
             return (
-                f"Timed out waiting for {model}; the server is running but did "
-                "not answer in time. First use of an SD model both downloads "
+                f"Timed out waiting for {model}; the server did not answer in "
+                "time. First use of an SD model both downloads "
                 "and loads several GB. Pre-fetch it "
                 f"({describe_client_hint('pull', model).instruction}), confirm "
                 f"it loads ({describe_client_hint('load', model).instruction}), "

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 
+import numpy as np
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
@@ -38,7 +39,7 @@ def _isolated_registry():
 
 
 @pytest.fixture(scope="module")
-def flagship():
+def flagship(tmp_path_factory):
     """The built agent, plus a SNAPSHOT of the registry it was built with.
 
     ``select`` scores against whatever registry it is handed, and sibling test
@@ -49,25 +50,28 @@ def flagship():
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr("gaia.config.GAIA_CONFIG_DIR", tmp_path_factory.mktemp("sd-output"))
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
         agent._registry_snapshot = dict(agent._tools_registry)
         yield agent
 
 
 def _select_fresh(agent, query):
-    """First-turn selection for ``query``, independent of test order.
+    """Pin bundle admission with deterministic scores; live scoring needs an eval."""
 
-    Skips when the embedder is unreachable: scoring a real query against real
-    tool descriptions needs live embeddings, and a plain CI runner has no
-    Lemonade. Keyed off the loader's own ``session_disabled`` flag rather than
-    a bare ``None``, so a genuine selection regression still fails here.
-    """
+    def embed(text):
+        is_image = text.split(":", 1)[0] in SD_TOOLS or text.startswith(
+            ("draw me a picture", "generate an image")
+        )
+        return np.array([1.0, 0.0] if is_image else [0.0, 1.0], dtype=np.float32)
+
     agent.tool_loader.reset_session()
-    selected = agent.tool_loader.select(query, agent._registry_snapshot)
-    if selected is None:
-        if agent.tool_loader.session_disabled:
-            pytest.skip("semantic tool selection needs a reachable embedder")
-        pytest.fail("select() returned None with the session still enabled")
+    agent.tool_loader._embed_cache.clear()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(agent.tool_loader, "_embed_fn", embed)
+        mp.setattr(agent.tool_loader, "_embed_batch_fn", None)
+        selected = agent.tool_loader.select(query, agent._registry_snapshot)
+    assert selected is not None
     return selected
 
 
