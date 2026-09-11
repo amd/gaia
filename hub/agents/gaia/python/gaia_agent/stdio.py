@@ -30,10 +30,10 @@ respawn would destroy. Embeddings (RAG, memory, code index) stay on Lemonade
 either way — Anthropic has no embeddings API.
 
 A live switch is process-local: if the child ever respawns (the Go side kills
-and restarts it after a cancelled turn — see ``client.SubprocessClient``'s
-``discard``/respawn), the NEW process comes up from the ORIGINAL
-``--use-claude``/``--claude-model`` argv again, not from whatever ``/model``
-last set. This module cannot prevent that — there is no argv to persist a
+it when a cancelled turn will not stop, or it crashed — see
+``client.SubprocessClient``'s ``discard``/respawn), the NEW process comes up
+from the ORIGINAL ``--use-claude``/``--claude-model`` argv again, not from
+whatever ``/model`` last set. This module cannot prevent that — there is no argv to persist a
 switch into short of the TUI re-issuing it — so the Go side instead detects
 the mismatch from this module's own startup ping and tells the user their
 model reverted (see ``handleCanonicalEvent`` in ``canonical.go``).
@@ -51,7 +51,8 @@ the back-channel a permission prompt needs: without one the agent can ask "may
 I run this?" and the answer has nowhere to travel, so every gated tool
 eventually auto-denies. Control messages are read by a dedicated thread so
 they still land *while* a turn is in flight, which is the only moment a
-confirmation decision is worth anything. ``/model`` is deliberately NOT a
+confirmation decision is worth anything — and the only moment ``cancel`` (stop
+this turn, keep the process) can land. ``/model`` is deliberately NOT a
 control message: its response (the switched-to model, or why it was refused)
 has to reach the transport's reader, which only scans stdout *during* a turn
 (see ``client.SubprocessClient`` on the Go side) — so it rides the query
@@ -120,6 +121,10 @@ QUERY_KEY = "gaia_query"
 #: screen; ``bypass`` turns unattended approval on or off for the session.
 CONTROL_TOOL_DECISION = "tool_decision"
 CONTROL_BYPASS = "bypass"
+#: ``cancel`` stops the running turn but not the process, so loaded skills,
+#: "always" grants, history and the bypass mode all survive it.
+CONTROL_CANCEL = "cancel"
+
 
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
@@ -204,21 +209,24 @@ class PermissionState:
                 confirm_id=confirm_id,
             )
 
-    def cancel_active(self) -> bool:
+    def cancel_active(self, reason: str = "stdin closed mid-turn") -> bool:
         """Cancel the turn currently running, if any. True if one was cancelled.
 
-        stdin closing means the host is gone, but the sentinel that ends the run
-        loop sits BEHIND the running turn in the query queue — so a turn parked
-        on a confirmation nobody can answer would keep the process alive forever,
-        holding the model slot. Cancelling unblocks the wait, which lets the turn
-        finish through its normal path and emit its one terminal event.
+        Two callers. The host's ``cancel`` verb stops a turn while keeping the
+        process. stdin closing means the host is gone, but the sentinel that
+        ends the run loop sits BEHIND the running turn in the query queue — so a
+        turn parked on a confirmation nobody can answer would keep the process
+        alive forever, holding the model slot.
+
+        Either way, cancelling unblocks the wait, which lets the turn finish
+        through its normal path and emit its one terminal event.
         """
         with self._lock:
             handler = self._handler
             if handler is None:
                 return False
             handler.cancelled.set()
-        audit.warning("stdin closed mid-turn — cancelled the in-flight turn")
+        audit.warning("%s — cancelled the in-flight turn", reason)
         return True
 
 
@@ -267,6 +275,9 @@ def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
     verb = message.get(CONTROL_KEY)
     if verb == CONTROL_BYPASS:
         state.set_bypass(bool(message.get("enabled")))
+    elif verb == CONTROL_CANCEL:
+        if not state.cancel_active("host asked to cancel"):
+            logger.info("Cancel requested with no turn running — nothing to stop")
     elif verb == CONTROL_TOOL_DECISION:
         decision = str(message.get("decision") or DECISION_DENY)
         if decision not in (DECISION_ALLOW, DECISION_DENY, DECISION_ALWAYS):

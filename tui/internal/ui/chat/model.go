@@ -282,9 +282,9 @@ type ChatModel struct {
 	// this session itself started. A model-state ping that disagrees with
 	// modelID while this is true is the expected confirmation of THAT
 	// switch — no warning. One that disagrees while this is false means the
-	// agent process was replaced without anyone here asking for it (a
-	// cancelled turn respawns the child from its ORIGINAL launch flags,
-	// silently reverting any live switch — see subprocess.go's discard/
+	// agent process was replaced without anyone here asking for it (a hard
+	// stop — Esc pressed twice — respawns the child from its ORIGINAL model
+	// flags, reverting any live switch — see subprocess.go's discard/
 	// respawn) — see handleCanonicalEvent. Cleared on the turn's own
 	// terminal event, whichever way that turn ended, so a failed switch
 	// (Lemonade down, bad credential — no ping ever arrives) never leaves
@@ -1151,10 +1151,11 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // settleTurn() is the single place that clears cancelPending once the turn's
 // OWN signal — not this call — says it is over.
 //
-// A transport with no such server-side lock (e.g. a local subprocess) does
-// not implement AgentCanceler; for it, tearing down the local connection IS
-// the whole cancellation, so the old immediate cancelFn() behavior is exactly
-// right and unchanged below.
+// The local subprocess implements AgentCanceler too, for a different reason:
+// killing the child discards the session state it holds (skills, grants,
+// history, a /bypass toggle), so the first press asks it to stop and the
+// second (forceLocalAbort) kills its whole process tree. A transport that
+// implements neither tears its connection down immediately below.
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelPending = true
 	m.activity = nil
@@ -1170,7 +1171,7 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.restoreQueuedToComposer()
 	m.messages = append(m.messages, Message{
 		Role:    RoleStatus,
-		Content: cancellingNotice + " (the agent stops at its next step — press again to stop waiting)",
+		Content: cancellingNotice + m.cancelHint(),
 	})
 	m.drainPendingPreScan()
 	m.updateViewport()
@@ -1189,6 +1190,15 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelFn()
 	m.cancelFn = nil
 	return m, nil
+}
+
+// cancelHint says what a second Esc will do: for an agent the TUI runs itself
+// it kills the process, for any other transport it only stops waiting here.
+func (m ChatModel) cancelHint() string {
+	if s, ok := m.client.(client.LocalAgentStopper); ok && s.AbortStopsAgent() {
+		return " (the agent stops at its next step — press again to stop it now)"
+	}
+	return " (the agent stops at its next step — press again to stop waiting)"
 }
 
 // forceLocalAbort is the escape hatch for a SECOND Esc/Ctrl+C pressed while a
@@ -1216,11 +1226,12 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	// Same reasoning as requestCancel: what was queued behind this turn was
 	// written expecting it to finish. Give it back rather than sending it.
 	m.restoreQueuedToComposer()
-	m.messages = append(m.messages, Message{
-		Role: RoleStatus,
-		Content: "gave up waiting locally — the run may still be finishing on the server; " +
-			"a retry may briefly answer \"already in progress\"",
-	})
+	content := "gave up waiting locally — the run may still be finishing on the server; " +
+		"a retry may briefly answer \"already in progress\""
+	if s, ok := m.client.(client.LocalAgentStopper); ok && s.AbortStopsAgent() {
+		content = "stopped the agent process — it restarts on your next message"
+	}
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: content})
 	m.updateViewport()
 	return m, nil
 }
