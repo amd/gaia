@@ -87,8 +87,8 @@ def _register_agent_memory_ops(agent) -> None:
             _mem_router._consolidate_fn = agent.consolidate_old_sessions
         if hasattr(agent, "reconcile_memory"):
             _mem_router._reconcile_fn = agent.reconcile_memory
-    except Exception:
-        pass  # Non-fatal: dashboard ops degrade gracefully when not registered
+    except Exception as exc:
+        logger.warning("Could not register agent memory operations: %s", exc)
 
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
@@ -1031,6 +1031,24 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
+def _restore_model_history(agent, db, session_id: str, query: str) -> None:
+    """Reserve the current prompt and output before admitting completed turns."""
+    from gaia.agents.base.history import select_history, transcript_turns
+    from gaia.agents.base.turn_metrics import count_tokens
+    from gaia.llm.lemonade_client import profile_ctx_size
+
+    ctx = profile_ctx_size(getattr(agent, "device", None))
+    prompt = getattr(agent, "system_prompt", "")
+    tools = getattr(agent, "_openai_tools", [])
+    overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
+    config = getattr(getattr(agent, "chat", None), "config", None)
+    output = getattr(config, "max_tokens", 8192)
+    budget = min(ctx // 2, ctx - overhead - output - 2048)
+    agent.conversation_history = select_history(
+        transcript_turns(db.get_context_messages(session_id)), budget
+    )
+
+
 def _dispatch_email_query(
     sse_handler,
     request: ChatRequest,
@@ -1334,7 +1352,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
 
 async def _get_chat_response(
-    db: ChatDatabase, session: dict, request: ChatRequest
+    db: ChatDatabase,
+    session: dict,
+    request: ChatRequest,
+    *,
+    model_messages: list | None = None,
 ) -> str:
     """Get a non-streaming chat response from the ChatAgent.
 
@@ -1346,10 +1368,6 @@ async def _get_chat_response(
     """
 
     def _do_chat():
-        # Build conversation history from database
-        messages = db.get_messages(request.session_id, limit=20)
-        history_pairs = _build_history_pairs(messages)
-
         # Resolve document IDs to file paths.
         document_ids = session.get("document_ids", [])
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
@@ -1574,22 +1592,7 @@ async def _get_chat_response(
             memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
             agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
-        # Restore conversation history (limited to prevent context overflow).
-        # Always re-inject from DB so the history is consistent with what was
-        # persisted — regardless of whether the agent was cached or fresh.
-        # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
-        # 2000-char truncation preserves enough assistant context for cross-turn
-        # recall, pronoun resolution, and multi-step planning.
-        _MAX_PAIRS = 5
-        _MAX_CHARS = 2000
-        agent.conversation_history = []
-        for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
-            u = user_msg[:_MAX_CHARS]
-            a = assistant_msg[:_MAX_CHARS]
-            if len(assistant_msg) > _MAX_CHARS:
-                a += "... (truncated)"
-            agent.conversation_history.append({"role": "user", "content": u})
-            agent.conversation_history.append({"role": "assistant", "content": a})
+        _restore_model_history(agent, db, session_id, request.message)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -1617,8 +1620,8 @@ async def _get_chat_response(
             )
             try:
                 _maybe_load_expected_model(effective)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Model reload before retry failed: %s", exc)
             try:
                 result = agent.process_query(request.message)
             except Exception as second_exc:  # pylint: disable=broad-except
@@ -1630,6 +1633,8 @@ async def _get_chat_response(
                 raise
 
         if isinstance(result, dict):
+            if model_messages is not None:
+                model_messages.extend(result.get("model_messages", []))
             # process_query returns {"result": "...", "status": "...", ...}
             # Use explicit None check so an intentional empty string isn't
             # overridden by fallback to "answer".
@@ -1745,7 +1750,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         )
 
         # Build conversation history
-        messages = db.get_messages(request.session_id, limit=20)
+        messages = db.get_context_messages(request.session_id)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
@@ -2131,28 +2136,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                # -- Phase 4: Conversation history --
-                # Always re-inject from DB so history is consistent regardless of
-                # whether the agent was cached or freshly constructed.  Clears any
-                # stale history accumulated in prior turns of a cached agent.
-                # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
-                _MAX_HISTORY_PAIRS = 5
-                _MAX_MSG_CHARS = 2000
-                agent.conversation_history = []
-                if history_pairs:
-                    recent = history_pairs[-_MAX_HISTORY_PAIRS:]
-                    for user_msg, assistant_msg in recent:
-                        # Truncate to keep context manageable
-                        u = user_msg[:_MAX_MSG_CHARS]
-                        a = assistant_msg[:_MAX_MSG_CHARS]
-                        if len(assistant_msg) > _MAX_MSG_CHARS:
-                            a += "... (truncated)"
-                        agent.conversation_history.append(
-                            {"role": "user", "content": u}
-                        )
-                        agent.conversation_history.append(
-                            {"role": "assistant", "content": a}
-                        )
+                _restore_model_history(agent, db, session_id, request.message)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2195,10 +2179,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         _maybe_load_expected_model(
                             _effective_model(agent, model_id), sse_handler
                         )
-                    except Exception:  # pylint: disable=broad-except
-                        # Reload failure is non-fatal — the retry might
-                        # still succeed if Lemonade caught up on its own.
-                        pass
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("Model reload before retry failed: %s", exc)
                     # Surface a brief status line to the SSE so the user
                     # sees we're recovering, not silently retrying.
                     sse_handler._emit(
@@ -2226,6 +2208,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
                         val if val is not None else result.get("answer", "")
@@ -2637,20 +2620,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
 
-            if (
-                persisted_policy_block_msg_id is not None
-                and full_response == persisted_policy_block_content
-            ):
-                msg_id = persisted_policy_block_msg_id
-            else:
-                msg_id = db.upsert_message(
-                    request.session_id,
-                    persisted_policy_block_msg_id,
-                    "assistant",
-                    full_response,
-                    agent_steps=captured_steps if captured_steps else None,
-                    inference_stats=inference_stats,
-                )
+            msg_id = db.upsert_message(
+                request.session_id,
+                persisted_policy_block_msg_id,
+                "assistant",
+                full_response,
+                agent_steps=captured_steps if captured_steps else None,
+                inference_stats=inference_stats,
+                model_messages=result_holder.get("model_messages"),
+            )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -2720,6 +2698,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     "assistant",
                     content,
                     agent_steps=steps_to_persist,
+                    model_messages=result_holder.get("model_messages"),
                 )
                 done_event = {
                     "type": "done",
@@ -2734,8 +2713,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:
@@ -2762,8 +2741,8 @@ async def _run_chat_lifecycle(
         from gaia.ui.agent_loop import agent_loop
 
         agent_loop.notify_user_message(request.session_id)
-    except Exception:  # pylint: disable=broad-except
-        pass
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not notify agent loop: %s", exc)
 
 
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):

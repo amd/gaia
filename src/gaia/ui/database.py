@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS session_documents (
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-    role TEXT CHECK(role IN ('user', 'assistant', 'system')) NOT NULL,
+    role TEXT CHECK(role IN ('user', 'assistant', 'system', 'autonomous')) NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     rag_sources TEXT,
@@ -168,6 +168,49 @@ class ChatDatabase:
         """Create tables if they don't exist and run migrations."""
         self._conn.executescript(SCHEMA_SQL)
         self._migrate()
+        self._migrate_autonomous_role()
+
+    def _migrate_autonomous_role(self) -> None:
+        """Allow background turns while preserving the existing message table."""
+        schema = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+        ).fetchone()[0]
+        old_roles = "'user', 'assistant', 'system'"
+        if "'autonomous'" in schema:
+            return
+        if old_roles not in schema:
+            raise RuntimeError(
+                "Cannot migrate messages role constraint; inspect the chat database schema."
+            )
+        indexes = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name = 'messages' "
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+        ).fetchall()
+        sequence = self._conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'messages'"
+        ).fetchone()
+        migrated = schema.replace(old_roles, old_roles + ", 'autonomous'")
+        migrated = migrated.replace(
+            "CREATE TABLE messages", "CREATE TABLE messages_history_migration", 1
+        )
+        with self._transaction():
+            self._conn.execute("BEGIN")
+            self._conn.execute(migrated)
+            self._conn.execute(
+                "INSERT INTO messages_history_migration SELECT * FROM messages"
+            )
+            self._conn.execute("DROP TABLE messages")
+            self._conn.execute(
+                "ALTER TABLE messages_history_migration RENAME TO messages"
+            )
+            for index in indexes:
+                self._conn.execute(index[0])
+            if sequence is not None:
+                self._conn.execute(
+                    "UPDATE sqlite_sequence SET seq = ? WHERE name = 'messages'",
+                    (sequence[0],),
+                )
+        logger.info("Migrated messages table: enabled autonomous history")
 
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""
@@ -181,6 +224,10 @@ class ChatDatabase:
         """Apply incremental schema migrations for existing databases."""
         # Ensure settings table exists
         self._ensure_settings_table()
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)")}
+        if "model_messages" not in cols:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN model_messages TEXT")
+            self._conn.commit()
         # Add agent_steps column if it doesn't exist (added for observability persistence)
         try:
             cols = [
@@ -422,7 +469,7 @@ class ChatDatabase:
         with self._lock:
             row = self._conn.execute(
                 """SELECT s.*,
-                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
+                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s WHERE s.id = ?""",
                 (session_id,),
             ).fetchone()
@@ -446,7 +493,7 @@ class ChatDatabase:
         with self._lock:
             rows = self._conn.execute(
                 """SELECT s.*,
-                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
+                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
                    ORDER BY s.updated_at DESC
                    LIMIT ? OFFSET ?""",
@@ -575,18 +622,20 @@ class ChatDatabase:
         tokens_prompt: int | None = None,
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
+        model_messages: List[Dict] | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
+        model_json = json.dumps(model_messages) if model_messages is not None else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -597,6 +646,7 @@ class ChatDatabase:
                     tokens_prompt,
                     tokens_completion,
                     stats_json,
+                    model_json,
                 ),
             )
 
@@ -620,6 +670,7 @@ class ChatDatabase:
         tokens_prompt: int | None = None,
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
+        model_messages: List[Dict] | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -632,6 +683,7 @@ class ChatDatabase:
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
+        model_json = json.dumps(model_messages) if model_messages is not None else None
 
         with self._transaction():
             if msg_id is not None:
@@ -643,8 +695,8 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -655,6 +707,7 @@ class ChatDatabase:
                     tokens_prompt,
                     tokens_completion,
                     stats_json,
+                    model_json,
                 ),
             )
 
@@ -674,7 +727,7 @@ class ChatDatabase:
         with self._lock:
             rows = self._conn.execute(
                 """SELECT * FROM messages
-                   WHERE session_id = ?
+                   WHERE session_id = ? AND role != 'autonomous'
                    ORDER BY created_at ASC
                    LIMIT ? OFFSET ?""",
                 (session_id, limit, offset),
@@ -683,6 +736,7 @@ class ChatDatabase:
         messages = []
         for row in rows:
             msg = dict(row)
+            msg.pop("model_messages", None)
             if msg.get("rag_sources"):
                 try:
                     msg["rag_sources"] = json.loads(msg["rag_sources"])
@@ -702,6 +756,28 @@ class ChatDatabase:
 
         return messages
 
+    def get_context_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """Read model history separately from paginated UI activity metadata."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT role, content, model_messages FROM messages "
+                "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        messages = []
+        for row in rows:
+            message = dict(row)
+            if message["model_messages"] is not None:
+                try:
+                    message["model_messages"] = json.loads(message["model_messages"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"Cannot restore model history for session {session_id}; "
+                        "inspect the messages table in the chat database."
+                    ) from exc
+            messages.append(message)
+        return messages
+
     def delete_message(self, session_id: str, message_id: int) -> bool:
         """Delete a single message by ID.
 
@@ -713,6 +789,14 @@ class ChatDatabase:
             True if a message was deleted, False if not found.
         """
         with self._transaction():
+            self._conn.execute(
+                "UPDATE messages SET model_messages = NULL "
+                "WHERE id = (SELECT id FROM messages WHERE session_id = ? AND id > ? "
+                "AND role IN ('user', 'assistant') ORDER BY id LIMIT 1) "
+                "AND role = 'assistant' AND EXISTS "
+                "(SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND role = 'user')",
+                (session_id, message_id, message_id, session_id),
+            )
             cursor = self._conn.execute(
                 "DELETE FROM messages WHERE id = ? AND session_id = ?",
                 (message_id, session_id),
@@ -759,7 +843,7 @@ class ChatDatabase:
         """Count messages in a session."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
+                "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ? AND role != 'autonomous'",
                 (session_id,),
             ).fetchone()
             return int(row["cnt"])

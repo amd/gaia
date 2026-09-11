@@ -41,6 +41,15 @@ Ask the agent to locate files across your drives — by name, type, content, or 
 
 The agent searches your common folders first, then offers a deep search across all drives if nothing turns up.
 
+### Continue Work Across Turns
+
+In-process chat agents retain file reads, tool calls and tool results for later
+questions, including after the server restarts. Complete older turns leave the
+model's context only when its estimated history budget fills; the transcript and
+stored evidence remain on your machine. A backend log warning identifies context
+exclusions. Earlier conversations saved before this feature retain text only.
+The email sidecar still uses its separate prose-only history contract.
+
 ### Analyze Any Document
 
 Drag files into the chat — or just ask the agent to find them. It indexes the content and lets you ask questions, extract data, compare sections, or get summaries. Works with:

@@ -777,6 +777,14 @@ print(result["result"])
 
 ## Deep Dive: Under the Hood
 
+`process_query()` also returns `model_messages`: a deep-copied, model-facing trace
+of the current turn, including native tool calls and their results. It excludes
+prior conversation history and the system prompt. Hosts can persist it and use
+complete turns to populate `conversation_history` on later calls. Overflow retry
+trimming does not replace the retained evidence with stubs. Calls interrupted
+before a result was recorded receive an explicit incomplete-result message;
+this does not claim they executed successfully.
+
 <Accordion title="How process_query() Works Internally">
 
 When you call `agent.process_query(user_input)`, here's the detailed flow:

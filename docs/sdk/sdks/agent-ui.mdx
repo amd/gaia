@@ -170,9 +170,30 @@ for s in db.list_sessions(limit=10):
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?) -> int` | Add a message, returns message ID |
+| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?, model_messages?) -> int` | Add a message, returns message ID |
 | `get_messages` | `(session_id, limit=100, offset=0) -> List[Dict]` | Get messages oldest-first |
 | `count_messages` | `(session_id) -> int` | Count messages in a session |
+| `get_context_messages` | `(session_id) -> List[Dict]` | Read ordered model history, including tool evidence; separate from UI pagination |
+
+In-process chat and autonomous turns save the agent's `model_messages` on the
+assistant or autonomous row. These contain the current turn's user message,
+assistant tool calls, tool results and final answer, without duplicating prior
+history or the system prompt. The nullable JSON column is added automatically to
+existing databases; legacy rows retain their original text-only context.
+
+Restoration budgets complete turns against the device profile (32K NPU, 64K
+GPU/CPU), reserving the current prompt, native tool schemas, output allowance and
+2K estimated tokens of headroom. History uses at most half the profile window.
+Counts use GAIA's shared token estimator, not a guarantee against the model's
+exact tokenizer. On overflow, old turns are removed in a block toward half the
+history budget; the newest turn is retained if it fits. The full stored trace
+remains in SQLite, and exclusions produce a warning in the backend log.
+
+`get_messages` and the ordinary transcript API do not expose the internal trace.
+Deleting a transcript message also deletes its evidence. The email sidecar's
+separate `/query` contract still carries bounded prose; native evidence replay
+for that transport is a separate extension.
+
 
 **Example:**
 

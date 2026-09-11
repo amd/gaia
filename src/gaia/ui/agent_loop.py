@@ -156,8 +156,10 @@ class AgentLoop:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception as exc:
+                    logger.warning("Agent loop task failed during shutdown: %s", exc)
         logger.info("AgentLoop stopped")
 
     # ── Public API (called from routers/chat) ────────────────────────────────
@@ -172,8 +174,8 @@ class AgentLoop:
             self._trigger_queue.put_nowait(
                 AgentTrigger("user_message_followup", session_id)
             )
-        except asyncio.QueueFull:
-            pass  # queue is unbounded; this should never happen
+        except asyncio.QueueFull as exc:
+            logger.error("Agent trigger queue unexpectedly full: %s", exc)
 
     # ── Internal: trigger consumer ────────────────────────────────────────────
 
@@ -210,8 +212,8 @@ class AgentLoop:
             if not self._stop_event.is_set():
                 try:
                     self._trigger_queue.put_nowait(AgentTrigger("idle_tick", None))
-                except Exception:
-                    pass
+                except asyncio.QueueFull as exc:
+                    logger.error("Agent tick queue unexpectedly full: %s", exc)
 
     # ── Internal: trigger processing ─────────────────────────────────────────
 
@@ -361,19 +363,6 @@ class AgentLoop:
 
         def _run_agent() -> None:
             try:
-                # Run the heavier sync work inline (we're in a thread).
-                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-                try:
-                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-                except ImportError as e:
-                    raise RuntimeError(
-                        agent_not_installed_message(
-                            "The chat agent is not installed",
-                            "gaia-agent-chat",
-                            next_step="Then restart the server.",
-                        )
-                    ) from e
-
                 import gaia.ui._chat_helpers as _helpers
 
                 # Reuse cached agent if available; build fresh if not.
@@ -392,6 +381,19 @@ class AgentLoop:
                     agent.console = sse_handler
                     agent._register_tools()
                 else:
+                    # Run the heavier sync work inline (we're in a thread).
+                    # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                    try:
+                        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                    except ImportError as e:
+                        raise RuntimeError(
+                            agent_not_installed_message(
+                                "The chat agent is not installed",
+                                "gaia-agent-chat",
+                                next_step="Then restart the server.",
+                            )
+                        ) from e
+
                     rag_paths, lib_paths = _helpers._resolve_rag_paths(
                         db, session.get("document_ids", [])
                     )
@@ -409,30 +411,21 @@ class AgentLoop:
                         debug=False,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
+                        device=session.get("device"),
                         dynamic_tools=dynamic_tools,
                     )
                     agent = ChatAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
-                # Inject conversation history (capped for autonomous ticks)
-                messages = db.get_messages(session_id, limit=10)
-                history_pairs = _helpers._build_history_pairs(messages)
-                agent.conversation_history = []
-                for u, a in history_pairs[-3:]:  # 3-pair rolling window for ticks
-                    agent.conversation_history.append(
-                        {"role": "user", "content": u[:1000]}
-                    )
-                    agent.conversation_history.append(
-                        {"role": "assistant", "content": a[:1000]}
-                    )
+                _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
                 # Set incognito flag (respect private/memory settings)
                 if hasattr(agent, "_incognito"):
                     memory_off = db.get_setting("memory_enabled", "false") == "false"
                     agent._incognito = memory_off
 
-                agent.process_query(tick_prompt)
+                result_holder["result"] = agent.process_query(tick_prompt)
 
             except Exception as exc:
                 logger.error("AgentLoop tick execution failed: %s", exc, exc_info=True)
@@ -458,9 +451,10 @@ class AgentLoop:
                 session_id=session_id,
                 role="autonomous",
                 content=tick_prompt,
+                model_messages=result_holder.get("result", {}).get("model_messages"),
             )
-        except Exception:
-            pass  # Non-fatal — activity logging is best-effort
+        except Exception as exc:
+            logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
 
         # Read directive from SSE handler (set by set_loop_state tool)
         if sse_handler.loop_state_directive:
