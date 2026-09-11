@@ -112,8 +112,11 @@ class TestProcessQueryRecoversOnParseError:
         """Issue #3596: a response that is nothing but fenced tool calls used to
         be handed back to the user as the turn's answer — raw JSON, no tool run,
         no error. It must now retry and answer on the next round."""
-        fenced = '```json\n{"tool": "extract_audio", "tool_args": {}}\n```'
-        bad = f"{fenced}\n{fenced}\n```json}}"
+        bad = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```\n'
+            "```json}"
+        )
         good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
         chat = self._stub_chat(agent, bad, good_answer)
 
@@ -125,6 +128,63 @@ class TestProcessQueryRecoversOnParseError:
         )
         text = result.get("response") if isinstance(result, dict) else str(result)
         assert "```json" not in (text or "")
+
+    def test_retry_prompt_carries_the_parser_reason(self, agent):
+        """The recovery turn must quote the parser's own message.
+
+        Telling the model its *arguments* were malformed when the real defect
+        was duplicated fenced blocks sends it back down the same path and burns
+        every retry.
+        """
+        bad = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```'
+        )
+        good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
+        chat = self._stub_chat(agent, bad, good_answer)
+
+        agent.process_query("Summarize the workshop video", max_steps=5)
+
+        retry_msgs = [
+            m["content"]
+            for call in chat.send_messages.call_args_list
+            for m in (call.kwargs.get("messages") or call.args[0])
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        assert any(
+            "Ambiguous tool call" in c and "unfenced" in c for c in retry_msgs
+        ), f"parser reason missing from the retry prompt: {retry_msgs}"
+
+    def test_unparseable_plan_recovers_instead_of_crashing(self, agent):
+        """A plan reply that won't parse must retry, not escape as an error.
+
+        The planning branch calls the same parser as the main loop, so the
+        reply shapes that raise there raise here too.
+        """
+        needs_plan = json.dumps({"thought": "Need a plan.", "needs_plan": True})
+        bad_plan = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```'
+        )
+        good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
+        chat = self._stub_chat(agent, needs_plan, bad_plan, good_answer)
+
+        result = agent.process_query("Plan then answer", max_steps=5)
+
+        assert chat.send_messages.call_count == 3
+        sent = [
+            m["content"]
+            for call in chat.send_messages.call_args_list
+            for m in (call.kwargs.get("messages") or call.args[0])
+            if isinstance(m.get("content"), str)
+        ]
+        assert any("You MUST create a detailed plan" in c for c in sent)
+        assert any("Ambiguous tool call" in c for c in sent)
+        assert any(
+            e.get("type") == "tool_call_parse_error" for e in agent.error_history
+        )
+        text = result.get("response") if isinstance(result, dict) else str(result)
+        assert "Agent error" not in (text or "")
 
     def test_three_consecutive_parse_errors_give_up_gracefully(self, agent):
         """After 3 parse errors the loop bails with a friendly message."""

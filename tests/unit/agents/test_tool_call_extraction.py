@@ -6,7 +6,8 @@ Stage A of issue #1428: verify the base parser's decision logic:
   1. ≥1 unfenced candidate → return the first (unchanged behaviour)
   2. exactly one fenced candidate → return it (the fix)
   3. >1 fenced + 0 unfenced → ambiguous → None + warning when prose surrounds
-     the fences, ValueError when the response is fenced calls only (#3596)
+     the fences; with no prose, the call is returned when every block is
+     identical and ValueError is raised when they differ (#3596)
   4. no candidates → None
 """
 
@@ -188,20 +189,48 @@ class TestMultipleFencedCandidates:
         assert result is None
 
     def test_fenced_only_no_prose_raises(self, parser):
-        """Nothing but fenced tool calls is a fumbled call, not an answer (#3596).
+        """Nothing but differing fenced tool calls is a fumbled call, not an
+        answer (#3596).
 
         Returning None here would hand the user raw JSON as the turn's answer;
         raising routes the turn into process_query's parse-error recovery.
         """
-        fenced = '```json\n{"tool": "t", "tool_args": {}}\n```'
-        response = f"{fenced}\n{fenced}\n{fenced}"
+        response = (
+            '```json\n{"tool": "a", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "b", "tool_args": {}}\n```'
+        )
         with pytest.raises(ValueError, match="Ambiguous tool call"):
             _call(parser, response)
 
+    def test_fenced_only_differing_args_raises(self, parser):
+        """Same tool, different arguments is still undecidable."""
+        response = (
+            '```json\n{"tool": "t", "tool_args": {"path": "a.mp4"}}\n```\n'
+            '```json\n{"tool": "t", "tool_args": {"path": "b.mp4"}}\n```'
+        )
+        with pytest.raises(ValueError, match="Ambiguous tool call"):
+            _call(parser, response)
+
+    def test_fenced_only_identical_blocks_returns_the_call(self, parser):
+        """Repeating one call verbatim is not ambiguous — run it (#3596).
+
+        This is the shape the model actually emitted: the same tool with the
+        same arguments, fenced, several times over.
+        """
+        fenced = '```json\n{"tool": "extract_audio", "tool_args": {"id": 1}}\n```'
+        response = f"{fenced}\n{fenced}\n{fenced}"
+        result = _call(parser, response)
+        assert result is not None
+        assert result["tool"] == "extract_audio"
+        assert result["tool_args"] == {"id": 1}
+
     def test_fenced_only_unclosed_fence_raises(self, parser):
         """The shape seen in #3596: fenced calls trailed by an unclosed fence."""
-        fenced = '```json\n{"tool": "extract_audio", "tool_args": {}}\n```'
-        response = f"{fenced}\n{fenced}\n```json}}"
+        response = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize", "tool_args": {}}\n```\n'
+            "```json}"
+        )
         with pytest.raises(ValueError, match="Ambiguous tool call"):
             _call(parser, response)
 

@@ -2376,6 +2376,22 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
+    def _tool_call_retry_prompt(self, reason: Exception) -> str:
+        """Build the recovery turn sent after a tool-call parse failure.
+
+        ``reason`` is the parser's own message — it names the specific defect
+        (ambiguous fenced blocks, malformed arguments, unparseable envelope),
+        which is what lets the model correct the real problem instead of
+        guessing from generic advice.
+        """
+        return (
+            f"Your last tool call could not be used: {reason}\n"
+            "Please try again. Emit exactly ONE tool call as raw JSON — no code "
+            "fences, no repeated blocks — and use ONLY the documented enum values "
+            "for each argument (e.g. 'brief', 'detailed', 'bullets' — never a long "
+            "sentence). If you don't need a tool, answer in plain text."
+        )
+
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
         Detect and extract a tool call JSON embedded in a text response.
@@ -2390,7 +2406,8 @@ Do NOT wrap conversational replies in JSON.
           2. else exactly one fenced candidate → return it (the fix for #1428).
           3. else >1 fenced, 0 unfenced → ambiguous: with prose around the
              fences it looks like docs → None + warning; with no prose at all
-             it is a fumbled tool call → ValueError (#3596).
+             it is a fumbled tool call → return it if every block is identical,
+             else ValueError (#3596).
           4. else → fall back to Python-call syntax detection (#2521), e.g.
              ``remember(fact="...", category="preference")``.
 
@@ -2404,7 +2421,8 @@ Do NOT wrap conversational replies in JSON.
                 when a *registered* tool's name is followed by an argument list
                 that can't be parsed — a loud failure rather than echoing the
                 raw syntax to the user as an answer.  Also raised for rule 3
-                above when the response is nothing but fenced tool calls.
+                above when the response is nothing but differing fenced tool
+                calls.
         """
         # Quick check: must contain "tool" to be worth scanning for the JSON
         # shape. Responses without it may still carry the #2521 Python-call
@@ -2523,11 +2541,22 @@ Do NOT wrap conversational replies in JSON.
             for fence_start, fence_end in reversed(_code_ranges):
                 prose = prose[:fence_start] + prose[fence_end:]
             if not prose.strip():
+                distinct = {
+                    json.dumps(c, sort_keys=True, default=str, ensure_ascii=False)
+                    for c in fenced
+                }
+                if len(distinct) == 1:
+                    logger.debug(
+                        "[PARSE] %d identical fenced tool calls — running one: %s",
+                        len(fenced),
+                        fenced[0].get("tool"),
+                    )
+                    return fenced[0]
                 raise ValueError(
-                    f"Ambiguous tool call: {len(fenced)} fenced tool-call blocks "
-                    "and no other text, so the intended call is undecidable "
-                    f"(candidates: {[c.get('tool') for c in fenced]}). Emit "
-                    "exactly one tool call, unfenced."
+                    f"Ambiguous tool call: {len(fenced)} different fenced "
+                    "tool-call blocks and no other text, so the intended call is "
+                    f"undecidable (candidates: {[c.get('tool') for c in fenced]}). "
+                    "Emit exactly one tool call, unfenced."
                 )
             logger.warning(
                 "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
@@ -5700,16 +5729,8 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
-                assistant_msg = (
-                    "[I tried to call a tool but my arguments were malformed.]"
-                )
-                user_msg = (
-                    "Your last tool call had malformed arguments. "
-                    "Please try again. Use ONLY the documented enum "
-                    "values for each argument (e.g. 'brief', "
-                    "'detailed', 'bullets' — never a long sentence). "
-                    "If you don't need a tool, answer in plain text."
-                )
+                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+                user_msg = self._tool_call_retry_prompt(parse_exc)
                 if _last_image_path:
                     user_msg += (
                         f"\n\nYour previous step generated an image at "
@@ -5855,7 +5876,42 @@ Do NOT wrap conversational replies in JSON.
                 ).strip()
 
                 # Parse the plan response
-                parsed_plan = self._parse_llm_response(plan_response)
+                try:
+                    parsed_plan = self._parse_llm_response(plan_response)
+                except ValueError as plan_parse_exc:
+                    logger.warning(
+                        "Plan parse failed (step %d): %s — recovering with retry prompt",
+                        steps_taken,
+                        plan_parse_exc,
+                    )
+                    self.error_history.append(
+                        {
+                            "step": steps_taken,
+                            "error": str(plan_parse_exc),
+                            "type": "tool_call_parse_error",
+                        }
+                    )
+                    error_count += 1
+                    if error_count >= 3:
+                        final_answer = (
+                            "I had trouble formatting my plan. Could you "
+                            "rephrase or break the request into smaller pieces?"
+                        )
+                        break
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": "[I tried to send a plan but it could not be parsed.]",
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._tool_call_retry_prompt(plan_parse_exc),
+                        }
+                    )
+                    steps_taken += 1
+                    continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
