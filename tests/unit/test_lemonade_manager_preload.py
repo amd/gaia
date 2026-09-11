@@ -401,3 +401,5 @@ def test_is_llm_model_entry_rejects_non_llm_types():
     # Catalog-derived rows carry no ``type`` — fall back to labels.
     assert is_llm_model_entry({"id": "Gemma-4-E4B-it-GGUF"}) is True
     assert is_llm_model_entry({"labels": ["embeddings"]}) is False
+    # Explicit JSON null for labels must not raise TypeError.
+    assert is_llm_model_entry({"id": "X", "labels": None}) is True

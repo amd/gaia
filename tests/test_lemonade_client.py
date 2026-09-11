@@ -1471,6 +1471,37 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIsNone(error)
 
     @responses.activate
+    def test_validate_context_size_skips_non_llm_entry(self):
+        """A non-LLM entry sorting first must not shadow the LLM's ctx_size."""
+        health_response = {
+            "status": "ok",
+            "model_loaded": TEST_MODEL,
+            "version": "9.1.4",
+            "all_models_loaded": [
+                {
+                    "model_name": "Whisper-Large-v3-Turbo",
+                    "type": "transcription",
+                    "recipe_options": {"ctx_size": 4096},
+                },
+                {
+                    "model_name": TEST_MODEL,
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 65536},
+                },
+            ],
+        }
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json=health_response, status=200
+        )
+
+        valid, error = self.client.validate_context_size(
+            required_tokens=32768, quiet=True
+        )
+
+        self.assertTrue(valid)
+        self.assertIsNone(error)
+
+    @responses.activate
     def test_validate_context_size_insufficient(self):
         """Test validate_context_size returns False when context is insufficient."""
         # Lemonade 9.1.4+ format: ctx_size in all_models_loaded[N].recipe_options

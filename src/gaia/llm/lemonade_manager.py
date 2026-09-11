@@ -915,13 +915,7 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
-        # Filter to the LLM(s) actually loaded, via the same
-        # ``is_llm_model_entry`` check ``get_status()`` uses for
-        # ``context_size`` — a single source of truth so the two can't drift.
-        # Embedding, image, and transcription models are excluded —
-        # reloading them with an LLM ctx_size makes no sense and (pre-#1030
-        # follow-up) used to load the wrong model entirely because the
-        # embedder can sort before ``Gemma-…``.
+        # Same predicate get_status() uses for context_size — one source of truth.
         llm_models = [m for m in status.loaded_models if is_llm_model_entry(m)]
         if not llm_models:
             return False
