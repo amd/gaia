@@ -93,10 +93,13 @@ cd ..
 
 > **This is the step people get wrong.** The terminal UI does not run the agent
 > itself — it spawns a separate `gaia-agent` program and talks to it over a
-> pipe. So the agent you get is whichever `gaia-agent` it finds first, and
-> `uv pip install -e ".[dev]"` in step 2 is what points that at **your clone**.
-> If the agent says it cannot transcribe, you are talking to a different build;
-> re-run step 2 from inside this checkout.
+> pipe, taking the first one on your `PATH`. Step 2 does **not** create one:
+> the repo's install ships `gaia`, `gaia-cli` and `gaia-mcp` only. With nothing
+> on `PATH` the UI falls back to a previously *installed* build, which predates
+> transcription and will tell you it cannot do it.
+>
+> **Use the launch scripts below.** They put `scripts/dev/bin` first on `PATH`,
+> and the `gaia-agent` there runs this checkout's source.
 
 The repo ships launch scripts that set the environment for you.
 
@@ -116,16 +119,17 @@ Launch it from **Windows Terminal**, not a bare `cmd.exe` window. A console
 started any other way reports no colour support and the UI renders flat grey —
 it looks broken but is not.
 
-If you would rather run the binary directly:
+Running `./tui/bin/gaia-tui` directly skips the `PATH` setup and gets you the
+stale installed agent — which is the failure above. If you must, export the
+`PATH` yourself first:
 
 ```bash
+export PATH="$PWD/scripts/dev/bin:$PATH"   # Windows: set PATH=%CD%\scripts\dev\bin;%PATH%
 ./tui/bin/gaia-tui
 ```
 
-On a machine with **several** GAIA clones, `gaia-agent` resolves to whichever
-one was `pip install -e`'d last — which may not be this one. Check with
-`where gaia-agent` (Windows) or `which gaia-agent`, and re-run step 2 here if
-it points elsewhere.
+To confirm which agent you are about to get, run `which gaia-agent` (Windows:
+`where gaia-agent`). It must point inside this checkout.
 
 The first launch runs a readiness check, then drops you into chat.
 

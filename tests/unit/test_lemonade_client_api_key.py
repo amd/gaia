@@ -104,3 +104,55 @@ class TestEmbeddedBaseURL:
         monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
         _, _, base = lc._get_lemonade_config()
         assert base == lc.DEFAULT_LEMONADE_URL
+
+
+class TestResolveLemonadeBaseURL:
+    """The public resolver every caller should use to locate Lemonade."""
+
+    def test_explicit_argument_wins(self, embedded_state, monkeypatch):
+        embedded_state({"port": 63207, "api_key": "k"})
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://env.test:9000")
+        assert (
+            lc.resolve_lemonade_base_url("http://explicit.test:1234/api/v1")
+            == "http://explicit.test:1234/api/v1"
+        )
+
+    def test_a_bare_origin_gains_the_api_path(self, embedded_state, monkeypatch):
+        """Users configure the origin; callers append endpoints to the result.
+
+        Returning it unchanged put the burden of adding /api/v1 back on each
+        caller, which is exactly the split that produced a doubled
+        ``/api/v1/api/v1/models`` in the agent's readiness probe.
+        """
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        assert (
+            lc.resolve_lemonade_base_url("http://explicit.test:1234")
+            == "http://explicit.test:1234/api/v1"
+        )
+
+    def test_a_trailing_slash_does_not_double_the_path(self, monkeypatch):
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        assert (
+            lc.resolve_lemonade_base_url("http://x.test:1/api/v1/")
+            == "http://x.test:1/api/v1"
+        )
+
+    def test_finds_the_embedded_server(self, embedded_state, monkeypatch):
+        embedded_state({"port": 63207, "api_key": "k"})
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        assert lc.resolve_lemonade_base_url() == "http://localhost:63207/api/v1"
+
+    def test_falls_back_to_the_packaged_default(self, embedded_state, monkeypatch):
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+
+    def test_always_carries_the_api_version(self, embedded_state, monkeypatch):
+        """The embedded state file records a port, not a URL.
+
+        Returning a bare host:port here would leave callers to append
+        ``/api/v1`` themselves — which is how the inline defaults this
+        function replaces drifted apart in the first place.
+        """
+        embedded_state({"port": 63207, "api_key": "k"})
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        assert lc.resolve_lemonade_base_url().endswith("/api/v1")

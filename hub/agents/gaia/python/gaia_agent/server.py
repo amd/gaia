@@ -370,12 +370,12 @@ def _probe_lemonade() -> Dict[str, Any]:
     import requests
     from gaia_agent.agent import GaiaAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, resolve_lemonade_base_url
 
-    base = (
+    # Already ends in /api/v1 — the requests below must not append it again.
+    base = resolve_lemonade_base_url(
         os.environ.get("LEMONADE_BASE_URL")
         or getattr(GaiaAgentConfig(), "base_url", None)
-        or "http://localhost:13305"
     ).rstrip("/")
     model_id = DEFAULT_MODEL_NAME
 
@@ -388,7 +388,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         "model_id": model_id,
     }
     try:
-        r = requests.get(f"{base}/api/v1/models", timeout=5)
+        r = requests.get(f"{base}/models", timeout=5)
         r.raise_for_status()
         out["reachable"] = True
         data = r.json().get("data") or []
@@ -405,7 +405,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         return out
 
     try:
-        rv = requests.get(f"{base}/api/v1/health", timeout=5)
+        rv = requests.get(f"{base}/health", timeout=5)
         if rv.ok:
             payload = rv.json()
             out["version"] = payload.get("version") or payload.get("server_version")

@@ -116,6 +116,29 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
+def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
+    """Resolve the Lemonade base URL: argument, env var, embedded server, default.
+
+    The public counterpart to :func:`resolve_lemonade_api_key`, and the only
+    thing callers should use to answer "where is Lemonade?".
+
+    Always returns a URL ending in ``/api/<version>`` — including one passed in
+    explicitly, since users routinely configure the bare origin. Callers can
+    therefore append endpoint paths directly; a caller that adds ``/api/v1``
+    itself will produce a doubled path.
+
+    Callers that instead wrote ``os.getenv("LEMONADE_BASE_URL", "http://…")``
+    inline could not see GAIA's own embedded server, which binds a port chosen
+    at start time. Every one of those copies had to be found and changed for
+    the embedded server to be usable at all.
+    """
+    if base_url is None:
+        return _get_lemonade_config()[2]
+    trimmed = base_url.rstrip("/")
+    suffix = f"/api/{LEMONADE_API_VERSION}"
+    return trimmed if trimmed.endswith(suffix) else f"{trimmed}{suffix}"
+
+
 #: Where GAIA's embedded Lemonade records the credential it generated.
 EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
 

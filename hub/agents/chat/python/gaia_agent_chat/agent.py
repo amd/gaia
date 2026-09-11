@@ -50,7 +50,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    is_tool_calling_model,
+    resolve_lemonade_base_url,
+)
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
@@ -285,12 +289,10 @@ class ChatAgent(
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
 
-        # Resolve effective base_url: config value > env var > default
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
+        # config value > env var > embedded server > packaged default. Resolved
+        # centrally: an inline default here cannot see GAIA's embedded Lemonade,
+        # which binds a port chosen at start time.
+        effective_base_url = resolve_lemonade_base_url(config.base_url)
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -1481,8 +1483,10 @@ No documents are currently indexed.
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
         try:
+            # getattr: tools can register from super().__init__(), before
+            # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=getattr(self, "_base_url", "http://localhost:13305/api/v1")
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"
