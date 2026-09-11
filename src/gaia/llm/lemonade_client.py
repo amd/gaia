@@ -218,6 +218,20 @@ def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
     return norm(a) == norm(b)
 
 
+def is_llm_model_entry(model: Dict[str, Any]) -> bool:
+    """True if *model* is an LLM entry, not embedding/image/transcription/etc.
+
+    Accepts either a raw ``all_models_loaded`` entry (has ``type``) or an
+    enriched ``loaded_models`` entry (may have ``type is None`` for
+    catalog-derived rows lacking health data). ``type == "llm"`` is the
+    precise check; the label fallback covers those catalog-only rows.
+    """
+    if model.get("type") is not None:
+        return model.get("type") == "llm"
+    labels = model.get("labels") or []
+    return "image" not in labels and "embeddings" not in labels
+
+
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
@@ -3970,12 +3984,15 @@ class LemonadeClient:
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                # Get context size from the first loaded model (typically the LLM)
-                reported_ctx = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            reported_ctx = 0
+            for m in all_models:
+                if not is_llm_model_entry(m):
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    reported_ctx = ctx
+                    break
+            if not reported_ctx:
                 # Fallback for older Lemonade versions
                 reported_ctx = health.get("context_size", 0)
 
@@ -4016,10 +4033,12 @@ class LemonadeClient:
             status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
-            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
+            # Only consider LLM entries — a co-loaded transcription or
+            # embedding model's ctx_size is irrelevant and, if it sorts
+            # first, would otherwise be misreported as the server's context.
             all_models = health.get("all_models_loaded", [])
             for m in all_models:
-                if m.get("type") == "embedding":
+                if not is_llm_model_entry(m):
                     continue
                 ctx = m.get("recipe_options", {}).get("ctx_size", 0)
                 if ctx:
