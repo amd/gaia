@@ -30,7 +30,7 @@ So the runtime shape is already two binaries talking over stdin/stdout. The
 release pipeline already builds and publishes both — `binaries.lock.json`
 declares a `sidecar` component and a `tui` component, per platform.
 
-## The blocker
+## The blocker — RESOLVED
 
 **The frozen agent binary speaks the wrong protocol.** Its entry is
 `packaging/server.py`, which re-exports `gaia_agent.server.main()` — a uvicorn
@@ -49,8 +49,21 @@ docstring says the TUI's argv spellings are load-bearing:
 > The TUI appends `--use-claude` / `--claude-model` as literal strings to the
 > child argv, so these exact spellings are load-bearing.
 
-It is simply never frozen. `freeze.py` has exactly one `ENTRY`, and it is the
-HTTP server. This is the open work in "Add stdio freeze target + smoke test".
+It was simply never frozen — `freeze.py` had one `ENTRY`, the HTTP server.
+
+**Fixed.** `gaia_agent.server.main()` now dispatches on argv: `--serve` (or a
+bind flag, which the daemon passes without `--serve` for the *email* sidecar)
+runs HTTP, anything else is the stdio wire. One binary, both transports.
+Verified on a real build: it answers JSONL, and `--serve` still passes
+`smoke_test.py`.
+
+A second fault surfaced only after that: the frozen binary had **no speaker
+identification at all**, because the engine was pip-installed lazily and
+`sys.executable` inside PyInstaller is the `.exe`, not an interpreter. A
+46-minute meeting produced zero speaker spans from the frozen build where a
+source checkout produced four. sherpa-onnx is now bundled at build time behind
+a `diarize` extra, guarded by `_verify_collect_targets` so a missing engine
+fails the build rather than shipping silently. Binary: 92 -> 102.5 MB.
 
 ## Four things to build
 
@@ -110,11 +123,21 @@ than defaulting.
 
 ## Sequencing
 
-Item 1 is the blocker and is small — the transport is written, it needs an entry
-point and a dispatch. Item 2 unlocks sharing custom builds immediately, even
-before there is an installer, because a zipped folder with two working binaries
-is already better than a toolchain. Items 3 and 4 are what turn it into
-something you would put in front of someone outside the team.
+Items 1 and 3 are done: the binary serves both transports, and
+`installer/scripts/build-gaia-installer.ps1` produces a per-user Windows
+installer (~107 MB) that lays down both binaries, puts `gaia-tui` on PATH and
+writes the install sentinel. Verified by installing and transcribing from the
+installed binaries.
+
+Item 2 (a local `bundle` target) and item 4 (who installs Lemonade) remain.
+Neither blocks sharing a build today — the installer covers Windows, which is
+where the colleagues are.
+
+One caveat learned the hard way: on a machine that already has the Python
+package, `gaia-agent` on PATH **shadows** the installed binary, because
+`ResolveExecutable` searches PATH first. That is correct for developers and
+invisible to end users, but it means the installer cannot be meaningfully
+tested on a dev box without moving the console script aside first.
 
 ## What is explicitly out of scope
 

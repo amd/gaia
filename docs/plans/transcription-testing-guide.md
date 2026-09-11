@@ -91,13 +91,14 @@ cd ..
 
 ## 5. Run it
 
-> **This is the step people get wrong.** `GAIA_GAIA_AGENT_MODE=dev` tells the
-> daemon to run the agent **from this checkout**. Without it, it runs the last
-> *published* agent build, which does not contain any of this work — the
-> transcription tools simply will not exist, and the agent will say it cannot
-> transcribe. If nothing seems to happen, check this first.
+> **This is the step people get wrong.** The terminal UI does not run the agent
+> itself — it spawns a separate `gaia-agent` program and talks to it over a
+> pipe. So the agent you get is whichever `gaia-agent` it finds first, and
+> `uv pip install -e ".[dev]"` in step 2 is what points that at **your clone**.
+> If the agent says it cannot transcribe, you are talking to a different build;
+> re-run step 2 from inside this checkout.
 
-The repo ships launch scripts that set this for you.
+The repo ships launch scripts that set the environment for you.
 
 **Windows** — from the repo root:
 
@@ -115,13 +116,16 @@ Launch it from **Windows Terminal**, not a bare `cmd.exe` window. A console
 started any other way reports no colour support and the UI renders flat grey —
 it looks broken but is not.
 
-If you would rather set it up by hand:
+If you would rather run the binary directly:
 
 ```bash
-export PYTHONPATH="$PWD/src:$PWD/hub/agents/gaia/python:$PWD/hub/agents/chat/python"
-export GAIA_GAIA_AGENT_MODE=dev
 ./tui/bin/gaia-tui
 ```
+
+On a machine with **several** GAIA clones, `gaia-agent` resolves to whichever
+one was `pip install -e`'d last — which may not be this one. Check with
+`where gaia-agent` (Windows) or `which gaia-agent`, and re-run step 2 here if
+it points elsewhere.
 
 The first launch runs a readiness check, then drops you into chat.
 
@@ -137,7 +141,7 @@ Summarize this meeting: C:\path\to\recording.mp4
 
 **Use a 3–10 minute recording for your first run.** Anything shorter does not
 give speaker separation enough to work with; a 46-minute meeting takes about
-10 minutes end to end.
+11–12 minutes end to end.
 
 `.mp4`, `.mkv`, `.mov`, `.m4a`, `.mp3` and `.wav` all work.
 
@@ -199,8 +203,18 @@ says three words, it reports one speaker.
 46-minute, 4-person meeting it found exactly 4; treat that as the good case
 rather than the guaranteed one.
 
-**It is not instant.** Roughly: a 46-minute recording is ~5 min transcription,
-~4 min speaker identification, ~30 s labelling.
+**It is not instant.** Measured on a 46-minute recording, roughly 4x realtime:
+
+| Stage | Time |
+|---|---:|
+| Decode to WAV | 4 s |
+| Transcribe (Whisper-Large-v3-Turbo) | 6.0 min |
+| Identify speakers | 4.1 min |
+| Name speakers + summarize | 1-2 min |
+| **End to end** | **~11-12 min** |
+
+Transcription and speaker identification are 99% of it; decoding is free.
+A 5-minute clip is proportionally quicker — about 90 seconds.
 
 ---
 
@@ -208,7 +222,8 @@ rather than the guaranteed one.
 
 | Symptom | Cause |
 |---|---|
-| "I can't transcribe files" | `GAIA_GAIA_AGENT_MODE=dev` is not set — see §5 |
+| "I can't transcribe files" | The TUI found a different `gaia-agent`. Re-run step 2 in this checkout — see §5 |
+| Speakers all come back as one | Speaker identification could not start; the reply says why |
 | Nothing happens for 60–90 s on the first question | Model loading. Only the first turn pays this |
 | "ffmpeg is required..." | Run the command it prints, then retry |
 | "Lemonade Server is not reachable" | `lemonade-server serve`, or re-run `gaia init --profile gaia` |
