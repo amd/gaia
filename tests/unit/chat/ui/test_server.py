@@ -305,6 +305,69 @@ class TestSystemStatus:
         assert data["context_size_sufficient"] is True
 
     @patch("httpx.AsyncClient")
+    def test_system_status_ctx_size_clamped_to_model_ceiling(
+        self, mock_httpx_cls, client
+    ):
+        """recipe_options.ctx_size is Lemonade's config echo of what was
+        REQUESTED, not a measurement — it can report the request even after
+        silently capping the real window lower (#2992). The reported
+        model_context_size must be clamped to max_context_window, matching
+        the CLI's LemonadeManager clamp, so the UI never shows a different
+        (higher, wrong) context than the CLI for the same running server."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Gemma-4-E4B-it-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    # Requested 65536 (echoed back as "sufficient"), but the
+                    # model's real trained ceiling is 16384 — below GAIA's
+                    # 32768 minimum.
+                    "recipe_options": {"ctx_size": 65536},
+                    "max_context_window": 16384,
+                }
+            ],
+        }
+        models_data = {"data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]}
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            return make_response(200, models_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_context_size"] == 16384, (
+            "Must report the real ceiling, not the raw recipe_options echo "
+            "that merely repeats the 65536 that was requested."
+        )
+        assert data["context_size_sufficient"] is False, (
+            "The echo alone (65536) would read as sufficient — only the "
+            "clamped real ceiling (16384 < 32768) reveals it is not."
+        )
+
+    @patch("httpx.AsyncClient")
     def test_system_status_model_not_downloaded(self, mock_httpx_cls, client):
         """model_downloaded is False when no model is loaded and default not in catalog."""
         mock_client = AsyncMock()

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     lemonade_auth_headers,
+    resolve_effective_ctx_size,
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
@@ -503,10 +504,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 status.model_loaded = m_name
                             status.model_device = m.get("device")
                             # Actual loaded context size (preferred over catalog
-                            # default).
+                            # default) — clamped against the model's real
+                            # max_context_window (#2992). recipe_options.ctx_size
+                            # is a config echo, not a measurement: Lemonade can
+                            # report the ctx_size it was ASKED for even after
+                            # silently capping it lower, which without this
+                            # clamp made the UI report a different (higher, wrong)
+                            # context than the CLI for the same running server.
                             ctx = m.get("recipe_options", {}).get("ctx_size")
                             if ctx is not None:
-                                status.model_context_size = ctx
+                                status.model_context_size = resolve_effective_ctx_size(
+                                    ctx, m.get("max_context_window")
+                                )
                             _llm_found = True  # take only the first matching LLM
 
                 # Fallback: older Lemonade versions expose context_size at root level
@@ -523,11 +532,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
                             # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded)
+                            # provide it (e.g. model not yet fully loaded) —
+                            # clamped the same way as the health-derived value
+                            # above.
                             if status.model_context_size is None:
                                 ctx = m.get("recipe_options", {}).get("ctx_size")
                                 if ctx is not None:
-                                    status.model_context_size = ctx
+                                    status.model_context_size = (
+                                        resolve_effective_ctx_size(
+                                            ctx, m.get("max_context_window")
+                                        )
+                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 

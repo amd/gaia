@@ -393,6 +393,9 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
         mock_client.base_url = "http://localhost:13305/api/v1"
+        # Ceiling unknown (#2992) — keeps the legacy "assume success to break
+        # the reload loop" branch, matching this test's pre-#2992 assertions.
+        mock_client.get_model_max_context_window.return_value = None
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",
@@ -430,6 +433,9 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
         mock_client.base_url = "http://localhost:13305/api/v1"
+        # Ceiling unknown (#2992) — keeps the legacy "assume success to break
+        # the reload loop" branch, matching this test's pre-#2992 assertions.
+        mock_client.get_model_max_context_window.return_value = None
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",
@@ -466,6 +472,9 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_status.context_size = 4096
         mock_client.get_status.return_value = mock_status
         mock_client.base_url = "http://localhost:13305/api/v1"
+        # Ceiling unknown (#2992) — keeps the legacy "assume success to break
+        # the reload loop" branch, matching this test's pre-#2992 assertions.
+        mock_client.get_model_max_context_window.return_value = None
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",
