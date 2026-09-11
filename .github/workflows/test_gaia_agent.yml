@@ -16,11 +16,13 @@ on:
     paths:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
-      - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/skills/**'
-      - 'src/gaia/code_index/**'
+      # The flagship composes providers, RAG, connectors and the UI's stdio
+      # adapters; restricting this to agent modules misses runtime regressions.
+      - 'src/gaia/**'
+      - 'hub/skills/**'
+      - 'tests/**'
       - 'setup.py'
+      - 'pyproject.toml'
       - '.github/workflows/test_gaia_agent.yml'
   pull_request:
     branches: [ main ]
@@ -28,11 +30,11 @@ on:
     paths:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
-      - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/skills/**'
-      - 'src/gaia/code_index/**'
+      - 'src/gaia/**'
+      - 'hub/skills/**'
+      - 'tests/**'
       - 'setup.py'
+      - 'pyproject.toml'
       - '.github/workflows/test_gaia_agent.yml'
   merge_group:
   workflow_dispatch:
@@ -95,6 +97,7 @@ jobs:
           # the starter-pack honesty guards, and the binary policies — run
           # their framework-side suites in the same environment.
           python -m pytest \
+            tests/unit/test_flagship_ci.py \
             tests/unit/test_skill_loader.py \
             tests/unit/test_agent_lazy_skill_prompt.py \
             tests/unit/test_starter_skills.py \
