@@ -68,3 +68,39 @@ class TestResolveLemonadeApiKey:
         embedded_state(payload)
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         assert lc.resolve_lemonade_api_key() is None
+
+
+class TestEmbeddedBaseURL:
+    """The embedded server binds a port chosen at start time."""
+
+    def test_discovers_the_embedded_port(self, embedded_state, monkeypatch):
+        """Regression: clients looked at the default port and saw nothing.
+
+        `gaia lemonade embedded` came up on 63207 holding every model, while
+        the readiness screen reported the language model as not downloaded.
+        """
+        embedded_state({"pid": 1, "port": 63207, "api_key": "k"})
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        _, port, base = lc._get_lemonade_config()
+        assert port == 63207
+        assert base == "http://localhost:63207/api/v1"
+
+    def test_an_explicit_base_url_wins(self, embedded_state, monkeypatch):
+        embedded_state({"port": 63207, "api_key": "k"})
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://example.test:9000")
+        _, port, base = lc._get_lemonade_config()
+        assert port == 9000
+        assert base == "http://example.test:9000/api/v1"
+
+    def test_falls_back_to_the_packaged_default(self, embedded_state, monkeypatch):
+        """No embedded server is the normal case for a tray install."""
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        _, _, base = lc._get_lemonade_config()
+        assert base == lc.DEFAULT_LEMONADE_URL
+
+    @pytest.mark.parametrize("port", [0, -1, "63207", None])
+    def test_an_unusable_port_is_ignored(self, embedded_state, monkeypatch, port):
+        embedded_state({"port": port, "api_key": "k"})
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        _, _, base = lc._get_lemonade_config()
+        assert base == lc.DEFAULT_LEMONADE_URL

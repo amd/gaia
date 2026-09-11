@@ -62,6 +62,32 @@ DEFAULT_LEMONADE_URL = (
 )
 
 
+def _embedded_lemonade_url() -> str:
+    """The embedded server's base URL, or the packaged default.
+
+    ``gaia lemonade embedded`` binds a port chosen at start time and records it
+    alongside its API key. Nothing exports either, so a client that assumed the
+    default port looked at an address with nothing on it and reported the models
+    as missing — while the embedded server held every one of them.
+    """
+    state = _read_embedded_lemonade_state()
+    port = state.get("port") if state else None
+    if isinstance(port, int) and port > 0:
+        return f"http://{DEFAULT_HOST}:{port}"
+    return DEFAULT_LEMONADE_URL
+
+
+def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
+    """Read ~/.gaia/lemonade/state.json, or None when there is no such server."""
+    try:
+        import json
+
+        state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
 def _get_lemonade_config() -> tuple:
     """
     Get Lemonade host, port, and base_url from environment or defaults.
@@ -74,7 +100,7 @@ def _get_lemonade_config() -> tuple:
     """
     from urllib.parse import urlparse
 
-    base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    base_url = os.getenv("LEMONADE_BASE_URL") or _embedded_lemonade_url()
     # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
     if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
         base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
@@ -105,13 +131,8 @@ def _embedded_lemonade_api_key() -> Optional[str]:
     and serving — which the readiness screen then reported as "Lemonade not
     running", and offered to install a second one onto the same port.
     """
-    try:
-        import json
-
-        state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    key = state.get("api_key")
+    state = _read_embedded_lemonade_state()
+    key = state.get("api_key") if state else None
     return key.strip() or None if isinstance(key, str) else None
 
 

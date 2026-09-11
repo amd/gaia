@@ -21,7 +21,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		body, _ := json.Marshal(map[string]any{"pid": 1, "port": 13305, "api_key": key})
+		body, _ := json.Marshal(map[string]any{"pid": 1, "port": 63207, "api_key": key})
 		if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -65,4 +65,41 @@ func TestLemonadeAPIKey(t *testing.T) {
 			t.Fatalf("got %q, want empty rather than a panic", got)
 		}
 	})
+}
+
+// The embedded server picks its port at start time, so the fixed 13305/8000
+// list could never reach it -- this screen called GAIA's own model server
+// "not running" and offered to install a second one.
+func TestReadEmbeddedLemonade(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".gaia", "lemonade")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"pid": 9, "port": 63207, "api_key": "k"})
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := readEmbeddedLemonade()
+	if state == nil {
+		t.Fatal("got nil, want the embedded server's recorded state")
+	}
+	if state.Port != 63207 {
+		t.Fatalf("port %d, want the dynamically chosen 63207", state.Port)
+	}
+	if state.APIKey != "k" {
+		t.Fatalf("key %q, want k", state.APIKey)
+	}
+}
+
+func TestReadEmbeddedLemonadeAbsent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if state := readEmbeddedLemonade(); state != nil {
+		t.Fatalf("got %+v, want nil when no embedded server was ever started", state)
+	}
 }

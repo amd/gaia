@@ -348,13 +348,39 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 
 // probeLemonade asks the local model server for its model list, which is the
 // smallest call that proves it is actually serving rather than merely bound.
-// lemonadeAPIKey resolves the credential a local Lemonade may demand.
+// embeddedLemonade is what `gaia lemonade embedded` records about the private
+// server it runs: a port chosen at start time, and a generated API key.
+type embeddedLemonade struct {
+	Port   int    `json:"port"`
+	APIKey string `json:"api_key"`
+}
+
+// readEmbeddedLemonade loads that state file, or returns nil.
 //
-// GAIA's embedded server (`gaia lemonade embedded`, ~/.gaia/lemonade) generates
-// an API key and writes it to its state file. An unauthenticated probe gets 401
-// from it, which this screen used to report as "Lemonade not running" — while
-// the server was healthy and serving. The user was then offered a second
-// install that would fight for the same port.
+// Both fields matter and neither was used here. The port is picked when the
+// server starts — 63207 on the machine this was found on — so probing the
+// fixed 13305/8000 could never reach it; and the key means an unauthenticated
+// probe gets 401 from a server that is healthy and serving. Together they made
+// this screen report "Lemonade not running" for GAIA's own model server, then
+// offer to install a second one.
+func readEmbeddedLemonade() *embeddedLemonade {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".gaia", "lemonade", "state.json"))
+	if err != nil {
+		return nil
+	}
+	var state embeddedLemonade
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil
+	}
+	state.APIKey = strings.TrimSpace(state.APIKey)
+	return &state
+}
+
+// lemonadeAPIKey resolves the credential a local Lemonade may demand.
 //
 // LEMONADE_API_KEY wins when set, so an explicitly configured credential is
 // never overridden by whatever a local state file happens to hold.
@@ -362,21 +388,10 @@ func lemonadeAPIKey() string {
 	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
 		return key
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	if state := readEmbeddedLemonade(); state != nil {
+		return state.APIKey
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".gaia", "lemonade", "state.json"))
-	if err != nil {
-		return ""
-	}
-	var state struct {
-		APIKey string `json:"api_key"`
-	}
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(state.APIKey)
+	return ""
 }
 
 // It returns the base URL it settled on, whether it answered, and a trace for
@@ -391,6 +406,11 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 		// probing — a local server on 13305 proves nothing about it.
 		bases = []string{strings.TrimRight(override, "/")}
 	} else {
+		// GAIA's own embedded server first: its port is chosen at start time,
+		// so it is never one of the fixed ones below.
+		if state := readEmbeddedLemonade(); state != nil && state.Port > 0 {
+			bases = append(bases, fmt.Sprintf("http://localhost:%d/api/v1", state.Port))
+		}
 		for _, port := range lemonadePorts {
 			bases = append(bases, "http://localhost:"+port+"/api/v1")
 		}
