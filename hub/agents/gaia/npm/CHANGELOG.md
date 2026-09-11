@@ -12,6 +12,11 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Fixed
+
+- Clearing a TUI conversation now also clears the flagship stdio agent’s prior
+  conversation context, while preserving the selected model, skills, and permissions.
+
 ### Added
 
 - **A project map at task start.** In a code repository the agent now opens

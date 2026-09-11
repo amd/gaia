@@ -606,6 +606,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 
+	case conversationClearedMsg:
+		return m.handleConversationCleared(msg)
+
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
 
@@ -1291,15 +1294,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
 	case "/clear":
-		m.messages = nil
-		// Daemon-transport agents are stateless per turn: the host pushes the
-		// transcript back as `context`, so clearing the view must clear that
-		// too or the "cleared" history keeps being sent.
-		if r, ok := m.client.(client.TranscriptResetter); ok {
-			r.ResetTranscript()
-		}
-		m.updateViewport()
-		return m, nil
+		return m.clearConversation()
 
 	case "/memory":
 		return m.startMemoryFetch()
