@@ -283,6 +283,38 @@ class TestParallelCallsExecuteAndCorrelate:
         assert messages[assistant_index + 2]["role"] == "user"
         assert "[SYSTEM]" in messages[assistant_index + 2]["content"]
 
+    def test_native_dedup_guidance_follows_both_results_in_one_envelope(self, agent):
+        """Dedup firing on call 2 of 2 *within a single envelope* must not
+        split the tool_result pair — both role='tool' entries stay adjacent
+        to the assistant turn, and the [SYSTEM] guidance lands after both."""
+
+        def mark_read(**kwargs):  # pylint: disable=unused-argument
+            return {"status": "success"}
+
+        _register_tool("mark_read", mark_read)
+        parallel = _native_envelope(
+            ("id-1", "mark_read", {"message_id": "same"}),
+            ("id-2", "mark_read", {"message_id": "same"}),
+        )
+        final = json.dumps({"thought": "done", "answer": "Done."})
+        chat = _stub_chat(agent, parallel, final)
+
+        agent.process_query("mark it read twice", max_steps=5)
+
+        second_call = chat.send_messages.call_args_list[1]
+        messages = second_call.kwargs.get("messages") or second_call.args[0]
+        assistant_index = max(
+            index
+            for index, message in enumerate(messages)
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        assert messages[assistant_index + 1]["role"] == "tool"
+        assert messages[assistant_index + 1]["tool_call_id"] == "id-1"
+        assert messages[assistant_index + 2]["role"] == "tool"
+        assert messages[assistant_index + 2]["tool_call_id"] == "id-2"
+        assert messages[assistant_index + 3]["role"] == "user"
+        assert "[SYSTEM]" in messages[assistant_index + 3]["content"]
+
 
 class TestParallelCallsWithError:
     """Acceptance criterion (b): three parallel calls, one errors —

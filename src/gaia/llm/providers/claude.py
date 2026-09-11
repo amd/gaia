@@ -269,6 +269,9 @@ class ClaudeProvider(LLMClient):
                     "Claude tool-call history requires a complete, immediately "
                     "adjacent result group; missing tool_call_id(s): "
                     + ", ".join(sorted(expected_ids))
+                    + ". Append every role='tool' result directly after the "
+                    "assistant turn that requested it — any user/system message "
+                    "injected between them must come after the group."
                 )
             if role == "tool":
                 cleaned.append(
@@ -337,7 +340,7 @@ class ClaudeProvider(LLMClient):
         block = {
             "type": "tool_result",
             "tool_use_id": tool_call_id,
-            "content": message.get("content", ""),
+            "content": message.get("content") or "[tool returned no output]",
         }
         if (
             cleaned
