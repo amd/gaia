@@ -21,14 +21,7 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_calls_load_when_model_not_loaded(self, mock_load, mock_status):
-        """Verify load_model is called when model not in loaded_models list.
-
-        Unknown models (not in MODELS registry) default to ctx_size=32768
-        so ChatAgent's >7K-token system prompt isn't truncated by Lemonade's
-        default 4096 ctx — the silent-empty-stream regression that blocked
-        gaia-lite. See _chat_helpers._maybe_load_expected_model + the
-        matching log line in lemonade_client._ensure_model_loaded.
-        """
+        """Unknown models load at the configured GPU/CPU profile window."""
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
@@ -41,24 +34,16 @@ class TestEnsureModelLoaded:
         client._ensure_model_loaded("model-b", auto_download=True)
 
         # Verify: model is not in the built-in MODELS registry, so the
-        # 32K fallback kicks in (ChatAgent's prompt is >7K tokens; loading
+        # device-profile fallback kicks in (ChatAgent's prompt is >7K tokens; loading
         # at Lemonade's 4K default would silently truncate it).
         mock_load.assert_called_once_with(
-            "model-b", auto_download=True, prompt=False, ctx_size=32768
+            "model-b", auto_download=True, prompt=False, ctx_size=65536
         )
 
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_known_model_uses_registry_ctx_size(self, mock_load, mock_status):
-        """Verify a model in the built-in MODELS registry loads at the
-        registry's ``min_ctx_size``, NOT the 32K fallback.
-
-        The fallback only fires for models *not* in MODELS — see
-        ``lemonade_client.py:_ensure_model_loaded`` "Model not in MODELS
-        registry" branch. This test prevents a silent regression where a
-        future refactor breaks the registry-lookup loop and every model
-        ends up at 32K (wasting memory on small models like Qwen3 0.6B).
-        """
+        """Registered model defaults still take precedence over profile defaults."""
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
@@ -78,21 +63,13 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_skips_load_when_model_already_loaded(self, mock_load, mock_status):
-        """Verify no load_model call when model already in loaded_models list.
-
-        After #1030 ``_ensure_model_loaded`` skips the reload only when the
-        loaded entry's ``recipe_options.ctx_size`` is at or above the GAIA
-        expected window. Unknown models (not in MODELS) default to 32K, so
-        the mock must report at least that to take the no-op branch — see
-        ``lemonade_client.py:_ensure_model_loaded`` "Loaded but under-sized"
-        comment for the reload path.
-        """
+        """A resident model with the expected window avoids a redundant reload."""
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
-            loaded_models=[{"id": "model-a", "recipe_options": {"ctx_size": 32768}}],
+            loaded_models=[{"id": "model-a", "recipe_options": {"ctx_size": 65536}}],
         )
 
         # Execute
@@ -296,10 +273,10 @@ class TestModelLoadingIntegration:
         )
 
         # Verify load_model was called to download/load the model WITHOUT prompting.
-        # Same 32K fallback as above: "new-model" isn't in MODELS, so the
-        # default ctx is bumped from Lemonade's 4K up to 32K.
+        # Same device-profile fallback as above: "new-model" isn't in MODELS, so the
+        # GPU/CPU profile loads at 64K.
         mock_load.assert_called_once_with(
-            "new-model", auto_download=True, prompt=False, ctx_size=32768
+            "new-model", auto_download=True, prompt=False, ctx_size=65536
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -312,7 +289,7 @@ class TestModelLoadingIntegration:
 
         Same shape as ``test_skips_load_when_model_already_loaded``: after
         #1030 the loaded entry must carry ``recipe_options.ctx_size`` at or
-        above the GAIA-expected window (32K for unknown models), otherwise
+        above the GAIA-expected window (64K for unknown GPU/CPU models), otherwise
         the under-sized-reload branch fires.
         """
         # Setup
@@ -323,7 +300,7 @@ class TestModelLoadingIntegration:
             url="http://localhost:13305",
             running=True,
             loaded_models=[
-                {"id": "existing-model", "recipe_options": {"ctx_size": 32768}}
+                {"id": "existing-model", "recipe_options": {"ctx_size": 65536}}
             ],
         )
 
