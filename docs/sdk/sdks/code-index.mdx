@@ -65,6 +65,8 @@ sdk = CodeIndexSDK(config)
 A successful rebuild with no source chunks clears any previous index, including
 its disk cache. If discovered files cannot be read or used and no chunks remain,
 the rebuild raises an error and retains the previous index instead.
+Directory traversal or file metadata errors also abort the rebuild and retain
+the previous index, rather than treating an unavailable repository as empty.
 
 Discover source files, parse them, embed via Lemonade, and persist a FAISS index. Re-runs are incremental — unchanged files (matched by SHA-256) reuse their existing embeddings.
 

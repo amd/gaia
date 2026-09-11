@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Rebuilding an empty repository must not leave searchable deleted code."""
 
+import os
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -83,3 +85,29 @@ def test_fresh_empty_repository_needs_no_model(tmp_path):
     with patch.object(sdk, "_load_embedder", side_effect=AssertionError("no model")):
         assert sdk.index_repository().chunks_created == 0
         assert sdk.search("anything") == []
+
+
+@pytest.mark.parametrize("failure", ["missing_root", "walk", "stat"])
+def test_discovery_errors_do_not_erase_previous_index(indexed_repo, failure):
+    sdk, source = indexed_repo
+    metadata_before = sdk._meta_path.read_bytes()
+    index_before = sdk._index_path.read_bytes()
+    if failure == "missing_root":
+        source.parent.rename(source.parent.with_name("temporarily-unavailable"))
+        with pytest.raises(OSError):
+            sdk.index_repository()
+    else:
+        target = "os.scandir" if failure == "walk" else "os.path.getsize"
+        original = os.scandir if failure == "walk" else os.path.getsize
+
+        def deny_repository_access(path):
+            if Path(path) in (source, source.parent):
+                raise PermissionError("access denied")
+            return original(path)
+
+        with patch(target, side_effect=deny_repository_access):
+            with pytest.raises(OSError, match="access denied"):
+                sdk.index_repository()
+    assert sdk._meta_path.read_bytes() == metadata_before
+    assert sdk._index_path.read_bytes() == index_before
+    assert sdk._faiss_index.ntotal == 1

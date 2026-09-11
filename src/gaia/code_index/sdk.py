@@ -634,7 +634,11 @@ class CodeIndexSDK:
         # max_files cap below, and the truncation is logged loudly.
         entries_seen = 0
 
-        for root, dirs, files in os.walk(str(self._repo_root)):
+        def fail_discovery(error: OSError) -> None:
+            # An incomplete scan cannot establish that the index is empty.
+            raise error
+
+        for root, dirs, files in os.walk(str(self._repo_root), onerror=fail_discovery):
             rel_root = Path(root).relative_to(self._repo_root)
 
             # Filter out skipped directories in-place
@@ -677,10 +681,7 @@ class CodeIndexSDK:
                     continue
 
                 # Check size
-                try:
-                    size = os.path.getsize(abs_path)
-                except OSError:
-                    continue
+                size = os.path.getsize(abs_path)
                 if size > max_size_bytes:
                     self.log.debug(f"Skipping large file ({size} bytes): {rel_path}")
                     continue
