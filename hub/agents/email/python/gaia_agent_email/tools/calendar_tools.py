@@ -654,8 +654,10 @@ def _extract_organizer_self(event: Mapping[str, Any]) -> Optional[bool]:
 
     Google normally exposes this as ``organizer.self``. Some event payloads
     omit that field while still identifying the authenticated calendar in the
-    attendee list, where ``self`` and ``organizer`` together provide the same
-    explicit signal. Never derive the result from an email address.
+    attendee list. Google also omits the default-false ``organizer`` flag from
+    a self attendee when someone else organized the event, so a self attendee
+    without that key is an explicit external-organizer signal. Never derive
+    the result from an email address.
     """
     organizer = event.get("organizer")
     if isinstance(organizer, Mapping):
@@ -670,6 +672,8 @@ def _extract_organizer_self(event: Mapping[str, Any]) -> Optional[bool]:
         attendee_organizer = attendee.get("organizer")
         if isinstance(attendee_organizer, bool):
             return attendee_organizer
+        if "organizer" not in attendee:
+            return False
     return None
 
 
@@ -939,6 +943,11 @@ def list_calendar_events_impl(
     backend expand recurring series from their first-ever instance (#2162).
     A bare date or naive datetime is coerced to UTC (#2517) — Google 400s on
     a date-only ``timeMin``/``timeMax``.
+
+    The result includes ``count`` for the number of events returned and
+    ``truncated`` when the provider reports another page. When ``truncated``
+    is true, the returned events are only the first page and must not be
+    presented as the complete calendar window.
     """
     if time_min is None and time_max is None:
         now_dt = now if now is not None else datetime.now(timezone.utc)
@@ -974,8 +983,9 @@ def list_calendar_events_impl(
                     "attendees": _extract_attendees(e),
                 }
             )
-        st["result_summary"] = {"count": len(events)}
-        return {"events": events}
+        truncated = bool(data.get("nextPageToken"))
+        st["result_summary"] = {"count": len(events), "truncated": truncated}
+        return {"events": events, "count": len(events), "truncated": truncated}
 
 
 def update_rsvp_impl(
@@ -1161,8 +1171,10 @@ class CalendarToolsMixin:
             ``true`` means the user organized it, and ``null`` means the
             provider did not supply the signal. When ``organizer.self`` is
             omitted, the tool may use the provider's explicit
-            ``attendees[].self`` + ``attendees[].organizer`` pair. Never infer
-            this field from an email address."""
+            ``attendees[].self`` flag to identify the user. When Google omits the
+            default-false ``attendees[].organizer`` flag for that attendee, the
+            event is externally organized. Never infer this field from an
+            email address."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
@@ -1317,9 +1329,9 @@ class CalendarToolsMixin:
             bounding the proposed meeting. Returns an envelope whose
             ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
             overlapping events, each with ``id``/``summary``/``start``/
-            ``end``/``organizer_self``/``attendees``). Overlap is half-open: a meeting ending
-            exactly when another begins does NOT conflict. If the calendar
-            can't be read, this surfaces the error rather than reporting a
+            ``end``/``organizer_self``/``attendees``). Overlap is half-open: a
+            meeting ending exactly when another begins does NOT conflict. If
+            the calendar can't be read, this surfaces the error rather than reporting a
             reassuring "no conflicts". Never state an attendee for a
             conflicting event unless that event's own ``attendees`` list
             actually names them. Only ``organizer_self=false`` from this

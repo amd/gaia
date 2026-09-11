@@ -99,11 +99,20 @@ class TestExtractOrganizerSelf:
         }
         assert _extract_organizer_self(event) is False
 
+    def test_missing_google_organizer_flags_use_self_attendee(self):
+        event = {
+            "organizer": {"email": "vendor@example.com"},
+            "attendees": [
+                {"email": "me@example.com", "self": True},
+            ],
+        }
+        assert _extract_organizer_self(event) is False
+
     @pytest.mark.parametrize(
         "event",
         [
             {"organizer": {"email": "vendor@example.com", "self": None}},
-            {"organizer": {}, "attendees": [{"self": True}]},
+            {"organizer": {}, "attendees": [{"self": True, "organizer": None}]},
             {"attendees": [{"email": "me@example.com", "self": False}]},
         ],
     )
@@ -241,7 +250,7 @@ class TestDetectCalendarConflictsAttendees:
 
         assert out["conflicts"][0]["organizer_self"] is False
 
-    def test_conflicting_event_uses_attendee_flags_when_organizer_self_is_missing(
+    def test_conflicting_event_uses_self_attendee_when_organizer_self_is_missing(
         self,
     ):
         cal = _FakeCalendar(
@@ -256,7 +265,6 @@ class TestDetectCalendarConflictsAttendees:
                         {
                             "email": "me@example.com",
                             "self": True,
-                            "organizer": False,
                         }
                     ],
                 }
