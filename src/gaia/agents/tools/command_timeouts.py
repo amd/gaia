@@ -190,7 +190,7 @@ _SUBCOMMAND_CLASS: Dict[str, Dict[str, TimeoutClass]] = {
 _RUN_SCRIPT_BINARIES = frozenset({"npm", "pnpm", "yarn"})
 
 
-def normalize_binary(token: str) -> str:
+def command_basename(token: str) -> str:
     """``C:\\Tools\\PyTest.EXE`` -> ``pytest``: basename, no suffix, lowercase."""
     name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
     for suffix in (".exe", ".cmd", ".bat", ".ps1"):
@@ -207,7 +207,7 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
         if token.startswith("-"):  # a flag, incl. python's -m
             index += 1
             continue
-        binary = normalize_binary(token)
+        binary = command_basename(token)
         if binary in _WRAPPERS:
             index += 1
             continue
@@ -215,9 +215,9 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     else:
         return DEFAULT
 
-    binary = normalize_binary(tokens[index])
+    binary = command_basename(tokens[index])
     operands = [
-        (position, normalize_binary(token))
+        (position, command_basename(token))
         for position, token in enumerate(tokens[index + 1 :], start=index + 1)
         if not token.startswith("-")
     ]
@@ -240,7 +240,10 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
 def _split_segments(command: str) -> List[List[str]]:
     """Split *command* into pipeline segments of tokens."""
     try:
-        parts = shlex.split(command)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        parts = list(lexer)
     except ValueError:
         parts = command.split()
     segments: List[List[str]] = []

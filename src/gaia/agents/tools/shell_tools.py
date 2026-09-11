@@ -808,39 +808,7 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="run_shell_command",
-            # The agent-level guard must outlast the longest command class, or a
-            # build would be abandoned by the loop while the subprocess is still
-            # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
-            description=(
-                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
-                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
-                "navigation (pwd), and system information. "
-                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
-                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": "The shell command to execute (e.g., 'ls -la', 'pwd', 'cat file.txt')",
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the command in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": (
-                        "Timeout in seconds. Omit it for the default that suits this "
-                        f"kind of command. Maximum {MAX_COMMAND_TIMEOUT}."
-                    ),
-                    "required": False,
-                },
-            },
         )
         def run_shell_command(
             command: str,
@@ -872,6 +840,14 @@ class ShellToolsMixin:
                 ``timed_out`` plus whatever it printed first.
             """
             try:
+                if self._wait_interrupt_signal().is_set():
+                    return {
+                        "status": "error",
+                        "error": "Shell command cancelled before execution.",
+                        "command": command,
+                        "has_errors": True,
+                        "cancelled": True,
+                    }
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
@@ -1135,7 +1111,34 @@ class ShellToolsMixin:
                         start_new_session=os.name != "nt",
                         shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
                     )
-                    stdout_str, stderr_str = process.communicate(timeout=timeout)
+                    cancel_signal = self._wait_interrupt_signal()
+                    deadline = start_time + timeout
+                    while True:
+                        if cancel_signal.is_set():
+                            stdout_str, stderr_str = terminate_process_tree(process)
+                            return {
+                                "status": "error",
+                                "error": "Shell command cancelled; its process tree was terminated.",
+                                "command": command,
+                                "stdout": _truncate(stdout_str, "stdout"),
+                                "stderr": _truncate(stderr_str, "stderr"),
+                                "has_errors": True,
+                                "cancelled": True,
+                                "timeout": timeout,
+                                "timeout_class": timeout_class,
+                                "duration_seconds": time.monotonic() - start_time,
+                                "cwd": cwd,
+                            }
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout)
+                        try:
+                            stdout_str, stderr_str = process.communicate(
+                                timeout=min(0.25, remaining)
+                            )
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
                     returncode = process.returncode
                     duration = time.monotonic() - start_time
 
@@ -1206,52 +1209,9 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="wait_for_condition",
             # Outlast the longest wait the tool itself permits, so the agent
             # loop never abandons a wait that is still inside its deadline.
             timeout=WAIT_MAX_TIMEOUT + 60,
-            description=(
-                "Wait until a shell command succeeds (exit code 0), or give up at a "
-                "deadline. Use this instead of sleeping and re-checking: waiting for a "
-                "server to answer, a file to appear, a log line to be written, or a CI "
-                "run to finish is ONE call, not one call per check. "
-                f"Polls every {WAIT_DEFAULT_POLL_INTERVAL}s by default "
-                f"({WAIT_MIN_POLL_INTERVAL}-{WAIT_MAX_POLL_INTERVAL}s), waits "
-                f"{WAIT_DEFAULT_TIMEOUT}s by default and {WAIT_MAX_TIMEOUT}s at most. "
-                "Examples: 'ls build/output.bin' (file exists), "
-                "'grep -q \"Server started\" server.log' (log line written)."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": (
-                        "The predicate: a shell command that exits 0 once the condition "
-                        "holds and non-zero until then. Same allowlist as run_shell_command."
-                    ),
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the predicate in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": (
-                        f"Give up after this many seconds (default {WAIT_DEFAULT_TIMEOUT}, "
-                        f"maximum {WAIT_MAX_TIMEOUT})."
-                    ),
-                    "required": False,
-                },
-                "poll_interval": {
-                    "type": "int",
-                    "description": (
-                        f"Seconds between checks (default {WAIT_DEFAULT_POLL_INTERVAL}, "
-                        f"{WAIT_MIN_POLL_INTERVAL}-{WAIT_MAX_POLL_INTERVAL})."
-                    ),
-                    "required": False,
-                },
-            },
         )
         def wait_for_condition(
             command: str,

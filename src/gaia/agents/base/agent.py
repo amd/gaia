@@ -742,6 +742,9 @@ class Agent(abc.ABC):
             "get_memory_system_prompt",  # changes on any remember()/forget()
             "get_skills_system_prompt",  # per-turn body selection (#2848)
             "get_recalled_skills_system_prompt",  # per-turn procedural recall
+            # Mostly static, but the index line flips as a background index
+            # lands and the shape line changes if the project does (#3379).
+            "get_project_map_system_prompt",
         }
     )
 
@@ -1386,6 +1389,17 @@ Do NOT wrap conversational replies in JSON.
         with a dynamic tool loader override this to return a selection.
         """
         return None
+
+    def _on_task_start(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run at the top of every turn, before the prompt is composed.
+
+        Default: no-op. Mixins that orient the agent in its environment — the
+        project map (#3379) is the first — override this and must call
+        ``super()._on_task_start(user_input)``. Anything expensive belongs
+        behind a once-per-session guard inside the override, not here.
+        """
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Hook called when a tool is about to execute (after registry lookup).
@@ -3632,10 +3646,11 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Normalize common model name-construction errors before registry lookup:
-        # strip trailing "()" some models append, and convert hyphens to underscores
-        # (tool names are always snake_case; hyphens are never valid).
-        tool_name = tool_name.removesuffix("()").replace("-", "_")
+        # Exact name first — skill tools register with a literal hyphen
+        # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
+        tool_name = tool_name.removesuffix("()")
+        if tool_name not in self._tools_registry:
+            tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
@@ -4785,6 +4800,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._begin_turn_provenance()
+
+        # Orientation. Runs before the prompt is composed so anything it
+        # establishes is in the prompt on the turn that established it.
+        self._on_task_start(user_input)
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool
@@ -5941,6 +5960,7 @@ Do NOT wrap conversational replies in JSON.
                 any_error = False
                 last_error = None
                 fanout_repeat_break = False
+                post_tool_messages = []
 
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
@@ -6019,7 +6039,9 @@ Do NOT wrap conversational replies in JSON.
                                 "relevant data, OR state that the "
                                 "information was not found in the document."
                             )
-                            messages.append({"role": "user", "content": dedup_msg})
+                            post_tool_messages.append(
+                                {"role": "user", "content": dedup_msg}
+                            )
 
                     # Input-based dedup for mutation tools (#1317): catch an
                     # identical mutation re-issue at the first repeat. Errored
@@ -6029,7 +6051,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_name,
                         tool_args,
                         mutation_call_cache,
-                        messages,
+                        post_tool_messages,
                         tool_result,
                     )
 
@@ -6108,6 +6130,11 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+
+                # Anthropic and other spec-strict providers require all native
+                # tool results to immediately follow the assistant tool-call
+                # turn. Dedup guidance belongs after the complete result group.
+                messages.extend(post_tool_messages)
 
                 if fanout_repeat_break:
                     break  # break outer while
