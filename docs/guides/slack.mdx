@@ -1,0 +1,156 @@
+---
+title: "Slack"
+description: "Drive the flagship GAIA agent from a Slack DM — set it up from the terminal in about ninety seconds."
+icon: "slack"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+</Info>
+
+Message GAIA from Slack on your phone and it answers from your desktop — reading your
+files, searching your documents, and sending results back as Slack uploads. The agent runs
+locally the whole time; Slack carries the conversation, not the work.
+
+<Warning>
+  **This bridge drives the real agent, not a chat-only session.** Unlike the
+  [Telegram adapter](/guides/telegram-adapter) — where a message reaches a session with no
+  tool loop at all — a Slack message reaches the flagship agent's full tool surface.
+
+  Shell commands, file writes, and code execution **pause and ask you first**: they arrive
+  in Slack as Allow / Deny buttons, and nothing runs until you press one. **Reading does
+  not ask.** Anyone on the allowlist can read the files the agent can read — your home
+  directory, by default — and your indexed documents. Put only yourself on the allowlist
+  unless you mean otherwise.
+</Warning>
+
+## Why Socket Mode
+
+The bridge connects *outward* over a WebSocket. There is no inbound port, no public URL,
+no tunnel, and no request-signing secret that could leak — which is what makes it safe to
+run on a laptop behind a home router.
+
+## Setup
+
+Slack apps can only be created from api.slack.com, so this is not fully automatic. GAIA
+fills in the manifest; you paste two tokens back.
+
+```bash
+gaia slack setup
+```
+
+That opens Slack's create-app page with the scopes, Socket Mode, and the DM event
+subscription already filled in. Then:
+
+1. Pick your workspace and click **Create**.
+2. Under **Basic Information → App-Level Tokens**, click Generate, add the
+   `connections:write` scope, and copy the `xapp-` token.
+3. Under **OAuth & Permissions**, click **Install to Workspace**, then copy the `xoxb-`
+   Bot User OAuth Token.
+4. Paste both back into the terminal.
+
+Tokens are validated against Slack and stored in your OS keyring — never in a config file.
+
+### Start it
+
+```bash
+gaia slack start --allowed-users U024BE7LH
+```
+
+Find your member ID in Slack: your avatar → **Profile** → the `...` menu → **Copy member
+ID**. A display name or an email address will not work.
+
+The bridge **refuses to start without an allowlist**. Every member of a workspace can DM a
+bot, so an empty list would offer your local agent to all of them.
+
+## What the scopes are for
+
+| Scope | Why |
+|---|---|
+| `chat:write` | Post the reply and edit it as tokens stream in |
+| `im:history` | Read the DMs addressed to the bot |
+| `im:write` | Open a DM to reach you |
+| `files:read` | Download a document or image you share, for indexing |
+| `files:write` | Send back a file the agent produced |
+| `users:read` | Show the allowlist in names rather than raw IDs |
+
+No channel scopes are requested. The app subscribes to `message.im` and nothing else.
+
+## Using it
+
+Send a direct message. The reply streams in place, and a line underneath names the tools
+that ran.
+
+- **Share a file** and it is indexed — documents into RAG, images through the vision model
+  — so you can ask about it in the same conversation.
+- **Ask for a file back** and anything the agent writes under an upload root (your home
+  directory by default) is uploaded to the thread.
+- **A message sent mid-answer is queued**, not dropped. The agent handles one turn at a
+  time, and you are told where you are in line.
+
+### Approving a tool
+
+When the agent wants to run a command or write a file, the turn pauses and Slack shows the
+action with **Allow**, **Deny**, and sometimes **Always allow**. Nothing runs until you
+choose. Only people on the allowlist can press the buttons — someone else viewing the
+conversation cannot approve a command on your machine.
+
+**Always allow** appears only when the agent offers a specific scope to grant. When it
+does not, that call has no boundary narrow enough to grant standing permission to, so only
+one-time Allow is offered.
+
+To run the bridge with no tool access at all:
+
+```bash
+gaia slack start --allowed-users U024BE7LH --deny-gated-tools
+```
+
+Every gated tool is then refused outright rather than offered, and Slack becomes a
+read-only window onto your documents.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `gaia slack setup` | Create the Slack app and store its tokens |
+| `gaia slack start --allowed-users <ids>` | Run the bridge (blocks until Ctrl-C) |
+| `gaia slack stop` | Stop a bridge started with `--background` |
+| `gaia slack status` | Show detection, configuration, and liveness |
+
+Useful flags on `start`:
+
+- `--deny-gated-tools` — refuse every tool that would ask, instead of offering buttons.
+- `--upload-root PATH` — restrict where a file may be uploaded from (repeatable).
+- `--agent-command` — point at a specific agent build instead of `gaia-agent` on PATH.
+- `--background` — write a PID file so `gaia slack stop` can find the process.
+
+Tokens can also come from `GAIA_SLACK_BOT_TOKEN` and `GAIA_SLACK_APP_TOKEN`, which take
+precedence over the keyring — that is how a container supplies them with no keyring at all.
+
+## Troubleshooting
+
+**"no allowed-users configured"** — expected. Pass `--allowed-users` with your member ID.
+
+**"Slack rejected the bot token"** — the two tokens are easy to swap. The `xoxb-` one goes
+in the bot field, the `xapp-` one in the app-level field.
+
+**Nothing happens when I DM the bot** — the bridge answers direct messages only. In a
+channel it stays silent by design.
+
+**The buttons do nothing** — interactivity must be enabled on the app. The generated
+manifest turns it on; an app created by hand may not have it.
+
+**`slack-sdk is required`** — install the extra:
+
+```bash
+pip install "amd-gaia[slack]"
+```
+
+## Limits
+
+- One conversation at a time. The agent processes one turn at a time, so a second message
+  waits rather than running in parallel.
+- Direct messages only. Channels and `@mentions` need their own threat model and are not
+  supported yet.
+- Uploads are capped at 25 MB, downloads at 100 MB, and a reply longer than Slack's
+  message limit is truncated with a note.

@@ -1,0 +1,292 @@
+---
+title: "Slack via the TUI"
+description: "Drive the flagship GAIA agent from Slack, set up from the terminal UI in about ninety seconds"
+icon: "slack"
+---
+
+# Slack integration, driven from the TUI
+
+> **Status:** Phases 0-3 implemented; Phase 4 (Signal) not started
+>
+> **Priority:** P1 — consumer track
+>
+> **Related issues:** #635 (messaging adapters), #690 (messaging tool restriction + sanitization),
+> #689 (adapter rate limiting), #693 (Signal), #2062 (Telegram has no e2e coverage)
+>
+> **Related plans:** [Messaging Integrations](/plans/messaging-integrations-plan),
+> [Security Model](/plans/security-model), [TUI User Journey](/plans/tui-user-journey)
+
+---
+
+## 1. What the user gets
+
+Today the flagship agent only answers someone sitting at the machine it runs on. After this,
+you message GAIA from the Slack app on your phone and it answers from your desktop — reading
+your files, searching your documents, and sending results back as Slack file uploads. The
+setup is offered to you rather than hunted for: the TUI notices Slack is installed and asks
+once whether to connect it.
+
+The hard part is not the Slack API. It is that the flagship agent can run shell commands and
+write files, and Slack is a remote surface in a workspace with other people in it. Everything
+in §5 exists because of that, and it is the work that actually decides whether this ships.
+
+---
+
+## 2. What already exists
+
+Almost every piece has a home already. This is mostly wiring, not invention.
+
+| Need | Already in the tree | Note |
+|---|---|---|
+| Detect Slack is installed | `SystemDiscovery.scan_installed_apps()` (`src/gaia/agents/base/discovery.py:1290`) | macOS `.app` bundles, Windows registry + Start Menu, Linux `.desktop`. Already categorises Slack as "Communication" (`tests/unit/agents/test_discovery.py:148`). Do not write a second detector. |
+| Talk to the flagship agent | `gaia_agent.stdio` (`hub/agents/gaia/python/gaia_agent/stdio.py`) | Newline-delimited JSON: one query per stdin line, canonical `status`/`tool_call`/`tool_result`/`token`/`final`/`error` events back. The TUI's `client.SubprocessClient` is the reference consumer. |
+| Ask permission for a tool | `gaia_control` back-channel, same file | A JSON line with a `gaia_control` key, read by a dedicated thread so it lands *during* a turn. Decisions are `allow` / `always` / `deny`. This is the piece Telegram never used. |
+| A messaging adapter to copy | `src/gaia/messaging/telegram.py` | Allowlist enforcement, PID file, health port, background thread, streaming via message edits. Copy the shape; do not copy the tool posture (§5.1). |
+| Ingest what a user sends | `ingest_document_to_rag` / `ingest_image_to_vlm` (`src/gaia/messaging/ingest.py`) | Already used by Telegram for photos and documents. |
+| Store the tokens | connectors keyring (`src/gaia/connectors/_keyring.py`) | OS keyring. Tokens never land in a config file. |
+| An optional readiness row | `preflight.ExtraCheck{Optional: true}` (`tui/internal/ui/preflight/check.go:23`) | Already means "gates a capability, not the launch" — exactly what a Slack offer is. |
+
+**What does not exist and has to be built:** the Socket Mode client, the turn queue, the Block
+Kit renderer, the approval marshalling, the manifest-assisted setup flow, and the TUI screens.
+
+---
+
+## 3. Where the bridge runs
+
+**`gaia slack` is its own long-lived process and owns its own `gaia_agent.stdio` child.** It
+does not route through the TUI, and it does not need the TUI to be running.
+
+This is the decision with the most consequences, so the reasoning matters. The flagship agent
+is **not** a daemon sidecar today — the TUI spawns it directly as a stdio subprocess and keeps
+it. Three options and why one wins:
+
+- **Reuse the TUI's child.** Rejected: Slack would only work while a terminal is open, and
+  remote turns would interleave into the conversation the local user is looking at.
+- **Drive the TUI's control API** (`tui/internal/control/`). Rejected: that API injects
+  keystrokes and returns rendered frames. Screen-scraping a terminal is not a transport.
+- **Own a peer child.** Chosen: same transport as the TUI, separate conversation, independent
+  lifetime. The TUI becomes the *control plane* — discover, configure, start, stop, status —
+  and never the data plane.
+
+```
+Slack (Socket Mode, outbound WS)
+   │
+   ▼
+gaia slack ──spawns──> gaia_agent.stdio  ──> Lemonade
+   │                    (its own GaiaAgent)
+   └── control plane: gaia config / the TUI (start, stop, status, tokens)
+```
+
+### 3.1 The prerequisite nobody can skip — answered
+
+Two `GaiaAgent` processes now share `~/.gaia`: the memory store, the FAISS RAG and code
+indexes, and the scratchpad SQLite DB. Phase 0 asked whether concurrent writes there are safe.
+**They are, and no lock is needed** — but for three different reasons, and the weakest one is
+worth knowing:
+
+| Shared state | Behaviour under two writers | Verdict |
+|---|---|---|
+| `~/.gaia/memory.db` | WAL mode plus `busy_timeout=5000`, added precisely so the dashboard and an agent could share it (`memory_store.py:414`) | Safe by design |
+| Code index | `_save_atomic` writes a temp file and `Path.replace`s it (`code_index/sdk.py:964`) | No torn file. Two writers can leave index and metadata mismatched, which `_load_metadata`'s `ntotal` check already detects and rebuilds |
+| RAG document cache | Plain `open(..., "wb")`, *not* atomic (`rag/sdk.py:370`) — but every cache is HMAC-signed | A torn write fails verification loudly and is rebuilt, rather than being read back as truth |
+
+So the worst case is a wasted re-index, never a silently wrong answer. That is the bar the
+no-silent-fallbacks rule sets, so the bridge runs its own agent child without a lock. If the
+RAG cache is ever made unsigned, this conclusion expires with it.
+
+### 3.2 One conversation, one turn at a time
+
+`gaia_agent.stdio` is a single agent that processes one turn at a time. So v1 is one Slack
+conversation, and a message arriving mid-turn is queued with an :hourglass: reaction rather
+than dropped or run concurrently.
+
+Thread-per-session needs the agent's HTTP surface instead (`server.py`, which already has
+`session_registry` and `/query/{run_id}/respond`). That is a real upgrade path, but it pulls in
+the daemon sidecar layer the flagship deliberately does not use today, so it is Phase 5 at the
+earliest and only if demand shows up.
+
+---
+
+## 4. The user journey
+
+### 4.1 First boot, Slack already installed
+
+The readiness screen already walks a ladder of checks. Slack becomes one more row, marked
+`Optional` so a failure never blocks the launch:
+
+```
+  ✓  Lemonade running
+  ✓  Model downloaded
+  ✓  Memory index ready
+  ○  Slack detected — not connected      [enter] set up   [s] skip   [n] never ask
+```
+
+### 4.2 Setup — and the part we cannot automate
+
+**A Slack app cannot be created without a human at api.slack.com.** Saying "automatic
+configuration" in the UI would be a lie, and users find that out thirty seconds later. What we
+*can* do is make it one click and two pastes, about ninety seconds:
+
+1. The TUI generates the app manifest — bot scopes, Socket Mode on, the `message.im` event
+   subscription — and opens `https://api.slack.com/apps?new_app=1&manifest_json=<urlencoded>`.
+   One click creates an app that is already configured correctly.
+2. The user generates an app-level token (`xapp-…`, scope `connections:write`) and clicks
+   **Install to Workspace** for the bot token (`xoxb-…`).
+3. Both are pasted into the TUI, validated with `auth.test`, and stored in the OS keyring.
+
+Slack's `apps.manifest.create` API does not remove that step — the configuration token it needs
+is itself obtained by hand. Not worth the complexity for v1.
+
+The confirmation screen states the blast radius in plain words before anything starts:
+
+> Connected to **acme.slack.com** as **@gaia**. Only **you** (`U024BE7LH`) can message it.
+> It can read and search your documents. It will ask before running a command or writing a file.
+
+### 4.3 Slack installed later, or a mind changed
+
+Three persisted states in `~/.gaia/config.json`, plus the timestamp detection last succeeded:
+
+| State | Behaviour on next TUI boot |
+|---|---|
+| `connected` | Row shows connected; no prompt |
+| `skipped` | Silent — **except** the one boot where detection flips absent → present, which re-offers once |
+| `never` | Never prompts again; `/slack` still works |
+
+`/slack` in the command palette re-runs setup at any time, which is the "go back to the
+configuration option" path. `gaia slack {setup,start,stop,status}` mirrors all of it for people
+who never open the TUI, matching `gaia telegram`'s shape.
+
+---
+
+## 5. Security
+
+A Slack message is untrusted input reaching an agent that holds shell and file-write tools.
+Telegram dodged this by constructing a plain `AgentSDK` with no tool loop at all. That dodge is
+not available here — tool access *is* the feature — so each layer below is load-bearing.
+
+### 5.1 Layers
+
+1. **Socket Mode only.** An outbound WebSocket: no inbound port, no public URL, no webhook
+   signing secret to leak, nothing for a home router to forward.
+2. **Allowlist with no permissive default.** Refuse to start without one, mirroring
+   `TelegramAllowlistError`. Default is the installing user alone. Pin the `team_id` too, so a
+   token that ends up in another workspace is refused rather than served.
+3. **DMs only in v1.** Anyone in a channel can address a bot in it. Channels and `@mentions`
+   are Phase 5 and need their own threat model.
+4. **Per-call approval over Block Kit.** A `tool_call` event renders as a message with
+   **Allow** / **Always allow** / **Deny** buttons; the click becomes a `gaia_control`
+   `tool_decision` line. No answer inside the timeout is a deny. This is the single most
+   valuable thing in the plan — it is what lets a remote surface hold real tools honestly.
+5. **Bypass is unreachable from Slack.** Not a button, not a command, not a config key the
+   bridge reads. It is set locally or not at all, and the existing audit logger records it.
+6. **A read-only tool profile by default** (#690): documents, search, web. Shell and file
+   writes are opt-in at start time via `--allow-tools` — and even then still pass through
+   per-call approval, so opting in widens what *can* be asked, never what happens unasked.
+7. **Outbound file upload is exfiltration.** A file leaving the user's disk for Slack's servers
+   is approval-gated like any other side effect, and restricted to an allowlisted set of roots.
+8. **Input sanitization** (#690): strip Slack markup, cap length, and never let message text
+   influence tool policy or bypass state.
+
+### 5.2 Transport shape
+
+- **Streaming:** `chat.update` is rate-limited near one call per second per channel. Post a
+  placeholder, update at most once a second with accumulated text, then a final update. Tool
+  activity renders as a context-block trail rather than more messages.
+- **Files in:** download the share, hand to `ingest_document_to_rag` / `ingest_image_to_vlm`.
+- **Files out:** `files.uploadV2` (`files.getUploadURLExternal` + `completeUploadExternal`).
+  The old `files.upload` is retired — do not reach for the example in an old tutorial.
+- **Health port:** Socket Mode needs no inbound port, but the `/healthz` probe does. Add
+  `SLACK_HEALTH_PORT = 8769` to `src/gaia/mcp/ports.py`; 8765–8768 are taken and #3604 was the
+  last collision.
+
+---
+
+## 6. Build the seam once
+
+Signal is next (#693) and Telegram already exists, so the transport-agnostic half belongs in
+`src/gaia/messaging/bridge.py` from the start: the stdio child lifecycle, the turn queue, the
+approval marshalling, the streaming throttle, and file ingest. Per-platform adapters supply
+only what is genuinely platform-specific — the socket, the message renderer, and identity.
+
+Doing this in Phase 1 rather than after makes Signal roughly a three-day addition instead of a
+second bridge, and gives Telegram a supported path to gaining tools later instead of staying
+permanently neutered.
+
+---
+
+## 7. Phases
+
+| Phase | Scope | Estimate |
+|---|---|---|
+| **0 — Spike (blocking)** | Concurrent `~/.gaia` writes from two `GaiaAgent` processes. | ✅ Done — see §3.1 |
+| **1 — Bridge** | `gaia slack` + the shared `bridge.py` seam. Socket Mode, DM-only, allowlist, stdio child, turn queue, throttled streaming. | ✅ Done |
+| **2 — TUI onboarding** | The one-time offer, manifest one-click, token capture to keyring, `/slack`, the three persisted states, start/stop/status. | ✅ Done |
+| **3 — Tools and files** | Block Kit approvals over `gaia_control`, file in/out, `--deny-gated-tools`. | ✅ Done |
+| **4 — Signal** | Second adapter on the same seam (#693). | Not started — 3 d |
+
+**What shipped differently from the plan.** Two things:
+
+- **The read-only tool profile inverted.** The plan assumed a curated allowlist of safe tools
+  per #690. The base agent already gates every shell, file-write and code-execution tool
+  behind `TOOLS_REQUIRING_CONFIRMATION`, so the useful knob turned out to be the other end:
+  `--deny-gated-tools` refuses that whole set outright. The default asks; the flag refuses.
+  Reads stay ungated either way, which §5 now says plainly instead of implying otherwise.
+- **The readiness row became a chat offer.** `preflight.ExtraCheck` runs against a sidecar's
+  `/v1/<agent>/init` endpoint, and the flagship has no sidecar — it is a stdio child. So the
+  offer renders in the chat view at launch instead, gated on the same
+  `gaia slack status --json` answer.
+
+**WhatsApp stays deferred.** That decision is already made and documented in
+[`docs/spec/whatsapp-evaluation.md`](/spec/whatsapp-evaluation) (issue #891, closed): every
+path is bad for a local-first product — the community libraries (`whatsapp-web.js`, Baileys)
+violate WhatsApp's terms and get accounts banned, and the Business Cloud API needs Meta
+business verification, a separate phone number, and template-gated conversations that make
+streaming replies awkward. Nothing has changed since. Revisit on concrete user demand, not on
+completeness.
+
+---
+
+## 8. Testing
+
+#2062 is the warning: the Telegram adapter shipped with no end-to-end coverage, so "does it
+actually work" is still unanswered. Do not repeat that.
+
+- **Unit:** allowlist enforcement per handler (Slack routes commands and messages separately,
+  the same trap `require_allowed` exists for in Telegram); manifest generation; the three
+  onboarding states; the turn queue under a mid-turn message.
+- **Contract:** assert the *shape* of outgoing Slack calls, not merely that a stub was called —
+  `files.uploadV2`'s two-step handshake and `chat.update`'s throttle are exactly the kind of
+  thing a hardcoded-success mock proves nothing about (CLAUDE.md's boundary-validity rule).
+- **End-to-end:** a real Socket Mode connection against a scratch workspace — send a message,
+  get a streamed reply, approve a gated tool, receive a file.
+- **Cold-state:** run setup on a machine with no prior `~/.gaia/config.json` and no keyring
+  entry. A warm dev box hides every first-run bug in this flow.
+- **Eval:** not required — nothing here touches a system prompt or the tool schema. If the
+  Slack path ever injects context into the prompt, it does.
+
+---
+
+## 9. Decisions taken, and what is still open
+
+**Settled during implementation:**
+
+1. **The bridge does not auto-start.** `gaia slack start` is explicit. A background process
+   spawned at TUI launch would be convenient and surprising, and this one can run shell
+   commands.
+2. **A bot token, not a user token.** A user token would let GAIA act *as you* in Slack — a
+   different product with a much larger threat model.
+3. **Tools are on by default, behind per-call approval.** The alternative made the first Slack
+   session weaker than the terminal for no security gain, since the approval gate is what
+   actually stops an unattended command. `--deny-gated-tools` is there for anyone who disagrees.
+
+**Still open:**
+
+4. **Where the approval renderer lives when Signal arrives.** Block Kit is Slack-shaped; Signal
+   has no buttons and needs a reply-with-a-word fallback. The decision protocol is already
+   shared in `bridge.py`; only the rendering is per-adapter, and whether that is enough
+   structure will not be clear until the second adapter exists.
+5. **Channel support.** Deliberately out of scope: anyone in a channel can address a bot in it,
+   so the allowlist would become the only boundary. It needs its own threat model.
+6. **Multi-conversation sessions.** One agent child means one turn at a time. Thread-per-session
+   needs the agent's HTTP surface and its `session_registry`, which pulls in the daemon sidecar
+   layer the flagship does not use.
