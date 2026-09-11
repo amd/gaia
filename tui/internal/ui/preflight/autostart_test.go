@@ -280,8 +280,8 @@ func TestTheStartCallOutlastsTheDaemonsOwnStartBudget(t *testing.T) {
 	}
 	// The gate's overall deadline has to cover the call it makes, or the same
 	// abort happens one level up.
-	if checkTimeout <= lemonadeStartHeaderTimeout {
+	if CheckTimeout <= lemonadeStartHeaderTimeout {
 		t.Errorf("checkTimeout %s does not cover the start call's %s",
-			checkTimeout, lemonadeStartHeaderTimeout)
+			CheckTimeout, lemonadeStartHeaderTimeout)
 	}
 }
