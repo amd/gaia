@@ -285,7 +285,7 @@ def _excerpt(current_content: str, old_content: str) -> Dict[str, Any]:
         "current_content_start_line": start,
         "current_content_end_line": end,
         "current_content_total_lines": total,
-        "current_content_truncated": truncated,
+        "current_content_truncated": truncated or start > 1 or end < total,
         "current_content_anchored_on": anchored_on,
     }
 
@@ -342,9 +342,11 @@ def check_file_state(
         return None
     error = _error(
         f"{operation} rejected: {file_path} changed on disk after it was read — "
-        f"{divergence.reason}. Nothing was written. The file's current "
-        "content is included as `current_content`; reissue the edit against "
-        "that, not against what you read earlier.",
+        f"{divergence.reason}. Nothing was written. A bounded excerpt of the "
+        "current file is included as `current_content`. Read the current file "
+        "in full before retrying a whole-file write; never use this excerpt "
+        "as the complete replacement. Base any edit on the current content, "
+        "not on what you read earlier.",
         file_path,
         len(_match_offsets(current_content, old_content)) if old_content else 0,
         {

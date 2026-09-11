@@ -33,8 +33,8 @@ After a file has been read, `write_file`, `write_python_file`,
 `write_markdown_file`, `update_gaia_md`, `replace_function`, and `edit_file`
 reject changes if the current file content differs from the recorded generation.
 The error includes `stale: true`, content hashes, and a bounded `current_content`
-excerpt. Review the current file before retrying; large files may require another
-read. Rejection leaves the file and backups untouched and re-anchors the ledger
+excerpt. Read the current file in full before retrying a whole-file write; the
+excerpt must never be used as its complete replacement. Rejection leaves the file and backups untouched and re-anchors the ledger
 to the returned generation. Successful writes record their new content so a later
 edit accepts the agent's own changes. New files and files without a prior read
 remain writable, subject to the existing path and write policies.

@@ -118,3 +118,19 @@ def test_missing_file_retains_create_or_replace_behavior(writer):
         tracker = FileStateTracker.instance()
         assert tracker.has_record(str(path))
         assert not tracker.check(str(path), path.read_text(encoding="utf-8")).diverged
+
+
+def test_long_stale_file_identifies_excerpt_and_requires_full_read(writer):
+    path, call, host, _ = writer
+    path.write_text(ORIGINAL, encoding="utf-8")
+    record_read(str(path), ORIGINAL)
+    current = EXTERNAL + "".join(f"# external line {number}\n" for number in range(60))
+    path.write_text(current, encoding="utf-8")
+    result = call()
+    assert result["stale"] is True
+    assert result["current_content_truncated"] is True
+    assert result["current_content_end_line"] < result["current_content_total_lines"]
+    assert "Read the current file in full" in result["error"]
+    assert "never use this excerpt as the complete replacement" in result["error"]
+    assert path.read_text(encoding="utf-8") == current
+    host.path_validator.create_backup.assert_not_called()
