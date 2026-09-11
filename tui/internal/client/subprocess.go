@@ -667,12 +667,16 @@ func (s *SubprocessClient) RespondToolPermission(confirmID string, decision Perm
 // there is nobody to tell, and recording it IS the whole change.
 func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 	s.mu.Lock()
-	if !s.started {
+	started := s.started
+	// A failed disable must never restore bypass on respawn. A failed enable
+	// must keep the prior mode, because the UI reports that enabling failed.
+	if !enabled || !started {
 		s.bypass = enabled
-		s.mu.Unlock()
-		return nil
 	}
 	s.mu.Unlock()
+	if !started {
+		return nil
+	}
 
 	if err := s.writeControl(map[string]interface{}{
 		controlKey: "bypass",
@@ -680,9 +684,11 @@ func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 	}); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.bypass = enabled
-	s.mu.Unlock()
+	if enabled {
+		s.mu.Lock()
+		s.bypass = true
+		s.mu.Unlock()
+	}
 	return nil
 }
 

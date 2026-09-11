@@ -70,6 +70,14 @@ describe('code fences — only a stray 1-2 char tag is unwrapped', () => {
 });
 
 describe('JSON in answers — only a complete envelope is removed', () => {
+    it('preserves an unparseable thought-only block instead of guessing its structure', () => {
+        const { container } = renderContent('{"thought": "line one\nline two"}');
+
+        expect(container.textContent).toContain('"thought"');
+        expect(container.textContent).toContain('line one');
+        expect(container.textContent).toContain('line two');
+    });
+
     it('renders a JSON example that merely has a "tool" key', () => {
         const { container } = renderContent(
             'The record looks like this: {"tool": "hammer", "price": 10} — note the price.',

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -392,5 +393,32 @@ func TestSpawnArgsFollowTheSessionMode(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.args, []string{"--dev", BypassPermissionsFlag, UseClaudeFlag}) {
 		t.Errorf("spawnArgs mutated the launch argv: %v", c.args)
+	}
+}
+
+func TestFailedBypassWriteKeepsRespawnInSafeMode(t *testing.T) {
+	for _, enable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {
+			args := []string{}
+			if !enable {
+				args = append(args, BypassPermissionsFlag)
+			}
+			c := NewSubprocessClient("agent", args, false)
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader.Close()
+			writer.Close()
+			c.started = true
+			c.stdin = writer
+
+			if err := c.SetBypassPermissions(enable); err == nil {
+				t.Fatal("closed stdin must report an undelivered control message")
+			}
+			if got := c.spawnArgs(c.bypass); slices.Contains(got, BypassPermissionsFlag) {
+				t.Fatalf("respawn would enable bypass after a failed control write: %v", got)
+			}
+		})
 	}
 }
