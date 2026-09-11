@@ -72,9 +72,30 @@ NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 #: there to declare it. The loop's own denial shape says it for them.
 _DENIED_STATUS = "denied"
 
-_SCOPE_LINE_RE = re.compile(
-    r"\n{1,2}" + re.escape(VERIFICATION_SCOPE_PREFIX) + r"[^\n]*\s*\Z"
+#: Leading blockquote markers, headings, list bullets and emphasis runs, so a
+#: model's ``> **Verification:** …`` or ``## Verification: …`` is recognised as
+#: the same line.
+_SCOPE_MARKUP_RE = re.compile(
+    r"^[ \t]*(?:>[ \t]*)*(?:\#{1,6}[ \t]+)?(?:(?:[-*+]|\d{1,3}[.)])[ \t]+)?[*_~`]*[ \t]*"
 )
+
+#: An opening or closing code fence — three or more backticks or tildes,
+#: indented or not. Lines between a matching pair are never touched.
+_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+
+#: A line is a scope statement only when it carries the WHOLE generated shape:
+#: the prefix, then one of the three states, then the em dash that introduces
+#: the body. Matching the bare prefix deleted a user's own "Verification: run
+#: pytest before tagging" out of a checklist the model wrote.
+_SCOPE_BODY_RE = re.compile(
+    re.escape(VERIFICATION_SCOPE_PREFIX.strip())
+    + r"\s*[*_~`]*\s*(?:un|partially )?verified\s*[—–-]"
+)
+
+
+def _is_scope_line(line: str) -> bool:
+    """True when *line* is a generated verification statement, Markdown and all."""
+    return bool(_SCOPE_BODY_RE.match(_SCOPE_MARKUP_RE.sub("", line)))
 
 
 def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
@@ -199,8 +220,54 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     return statement
 
 
+def split_verification_scope(text: str) -> Tuple[str, str]:
+    """Split *text* into ``(body, scope_line)``, removing EVERY scope line.
+
+    The line rides in the answer, and the answer is re-sent as conversation
+    history — so a model that reads it can write one of its own, anywhere in
+    its reply, in whatever Markdown it likes. Taking only a trailing one left
+    the echo in place and the appended line beside it, and the user saw the
+    same verification paragraph twice (#3675).
+
+    ``scope_line`` is the LAST one found, stripped of its markup, or ``""``.
+
+    Only the statement lines go, plus the blank line each one was separated by.
+    Everything else is left byte-for-byte: this runs on every Agent-UI answer,
+    and an earlier version that normalised blank runs silently reflowed the
+    inside of every fenced code block it passed through.
+
+    Code blocks are skipped entirely. An answer that *quotes* a footer — a
+    transcript, an explanation of the feature, this repo's own source — has to
+    come back with the quote intact, or the deletion lands in the middle of a
+    fence and leaves an empty pair of backticks.
+    """
+    if not isinstance(text, str) or VERIFICATION_SCOPE_PREFIX.strip() not in text:
+        return (text if isinstance(text, str) else "", "")
+    kept: List[str] = []
+    found = ""
+    fence = ""
+    for line in text.splitlines():
+        marker = _FENCE_RE.match(line)
+        if marker:
+            token = marker.group(1)[:3]
+            if not fence:
+                fence = token
+            elif token == fence:
+                fence = ""
+            kept.append(line)
+            continue
+        if not fence and _is_scope_line(line):
+            bare = _SCOPE_MARKUP_RE.sub("", line).strip()
+            body = bare[len(VERIFICATION_SCOPE_PREFIX.strip()) :].strip(" *_~`")
+            found = VERIFICATION_SCOPE_PREFIX + body if body else ""
+            # The blank line that set this statement apart goes with it.
+            if kept and not kept[-1].strip():
+                kept.pop()
+            continue
+        kept.append(line)
+    return "\n".join(kept).rstrip(), found
+
+
 def strip_verification_scope(text: str) -> str:
-    """Remove a trailing verification-scope line added by the agent loop."""
-    if not isinstance(text, str) or VERIFICATION_SCOPE_PREFIX not in text:
-        return text
-    return _SCOPE_LINE_RE.sub("", text)
+    """Remove every verification-scope line, wherever it sits in *text*."""
+    return split_verification_scope(text)[0]

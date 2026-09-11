@@ -37,6 +37,7 @@ from gaia.agents.base.verification import (
     VERIFICATION_SCOPE_PREFIX,
     build_verification_scope,
     check_was_executed,
+    split_verification_scope,
     strip_verification_scope,
     verification_check_label,
 )
@@ -890,3 +891,185 @@ def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
     )
     assert "ran and did not pass" in statement
     assert "did not run" not in statement
+
+
+# ---------------------------------------------------------------------------
+# Exactly one statement per answer, whatever the model wrote (#3675)
+# ---------------------------------------------------------------------------
+
+ECHOED = (
+    "Verification: unverified — 5 tool calls ran, none of them a test, lint, or build."
+)
+
+MODEL_ECHOES = [
+    ("plain_trailing", f"All five calls succeeded.\n\n{ECHOED}"),
+    ("no_blank_line", f"All five calls succeeded.\n{ECHOED}"),
+    ("trailing_whitespace", f"All five calls succeeded.\n\n{ECHOED}   \n\n"),
+    (
+        "bold_markdown",
+        "All five calls succeeded.\n\n**Verification:** unverified — 5 tool calls ran.",
+    ),
+    (
+        "italic_markdown",
+        "All five calls succeeded.\n\n_Verification: unverified — 5 tool calls ran._",
+    ),
+    (
+        "blockquoted",
+        "All five calls succeeded.\n\n> Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "bulleted",
+        "All five calls succeeded.\n\n- **Verification:** unverified — 5 tool calls ran.",
+    ),
+    ("mid_answer", f"First part.\n\n{ECHOED}\n\nSecond part."),
+    ("twice_over", f"Body.\n\n{ECHOED}\n\n{ECHOED}"),
+    (
+        "heading",
+        "All five calls succeeded.\n\n## Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "ordered_list",
+        "All five calls succeeded.\n\n1. Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "em_dash_variants",
+        "All five calls succeeded.\n\nVerification: unverified - 5 tool calls ran.",
+    ),
+]
+
+
+def _scope_lines(text):
+    return [
+        line
+        for line in text.splitlines()
+        if line.lstrip(" >-*_`").startswith("Verification:")
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer", [case[1] for case in MODEL_ECHOES], ids=[case[0] for case in MODEL_ECHOES]
+)
+def test_an_echoed_statement_is_replaced_not_duplicated(agent, answer):
+    emitted = agent._with_verification_scope(answer)
+    assert len(_scope_lines(emitted)) == 1, emitted
+
+
+def test_the_surviving_statement_is_the_one_derived_from_this_turn(agent):
+    agent._turn_tool_executions = [
+        {"tool": "run_shell_command", "check_label": "pytest", "failed": False}
+    ]
+    emitted = agent._with_verification_scope(f"Body.\n\n{ECHOED}")
+    assert _scope_lines(emitted) == [agent.verification_scope_statement()]
+    assert "5 tool calls ran" not in emitted
+
+
+def test_the_answer_text_around_an_echo_is_preserved(agent):
+    emitted = agent._with_verification_scope(f"First part.\n\n{ECHOED}\n\nSecond part.")
+    assert "First part." in emitted
+    assert "Second part." in emitted
+
+
+def test_an_answer_that_is_only_an_echo_keeps_exactly_one_statement(agent):
+    emitted = agent._with_verification_scope(ECHOED)
+    assert emitted == agent.verification_scope_statement()
+
+
+def test_an_answer_with_no_echo_is_unchanged_but_for_the_appended_line(agent):
+    emitted = agent._with_verification_scope("Just an answer.")
+    assert emitted.startswith("Just an answer.")
+    assert len(_scope_lines(emitted)) == 1
+
+
+def test_the_loop_emits_one_statement_when_the_model_echoes_one(agent):
+    """End-to-end: the echo comes back through conversation history."""
+    agent.shell_result = {"status": "success", "return_code": 0, "stdout": "ok"}
+    _stub_chat(
+        agent,
+        _tool_call("ls -la"),
+        _answer(f"Listed the directory.\n\n{ECHOED}"),
+    )
+
+    result = agent.process_query("list the directory")["result"]
+
+    assert len(_scope_lines(result)) == 1, result
+    assert "5 tool calls ran" not in result
+
+
+def test_split_returns_the_body_and_the_last_statement():
+    body, line = split_verification_scope(f"Body.\n\n{ECHOED}")
+    assert body == "Body."
+    assert line == ECHOED
+
+
+def test_split_tolerates_a_non_string():
+    assert split_verification_scope(None) == ("", "")
+
+
+# --- what the splitter must NOT touch ---------------------------------------
+#
+# It runs on every Agent-UI answer, so anything it rewrites, it rewrites for
+# every answer. Only the generated statement goes.
+
+KEEP_VERBATIM = [
+    (
+        "blank_lines_inside_a_code_block",
+        "Here you go:\n\n```python\ndef a():\n    pass\n\n\ndef b():\n    pass\n```",
+    ),
+    (
+        "a_users_own_verification_step",
+        "Here is the plan:\n\n1. Build\n\nVerification: run pytest before tagging.\n\nDone.",
+    ),
+    ("the_word_in_prose", "verification: none was performed on this branch."),
+    ("a_colon_line_that_is_not_a_statement", "Verification: TBD"),
+    ("paragraph_spacing", "Line A.\n\n\nLine B."),
+    (
+        "a_footer_quoted_inside_a_code_fence",
+        "Here is what it looks like:\n\n```\n"
+        "Verification: unverified - no tools ran, so nothing was checked.\n```",
+    ),
+    (
+        "a_footer_inside_a_tilde_fence",
+        "Example:\n\n~~~text\nVerification: verified - pytest ran and passed.\n~~~",
+    ),
+    (
+        "a_footer_inside_an_indented_fence",
+        "Steps:\n\n  ```\n  Verification: verified - pytest ran and passed.\n  ```",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "text", [t for _, t in KEEP_VERBATIM], ids=[i for i, _ in KEEP_VERBATIM]
+)
+def test_text_that_is_not_a_generated_statement_is_untouched(text):
+    assert strip_verification_scope(text) == text
+
+
+@pytest.mark.parametrize(
+    "text", [t for _, t in KEEP_VERBATIM], ids=[i for i, _ in KEEP_VERBATIM]
+)
+def test_the_body_survives_byte_for_byte_when_a_statement_is_removed(text):
+    """Removing the line must not reflow what is left (the email agent compares
+    the stripped answer against its own grounded text for exact identity)."""
+    emitted = f"{text}\n\n{ECHOED}"
+    assert strip_verification_scope(emitted) == text
+
+
+def test_only_the_statements_blank_separator_is_removed():
+    assert strip_verification_scope(f"Body.\n\n{ECHOED}") == "Body."
+    assert strip_verification_scope(f"Body.\n{ECHOED}") == "Body."
+
+
+def test_a_quoted_footer_survives_while_the_real_one_is_replaced(agent):
+    """An answer explaining the feature must keep its example intact."""
+    answer = "Here is what the footer looks like:\n\n```\n" f"{ECHOED}\n```\n\n{ECHOED}"
+    emitted = agent._with_verification_scope(answer)
+    assert "```\n" + ECHOED + "\n```" in emitted
+    assert len(_scope_lines(emitted)) == 2  # the quoted one, and exactly one real
+    assert emitted.rstrip().endswith(agent.verification_scope_statement())
+
+
+def test_an_unterminated_fence_is_left_alone_rather_than_edited_inside():
+    """Ambiguous markup: keep the answer whole instead of guessing."""
+    text = "Broken:\n\n```\n" + ECHOED
+    assert strip_verification_scope(text) == text

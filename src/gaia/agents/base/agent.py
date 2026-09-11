@@ -44,6 +44,7 @@ from gaia.agents.base.verification import (
     NOT_EXECUTED,
     build_verification_scope,
     check_was_executed,
+    strip_verification_scope,
     verification_check_label,
 )
 
@@ -4847,14 +4848,25 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Append the scope statement to a non-empty answer (#3376).
+        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+
+        Any statement the model wrote itself comes out first. The line rides in
+        the answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's — and the user then read the same
+        verification paragraph twice, once from the model and once from here.
+        Only the one derived from this turn's tool log is authoritative.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
         """
         if not answer or not answer.strip():
             return answer
-        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+        body = strip_verification_scope(answer)
+        statement = self.verification_scope_statement()
+        if not body.strip():
+            # The whole "answer" was an echoed scope line; one is still one.
+            return statement
+        return f"{body.rstrip()}\n\n{statement}"
 
     def process_query(
         self,
