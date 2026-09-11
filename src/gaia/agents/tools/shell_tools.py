@@ -124,6 +124,92 @@ SAFE_GIT_COMMANDS = {
     "help",
 }
 
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+}
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _resolve_git_subcommand(cmd_parts: list) -> tuple:
+    """Step over git's global options to find the real subcommand.
+
+    ``git -C <path> branch`` is a branch listing, not a ``-C`` command; reading
+    ``cmd_parts[1]`` blindly refuses every invocation that carries a global flag.
+
+    Returns:
+        ``(subcommand, error_message)`` — exactly one is non-None. A terminal
+        flag like ``--version`` comes back as the subcommand, since nothing
+        follows it.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            return token.lower(), None
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            return name, None
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, (
+            f"Git global option '{name}' is not recognized, so the subcommand "
+            "behind it cannot be identified."
+        )
+
+    return None, "No git subcommand was given."
+
+
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
     "get-",
@@ -614,13 +700,23 @@ class ShellToolsMixin:
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+                git_subcmd, resolve_error = _resolve_git_subcommand(cmd_parts)
+                if resolve_error is not None:
+                    return {
+                        "status": "error",
+                        "error": resolve_error,
+                        "has_errors": True,
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
+                    }
+                if (
+                    git_subcmd not in SAFE_GIT_COMMANDS
+                    and git_subcmd not in GIT_TERMINAL_FLAGS
+                ):
                     return {
                         "status": "error",
                         "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
                     }
         # Special handling for wmic - only allow read-only queries
         elif cmd_base == "wmic":

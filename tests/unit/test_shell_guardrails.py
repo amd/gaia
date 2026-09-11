@@ -103,6 +103,65 @@ class TestGitSubcommands:
 
 
 # ---------------------------------------------------------------------------
+# Git global options that precede the subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestGitGlobalOptions:
+    """A global flag must not be mistaken for the subcommand (#3624)."""
+
+    def test_dash_c_repo_path_then_read_only_subcommand(self):
+        assert validate("git -C /repo branch --list") is None
+
+    def test_dash_c_repo_path_then_write_subcommand_still_blocked(self):
+        result = validate("git -C /repo push origin main")
+        assert result is not None
+        assert "push" in result["error"]
+
+    def test_git_dir_separate_value(self):
+        assert validate("git --git-dir /repo/.git log --oneline") is None
+
+    def test_git_dir_inline_value(self):
+        assert validate("git --git-dir=/repo/.git status") is None
+
+    def test_work_tree_and_no_pager_combined(self):
+        assert validate("git --no-pager --work-tree /repo status") is None
+
+    def test_namespace_value_is_not_read_as_subcommand(self):
+        # Without value-consumption the walk would land on "reset".
+        result = validate("git --namespace reset status")
+        assert result is None
+
+    def test_version_needs_no_subcommand(self):
+        assert validate("git --version") is None
+
+    def test_config_override_refused(self):
+        result = validate("git -c core.pager=sh status")
+        assert result is not None
+        assert "-c" in result["error"]
+
+    def test_config_env_refused(self):
+        result = validate("git --config-env=core.pager=EVIL status")
+        assert result is not None
+        assert "--config-env" in result["error"]
+
+    def test_exec_path_refused(self):
+        result = validate("git --exec-path=/tmp/evil status")
+        assert result is not None
+        assert "--exec-path" in result["error"]
+
+    def test_unknown_global_option_refused(self):
+        result = validate("git --brand-new-flag status")
+        assert result is not None
+        assert "--brand-new-flag" in result["error"]
+
+    def test_global_option_with_no_subcommand_refused(self):
+        result = validate("git -C /repo")
+        assert result is not None
+        assert "No git subcommand" in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # Dangerous shell operator detection
 # ---------------------------------------------------------------------------
 
