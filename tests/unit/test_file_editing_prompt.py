@@ -13,14 +13,31 @@ These tests pin the fragment's existence and its discovery, not its wording —
 the wording should stay tunable.
 """
 
+import pytest
+
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
 
 class _Bare(FileIOToolsMixin):
-    """The mixin alone — no agent, no registry, no LLM."""
+    """The mixin with registered edit tools, without an agent or LLM."""
+
+    _tools_registry = {"edit_file": {}, "edit_python_file": {}}
 
 
 class TestTheFragmentExists:
+    @pytest.mark.parametrize("profile", ["chat", "doc", "file", "full", "data", "web"])
+    def test_only_profiles_with_both_edit_tools_advertise_them(self, profile):
+        from tests.unit.test_profilespec_characterization import (
+            chat_agent_build_context,
+        )
+
+        with chat_agent_build_context(profile) as agent:
+            agent._register_tools()
+            available = {"edit_file", "edit_python_file"}.issubset(
+                agent._tools_registry
+            )
+            assert bool(agent.get_file_editing_system_prompt()) == available
+
     def test_it_names_the_edit_tools(self):
         text = _Bare().get_file_editing_system_prompt()
         assert "edit_file" in text
