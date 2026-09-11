@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -790,10 +790,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         return;
                     }
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
+                    // Granted for this chat only (revocable in Settings → Tools & Permissions).
+                    if (useNotificationStore.getState().isAlwaysAllowed(sessionId, toolName)) {
                         // Auto-approve without showing the modal
                         api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
@@ -805,6 +803,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         id: event.confirm_id,
                         type: 'permission_request',
                         agentId: 'chat',
+                        sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: `The agent wants to execute: ${toolName}`,
@@ -824,10 +823,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // notification store for the PermissionPrompt overlay.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
+                    if (useNotificationStore.getState().isAlwaysAllowed(sessionId, toolName)) {
                         api.confirmTool(sessionId, true).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
                         );
@@ -838,6 +834,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         id: event.confirm_id ?? `perm-${Date.now()}`,
                         type: 'permission_request',
                         agentId: sessionId,
+                        sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: `The agent wants to execute: ${toolName}`,

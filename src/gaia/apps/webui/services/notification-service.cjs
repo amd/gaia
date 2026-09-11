@@ -330,34 +330,56 @@ class NotificationService extends EventEmitter {
     // Listen for agent notifications via the EventEmitter
     this.agentProcessManager.on(
       "agent-notification",
-      (agentId, params) => {
+      this._guardListener("agent-notification", (agentId, params) => {
         this.handleAgentNotification(agentId, params);
-      }
+      })
     );
 
     // Agent crash → generate error notification
-    this.agentProcessManager.on("status-change", (payload) => {
-      if (payload.status === "stopped" && payload.detail) {
-        // Only notify on unexpected stops (crashes)
-        this.handleAgentNotification(payload.agentId, {
-          type: "error",
-          title: "Agent Crashed",
-          message: payload.detail || `Agent ${payload.agentId} stopped unexpectedly`,
-        });
-      }
-    });
+    this.agentProcessManager.on(
+      "status-change",
+      this._guardListener("status-change", (payload) => {
+        if (payload.status === "stopped" && payload.detail) {
+          // Only notify on unexpected stops (crashes)
+          this.handleAgentNotification(payload.agentId, {
+            type: "error",
+            title: "Agent Crashed",
+            message: payload.detail || `Agent ${payload.agentId} stopped unexpectedly`,
+          });
+        }
+      })
+    );
 
     // Crash limit reached → generate error notification
     this.agentProcessManager.on(
       "agent-crash-limit",
-      (agentId, crashCount) => {
+      this._guardListener("agent-crash-limit", (agentId, crashCount) => {
         this.handleAgentNotification(agentId, {
           type: "error",
           title: "Agent Crash Limit Reached",
           message: `Agent ${agentId} crashed ${crashCount} times — automatic restart disabled`,
         });
-      }
+      })
     );
+  }
+
+  /**
+   * Wrap an EventEmitter listener so a throw inside it is logged instead of
+   * escaping as an uncaughtException — these fire from a child-process `exit`
+   * handler, where an unhandled throw takes the whole app down with the
+   * backend and sidecars still running.
+   */
+  _guardListener(eventName, fn) {
+    return (...args) => {
+      try {
+        fn(...args);
+      } catch (err) {
+        console.error(
+          `[notif] Listener for "${eventName}" threw and was contained: ` +
+            `${err && err.stack ? err.stack : err}`
+        );
+      }
+    };
   }
 
   // ── Private: Persistence ─────────────────────────────────────────────

@@ -118,6 +118,8 @@ export interface GaiaNotification {
   /** For permission_request type. */
   tool?: string;
   toolArgs?: Record<string, unknown>;
+  /** Chat session that raised the request; "always allow" grants are scoped to it. */
+  sessionId?: string;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;

@@ -199,7 +199,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
             onChange={(e) => setRemember(e.target.checked)}
             disabled={isResponding}
           />
-          <span>Always allow this tool</span>
+          <span>
+            Allow this tool for the rest of this chat
+            <small className="permission-remember-hint">
+              Only in this chat, until GAIA restarts. Revoke any time in Settings → Tools &amp; Permissions.
+            </small>
+          </span>
         </label>
       </div>
 
