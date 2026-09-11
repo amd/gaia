@@ -217,15 +217,52 @@ def test_direct_llm():
     return True
 
 
-@test("CORS Headers", "Verify CORS support for browser clients")
+@test(
+    "CORS Headers",
+    "Loopback origins are echoed; an Origin-less request gets no wildcard",
+)
 def test_cors():
-    # Test OPTIONS request
-    req = urllib.request.Request(f"{BASE_URL}/", method="OPTIONS")
+    origin = "http://localhost:3000"
+    req = urllib.request.Request(
+        f"{BASE_URL}/", method="OPTIONS", headers={"Origin": origin}
+    )
     with urllib.request.urlopen(req) as response:
         headers = response.headers
-        assert "Access-Control-Allow-Origin" in headers, "Missing CORS origin header"
+        echoed = headers.get("Access-Control-Allow-Origin")
+        assert echoed == origin, f"Loopback origin not echoed: {echoed!r}"
         assert "Access-Control-Allow-Methods" in headers, "Missing CORS methods header"
-        print(f"   🌐 CORS enabled: {headers['Access-Control-Allow-Origin']}")
+        print(f"   🌐 Loopback origin echoed: {origin}")
+
+    # No Origin means no browser cross-origin call (curl, MCP clients, n8n):
+    # it is served, and must never be answered with a wildcard.
+    req = urllib.request.Request(f"{BASE_URL}/", method="OPTIONS")
+    with urllib.request.urlopen(req) as response:
+        acao = response.headers.get("Access-Control-Allow-Origin")
+        assert (
+            acao is None
+        ), f"Origin-less request got Access-Control-Allow-Origin: {acao!r}"
+    return True
+
+
+@test(
+    "CORS - Foreign Origin",
+    "A non-loopback browser origin is refused before any tool runs",
+)
+def test_cors_foreign_origin_refused():
+    req = urllib.request.Request(
+        f"{BASE_URL}/", method="OPTIONS", headers={"Origin": "https://attacker.example"}
+    )
+    try:
+        with urllib.request.urlopen(req) as response:
+            raise AssertionError(
+                f"Foreign origin was served with HTTP {response.status}"
+            )
+    except urllib.error.HTTPError as e:
+        assert e.code == 403, f"Foreign origin got HTTP {e.code}, expected 403"
+        assert (
+            e.headers.get("Access-Control-Allow-Origin") is None
+        ), "Foreign origin was echoed"
+        print("   🛡️  Foreign origin refused with 403")
     return True
 
 
@@ -264,6 +301,8 @@ def run_all_tests():
     test_error_unknown_tool()
     test_direct_llm()
     test_cors()
+
+    test_cors_foreign_origin_refused()
     test_performance()
 
     # Generate report
