@@ -391,6 +391,18 @@ class OutputHandler(ABC):
         """Display performance statistics. Optional - default no-op."""
         ...
 
+    def print_diff(  # pylint: disable=unused-argument
+        self, diff: str, filename: str
+    ) -> None:
+        """Show a unified diff for a file the agent changed. Optional no-op.
+
+        Declared here so no handler can be missing it: the write tools call it
+        AFTER the bytes are on disk, and an AttributeError there reported a
+        completed edit as a failure (#3676). The diff also rides in the tool
+        result, so a handler that renders nothing loses no information.
+        """
+        ...
+
     def print_header(self, text: str):  # pylint: disable=unused-argument
         """Print header. Optional - default no-op."""
         ...
