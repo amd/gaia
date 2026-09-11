@@ -743,32 +743,6 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="run_shell_command",
-            description=(
-                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
-                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
-                "navigation (pwd), and system information. "
-                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
-                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": "The shell command to execute (e.g., 'ls -la', 'pwd', 'cat file.txt')",
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the command in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": "Timeout in seconds (default: 30)",
-                    "required": False,
-                },
-            },
         )
         def run_shell_command(
             command: str, working_directory: Optional[str] = None, timeout: int = 30

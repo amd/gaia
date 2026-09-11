@@ -131,7 +131,7 @@ a relocation, not a rewrite.
 |---|---|
 | `src/gaia/agents/tools/email_tools.py` | New — `EmailToolsMixin`, ~19 tools |
 | `src/gaia/agents/tools/_email/gmail.py` | New — relocated from `gaia_agent_email/gmail_backend.py` |
-| `src/gaia/agents/tools/_email/graph.py` | New — relocated from `outlook_backend.py` (Phase 4) |
+| `src/gaia/agents/tools/_email/graph.py` | New — read-only Microsoft Graph backend (Phase 0) |
 | `src/gaia/agents/tools/_email/scopes.py` | New — relocated; keeps the `https://mail.google.com/` exclusion (#2533) |
 | `src/gaia/agents/registry.py` | Add `"email"` to `KNOWN_TOOLS` |
 | `hub/skills/inbox-triage/SKILL.md` | New — the judgment layer |
@@ -295,11 +295,13 @@ Evals run **serially** — never two `gaia eval agent` processes at once. Confir
 
 ## Phased plan
 
-**Phase 0 — read-only Gmail triage from the TUI.** One PR. `EmailToolsMixin` with
-5 read tools plus `triage_inbox`, registered in `KNOWN_TOOLS`; `inbox-triage`
-skill; Google connector requirement with read scopes only. No writes, no state DB,
-no Outlook, no calendar. Acceptance: `triage my inbox` works end-to-end in
-`gaia tui` against a real Gmail account, and `tool_selection` does not regress
+**Phase 0 — read-only Outlook triage from the TUI.** One PR. `EmailToolsMixin`
+registers `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, and
+`list_mail_folders` in `KNOWN_TOOLS`; the `inbox-triage` skill supplies the triage
+procedure. The Microsoft connector requests `Mail.ReadWrite` to match its existing
+consent contract, while these five tools expose reads only. No writes, no state
+DB, no Gmail, no calendar. Acceptance: `triage my inbox` works end-to-end in
+`gaia tui` against a real Outlook account, and `tool_selection` does not regress
 against the committed baseline.
 
 **Phase 1** — organize + undo. Brings the action ledger and the batch threshold.
@@ -308,7 +310,7 @@ against the committed baseline.
 
 **Phase 3** — briefing, tasks, scheduling. Needs daemon-managed jobs.
 
-**Phase 4** — Outlook / Microsoft Graph.
+**Phase 4** — Gmail / Google connector.
 
 **Phase 5** — deprecate. Not before Phases 0–4 have shipped and the eval bar is met.
 

@@ -67,6 +67,20 @@ def format_connector_error(e: BaseException) -> str:
     """
     if isinstance(e, AuthRequiredError):
         if e.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED:
+            if e.agent_id is None:
+                # The fail-closed branch (#915): a credential request inside an
+                # agent turn that carries no identity. "Grant it in Settings"
+                # is unfollowable here — there is no agent to grant anything
+                # TO. Name the actual cause instead.
+                return (
+                    f"AGENT_IDENTITY_MISSING: a credential for {e.provider} was "
+                    "requested from inside an agent turn that carries no agent "
+                    "identity, so no per-agent grant can be checked and none is "
+                    "assumed. Either the agent has no AGENT_ID, or the calling "
+                    "code left the agent's context (a thread or task it started "
+                    "itself) — capture current_agent_id() and pass agent_id= "
+                    "explicitly across that boundary."
+                )
             override = _AGENT_GRANT_MIGRATION_MESSAGES.get(
                 (e.agent_id or "", e.provider or "")
             )

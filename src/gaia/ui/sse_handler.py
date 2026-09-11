@@ -25,6 +25,7 @@ from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
+from gaia.agents.base.verification import strip_verification_scope
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
@@ -608,6 +609,14 @@ class SSEOutputHandler(OutputHandler):
         ttft_seconds: Optional[float] = None,
     ):
         if answer:
+            scope_line = ""
+            # Set aside the verification-scope line before the cleaners run: an
+            # answer they strip to nothing (a card-echo) must stay empty, not
+            # arrive as a message consisting only of the scope line (#3376).
+            cleaned_of_scope = strip_verification_scope(answer)
+            if cleaned_of_scope != answer:
+                scope_line = answer[len(cleaned_of_scope) :].strip()
+                answer = cleaned_of_scope
             answer = _THINK_TAG_SUB_RE.sub("", answer)
             # Extract answer text from {"thought":..., "answer":...} JSON before
             # the regex cleaners run.  _THOUGHT_JSON_SUB_RE would otherwise strip
@@ -620,6 +629,8 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
+            if answer and scope_line:
+                answer = f"{answer}\n\n{scope_line}"
         event: Dict[str, Any] = {
             "type": "answer",
             "content": _fix_double_escaped(answer) if answer else answer,

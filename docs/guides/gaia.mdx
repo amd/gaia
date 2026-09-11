@@ -58,10 +58,15 @@ The agent runs local inference only: the sidecar's `/query` endpoint rejects any
 
     ```bash
     uv pip install -e hub/agents/gaia/python    # once
-    gaia daemon start-agent gaia --mode dev
+    GAIA_GAIA_AGENT_MODE=dev gaia-tui
     ```
 
-    Dev mode always runs from **the daemon's own checkout**. If the daemon is already running from a different checkout, it refuses loudly and names both paths rather than quietly serving the wrong source. Check what's running with `gaia daemon agents`; stop it with `gaia daemon stop-agent gaia`.
+    Set `GAIA_GAIA_AGENT_MODE=dev` on the TUI launch as well as on any manual
+    `gaia daemon start-agent gaia --mode dev` launch. The TUI sends its caller
+    checkout to the daemon, so both sides agree on the source tree. Dev mode
+    refuses loudly if a sidecar is already running from a different checkout;
+    check what's running with `gaia daemon agents` and stop it with `gaia daemon
+    stop-agent gaia`.
 
     Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
   </Tab>
@@ -85,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **67 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **73 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 5 read-only Outlook tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -108,10 +113,10 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 ### Tools that need your approval
 
-Six tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, all six are refused rather than prompted.** That
+  **Over the sidecar's `/query` stream, all seven are refused rather than prompted.** That
   surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
@@ -227,5 +232,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, all seven [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
 - **No image generation** — deliberately, so the chat model is never evicted mid-conversation.

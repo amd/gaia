@@ -13,6 +13,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from gaia.agents.base.agent import Agent as _Agent
+
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "skills"
 
 
@@ -274,3 +276,29 @@ def isolated_manager(tmp_path: Path, **kwargs):
         claude_skill_dirs=claude_dirs,
         **kwargs,
     )
+
+
+class LearnedOverlayStubMixin:
+    """Gives a hand-rolled ``Agent`` double the learned-overlay attributes.
+
+    ``Agent.get_skills_system_prompt`` resolves every skill body through the
+    adaptive-skills overlay (#2674), so a stub that borrows that method also
+    needs the handful of members it calls. Inherit this and they are inert: with
+    no memory store the resolver short-circuits and returns the authored body,
+    which is what a test not about learning expects.
+
+    It lives here rather than being copy-pasted into each stub because two test
+    files already needed the identical block, and the third would have been
+    debugged from an ``AttributeError`` rather than found.
+    """
+
+    _effective_skill_body = _Agent._effective_skill_body
+    learned_skills_enabled = _Agent.learned_skills_enabled
+    overlaid_skills = _Agent.overlaid_skills
+    learned_skill_scope = _Agent.learned_skill_scope
+
+    _memory_store = None
+    _incognito = False
+    _learned_skills_enabled = True
+    _effective_skill_cache = None
+    _overlaid_skills = None
