@@ -879,7 +879,7 @@ No documents are currently indexed.
 - Common folders: Desktop, Documents, Downloads (under {home_dir})
 - Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
 - Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
-- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"` (WS is bytes; divide in your answer). Avoid `tasklist /V`.
 - CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
 - GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
 - Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.

@@ -187,11 +187,111 @@ DANGEROUS_PS_PATTERNS = (
 # - > >> are output redirection, < is input redirection
 # - || is OR chaining, ; is command separator
 # - ` and $() are command substitution
-# Note: bare & is matched as word-boundary to avoid false positives
-# inside quoted PowerShell strings (e.g. @{N='...'}).
-DANGEROUS_SHELL_OPERATORS = re.compile(
-    r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
+# Every `&` counts, spaced or not: cmd.exe runs `dir . &where cmd` as two
+# commands, so requiring whitespace after it left the second one unchecked.
+DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:&|>|<|\|\||;|`|\$\()")
+
+
+#: PowerShell execution flags that bypass cmdlet filtering outright.
+BLOCKED_PS_FLAGS = frozenset(
+    {
+        "-encodedcommand",
+        "-enc",
+        # powershell.exe's own switch table carries these short aliases
+        # alongside the prefix rule, so neither is reachable by prefix alone.
+        "-ec",
+        "-ea",
+        "-file",
+        "-f",
+        "-executionpolicy",
+        "-ex",
+        "-ep",
+        "-noprofile",
+        "-nop",
+        "-windowstyle",
+        "-w",
+        "-noninteractive",
+        "-noni",
+    }
 )
+
+#: PowerShell resolves a parameter from any unambiguous prefix of its name, so
+#: an exact-match blocklist leaves ``-e``, ``-ec``, ``-fi``, ``-exec`` open onto
+#: the very parameters it names.
+PREFIX_BLOCKED_PS_PARAMS = (
+    "encodedcommand",
+    "encodedarguments",
+    "file",
+    "executionpolicy",
+)
+
+_SAFE_PS_LEADING_SWITCHES = frozenset({"nologo", "sta", "mta"})
+
+#: Ways a ``-Command`` body reaches code the cmdlet allowlist never sees. The
+#: outer operator scan skips this body by design (``_operator_check_text``), so
+#: every escape it would have caught has to be caught here instead.
+_PS_BODY_ESCAPES = (
+    (re.compile(r"::"), "static .NET member access ([Type]::Member)"),
+    (re.compile(r"\.\s*[a-z_][a-z0-9_]*\s*\("), "method invocation (.Method(...))"),
+    (re.compile(r"(?:^|\|)\s*\.\s+"), "dot-sourcing (. script.ps1)"),
+    # The two below fire in command position only — start of the body or just
+    # after a pipe — so a path OPERAND (Get-Content C:/log.txt) is still a read.
+    (
+        re.compile(r"(?:^|\|)\s*(?:[.\\/]|[a-z]:)"),
+        "running a file by path instead of a cmdlet",
+    ),
+    (
+        re.compile(r"(?:^|\|)\s*\S*\.(?:ps1|psm1|exe|bat|cmd|vbs|js)\b"),
+        "running a script or executable instead of a cmdlet",
+    ),
+    (re.compile(r"&"), "the call operator (& command)"),
+    (re.compile(r"\$"), "variables and subexpressions ($var, $(...))"),
+    (re.compile(r"[<>]"), "redirection (>, >>, <)"),
+    (re.compile(r"[;\r\n]"), "statement separators (; or newline)"),
+)
+
+#: Long-flag names that make a command write a file. Matched on any prefix
+#: because GNU-style long options accept unambiguous abbreviations.
+_FILE_WRITE_FLAG_NAMES = ("output", "append")
+
+
+def _is_blocked_ps_flag(token: str) -> bool:
+    """True when *token* spells a PowerShell parameter that defeats the filter."""
+    if not token or token[0] not in "-/":
+        return False
+    name = token[1:].split(":", 1)[0].split("=", 1)[0].lower()
+    if not name:
+        return False
+    if f"-{name}" in BLOCKED_PS_FLAGS:
+        return True
+    return any(param.startswith(name) for param in PREFIX_BLOCKED_PS_PARAMS)
+
+
+def _powershell_body_escape(ps_cmd: str) -> Optional[str]:
+    """What *ps_cmd* uses to run code the cmdlet allowlist cannot see, or None."""
+    for pattern, description in _PS_BODY_ESCAPES:
+        if pattern.search(ps_cmd):
+            return description
+    return None
+
+
+def _is_file_write_flag(token: str) -> bool:
+    """True when *token* is a write-to-a-file flag in any of its spellings.
+
+    Long and Windows-style names match on any prefix (``--o``, ``/out:``);
+    the single-dash form matches only a cluster starting in ``o``, so
+    ``git branch -a`` is not mistaken for ``--append``.
+    """
+    lowered = token.lower()
+    head = lowered.split("=", 1)[0].split(":", 1)[0]
+    if head.startswith("--") or head.startswith("/"):
+        name = head.lstrip("-/")
+        return bool(name) and any(
+            full.startswith(name) for full in _FILE_WRITE_FLAG_NAMES
+        )
+    if head.startswith("-") and head != "-":
+        return head[1] == "o"
+    return False
 
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
@@ -220,6 +320,20 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     return normalize_binary(token) in granted
 
 
+def _outside_double_quotes(text: str) -> str:
+    """The spans of *text* the shell reads as syntax rather than as data.
+
+    Both ``cmd.exe`` and ``sh`` honour double quotes and treat ``&``, ``|``,
+    ``<`` and ``>`` between them as literals, so scanning a quoted argument for
+    operators refuses reads like ``gh api "issues?a=1&b=2"``. An odd quote count
+    means the quoting is broken, so nothing is stripped and the whole string is
+    scanned.
+    """
+    if text.count('"') % 2:
+        return text
+    return " ".join(text.split('"')[::2])
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -228,7 +342,7 @@ def _operator_check_text(command: str) -> str:
     prefix allowlist). Scanning it here would refuse legitimate cmdlets.
     """
     if not command.strip().lower().startswith(("powershell ", "powershell.exe ")):
-        return command
+        return _outside_double_quotes(command)
     try:
         parts = shlex.split(command)
     except ValueError:
@@ -409,7 +523,11 @@ class ShellToolsMixin:
             return False
 
         command = (tool_args or {}).get("command")
-        if not isinstance(command, str) or DANGEROUS_SHELL_OPERATORS.search(command):
+        # Same operator text as the refusal path, or the two tiers disagree
+        # about what counts as a chained command.
+        if not isinstance(command, str) or DANGEROUS_SHELL_OPERATORS.search(
+            _operator_check_text(command)
+        ):
             return False
 
         try:
@@ -577,8 +695,38 @@ class ShellToolsMixin:
                         "has_errors": True,
                         "allowed_git_commands": list(SAFE_GIT_COMMANDS),
                     }
+            # A read-only subcommand still writes a caller-chosen path when it
+            # is handed an output flag, and the subcommand check never sees it.
+            for part in cmd_parts[1:]:
+                if (
+                    len(cmd_parts) > 1
+                    and cmd_parts[1].lower() == "ls-files"
+                    and part == "-o"
+                ):
+                    continue
+                if _is_file_write_flag(part):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"git '{part}' writes to a file, which is not allowed "
+                            "under the read-only command policy."
+                        ),
+                        "has_errors": True,
+                        "hint": "Drop the output flag and read git's result from stdout.",
+                    }
         # Special handling for wmic - only allow read-only queries
         elif cmd_base == "wmic":
+            for part in cmd_parts[1:]:
+                if _is_file_write_flag(part):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"wmic '{part}' writes to a file, which is not allowed "
+                            "under the read-only command policy."
+                        ),
+                        "has_errors": True,
+                        "hint": "Drop /output: and /append: and read the query result from stdout.",
+                    }
             cmd_lower = command.lower()
             dangerous_wmic_ops = {"call", "create", "delete", "set"}
             cmd_words = set(cmd_lower.split())
@@ -592,23 +740,7 @@ class ShellToolsMixin:
                 }
         # Special handling for powershell - only allow read-only cmdlets
         elif cmd_base in ("powershell", "powershell.exe"):
-            # Block dangerous execution flags that can bypass cmdlet filtering
-            _BLOCKED_PS_FLAGS = {
-                "-encodedcommand",
-                "-enc",
-                "-file",
-                "-f",
-                "-executionpolicy",
-                "-ex",
-                "-ep",
-                "-noprofile",
-                "-nop",
-                "-windowstyle",
-                "-w",
-                "-noninteractive",
-                "-noni",
-            }
-            if any(part.lower() in _BLOCKED_PS_FLAGS for part in cmd_parts[1:]):
+            if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
                 return {
                     "status": "error",
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
@@ -616,15 +748,49 @@ class ShellToolsMixin:
                     "hint": "Use -Command to pass a readable cmdlet string",
                     "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
                 }
-            # Extract the PowerShell command text
-            ps_cmd = ""
-            for i, part in enumerate(cmd_parts):
-                if part.lower() in ("-command", "-c"):
-                    ps_cmd = " ".join(cmd_parts[i + 1 :]).lower()
+            body_start = 1
+            while body_start < len(cmd_parts):
+                part = cmd_parts[body_start]
+                if not part.startswith(("-", "/")):
                     break
+                name = part[1:].lower()
+                if name and "command".startswith(name):
+                    body_start += 1
+                    break
+                if name not in _SAFE_PS_LEADING_SWITCHES:
+                    return {
+                        "status": "error",
+                        "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
+                        "has_errors": True,
+                        "hint": "Use -Command with plain read-only cmdlets.",
+                    }
+                body_start += 1
+            ps_cmd = " ".join(cmd_parts[body_start:]).lower()
             if not ps_cmd:
-                # Inline: powershell "Get-Process"
-                ps_cmd = " ".join(cmd_parts[1:]).lower()
+                return {
+                    "status": "error",
+                    "error": "PowerShell requires an explicit read-only command.",
+                    "has_errors": True,
+                }
+
+            escape = _powershell_body_escape(ps_cmd)
+            if escape is not None:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"PowerShell {escape} is not allowed: it runs code the "
+                        "read-only cmdlet allowlist cannot inspect."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Use plain Get-* cmdlets and parameters only — no $variables, "
+                        "no [Type]::Member, no .Method(), no &, no redirection, no ';'."
+                    ),
+                    "examples": (
+                        'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name", '
+                        'powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"'
+                    ),
+                }
 
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
@@ -639,6 +805,14 @@ class ShellToolsMixin:
                 }
 
             # Verify each cmdlet is safe
+            for segment in ps_cmd.split("|"):
+                head = re.match(r"\s*([a-z]+-[a-z]+)\b", segment)
+                if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
+                    return {
+                        "status": "error",
+                        "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
+                        "has_errors": True,
+                    }
             cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
             for cmdlet in cmdlets:
                 if not any(

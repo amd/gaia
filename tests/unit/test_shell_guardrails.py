@@ -3,6 +3,44 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import pytest
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo calc.exe",
+        "powershell -Mta calc.exe",
+        "powershell -Sta -NoLogo -com calc.exe",
+        'powershell -comm "calc.exe"',
+        "powershell -InputFormat Text calc.exe",
+        "powershell -ConfigurationName x calc.exe",
+        "powershell -Unknown Get-Process",
+        "powershell -NoLogo",
+        "powershell -NoLogo calc",
+        'powershell -Command "Get-Process | calc"',
+        'powershell -Command "Get-Process\ncalc.exe"',
+    ],
+)
+def test_powershell_switches_cannot_hide_executable_body(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo Get-Process",
+        "powershell -Sta -NoLogo -com Get-Process",
+        'powershell -Command "Get-Content ./a.txt"',
+        'powershell -Command "Get-ChildItem . -Recurse"',
+        "git ls-files -o",
+        "git ls-files --others",
+    ],
+)
+def test_reviewed_switches_and_relative_path_reads_remain_allowed(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is None
+
+
 from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     ShellToolsMixin,
@@ -308,3 +346,199 @@ class TestPowerShellFiltering:
             validate("powershell -Command Get-Process | Where-Object Name -eq svchost")
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Read-only allowlist bypasses (C4)
+#
+# Probe strings from a security review of the read-only whitelist: the refused
+# ones were answered "allowed" before, the allowed ones pin behaviour the fix
+# must not cost. They go through the WHOLE validator rather than one regex,
+# because each bypass reached the shell by a different door — the operator
+# scan, the PowerShell flag list, the `-Command` body, or a git/wmic flag the
+# subcommand check never looked at.
+# ---------------------------------------------------------------------------
+
+
+def refused(command: str) -> bool:
+    """True when the full validator refuses *command*."""
+    error, _ = ShellToolsMixin()._validate_shell_command(command)
+    return error is not None
+
+
+class TestUnspacedAmpersandIsAnOperator:
+    """cmd.exe splits on `&` with or without whitespace around it."""
+
+    def test_unspaced_ampersand_chains_a_second_command(self):
+        assert refused("dir . &where cmd")
+
+    @pytest.mark.parametrize(
+        "command",
+        ["dir&whoami", "dir .&where cmd", "ls >& out", "ls <& in", "sleep 10 &"],
+    )
+    def test_every_ampersand_spelling_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command", ["ls -la /tmp", "git status", "cat file.txt", "ls | grep foo"]
+    )
+    def test_ordinary_commands_still_run(self, command):
+        assert not refused(command)
+
+
+class TestPowerShellFlagPrefixes:
+    """PowerShell resolves a parameter from a prefix, so exact matching leaks."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "powershell -e ZQBjAGgAbwA=",
+            "powershell -ec ZQBjAGgAbwA=",
+            "powershell -enc ZQBjAGgAbwA=",
+            "powershell -encod ZQBjAGgAbwA=",
+            "powershell -EncodedCommand ZQBjAGgAbwA=",
+            "powershell -fi C:/evil.ps1",
+            "powershell -File C:/evil.ps1",
+            "powershell -exec bypass -Command Get-Process",
+            "powershell -ExecutionPolicy Bypass -Command Get-Process",
+        ],
+    )
+    def test_any_prefix_of_a_blocked_parameter_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "powershell -Command Get-Process",
+            "powershell -c Get-Process",
+            'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
+        ],
+    )
+    def test_command_is_not_a_prefix_of_anything_blocked(self, command):
+        assert not refused(command)
+
+
+class TestPowerShellCommandBodyEscapes:
+    """The outer operator scan skips the `-Command` body, so it is checked here."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -Command "Get-Content x > C:/out.txt"',
+            "powershell -Command \"[System.Diagnostics.Process]::Start('calc')\"",
+            "powershell -Command \"[System.IO.File]::WriteAllText('a','b')\"",
+            "powershell -Command \"(Get-WmiObject Win32_Process).Create('calc')\"",
+            'powershell -Command "& calc.exe"',
+            'powershell -Command "&$var"',
+            'powershell -Command ". ./evil.ps1"',
+            'powershell -Command "Get-Process; Get-Service"',
+            'powershell -Command "Get-Process $env:USERNAME"',
+        ],
+    )
+    def test_code_the_cmdlet_allowlist_cannot_see_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"',
+            'powershell -Command "Get-Process | Sort-Object WS -Descending | '
+            'Select-Object -First 15 Name, Id, WS"',
+            'powershell -Command "Get-ChildItem -Filter *.log"',
+        ],
+    )
+    def test_plain_read_only_cmdlets_still_run(self, command):
+        assert not refused(command)
+
+
+class TestGitAndWmicFileWrites:
+    """The allowlisted read-only binaries that can still write a chosen path."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git log --output=C:/out.txt --format=pwned",
+            "git log --o C:/out.txt",
+            "git log -o C:/out.txt",
+            "git log -oC:/out.txt",
+            "wmic /output:C:/out.txt cpu get name",
+            "wmic /append:C:/out.txt os get caption",
+        ],
+    )
+    def test_an_output_flag_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git log --oneline -10",
+            "git branch -a",
+            "git diff --stat",
+            "git status",
+            "wmic cpu get name",
+            "wmic os get caption",
+        ],
+    )
+    def test_read_only_spellings_are_untouched(self, command):
+        assert not refused(command)
+
+
+class TestQuotedOperatorsAreData:
+    """cmd.exe and sh both read `&` between double quotes as a literal.
+
+    Scanning the quoted span too would refuse ordinary reads whose argument
+    happens to contain a URL query string.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        ['grep "a&b" file.txt', 'grep "a>b" file.txt', 'cat "a|b.txt"'],
+    )
+    def test_an_operator_inside_double_quotes_is_an_argument(self, command):
+        assert not refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" ; id'],
+    )
+    def test_an_operator_outside_the_quotes_is_still_an_operator(self, command):
+        assert refused(command)
+
+    def test_unbalanced_quotes_are_scanned_whole(self):
+        """Broken quoting means the shell's parse is anyone's guess — refuse."""
+        assert refused('dir "a &calc')
+
+
+class TestPowerShellRunsAFileInsteadOfACmdlet:
+    """A body naming a path or an executable never matches the cmdlet regex.
+
+    Every probe here passed the `verb-noun` allowlist by containing no cmdlet
+    at all, which made the whole PowerShell filter a no-op for that call.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            r'powershell -Command ".\evil.ps1"',
+            r'powershell -Command "C:\evil.ps1"',
+            r'powershell -Command "\\host\share\evil.ps1"',
+            r'powershell -Command ". .\evil.ps1"',
+            r'powershell -Command "Get-Process | .\evil.ps1"',
+            'powershell -Command "calc.exe"',
+            'powershell -Command "payload.bat"',
+        ],
+    )
+    def test_running_a_file_by_path_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            r'powershell -Command "Get-Content C:\temp\a.txt"',
+            'powershell -Command "Get-Content C:/temp/a.txt"',
+            'powershell -Command "Get-ChildItem -Filter *.log"',
+        ],
+    )
+    def test_a_path_operand_is_still_a_read(self, command):
+        """The rule is command position only, or every file argument breaks."""
+        assert not refused(command)

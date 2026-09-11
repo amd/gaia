@@ -48,6 +48,14 @@ from gaia.skills.permissions import (
 GH = BINARY_POLICIES["gh"]
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["gh run list --status failure", "gh repo list --visibility private"],
+)
+def test_read_filters_remain_allowed(command):
+    assert tier(command) == ALLOW
+
+
 def check(command: str) -> str | None:
     """May this gh command line run with nobody asked? None means yes."""
     return validate_invocation(GH, shlex.split(command))
@@ -195,6 +203,46 @@ def test_gh_auth_token_is_blocked_because_it_prints_the_credential():
     error = check("gh auth token")
     assert error is not None
     assert "auth token" in error
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth status --show-token",
+        "gh auth status -t",
+        "gh auth status --show-token=1",
+        "gh auth status -t=x",
+    ],
+)
+def test_gh_auth_status_never_prints_the_token(command):
+    """`--show-token` is `gh auth token` wearing a read's clothes.
+
+    It reached the ALLOW tier, which `skill_grant_covers_call` exempts from
+    confirmation — so the credential printed with nobody asked.
+    """
+    assert tier(command) == REFUSE
+    assert "credential" in classify_invocation(GH, shlex.split(command)).message
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh repo view amd/gaia --web",
+        "gh issue list -w",
+        "gh run view 1 --watch",
+        "gh pr checks 1 --watch",
+    ],
+)
+def test_browser_and_blocking_flags_are_refused(command):
+    """Neither returns output to the agent: one opens a browser, one blocks."""
+    assert tier(command) == REFUSE
+
+
+def test_a_read_subcommand_refuses_a_flag_nobody_reviewed():
+    """Reads take an allowlist, so a future gh flag cannot widen this grant."""
+    error = check("gh repo view amd/gaia --unreviewed-flag")
+    assert error is not None
+    assert "fixed set of read-only flags" in error
 
 
 @pytest.mark.parametrize(
@@ -529,6 +577,25 @@ def test_the_granted_binary_exemption_does_not_cover_the_rest_of_the_pipeline():
     result = _run(host, "gh issue list --repo amd/gaia | cat ../../secret.txt")
     assert result["status"] == "error"
     assert "Access denied" in result["error"]
+
+
+def test_a_query_string_ampersand_is_not_a_command_separator():
+    """The github-triage skill's own notifications call, verbatim.
+
+    Treating every `&` as an operator refuses this, because the `&` sits in a
+    URL query string inside double quotes — data to cmd.exe and to sh alike.
+    """
+    host = _Validating()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("gh", skill_name="github-triage")
+    command = (
+        'gh api "notifications?all=false&per_page=50" '
+        '--jq ".[]|[.reason,.repository.full_name]|@tsv"'
+    )
+
+    error, _ = host._validate_shell_command(command)
+    assert error is None
+    assert host.skill_grant_covers_call("run_shell_command", {"command": command})
 
 
 def test_an_ungranted_command_in_a_pipeline_is_still_refused():
@@ -1267,14 +1334,26 @@ def test_a_free_form_subcommand_still_takes_leading_flags():
 # away. Everything else keeps the old path.
 
 
-def _registered_shell_tool(host):
+def _captured_shell_tool(host):
     """The registered run_shell_command closure bound to *host*."""
-    from gaia.agents.base.tools import get_tool_metadata
+    import gaia.agents.base.tools as tools_module
 
-    host.register_shell_tools()
-    entry = get_tool_metadata("run_shell_command")
-    assert entry is not None, "register_shell_tools did not register run_shell_command"
-    return entry["function"]
+    captured = {}
+    original = tools_module.tool
+
+    def spy(**kwargs):
+        def decorate(fn):
+            captured[kwargs.get("name", fn.__name__)] = fn
+            return original(**kwargs)(fn)
+
+        return decorate
+
+    tools_module.tool = spy
+    try:
+        host.register_shell_tools()
+    finally:
+        tools_module.tool = original
+    return captured["run_shell_command"]
 
 
 def _run_capturing_subprocess(host, command):
@@ -1293,7 +1372,7 @@ def _run_capturing_subprocess(host, command):
 
     shell_module.subprocess.run = fake_run
     try:
-        _registered_shell_tool(host)(command=command)
+        _captured_shell_tool(host)(command=command)
     finally:
         shell_module.subprocess.run = real_run
     return seen
