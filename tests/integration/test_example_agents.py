@@ -46,7 +46,7 @@ def lemonade_available():
 
 requires_lemonade = pytest.mark.skipif(
     not _check_lemonade(),
-    reason="Lemonade server not running - start with: lemonade-server serve",
+    reason="Lemonade server not running - start it with: gaia daemon start",
 )
 
 

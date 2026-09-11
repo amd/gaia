@@ -114,11 +114,8 @@ Set up Claude API for synthetic data generation:
 export ANTHROPIC_API_KEY=your_key_here
 ```
 
-Optional: Start Lemonade for local LLM processing if not running:
-
-```bash
-lemonade-server serve
-```
+Lemonade handles the local LLM processing. You don't need to start it — GAIA
+does that when a run needs it. If it isn't installed yet, run `gaia init`.
 
 **Additional Requirements:**
 - **Node.js (with npm)**: Required for the interactive visualizer (`gaia visualize` command)
@@ -172,7 +169,7 @@ gaia visualize
 
 **Prerequisites:**
 - Claude API key: `export ANTHROPIC_API_KEY=your_key_here`
-- Lemonade server running: `lemonade-server serve`
+- Lemonade installed and its model pulled: `gaia init` (GAIA starts the server itself)
 - Node.js installed for visualizer
 
 This creates one synthetic meeting transcript, generates evaluation standards, tests it with multiple models, scores the results, and launches an interactive comparison interface. The default configuration uses **individual prompts** for maximum reliability and accuracy.
@@ -1339,10 +1336,10 @@ Check if server is running:
 curl http://localhost:13305/api/v1/health
 ```
 
-Start server if needed:
+Start it if needed — the daemon owns the server, so ask it:
 
 ```bash
-lemonade-server serve
+gaia daemon start
 ```
 
 **File Path Issues:**

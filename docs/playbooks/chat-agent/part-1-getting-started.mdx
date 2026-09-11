@@ -126,14 +126,13 @@ Get a working agent running to understand the basic flow.
     </Tabs>
   </Step>
 
-  <Step title="Start Lemonade Server">
+  <Step title="Install the model backend">
     ```bash
-    # Start local LLM server with AMD NPU/iGPU acceleration
-    lemonade-server serve
+    gaia init
     ```
 
     <Info>
-    Lemonade Server provides AMD-optimized inference for AI PCs with Ryzen AI. Models run on your NPU or iGPU for fast, private processing.
+    This installs Lemonade Server and pulls the model. You never start it yourself — `gaia daemon` resolves, starts and supervises it when an agent needs inference. Models run on your NPU or iGPU for fast, private processing.
     </Info>
   </Step>
 

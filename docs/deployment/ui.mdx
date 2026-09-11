@@ -152,10 +152,10 @@ glibc or system libraries than the Ubuntu runner used to produce the
 AppImage. If the AppImage binary is not compatible on Arch you have
 these options:
 
-- Use the browser-based UI by running the backend manually:
+- Use the browser-based UI by running the backend yourself. It asks the
+  daemon for a model server, so this is the only command you need:
 
 ```bash
-lemonade-server serve
 python -m gaia.ui.server
 # Open http://127.0.0.1:4200
 ```
@@ -205,14 +205,14 @@ Gaia Agent UI
 
 ## Developer Quick Start
 
-```bash
-# 1. Start Lemonade Server
-lemonade-server serve
+The backend brings up Lemonade Server through the daemon on first use, so
+there is nothing to start before it:
 
-# 2. Start Agent UI backend
+```bash
+# 1. Start Agent UI backend
 python -m gaia.ui.server
 
-# 3. Open http://127.0.0.1:4200 in your browser
+# 2. Open http://127.0.0.1:4200 in your browser
 ```
 
 For full documentation, see:

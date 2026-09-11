@@ -245,15 +245,10 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
     ```
   </Step>
 
-  <Step title="Start the LLM backend">
-    Lemonade server provides the local LLM and embeddings for the Agent UI:
-
-    ```bash
-    lemonade-server serve
-    ```
-  </Step>
-
   <Step title="Start the Agent UI backend">
+    This also brings up Lemonade Server, which provides the local LLM and
+    embeddings — you don't need to start it separately.
+
     <Tabs>
       <Tab title="CLI">
         ```bash

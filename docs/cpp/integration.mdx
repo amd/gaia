@@ -365,10 +365,10 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
   </Tab>
 
   <Tab title="Lemonade (default)">
-    [Lemonade Server](https://lemonade-server.ai) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration.
+    [Lemonade Server](https://lemonade-server.ai) is the default backend, optimized for AMD Ryzen AI NPU and GPU acceleration. `gaia daemon` starts and supervises it for you in the background.
 
     ```bash
-    lemonade-server serve
+    gaia daemon start
     ```
 
     ```cpp

@@ -52,14 +52,15 @@ def my_tool():
 
 ### Issue: LLM not responding
 
-```bash
-# Check Lemonade server is running
-curl http://localhost:13305/api/v1/models
-# Should return available models
+The daemon supervises the model server, so start there:
 
-# Or start it
-lemonade-server serve
+```bash
+gaia daemon status          # reports the model server it supervises
+gaia daemon start           # if no daemon is running
+gaia daemon logs --lines 100  # daemon up but no model server? the reason is here
 ```
+
+The usual cause is that Lemonade was never installed — `gaia init` installs the server and pulls the model.
 
 ---
 

@@ -76,11 +76,10 @@ The agent uses three tools:
 
 ## Requirements
 
-- **Lemonade Server** must be running for hardware detection
 - **GAIA** installed: `uv pip install amd-gaia`
 
 <Tip>
-GAIA auto-starts Lemonade Server on first use if it's not already running.
+Hardware detection reads from the model server, but you don't start that yourself — `gaia daemon` resolves, starts and supervises it.
 </Tip>
 
 ---
@@ -90,10 +89,15 @@ GAIA auto-starts Lemonade Server on first use if it's not already running.
 <Accordion title="Lemonade Server not running">
 **Error:** `Failed to get hardware information from Lemonade Server`
 
-**Solution:** Start Lemonade Server:
-```bash
-lemonade-server serve
-```
+You shouldn't have to start the model server yourself — `gaia daemon` resolves, starts and supervises it. So the question is why that didn't happen.
+
+Start with the daemon, which reports the model server it supervises: `gaia daemon status`
+
+If no daemon is running, start it: `gaia daemon start`
+
+If the daemon is up but the model server isn't, the reason is in the daemon log: `gaia daemon logs --lines 100`
+
+The usual cause is that Lemonade isn't installed at all. `gaia init` installs the server and pulls the model.
 </Accordion>
 
 <Accordion title="GPU not detected">

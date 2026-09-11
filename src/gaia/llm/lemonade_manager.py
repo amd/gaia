@@ -690,10 +690,18 @@ class LemonadeManager:
                 status = client.get_status()
 
                 if not status.running:
-                    cls._log.warning("Lemonade server is not running")
-                    if not quiet:
-                        cls.print_server_error(min_context_size)
-                    return False
+                    # GAIA manages Lemonade — a stopped server is something to
+                    # start, not something to tell the user about.
+                    if not cls._autostart(client, min_context_size, quiet, cls._lock):
+                        return False
+                    status = client.get_status()
+                    if not status.running:
+                        cls._log.warning(
+                            "Lemonade server still not running after auto-start"
+                        )
+                        if not quiet:
+                            cls.print_server_error(min_context_size)
+                        return False
 
                 # Defensive normalisation: some Lemonade versions can return
                 # `loaded_models: null` in their JSON, which would crash the
@@ -792,6 +800,65 @@ class LemonadeManager:
                 if not quiet:
                     cls.print_server_error(min_context_size)
                 return False
+
+    @classmethod
+    def _autostart(
+        cls,
+        client: "LemonadeClient",
+        min_context_size: int,
+        quiet: bool,
+        lock: "threading.Lock",
+    ) -> bool:
+        """Start Lemonade Server for a caller who found it down.
+
+        The work belongs to the daemon, which owns the process — this asks it
+        (:func:`gaia.llm.lemonade_service.ensure_lemonade_running`) rather than
+        spawning anything, so a CLI and a UI starting at the same moment cannot
+        produce two servers.
+
+        Returns True when a server is answering afterwards. Returns False after
+        printing and logging the actionable reason it could not be started —
+        ``ensure_ready``'s contract is a bool, so the failure is surfaced in
+        full rather than raised past callers that cannot handle it.
+
+        Releases *lock* for the duration: a cold start takes tens of seconds and
+        must not stall status pollers or concurrent ``ensure_ready`` callers.
+        Mirrors the lock discipline of :meth:`_try_preload_with_ctx`.
+        """
+        from gaia.llm.lemonade_service import (
+            LemonadeStartError,
+            ensure_lemonade_running,
+        )
+
+        cls._log.info(
+            "Lemonade server is not running at %s — starting it", client.base_url
+        )
+        if not quiet:
+            print(
+                "\n⏳ Lemonade Server is not running — starting it...",
+                flush=True,
+            )
+
+        lock.release()
+        try:
+            result = ensure_lemonade_running(
+                ctx_size=min_context_size, base_url=client.base_url
+            )
+        except LemonadeStartError as e:
+            cls._log.error("Could not start the local model server: %s", e)
+            if not quiet:
+                print(f"\n❌ {e}", file=sys.stderr, flush=True)
+            return False
+        finally:
+            lock.acquire()
+
+        if not quiet and result.started:
+            print(
+                f"✅ Lemonade Server is up at {result.base_url} "
+                f"({result.waited_seconds:.0f}s).",
+                flush=True,
+            )
+        return True
 
     @classmethod
     def _try_preload_with_ctx(
