@@ -313,6 +313,22 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 
+	// Installed but stopped is the commonest way to land here, and it is the one
+	// case this screen can resolve by itself. Starting is not installing: an
+	// absent Lemonade still falls through to the `f` key below, because pulling
+	// gigabytes needs a human to agree.
+	if started, base, trace := tryAutoStartLemonade(ctx); started {
+		row.State = StateOK
+		row.Line = "started for you, running at " + base
+		row.Raw = probe + "\n" + trace
+		return row
+	} else if trace != "" {
+		// A failed attempt is reported, never swallowed: the row goes red as it
+		// always did, and `d details` now shows what was run and how it failed.
+		probe += "\n" + trace
+		row.Raw = probe
+	}
+
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
 	row.Line = "not running"
@@ -396,7 +412,15 @@ func lemonadeAPIKey() string {
 
 // It returns the base URL it settled on, whether it answered, and a trace for
 // the details pane.
-func probeLemonade(ctx context.Context) (base string, reachable bool, trace string) {
+// probeLemonade asks whether a local model server is answering, and where.
+//
+// A var so a test can decide that answer. Without it every row-level test here
+// depends on whether the developer running `go test` happens to have Lemonade
+// up — which silently skipped the entire auto-start path on any machine that
+// did, testing nothing while reporting green.
+var probeLemonade = probeLemonadeHTTP
+
+func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace string) {
 	ctx, cancel := context.WithTimeout(ctx, lemonadeProbeTimeout)
 	defer cancel()
 
