@@ -2,13 +2,24 @@
 # SPDX-License-Identifier: MIT
 """Keep the flagship regression lane active for its shared dependencies."""
 
-from fnmatch import fnmatchcase
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def matches_path(path, pattern):
+    """Match the literal, * and ** filters used by this workflow."""
+    assert not any(char in pattern for char in "?![]+"), pattern
+    tokens = re.split(r"(\*\*|\*)", pattern)
+    expression = "".join(
+        ".*" if token == "**" else "[^/]*" if token == "*" else re.escape(token)
+        for token in tokens
+    )
+    return re.fullmatch(expression, path) is not None
 
 
 @pytest.fixture
@@ -38,13 +49,19 @@ def triggers():
 )
 def test_dependency_changes_run_flagship_tests(triggers, event, changed_path):
     assert any(
-        fnmatchcase(changed_path, pattern) for pattern in triggers[event]["paths"]
+        matches_path(changed_path, pattern) for pattern in triggers[event]["paths"]
     ), f"{event} does not run flagship tests for {changed_path}"
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_unrelated_docs_do_not_run_flagship_tests(triggers, event):
     assert not any(
-        fnmatchcase("docs/guides/talk.mdx", pattern)
+        matches_path("docs/guides/talk.mdx", pattern)
         for pattern in triggers[event]["paths"]
     )
+
+
+def test_single_star_cannot_hide_narrowed_dependency_coverage():
+    assert matches_path("src/gaia/agent.py", "src/gaia/*")
+    assert not matches_path("src/gaia/agents/base/agent.py", "src/gaia/*")
+    assert matches_path("src/gaia/agents/base/agent.py", "src/gaia/**")
