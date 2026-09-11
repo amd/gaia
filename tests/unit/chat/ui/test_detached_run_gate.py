@@ -126,3 +126,33 @@ async def test_stream_failure_before_run_start_releases_slot(runtime):
     # from reaching the response's BackgroundTask.
     assert not http_request.app.state.chat_semaphore.locked()
     assert not http_request.app.state.session_locks[sid].locked()
+
+
+async def test_cancelled_queued_request_releases_only_its_session_lock(runtime):
+    db, _manager, http_request = runtime
+    sid = db.create_session()["id"]
+    gate = http_request.app.state.chat_semaphore
+    await gate.acquire()
+    queued = asyncio.create_task(
+        chat.send_message(
+            ChatRequest(session_id=sid, message="queued", stream=True), http_request, db
+        )
+    )
+    try:
+        await asyncio.sleep(0.01)
+        assert http_request.app.state.session_locks[sid].locked()
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queued
+        assert not http_request.app.state.session_locks[sid].locked()
+        assert gate.locked()
+    finally:
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+        gate.release()
+
+    retry = await chat.send_message(
+        ChatRequest(session_id=sid, message="retry", stream=True), http_request, db
+    )
+    await retry.background()
+    assert not gate.locked()

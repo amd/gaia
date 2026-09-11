@@ -91,12 +91,8 @@ async def send_message(
     # asyncio.Lock held by another coroutine is unsafe because the lock
     # has no ownership tracking.
     #
-    # The lock guards the synchronous request window; ``run_manager`` guards
-    # the *background tail* — a streaming run keeps going (and persisting)
-    # after the client disconnects and the HTTP lock is released (#1580), so
-    # a new turn for the same session must also be rejected while that
-    # background run is still active, or it would corrupt the cached agent's
-    # conversation state.
+    # The session lock and run registry cover the entire producer lifetime,
+    # including detached runs, to protect the cached agent's conversation state.
     if session_lock.locked() or run_manager.is_running(sid):
         raise HTTPException(
             status_code=409,
@@ -118,6 +114,9 @@ async def send_message(
             detail="The server is busy processing other chat requests. "
             "Please try again in a few moments.",
         )
+    except asyncio.CancelledError:
+        session_lock.release()
+        raise
 
     # Both session_lock and chat_semaphore are now held by this coroutine.
     # Track whether ownership was transferred to the streaming generator.
