@@ -96,7 +96,7 @@ def test_background_start_keeps_polling_process_alive_until_stopped(
         lambda sig, handler: signal_handlers.__setitem__(sig, handler),
     )
 
-    adapter = TelegramAdapter(token="fake-token")
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
     adapter.start(token="fake-token", background=True)
 
     assert poll_started.wait(timeout=2)
