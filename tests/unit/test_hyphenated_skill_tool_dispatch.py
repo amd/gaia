@@ -9,29 +9,53 @@ registered name resolves, while the hyphen->underscore normalization still rescu
 a genuine snake_case model typo.
 """
 
+from unittest.mock import patch
+
 from gaia.agents.base.agent import Agent
 
 
-class _DispatchStub(Agent):
-    def __init__(self, registry):
-        self._instance_tools = registry
+class _DispatchAgent(Agent):
+    def _get_system_prompt(self) -> str:
+        return "test"
 
-    def _register_tools(self):
+    def _register_tools(self) -> None:
         pass
 
-    def _resolve_tool_name(self, name):
-        return None
+    def _create_console(self):
+        from gaia.agents.base.console import AgentConsole
+
+        return AgentConsole()
+
+
+def _agent_with_tools(registry):
+    """Build a real agent and swap its registry — the pattern used by the other
+    ``_execute_tool`` tests. Bypassing ``Agent.__init__`` would leave per-turn
+    state like ``_tool_reported_usage`` unset."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _DispatchAgent(silent_mode=True, skip_lemonade=True)
+    agent._instance_tools = {
+        name: {
+            "name": name,
+            "description": "stub",
+            "parameters": {},
+            "function": fn,
+            # These tests exercise name resolution, not the confirmation gate.
+            "requires_confirmation": False,
+        }
+        for name, fn in registry.items()
+    }
+    return agent
 
 
 def _tool(result):
     def fn(**kwargs):
         return {"status": "success", "result": result}
 
-    return {"function": fn, "description": "", "parameters": {}}
+    return fn
 
 
 def test_hyphenated_skill_tool_dispatches_to_exact_name():
-    agent = _DispatchStub({"rss-digest/fetch_rss": _tool("FEED")})
+    agent = _agent_with_tools({"rss-digest/fetch_rss": _tool("FEED")})
     out = agent._execute_tool("rss-digest/fetch_rss", {"url": "http://x"})
     assert out["status"] == "success"
     assert out["result"] == "FEED"
@@ -39,13 +63,13 @@ def test_hyphenated_skill_tool_dispatches_to_exact_name():
 
 def test_hyphen_normalization_still_rescues_a_snake_case_typo():
     # No exact match; the model emitted a hyphen for an underscore tool.
-    agent = _DispatchStub({"read_file": _tool("OK")})
+    agent = _agent_with_tools({"read_file": _tool("OK")})
     out = agent._execute_tool("read-file", {})
     assert out["status"] == "success"
     assert out["result"] == "OK"
 
 
 def test_unknown_tool_still_errors():
-    agent = _DispatchStub({"read_file": _tool("OK")})
+    agent = _agent_with_tools({"read_file": _tool("OK")})
     out = agent._execute_tool("nope/does_not_exist", {})
     assert out["status"] == "error"

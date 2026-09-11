@@ -192,6 +192,7 @@ class ClaudeProvider(LLMClient):
             )
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
     @property
     def provider_name(self) -> str:
@@ -208,15 +209,34 @@ class ClaudeProvider(LLMClient):
         return DEFAULT_CLAUDE_MODEL
 
     #: Anthropic's tool-name contract. GAIA names can be wider — skill tools are
-    #: namespaced ``<skill>/<tool>`` (e.g. ``rss-digest/fetch_rss``) and the ``/``
-    #: 400s the whole request — so names are sanitized outbound and mapped back
-    #: on every returned tool_use block.
+    #: namespaced ``<skill>/<tool>`` and the ``/`` 400s the whole request — so
+    #: names are sanitized outbound and mapped back on returned tool_use blocks.
     _TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
     def _api_tool_name(self, name: str) -> str:
         if self._TOOL_NAME_RE.fullmatch(name):
             return name
         return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
+
+    @staticmethod
+    def _restore_tool_name(name_map: Dict[str, str], api_name: str) -> str:
+        if api_name not in name_map:
+            # Every outbound name is registered, so a miss means request and
+            # response were shaped against different tool sets. The message
+            # reaches the user verbatim, so the diagnostic detail goes to the
+            # log rather than into the exception.
+            logger.error(
+                "Tool %r is not in this request's outbound name map, so the "
+                "response was parsed against a different tool set than the one "
+                "sent. Registered: %s",
+                api_name,
+                sorted(name_map),
+            )
+            raise RuntimeError(
+                f"Claude returned tool {api_name!r}, which was not in the tool "
+                "set sent with this request."
+            )
+        return name_map[api_name]
 
     def _to_anthropic_tools(
         self, tools: Optional[List[dict]]
@@ -238,21 +258,25 @@ class ClaudeProvider(LLMClient):
                 dict(tool)  # already Anthropic-shaped (name + input_schema)
                 if fn is None
                 else {
-                    "name": fn["name"],
+                    # .get so a nameless entry hits the guard below rather
+                    # than dying on a bare KeyError.
+                    "name": fn.get("name"),
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters")
                     or {"type": "object", "properties": {}},
                 }
             )
-            original = entry.get("name", "")
+            original = entry.get("name")
+            if not original:
+                raise ValueError(
+                    "Tool definition has no name: "
+                    f"{tool!r}. Anthropic requires a name on every tool entry "
+                    "(custom, server, and client-side alike), and GAIA needs "
+                    "one to route the model's call back to a registered tool."
+                )
             api_name = self._api_tool_name(original)
-            # EVERY outbound name is registered, identity included. Registering
-            # only the rewritten ones cannot detect the collision that actually
-            # misroutes a call: a skill tool `write/file` sanitizes to
-            # `write_file` and silently shadows the builtin of that name, so the
-            # restore map sends the model's builtin call to the skill's tool.
-            # A skill shadowing a registry name is an expected case
-            # (skills/loader.py), so this is reachable, not theoretical.
+            # Register identity names too: `write/file` sanitizes onto the
+            # builtin `write_file`, and only a full map can see that clash.
             if api_name in name_map:
                 clash = name_map[api_name]
                 raise ValueError(
@@ -402,7 +426,7 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": name_map.get(block.name, block.name),
+                            "name": self._restore_tool_name(name_map, block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
@@ -454,7 +478,7 @@ class ClaudeProvider(LLMClient):
                             "id": block.id,
                             "type": "function",
                             "function": {
-                                "name": name_map.get(block.name, block.name),
+                                "name": self._restore_tool_name(name_map, block.name),
                                 "arguments": "",
                             },
                         }

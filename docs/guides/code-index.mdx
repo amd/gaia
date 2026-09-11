@@ -66,6 +66,12 @@ The [`coding` skill](https://github.com/amd/gaia/blob/main/hub/skills/coding/SKI
 | `get_index_status` | Report current index state |
 | `clear_code_index` | Remove the cached index |
 
+You usually will not have to wait for that first `index_codebase` call. The
+[project map](/guides/project-map) starts one in the background at task start
+whenever the agent is in a repository that has no index, so by the time a
+semantic search matters the index is often already there. Set
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` to keep indexing entirely manual.
+
 ### Example interaction
 
 ```
