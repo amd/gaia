@@ -98,6 +98,11 @@ jobs:
     name: Email Agent Unit Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Email tests must never invoke an interactive host keychain. This is
+      # especially important for macOS local runs, where Keychain calls can
+      # block indefinitely when no GUI session is available (#2735).
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     strategy:
       fail-fast: false

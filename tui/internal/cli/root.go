@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
 )
 
@@ -84,6 +87,67 @@ func binaryName(argv0 string) string {
 // point that honours it reads the same variable.
 var mockAgent string
 
+// tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
+// the path the user gave. Resolved by openTrace.
+var tracePath string
+
+// traceAutoPath is what bare --trace parses to: cobra needs a NoOptDefVal for
+// the flag to be legal without a value, and "" already means "off".
+//
+// A WORD, not an unprintable sentinel — pflag prints NoOptDefVal verbatim in
+// --help, so a control character lands in the flag listing. As a side effect
+// `--trace=auto` is the same as bare `--trace`, which is what it reads like.
+// A file genuinely named "auto" is still reachable as `--trace=./auto`.
+const traceAutoPath = "auto"
+
+// traceArgAdvice explains a stray positional that is really a spaced --trace
+// path, and returns nil when --trace does not explain it.
+//
+// want is how many positionals the command legitimately takes. pflag refuses to
+// attach a spaced value to a flag that is legal without one, so
+// `… --trace out.jsonl` leaves out.jsonl as an argument and records to the
+// DEFAULT path — the exact "recording somewhere you did not ask for" this flag
+// exists to remove. Every command that accepts --trace has to say so, not just
+// the root one.
+func traceArgAdvice(args []string, want int) error {
+	if tracePath != traceAutoPath || len(args) <= want {
+		return nil
+	}
+	stray := args[want]
+	return fmt.Errorf(
+		"--trace takes its path attached, not spaced: write --trace=%s "+
+			"(as written, %q was read as an argument, and the trace would have gone "+
+			"to the default path instead)", stray, stray)
+}
+
+// openTrace turns --trace into a writer, or nil when the flag was not passed.
+// agentID names the run in the default filename, so a trace can be told apart
+// from another agent's without opening it.
+//
+// It returns an error rather than warning and continuing: a trace that is not
+// being written is indistinguishable from an agent that did nothing, which is
+// the exact confusion the flag exists to remove.
+func openTrace(agentID string) (*event.TraceWriter, error) {
+	if tracePath == "" {
+		return nil, nil
+	}
+	path := tracePath
+	if path == traceAutoPath {
+		auto, err := event.DefaultTracePath(agentID, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		path = auto
+	}
+	w, err := event.NewTraceWriter(path)
+	if err != nil {
+		return nil, err
+	}
+	// A recorder the user cannot find is a recorder that does not exist.
+	fmt.Fprintf(os.Stderr, "trace → %s\n", w.Path())
+	return w, nil
+}
+
 var rootCmd = &cobra.Command{
 	Use:   defaultBinaryName,
 	Short: "GAIA in your terminal",
@@ -97,8 +161,21 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
+		trace, err := openTrace(catalog.FlagshipID)
+		if err != nil {
+			return err
+		}
+		defer closeTrace(trace)
+		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg(), trace)
 	},
+}
+
+// closeTrace flushes and closes the trace, reporting a recording that stopped
+// early. Silence here would let a truncated trace read as a complete one.
+func closeTrace(w *event.TraceWriter) {
+	if err := w.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "trace: %v\n", err)
+	}
 }
 
 func init() {
@@ -112,7 +189,8 @@ func init() {
 
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
 		"developer mode: show per-turn timings, steps, and tool arguments and output "+
-			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/)")
+			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
+			"This is what is on SCREEN; --trace writes the same events to a file")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.
@@ -161,6 +239,44 @@ func init() {
 	// substituted a stand-in.
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
+	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
+		"record every agent event — tool calls WITH their arguments, results, errors "+
+			"and timings — to a JSONL file, one event per line, for later inspection. "+
+			"Bare --trace writes ~/.gaia/traces/<timestamp>-<agent>.jsonl; --trace=<path> "+
+			"picks the file (the path must be attached with =, not spaced). Independent "+
+			"of --dev, which shows the same events on screen instead. The file holds "+
+			"whatever the agent read — file contents, shell output, email — so review "+
+			"it before sharing. Does NOT capture prompt size or token accounting — "+
+			"those live only in the agent's own recorder (GAIA_TURN_LOG)")
+	// Without this, bare --trace is a parse error ("flag needs an argument").
+	rootCmd.PersistentFlags().Lookup("trace").NoOptDefVal = traceAutoPath
+	// pflag will not attach a spaced value to a NoOptDefVal flag, so
+	// `--trace out.jsonl` leaves out.jsonl as a positional and would otherwise
+	// be reported as an unknown command — with the real fix nowhere in sight.
+	//
+	// Cobra's own unknown-command path defaults this lazily; the exported
+	// SuggestionsFor does not, and a zero distance matches nothing.
+	rootCmd.SuggestionsMinimumDistance = 2
+	rootCmd.Args = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return nil
+		}
+		// Cobra's own legacyArgs message, suggestions included — this hook
+		// replaced it, so it owes the same help for an ordinary typo.
+		near := cmd.SuggestionsFor(args[0])
+		// A near-miss is a misspelled COMMAND, not a misplaced path: with
+		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
+		if len(near) == 0 {
+			if err := traceArgAdvice(args, 0); err != nil {
+				return err
+			}
+		}
+		msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
+		if len(near) > 0 {
+			msg += "\n\nDid you mean this?\n\t" + strings.Join(near, "\n\t")
+		}
+		return fmt.Errorf("%s", msg)
+	}
 }
 
 // Execute runs the CLI.

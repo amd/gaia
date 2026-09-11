@@ -166,28 +166,39 @@ class AgentSDK:
         """
         Ensure messages are safe to send to the LLM.
 
-        Tool messages are converted to user-role messages in send_messages /
-        send_messages_stream, so no extra "continue" sentinel is needed here —
-        the tool result itself already forms a valid user turn for the LLM to
-        respond to.
+        Tool messages become provider-appropriate history in send_messages /
+        send_messages_stream, so no extra "continue" sentinel is needed here.
         """
         if not messages:
             return []
 
         return list(messages)
 
-    def _flatten_tool_call_turn(self, msg: Dict[str, Any]) -> str:
-        """Textual stand-in for an assistant turn that only called tools.
-
-        Without it the flattened history shows ``None`` where the model called
-        a tool, so it can't correlate the tool results that follow.
-        """
-        calls = ", ".join(
-            f"{(tc.get('function') or {}).get('name', 'tool')}"
-            f"({(tc.get('function') or {}).get('arguments') or ''})"
-            for tc in msg.get("tool_calls", [])
-        )
-        return f"[Called tools: {calls}]"
+    def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert one history entry to the active provider's message shape."""
+        role = msg.get("role", "user")
+        content = self._normalize_message_content(msg.get("content", ""))
+        if self.config.use_claude and role == "assistant" and msg.get("tool_calls"):
+            return {
+                "role": "assistant",
+                "content": content if msg.get("content") else None,
+                "tool_calls": msg["tool_calls"],
+            }
+        if self.config.use_claude and role == "tool":
+            return {
+                "role": "tool",
+                "content": content,
+                "name": msg.get("name", "tool"),
+                "tool_call_id": msg.get("tool_call_id"),
+            }
+        if role == "tool":
+            # Local/OpenAI-compatible backends receive tool results as user text.
+            # The native Claude path above preserves the IDs Anthropic requires.
+            return {
+                "role": "user",
+                "content": f"[Tool result: {msg.get('name', 'tool')}] {content}",
+            }
+        return {"role": role, "content": content}
 
     # ── per-turn performance recording (dev mode, opt-in) ──────────────────
     #
@@ -280,34 +291,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages so that the LLM
-                    # receives a proper user turn to reply to.  Converting them to
-                    # "assistant" caused the previously-injected "continue" sentinel
-                    # to become the visible user message, making the model think it
-                    # was asked to "continue" rather than respond to the real query.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -400,31 +384,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages — same reasoning
-                    # as in send_messages above.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
