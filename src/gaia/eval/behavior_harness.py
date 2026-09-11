@@ -234,7 +234,11 @@ class BehaviorHarness:
         import requests  # local import — only needed when the harness actually runs
 
         url = f"{self._base_url}{path}"
-        resp = requests.post(url, json=body, timeout=self._timeout)
+        # The backend refuses mutating /api requests without this header
+        # (gaia/ui/security.py) — a browser cannot forge it cross-origin.
+        resp = requests.post(
+            url, json=body, timeout=self._timeout, headers={"X-Gaia-UI": "1"}
+        )
         resp.raise_for_status()
         return resp.json()
 

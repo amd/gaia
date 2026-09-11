@@ -105,14 +105,14 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 The MCP server also supports **Streamable HTTP** transport for clients that connect over HTTP instead of stdio:
 
 ```bash
-# Start as an HTTP MCP server (default port 8765)
+# Start as an HTTP MCP server (default port 8766)
 uv run python -m gaia.mcp.servers.agent_ui_mcp
 
 # Custom port
 uv run python -m gaia.mcp.servers.agent_ui_mcp --port 9000
 ```
 
-Connect your MCP client to `http://localhost:8765/mcp`.
+Connect your MCP client to `http://localhost:8766/mcp`.
 
 ---
 
@@ -187,7 +187,7 @@ The MCP server is a thin wrapper around the Agent UI REST API. When you call `se
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stdio` | off | Use stdio transport (for Claude Code) |
-| `--port` | `8765` | HTTP MCP server port |
+| `--port` | `8766` | HTTP MCP server port |
 | `--host` | `localhost` | HTTP MCP server host |
 | `--backend` | `http://localhost:4200` | Agent UI backend URL |
 

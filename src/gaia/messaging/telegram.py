@@ -1,11 +1,16 @@
 """Telegram messaging adapter for GAIA.
 
-This is a minimal scaffolding for v0.18.2. It wires Telegram updates into
-the `AgentSDK` and streams responses back via message edits.
+Wires Telegram updates into the `AgentSDK` and streams responses back via
+message edits.
 
-Notes:
-- Security defaults (restricted tools) and per-user sessions must be enforced
-  by the caller creating AgentSDK instances with the appropriate config.
+Security posture:
+- A Telegram session is a plain `AgentSDK` — an LLM completion wrapper with no
+  tool loop. The tool loop lives in `gaia.agents.base.agent.Agent`, which this
+  adapter never constructs, so shell and file-write tools are unreachable from
+  a Telegram message. `tests/unit/test_telegram_tool_surface.py` pins that.
+- Every update handler is gated on an explicit allowlist of numeric Telegram
+  user IDs. There is no permissive default: an adapter cannot be constructed
+  without one.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from typing import Dict, Optional, Set
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
+from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = get_logger(__name__)
@@ -34,17 +40,42 @@ def get_or_create_session(user_id: int) -> AgentSDK:
 
     This reuses AgentSDK instances to preserve conversation history and
     model warm-up. Simple in-memory store without persistence for now.
+
+    ``AgentSDK`` is deliberate, not incidental: it has no tool loop, so a
+    remote message cannot reach a shell or file-write tool. Swapping in an
+    ``Agent`` subclass here hands that surface to anyone on the allowlist.
     """
     with _SESSIONS_LOCK:
         if user_id in _USER_SESSIONS:
             return _USER_SESSIONS[user_id]
-        config = AgentConfig()  # Default config; callers may customize later
-        sdk = AgentSDK(config)
+        sdk = AgentSDK(AgentConfig())
         _USER_SESSIONS[user_id] = sdk
         return sdk
 
 
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+#: Text of the refusal. One string so the CLI and the exception agree.
+NO_ALLOWLIST_ERROR = (
+    "Telegram adapter refused to start: no allowed-users configured.\n"
+    "\n"
+    "A Telegram bot is reachable by anyone who finds it, so an empty "
+    "allowlist would expose your local agent to the whole platform.\n"
+    "Pass the numeric user IDs permitted to use it:\n"
+    "\n"
+    "  gaia telegram start --token <token> --allowed-users 11111111,22222222\n"
+    "\n"
+    "Find your own ID by messaging @userinfobot on Telegram.\n"
+    "Docs: https://amd-gaia.ai/docs/guides/telegram-adapter"
+)
+
+
+class TelegramAllowlistError(ValueError):
+    """The adapter was asked to run without an allowlist.
+
+    Subclasses ``ValueError`` so the CLI can catch this specific failure
+    rather than any ``ValueError`` raised while polling.
+    """
 
 
 def require_allowed(handler):
@@ -58,9 +89,17 @@ def require_allowed(handler):
     async def guarded(self, update, context):
         user = update.effective_user
         if not self._allowed(user.id):
-            log.warning("Refused Telegram message from unauthorized user %s", user.id)
+            log.warning(
+                "Refused Telegram message from unauthorized user %s "
+                "(handler=%s, allowlist holds %d id(s)) — add the id to "
+                "--allowed-users if this refusal is wrong",
+                user.id,
+                handler.__name__,
+                len(self.allowed_users),
+            )
             await update.message.reply_text(UNAUTHORIZED_REPLY)
             return None
+        log.debug("Authorized Telegram user %s for %s", user.id, handler.__name__)
         return await handler(self, update, context)
 
     guarded.__gaia_allowlist_guarded__ = True
@@ -69,13 +108,33 @@ def require_allowed(handler):
 
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
+        # Refused here rather than at start(): an adapter that cannot serve
+        # anyone should never exist, so no caller can reach a permissive one.
+        if not allowed_users:
+            raise TelegramAllowlistError(NO_ALLOWLIST_ERROR)
+        # A bare string would iterate into single characters and silently deny
+        # everyone, which reads as "the bot is broken" rather than "wrong type".
+        if isinstance(allowed_users, (str, bytes)):
+            raise TypeError(
+                "allowed_users must be a collection of int user IDs, got "
+                f"{type(allowed_users).__name__}. Pass {{11111111}}, not "
+                "'11111111'."
+            )
         self.token = token
-        self.allowed_users = allowed_users or set()
+        self.allowed_users = set(allowed_users)
         self.application = None
+        self._poll_thread: Optional[threading.Thread] = None
+        log.info(
+            "Telegram adapter configured with %d allowed user id(s)",
+            len(self.allowed_users),
+        )
 
     def _allowed(self, user_id: int) -> bool:
-        if not self.allowed_users:
-            return True
+        """Membership only — an empty allowlist admits nobody.
+
+        Defence in depth: ``__init__`` already refuses an empty allowlist, so
+        this only fires if one is emptied after construction.
+        """
         return user_id in self.allowed_users
 
     @require_allowed
@@ -202,12 +261,18 @@ class TelegramAdapter:
             # Optionally finalize or log
             pass
 
-    def start(self, token: str, background: bool = False) -> None:
+    def start(
+        self,
+        token: str,
+        background: bool = False,
+        health_port: int = TELEGRAM_HEALTH_PORT,
+    ) -> None:
         """Start the telegram Application and run polling.
 
-        If `background` is True, the `Application` instance is returned and not
-        run (caller can manage its lifecycle). Otherwise, this call blocks and
-        runs `run_polling()` until interrupted.
+        If `background` is True, polling runs in a non-daemon thread so a CLI
+        return cannot take the service process down. The application remains
+        available to the caller for lifecycle control. Otherwise, this call
+        blocks and runs `run_polling()` until interrupted.
         """
         # If running in background mode, create PID/log files early so tests
         # and supervisor systems can detect the process even if the
@@ -305,7 +370,16 @@ class TelegramAdapter:
                         # Silence default logging
                         return
 
-                server = HTTPServer(("127.0.0.1", 8765), HealthHandler)
+                try:
+                    server = HTTPServer(("127.0.0.1", health_port), HealthHandler)
+                except OSError as e:
+                    log.error(
+                        "Failed to bind Telegram health server on 127.0.0.1:%s "
+                        "(%s). Pass --health-port <port> to use a different port.",
+                        health_port,
+                        e,
+                    )
+                    raise
                 # Run until stop_event is set
                 while not stop_event.is_set():
                     server.handle_request()
@@ -316,20 +390,50 @@ class TelegramAdapter:
             )
             hs_thread.start()
 
-            def _run_polling():
+            polling_loop: Optional[asyncio.AbstractEventLoop] = None
+            loop_ready = threading.Event()
+
+            def _stop_application(*_):
+                stop_event.set()
+                if polling_loop is None:
+                    log.error(
+                        "Telegram polling loop never started; cannot stop it cleanly"
+                    )
+                    return
                 try:
-                    app.run_polling()
+                    polling_loop.call_soon_threadsafe(polling_loop.stop)
+                except RuntimeError as e:
+                    log.error(
+                        "Telegram polling loop could not be stopped; "
+                        "use gaia telegram stop --force: %s",
+                        e,
+                    )
+
+            def _run_polling():
+                nonlocal polling_loop
+                polling_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(polling_loop)
+                loop_ready.set()
+                try:
+                    # PTB's default signal handlers only work in the main
+                    # thread. The background thread owns this event loop.
+                    app.run_polling(stop_signals=None)
                 finally:
                     # cleanup
                     stop_event.set()
 
-            poll_thread = threading.Thread(target=_run_polling, daemon=True)
+            # This thread owns the background service lifetime. A daemon thread
+            # dies as soon as the CLI handler returns, leaving only a stale PID
+            # file and a bot that never polls.
+            poll_thread = threading.Thread(target=_run_polling, daemon=False)
+            self._poll_thread = poll_thread
             poll_thread.start()
+            loop_ready.wait(timeout=10)
 
             # Register signal handlers for graceful shutdown (works in main thread only)
             try:
-                signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
-                signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+                signal.signal(signal.SIGTERM, _stop_application)
+                signal.signal(signal.SIGINT, _stop_application)
             except (ValueError, OSError) as e:
                 # Not all environments allow signal registration
                 log.debug("Signal registration skipped: %s", e)
@@ -341,14 +445,28 @@ class TelegramAdapter:
 
 
 def run_telegram(
-    token: str, allowed_users: Optional[Set[int]] = None, background: bool = False
+    token: str,
+    allowed_users: Optional[Set[int]] = None,
+    background: bool = False,
+    health_port: int = TELEGRAM_HEALTH_PORT,
 ):
     """Entrypoint used by the CLI to start the Telegram adapter.
 
     This builds the `Application`, registers handlers, and runs polling.
     Pass `background=True` to return control without blocking (caller must
     call `adapter.application.run_polling()` or `await adapter.application.initialize()`).
+
+    Args:
+        token: Telegram bot token.
+        allowed_users: Set of numeric user IDs permitted to interact.
+        background: If True, run as a daemon (writes PID + health endpoint).
+        health_port: Health server port used in background mode.
+
+    Raises:
+        TelegramAllowlistError: if `allowed_users` is empty or None. A bot with
+            no allowlist is reachable by every Telegram user, so it is refused
+            rather than started permissively.
     """
     adapter = TelegramAdapter(token=token, allowed_users=allowed_users)
-    adapter.start(token=token, background=background)
+    adapter.start(token=token, background=background, health_port=health_port)
     return adapter

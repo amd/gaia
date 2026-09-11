@@ -1,0 +1,750 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Proactive nightly Claude audit. Every other Claude job in this repo is REACTIVE —
+# it fires on a PR, a comment, or an @claude mention (claude.yml). Nothing looks at
+# the repo proactively, so debt that ships inside a green PR (a feature with no doc
+# page, a code path with no test, a silent `except Exception: pass`, a cli.mdx that
+# drifted from the real flags) sits unnoticed until a user hits it. This workflow is
+# the missing proactive lens: a scheduled deep review that fans out one Claude job
+# per dimension, then files ONE issue per DEFECT.
+#
+# NAMING: the filename, `name:`, and cron all say NIGHTLY, because it is nightly. The
+# `weekly-audit` LABEL keeps its name deliberately — it is a PROVENANCE label ("a
+# proactive Claude audit filed this"), shared with the genuinely-weekly
+# claude-weekly-doc-walkthrough.yml, so no cadence word fits it. Nothing depends on the
+# label's spelling any more: dedup reads the audit-key/audit-cluster markers and searches
+# the whole open backlog, not one label.
+#
+# HUMAN-GATED — NOT an auto-merge bot. The workflow produces *findings*, never
+# commits. To turn an issue into a PR, a maintainer applies the `bug` label and
+# the existing auto-fix job (claude.yml) takes over. No new PR-creation code here.
+#
+# ONE ISSUE PER DEFECT, NOT PER LOCATION. A defect spanning 39 files is ONE fix, so it
+# gets ONE issue listing 39 locations. Lenses key findings by ROOT CAUSE (`cluster_key`);
+# scripts/audit/prepare_synthesis.py merges every location of a cluster, then searches
+# the WHOLE open backlog — not just this workflow's own label — for an issue already
+# tracking it. Both halves are load-bearing: file-scoped keys turned one dead command
+# into 5 issues in a night, and label-scoped dedup made the 4-month-old #1077 invisible,
+# so the audit re-discovered it 14 times in a single run.
+#
+# NO RUN RECEIPTS. The per-run summary goes to $GITHUB_STEP_SUMMARY, never a new issue.
+# Filing a bookkeeping issue per run accumulated 19 of them in the tracker with nothing
+# actionable in any of them.
+#
+# MODES:
+#   normal (6 nights/wk) — reviews the last N days of merged work (window_days, default
+#                      1) + the subsystems it touched. Skips a night with no commits.
+#   deep   (Sundays)  — whole-codebase latent-debt sweep; also selectable via dispatch.
+#   The `auto` default resolves to deep on Sunday (ISO day-of-week 7), else normal.
+#   Keyed on DAY-OF-WEEK deliberately — see the selector comment in preflight for why
+#   the old day-of-month test breaks under a nightly cron.
+#
+# SECURITY is NOT a dimension here — it has its own dedicated workflow,
+# .github/workflows/claude-security-audit.yml (deterministic semgrep + a Claude
+# taint/authz/suppression sweep, CVSS-scored, findings to the private code-scanning
+# tab). This audit deliberately leaves security to it, to avoid two half-owners.
+#
+# DIMENSIONS (one read-only Claude job each, run in parallel):
+#   correctness — logic bugs AND the CLAUDE.md "Fail Loudly" rule: `except Exception:
+#                 pass`, try/except that returns a placeholder, silent degradation.
+#                 (This dimension owns the silent-fallback check.)
+#   docs        — new feature with no docs/ page or docs.json entry; cli.mdx drift;
+#                 `amd-gaia.ai` links missing the `/docs/` prefix; hub-agent doc drift
+#                 (README/SPEC/SKILL/CHANGELOG out of sync).
+#   tests       — new/changed code paths with no coverage; assertions that only prove
+#                 invocation, not call validity (CLAUDE.md "#1655" boundary rule).
+#   features    — half-finished follow-ups, TODO-as-placeholder, gaps a recent feature implies.
+#
+# A synthesis job collects the four structured outputs, runs them through the
+# deterministic dedup pass (scripts/audit/prepare_synthesis.py), and files one issue per
+# surviving defect.
+#
+# MODEL: claude-opus-5 (Claude Opus 5) — excellent for static review at half the token
+# burn of Fable ($5/$25 vs $10/$50 per MTok), and priced identically to the Opus 4.8 it
+# replaced. A measured deep run on Fable cost ~$45 of API-equivalent subscription usage;
+# Opus roughly halves that. Swap AUDIT_MODEL below to claude-fable-5 for maximum depth if
+# you accept ~2x the cost.
+#
+# Model support is gated by the pinned claude-code-action version (the action bundles the
+# CLI that resolves model names). Bump the SHA in the same change and prove it first with
+# `gh workflow run claude-auth-canary.yml -f model=<new-id>`.
+#
+# Opus 5 finds real bugs at a higher rate per pass than 4.8 and stays accurate at lower
+# effort, so the lenses now REPORT everything and let synthesis filter. Do NOT reintroduce
+# "be conservative" / "precision beats recall" wording in a lens prompt: Opus 5 follows it
+# literally and silently reports less.
+#
+# AUTH: same OAuth-preferred / API-key-fallback wiring as every claude.yml job
+# (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
+# Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
+#
+# COST CEILING: 4 dimension jobs (--max-turns 45) + 1 synthesis job (--max-turns 32) =
+# a known per-run ceiling, now paid up to 7x/week instead of once since the cadence went
+# nightly. window_days=1 and skip-if-empty are what keep that affordable. This shares one
+# Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
+# PR-review / auto-fix jobs — if those start getting rate-limited, the first lever is
+# trimming the nightly matrix and leaving all four lenses to the Sunday deep run. The dimension matrix runs `max-parallel: 1` (serialized) so
+# the run is a steady drip rather than a 4-job burst — this keeps it under the Max
+# subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
+# skip-if-empty exits before any Claude call on a quiet night. The concurrency group
+# prevents two scheduled runs from overlapping.
+#
+# NO REPO-CODE EXECUTION: the jobs read and report only (--allowedTools Read,Grep,Glob,Bash
+# with no Edit/Write) — they never `pip install` / run GAIA / execute checked-out code,
+# same rule as the claude.yml review jobs.
+
+name: Claude Nightly Audit
+
+on:
+  schedule:
+    # 10:37 UTC nightly = 03:37 PDT / 02:37 PST. GitHub cron is UTC-only with no DST
+    # handling, so one fixed hour cannot be 3am year-round; the 1h winter drift is
+    # accepted. The off-the-hour minute is deliberate — ":00" slots are the busiest on
+    # the shared Actions fleet and get queued.
+    #
+    # Sundays → deep whole-codebase sweep; the other six nights → normal (last-day diff).
+    # See the mode selector in preflight: it keys off DAY-OF-WEEK, not day-of-month.
+    #
+    # Runs ~1.4h AFTER claude-security-audit.yml's nightly 09:13 UTC slot so the two
+    # proactive Claude runs don't stack on the shared subscription rate limit, and
+    # ~1.4h BEFORE claude-weekly-doc-walkthrough.yml's Monday 12:00 UTC slot.
+    - cron: "37 10 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Audit mode"
+        type: choice
+        options: [auto, normal, deep]
+        default: auto
+      window_days:
+        description: "Days of history to review in normal mode"
+        # 1, not 7: the schedule is nightly, so each run should audit the day that just
+        # passed. Leaving this at 7 would re-audit the same week seven times over.
+        default: "1"
+      dry_run:
+        # Files and comments NOTHING; writes what it WOULD have filed to the job summary.
+        # This is how you validate a dedup change against the real backlog without adding
+        # to it — the failure mode being guarded here is a bad dedup pass filing dozens of
+        # duplicates, which is expensive to undo and impossible to test any other way.
+        description: "Report what would be filed, without touching the tracker"
+        type: boolean
+        default: false
+
+# Least-privilege default. Only the synthesis job files issues, via its own
+# per-job `issues: write`. The dimension jobs are read-only.
+permissions:
+  contents: read
+
+# Never let two scheduled runs overlap — they would race-evict each other's model
+# slot and double-file issues. Not cancel-in-progress: let an in-flight run finish.
+concurrency:
+  group: claude-nightly-audit
+  cancel-in-progress: false
+
+env:
+  # Single source of truth for the model. Opus 5 by default — half the token burn of
+  # Fable for comparable static-review quality (see the MODEL note in the file header).
+  AUDIT_MODEL: claude-opus-5
+
+jobs:
+  # Resolve mode (auto → deep/normal) and short-circuit a night with no commits.
+  preflight:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+      mode: ${{ steps.scope.outputs.mode }}
+      window_days: ${{ steps.scope.outputs.window_days }}
+      dimensions: ${{ steps.dims.outputs.dimensions }}
+      dimension_count: ${{ steps.dims.outputs.dimension_count }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Single source of truth for the dimension list: the audit matrix and the
+      # synthesis completeness check both read it, so adding a dimension can't leave
+      # the check counting the old number.
+      - name: Resolve the dimension list
+        id: dims
+        run: |
+          set -euo pipefail
+          dimensions='["correctness","docs","tests","features"]'
+          {
+            echo "dimensions=$dimensions"
+            echo "dimension_count=$(printf '%s' "$dimensions" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          } >> "$GITHUB_OUTPUT"
+          echo "Dimensions: $dimensions"
+
+      - name: Resolve mode and skip-if-empty
+        id: scope
+        env:
+          DISPATCH_MODE: ${{ github.event.inputs.mode || 'auto' }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '1' }}
+        run: |
+          set -euo pipefail
+          mode="$DISPATCH_MODE"
+          if [ "$mode" = "auto" ]; then
+            # DAY-OF-WEEK, not day-of-month. This selector used to read
+            # `day-of-month <= 7` and relied on the cron firing only on Mondays to make
+            # that mean "first Monday". The cron is now NIGHTLY, so that test would match
+            # on the 1st through the 7th of every month — seven consecutive deep
+            # whole-codebase sweeps instead of one. Keyed off the weekday it is correct
+            # at any cadence: exactly one deep run per week.
+            # %u is ISO day-of-week (1=Mon .. 7=Sun). 10# forces base-10 for safety.
+            dow=$(date -u +%u)
+            if [ "$((10#$dow))" -eq 7 ]; then mode="deep"; else mode="normal"; fi
+          fi
+          skip=false
+          if [ "$mode" = "normal" ]; then
+            count=$(git log --since="$WINDOW_DAYS days ago" --oneline | wc -l | tr -d ' ')
+            echo "Commit activity in the last $WINDOW_DAYS days: $count"
+            [ "$count" = "0" ] && skip=true
+          fi
+          {
+            echo "mode=$mode"
+            echo "window_days=$WINDOW_DAYS"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: mode=$mode skip=$skip window_days=$WINDOW_DAYS"
+
+  # One read-only Claude job per dimension. Each writes findings-<dimension>.json and
+  # uploads it as an artifact for the synthesis job. continue-on-error so one dimension
+  # crashing (e.g. an install-phase flake) doesn't sink the whole audit.
+  audit:
+    needs: preflight
+    # A custom `if` drops the implicit needs-succeeded guard, so re-assert the repo
+    # gate — otherwise a fork (where preflight is skipped, leaving skip empty) would run.
+    if: github.repository == 'amd/gaia' && needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Serialize the dimensions so the run is a steady drip, not a 4-job burst —
+      # keeps it under the Max subscription's rolling (5-hour) rate limit. Trades
+      # wall-clock (~5 sequential Claude jobs) for a smoother token profile.
+      max-parallel: 1
+      matrix:
+        dimension: ${{ fromJSON(needs.preflight.outputs.dimensions) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Build audit scope
+        env:
+          MODE: ${{ needs.preflight.outputs.mode }}
+          WINDOW_DAYS: ${{ needs.preflight.outputs.window_days }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Audit scope"
+            echo "mode: $MODE"
+          } > audit-scope.txt
+          if [ "$MODE" = "normal" ]; then
+            echo "## Commits (last $WINDOW_DAYS days)" >> audit-scope.txt
+            git log --since="$WINDOW_DAYS days ago" --oneline >> audit-scope.txt || true
+            echo "" >> audit-scope.txt
+            echo "## Changed files (last $WINDOW_DAYS days)" >> audit-scope.txt
+            base_sha=$(git rev-list -1 --before="$WINDOW_DAYS days ago" HEAD || true)
+            if [ -n "$base_sha" ]; then
+              git diff --name-status "$base_sha"...HEAD >> audit-scope.txt || true
+            fi
+          else
+            echo "## Deep sweep — review the whole codebase, not just recent changes." >> audit-scope.txt
+          fi
+          echo "Scope file lines: $(wc -l < audit-scope.txt)"
+
+      - name: Run Claude (${{ matrix.dimension }} lens)
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@d75b94d5ad426cb8546e6628b6f5f19b84e5cce1  # v1.0.216
+        with:
+          # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue,github-actions"
+          prompt: |
+            You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
+            Do ONLY that lens — ignore issues that belong to the other four.
+
+            REPO: ${{ github.repository }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read `CLAUDE.md` — project conventions and the rules the lenses enforce.
+            2. Read `audit-scope.txt` — it says whether this is a `normal` (recent-diff) or
+               `deep` (whole-codebase) run and, for normal runs, lists the commits and
+               changed files to focus on. In deep mode, review beyond the diff.
+            3. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
+
+            ## Your lens — the four are mutually exclusive; claim ONLY yours
+            The lenses overlap unless you respect these boundaries. The decisive question for a
+            broken thing is: **is the code wired but misbehaving (correctness), never written
+            (features), or contradicted by its docs (docs)?** SECURITY is out of scope for this
+            audit — it has a dedicated workflow (claude-security-audit.yml); if you spot a security
+            issue, leave it to that workflow rather than filing it here.
+            - **correctness**: code that IS wired and runs but silently does the wrong thing or
+              nothing — a handler that flips a success flag without doing the work (a rollback
+              that never rolls back), a poller that always returns a placeholder/null, a mode
+              that no-ops, a flag the parser accepts but whose handler raises NotImplementedError.
+              PLUS real logic bugs and every CLAUDE.md "No Silent Fallbacks — Fail Loudly"
+              violation (`except Exception: pass`, `try/except` returning None/""/a placeholder
+              and swallowing the error, retry loops hiding the final failure, config defaulting a
+              missing required value). **This lens OWNS wired-but-broken behavior and the
+              silent-fallback check — do NOT leave these to `features`.**
+            - **features**: a genuinely MISSING or half-shipped capability where nothing is wired
+              yet — a `TODO` standing in for code never written, a capability a recent feature
+              clearly implies but didn't ship. If the code IS wired but behaves wrongly or does
+              nothing, that is **correctness**, not features. Don't claim it here.
+            - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
+              `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
+              `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
+              `hub/agents/<id>/python/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
+              A feature **documented as working whose implementation is a stub/NotImplementedError
+              is a DOCS finding** (doc-vs-code drift) — claim it here, not under features.
+            - **tests**: code paths with no test, or assertions that only prove a mock was called,
+              not that the outgoing call is valid (CLAUDE.md "#1655" boundary rule). **In DEEP
+              mode, do NOT file a separate finding for every large module that merely lacks tests
+              — that floods the tracker.** File separate findings only for untested RISK-BEARING
+              logic: auth/token handling, a release or trust gate, flag/precedence dispatch,
+              error-to-exit mapping, or the #1655 mock-only pattern. Give every plain
+              "module X has no coverage" case the shared `cluster_key`
+              `tests:aggregate-untested-modules` so they merge into one issue. In NORMAL
+              mode, focus on new/changed code paths from the scope file.
+
+            ## Published hub agents — HOLD TO THE HIGHEST BAR
+            Published agents are the project's shop window — an integrator installs them and
+            judges GAIA by them, so they must be bulletproof. **In BOTH modes, if your lens
+            touches a published hub agent, review it against this bar explicitly and bump any
+            gap up one severity level** (a gap here is never 🟡; a user-facing break on the
+            default path is 🔴).
+            - **Which agents are published:** currently the **email agent** — code at
+              `hub/agents/email/python/`, npm client at `hub/agents/email/npm/`. Detect
+              any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
+              OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
+              `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
+            - **What each lens checks on a published agent** (apply only YOUR lens):
+              - **docs**: the canonical README (the npm client README for npm agents, e.g.
+                `hub/agents/email/npm/README.md`) is high-quality and integrator-facing;
+                `SPEC.md` is a complete technical reference; `SKILL.md` is a real AI-integration
+                playbook; `CHANGELOG.md` accurately names each version's change; any shipped
+                contract spec (`spec_html.py` / `specification.html` / `openapi.*.json`) matches
+                the code; and a `SCORECARD.md` exists and is LINKED from the README. All of these
+                must be mutually consistent and genuinely written — flag placeholder/stub prose,
+                a missing surface, or one doc contradicting another.
+              - **tests**: solid unit + integration coverage of the agent's real request/response
+                contract (not mock-only — apply #1655 strictly); the `SCORECARD.md` must come from
+                a REAL eval and pass its release gate (`python -m gaia.eval.scorecard_gate`) — flag
+                a missing, stale, hand-authored, or gate-failing scorecard.
+              - **correctness**: the agent's runtime code is bulletproof — NO stubs, NO silent
+                fallbacks, NO half-finished paths, actionable errors at every boundary.
+
+            ## Severity — calibrate consistently (🔴 high · 🟠 medium · 🟡 low)
+            - **🔴 high**: a security issue, data loss, or a break that hits users on the default path.
+            - **🟠 medium**: broken or incorrect user-facing behavior (a feature that silently does
+              nothing or the wrong thing), a doc that tells users something false, or a missing
+              test that guards auth / a release-or-trust gate / destructive or precedence logic.
+            - **🟡 low**: a missing test on non-risk logic, a cosmetic gap, a minor nit.
+            **Broken behavior ALWAYS outranks a missing test** — never rate "module X has no tests"
+            above a feature that is actually broken.
+
+            ## Output — write findings to `findings-${{ matrix.dimension }}.json`
+            Write a JSON file at the repo root named exactly `findings-${{ matrix.dimension }}.json`
+            with this shape (write `{"findings": []}` if you find nothing):
+
+            ```json
+            {"findings": [
+              {
+                "severity": "🔴" | "🟠" | "🟡",
+                "path": "src/gaia/....py",
+                "symbol": "function_name or ClassName or a doc heading — NOT a line number",
+                "title": "one-line statement of the problem",
+                "why": "one sentence: the concrete impact / what breaks",
+                "evidence": "a direct quote or `path:line` you READ that proves the claim — enough for a reviewer to verify without re-deriving. e.g. \"auditStore.ts:88 sets `rolledBack = true` with a `// TODO: call IPC` and no IPC call\"",
+                "auto_fixable": true | false,
+                "cluster_key": "${{ matrix.dimension }}:<root-cause-slug>",
+                "dedup_key": "${{ matrix.dimension }}:<repo-relative-path>:<symbol-or-section>"
+              }
+            ]}
+            ```
+
+            ### `cluster_key` — ONE KEY PER DEFECT. This is the most important field.
+            A defect is what a maintainer FIXES, not where they see it. If the same root
+            cause shows up in 39 files, that is **one** defect with 39 locations, and every
+            one of those 39 findings carries the **identical** `cluster_key`. Everything
+            sharing a key is merged into a single issue automatically, so you do not have
+            to hold back: emit one finding per LOCATION with the shared key, and let the
+            merge do the collapsing.
+
+            The key is a short slug naming the CAUSE, with no path in it:
+            - `docs:lemonade-server-serve-command-removed` — one dead command, cited in
+              163 places across 106 files. ONE key. (This really happened and became five
+              separate issues in one night because keys were file-scoped.)
+            - `docs:guide-prerequisites-missing-extras` — 14 guides, one omission. ONE key.
+              (This really happened too: 14 issues in one night, for a defect already
+              tracked as #1077 since May.)
+            - `correctness:silent-except-pass-in-ui-layer` — one banned pattern, many files.
+            Two findings get DIFFERENT keys only when they need different fixes. Same
+            symptom in one file and a genuinely unrelated cause elsewhere = two keys.
+
+            **Before you write the file, re-read your own findings and ask: how many
+            separate PRs would fix all of this?** That number is how many distinct
+            `cluster_key`s you should have. If you have 20 findings and one PR fixes 14 of
+            them, those 14 share a key — go back and make them share it.
+
+            ### `dedup_key` — the per-location key (unchanged)
+            `${{ matrix.dimension }}:<path>:<symbol>` — a stable function/class name or doc
+            heading, NEVER a line number (line numbers move and would re-file the same
+            finding every week). Line numbers may appear in `title`/`why`, never in a key.
+            It identifies the LOCATION; `cluster_key` identifies the DEFECT.
+
+            `auto_fixable` = true only if the fix is locatable and small (~1-3 files, targeted,
+            no design decision) so the `bug`→auto-fix path can land it; false if it needs a human
+            (writing a test suite, a refactor, a design call).
+
+            ## Ground every finding in something you read — then REPORT IT
+            You are the FINDING pass, not the filtering pass. A separate synthesis step
+            dedupes these findings, re-checks their evidence, and drops the weak ones
+            before anything is filed. So your job here is COVERAGE: surface everything you
+            genuinely observed, including findings you are unsure about, and let synthesis
+            decide what survives. Do not self-censor to keep the list short — a finding
+            that synthesis discards costs nothing, a bug you withheld ships.
+
+            Grounding rules (these are about not inventing things, not about holding back):
+            1. **Open the cited file and confirm the problem is actually present** — never
+               report from a filename or a grep hit alone.
+            2. **Rule out that it's already handled** — the error re-raised two lines down,
+               a test in a different directory, the "missing" doc living under another
+               path. Already-covered is not a finding.
+            3. Fill `evidence` with what you actually read. **No evidence, no finding** —
+               this is the one hard filter in this pass, and it is a grounding requirement,
+               not a confidence threshold.
+            Use `severity` to express doubt rather than dropping the item: if it is real but
+            minor or you are unsure of the impact, file it 🟡 with your uncertainty stated
+            in `why`. Skip only what CI's `python util/lint.py --all` already enforces
+            (black/isort/whitespace).
+
+            NOTE FOR FUTURE EDITORS: this section used to read "precision beats recall …
+            skip anything you are not confident is real … never pad". On Claude Opus 5 that
+            wording measurably suppresses real findings — the model follows a
+            be-conservative instruction literally and reports less while investigating just
+            as hard. Filtering belongs in synthesis, which already does it. Do not put
+            conservatism back into a lens prompt.
+
+            ## Budget
+            You have --max-turns 45 and share one rate-limited subscription pool with the
+            sibling lenses (run back-to-back), the nightly security audit, and the
+            interactive PR-review jobs. Delegate to a subagent only for a genuinely wide,
+            parallelizable investigation — not for work you can finish in a handful of tool
+            calls, and never to verify or double-check your own findings. Prefer one
+            subagent over several. Spend turns reading code, not coordinating.
+
+            STOP investigating at ~5 turns remaining and spend them writing the findings
+            file. Hitting the ceiling mid-investigation discards everything you found and
+            fails the whole audit — partial findings written beat perfect findings lost.
+
+            ## Security is out of scope — hand it off, do not file it here
+            If you notice a security weakness, do NOT put it in this audit's findings — they
+            become public issues, which would disclose it. Security has a dedicated
+            private-channel workflow (claude-security-audit.yml). Leave it to that sweep.
+          claude_args: |
+            --max-turns 45
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: findings-${{ matrix.dimension }}
+          path: findings-${{ matrix.dimension }}.json
+          # A dimension that ran writes `{"findings": []}` even when clean, so a missing file
+          # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
+          if-no-files-found: error
+
+  # Collect the four dimension outputs, run the DETERMINISTIC dedup pass over them, and
+  # file one issue per surviving defect. This is the only job with issues: write.
+  synthesize:
+    needs: [preflight, audit]
+    # Re-assert the repo gate (custom `if` drops the needs-succeeded guard). !cancelled()
+    # so synthesis still files whatever the dimension jobs produced even if one crashed.
+    if: github.repository == 'amd/gaia' && !cancelled() && needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download all findings
+        uses: actions/download-artifact@v8
+        with:
+          path: audit-findings
+
+      # "No dimension produced output" and "every dimension found nothing" both leave
+      # synthesis with nothing to file, and it reports success either way. Refuse the
+      # first case loudly instead of calling an audit that never ran a clean bill of health.
+      - name: Require every dimension to have reported in
+        env:
+          EXPECTED_DIMENSIONS: ${{ needs.preflight.outputs.dimension_count }}
+        run: |
+          set -euo pipefail
+          got=$(find audit-findings -name 'findings-*.json' | wc -l)
+          if [ "$got" -lt "$EXPECTED_DIMENSIONS" ]; then
+            echo "::error title=Nightly audit::Only $got/$EXPECTED_DIMENSIONS dimensions produced findings files — the audit did not run. Not filing anything off a partial sweep."
+            exit 1
+          fi
+          echo "All $got/$EXPECTED_DIMENSIONS dimensions reported in."
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `weekly-audit` is a PROVENANCE label, not a cadence one — it marks "a proactive
+          # Claude audit filed this" and is shared with the genuinely-weekly doc walkthrough.
+          gh label create weekly-audit --color 5319e7 \
+            --description "Filed by a proactive Claude audit (nightly code audit or weekly doc walkthrough)" \
+            2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
+          # audit-wontfix permanently suppresses a finding — synthesis skips its key forever.
+          gh label create audit-wontfix --color cccccc \
+            --description "Accepted debt — the audits will never re-file this finding" \
+            2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
+
+      # THE dedup pass. Deterministic on purpose: asking a model to eyeball dedup across
+      # ~900 open issues is what produced a 2.35x duplication ratio. This step merges every
+      # location of a `cluster_key` into one defect and searches the WHOLE open backlog for
+      # an issue already tracking it, then hands the model a short worklist whose only open
+      # question is the semantic one ("is #1077 really this defect?").
+      - name: Dedupe findings into a synthesis worklist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/prepare_synthesis.py \
+            --findings-dir audit-findings \
+            --repo "${{ github.repository }}" \
+            --out synthesis-input.json \
+            --dossier synthesis-dossier.md
+          {
+            echo "## 🔁 Dedup pass"
+            echo ""
+            python3 -c "import json; c=json.load(open('synthesis-input.json'))['counts']; print(f\"{c['raw_findings']} raw findings → **{c['clusters']} distinct defects** ({c['new']} new, {c['already_filed']} already filed, {c['suppressed']} suppressed), searched {c['open_issues_searched']} open issues.\")"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A dry run is only prompt-enforced, and a mode that silently isn't dry is worse
+      # than no mode at all. Record the watermark now and check it afterwards.
+      - name: Record the issue watermark (dry run)
+        if: github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue list --repo "${{ github.repository }}" --state all --limit 1 \
+            --json number --jq '.[0].number // 0' > .issue-watermark
+          echo "Highest issue before synthesis: $(cat .issue-watermark)"
+
+      - name: Synthesize and file one issue per defect
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@d75b94d5ad426cb8546e6628b6f5f19b84e5cce1  # v1.0.216
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the dimension job's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
+          prompt: |
+            You are the synthesis step of GAIA's nightly proactive audit. A deterministic
+            pass has ALREADY collapsed the four dimension jobs' raw findings into distinct
+            defects and searched the whole open backlog for each one. Your job is the part
+            a script cannot do: verify the evidence, decide whether a defect is genuinely
+            new or already tracked, and write for a human.
+
+            REPO: ${{ github.repository }}
+            AUDIT MODE: ${{ needs.preflight.outputs.mode }}
+            DRY RUN: ${{ github.event.inputs.dry_run || 'false' }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read `synthesis-dossier.md` — your worklist. It has one section per NEW
+               defect, each with its locations and a ranked list of possibly-matching open
+               issues. Defects already filed or suppressed are listed at the bottom and are
+               **already handled — do not act on them at all**.
+            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone to write in.
+            3. `synthesis-input.json` has the same data structured, if you need a field the
+               dossier elides — including the full location list when one is truncated.
+            If the dossier reports malformed findings or that the lenses barely clustered,
+            say so in the run report: that is a lens-prompt bug a human needs to see.
+            You do NOT need to re-list issues or rebuild key sets — that is done. Spend your
+            turns reading cited code instead.
+
+            ## For each NEW defect, choose exactly one of three outcomes
+
+            ### (a) DROP it — the evidence gate
+            You are the only filter; the lenses deliberately over-report. Drop a defect when
+            its `evidence` is missing or does not actually substantiate its title. For every
+            🔴/🟠 survivor, open the cited path/symbol and confirm the problem is really
+            there before filing — a false 🔴 costs more trust than ten dropped 🟡s. Demote
+            rather than delete when a finding is real but overstated. **🟡 (low) defects are
+            never filed as issues** — they go in the job summary only.
+
+            ### (b) COMMENT on an existing issue — 🔴/🟠 only, check this BEFORE filing
+            The dossier lists candidate open issues per defect, drawn from the WHOLE backlog
+            — not just this audit's own label. **Open the top candidates and read them.** If
+            one already tracks this defect, comment on it instead of filing:
+            `gh issue comment <n> --repo ${{ github.repository }} --body-file <file>`
+            The comment adds only what is NEW — the extra locations this run found, or fresh
+            evidence — and never restates the issue. Include the marker line so future runs
+            match it by key: `<!-- audit-cluster: <cluster_key> -->`.
+            A candidate counts as a match when the same FIX would close both. The 4-month-old
+            #1077 ("Guide prerequisites missing across ~14 guides") is the canonical case:
+            the audit re-filed it 14 times in one night because it only searched its own
+            label. Err toward commenting — a comment on the wrong issue is trivially undone;
+            a duplicate issue is what created this backlog.
+
+            ### (c) FILE ONE issue — 🔴/🟠 only, non-security
+            Write the body to a temp file, then
+            `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
+            WITHOUT the `bug` label (humans gate every code change).
+
+            **One issue per DEFECT, listing every location.** A defect the dossier shows at
+            39 locations is ONE issue with 39 lines in it, never 39 issues. Its title names
+            the defect, never one file: "The documented Lemonade start command no longer
+            exists (163 places)", not "quickstart.mdx uses lemonade-server serve".
+
+            Body — follow CLAUDE.md → "How You Communicate": a human triages this, so the
+            opening line says what broke and who it hurts in plain words, and the mechanical
+            rows go in a collapsed `<details>`. The blank line after `</summary>` is REQUIRED
+            or GitHub renders the block as literal text. Both marker lines are REQUIRED —
+            they are what the next run dedupes against:
+            ```
+            <one paragraph: what's wrong + the concrete impact, in plain words>
+
+            <details>
+            <summary>🔍 Evidence and locations</summary>
+
+            **Severity:** 🔴 high / 🟠 medium   **Lens:** <dimension(s)>
+            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+
+            | Where | Evidence |
+            |---|---|
+            | `path` · `symbol` | <that location's evidence> |
+            </details>
+
+            Not acting on this? Close it with the `audit-wontfix` label and the audit will never
+            re-file it. Applying `bug` instead hands it to the existing auto-fix job.
+
+            <!-- audit-cluster: <cluster_key> -->
+            <!-- audit-key: <the first location's dedup_key> -->
+            ```
+            List up to 20 locations in the table; if there are more, add a final row saying
+            how many were elided and where to grep. Set Auto-fixable from `auto_fixable`.
+
+            ## Write the run report to `triage-report.md` — NOT to an issue
+            A following step appends this file to the run's job summary. **Do not file a
+            "Nightly audit — <run-id>" issue; that convention is gone** — 19 such bookkeeping
+            issues accumulated in the tracker with nothing actionable in any of them. The
+            old parent-chain bookkeeping is gone with it: do not cross-link a previous run's
+            issue, and never close one. (Commenting on a backlog issue that tracks a real
+            defect — outcome (b) above — is a different thing, and is encouraged.)
+
+            Write `triage-report.md` with a one-line tally then a section per dimension in
+            this fixed order — Correctness, Features, Docs, Tests — filing each defect under
+            the lens the dossier lists for it (its `lens/doc` line). A merged defect found by
+            two lenses goes under the more severe one's section, named once, never twice.
+            Order 🔴 → 🟠 → 🟡 within a section. 🟡 lines live here and nowhere else.
+            ```
+            ### Nightly audit — ${{ needs.preflight.outputs.mode }} mode
+            Filed: 3 new (🔴 1 · 🟠 2) · commented on existing: 2 · low (report-only): 4 · dropped on evidence: 6
+
+            #### Correctness
+            - 🔴 `rollbackAction` flips rolledBack=true but never calls the IPC — #<n>
+            - 🟡 `perf_analysis.py` swallows a KeyError (report-only, no issue)
+            #### Docs
+            - 🟠 Lemonade start command is dead in 163 places — commented on existing #<n>
+            ```
+
+            ## If DRY RUN is true
+            Run NO `gh issue create` and NO `gh issue comment` — file and comment nothing.
+            Do everything else, and in `triage-report.md` write what you WOULD have done
+            (`would file:` / `would comment on #<n>:`) so the dedup pass can be validated
+            against the real backlog without adding to it.
+
+            ## Rules
+            - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
+            - Do not open any PR and do not apply the `bug` label.
+            - Never close any issue.
+            - Security is not a dimension here (see claude-security-audit.yml). If a findings
+              JSON contains a security issue, omit it rather than disclosing it publicly.
+            - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>`.
+          claude_args: |
+            --max-turns 32
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Prove the dry run filed nothing
+        if: always() && github.event.inputs.dry_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          before=$(cat .issue-watermark)
+          created=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --limit 100 --json number --jq "[.[] | select(.number > $before) | .number] | join(\", \")")
+          if [ -n "$created" ]; then
+            echo "::error title=Dry run was not dry::The synthesis step created issue(s) $created despite dry_run=true. Close them, then fix the dry-run instruction in the prompt."
+            exit 1
+          fi
+          echo "✅ Dry run confirmed: no issue created above #$before."
+
+      # The run receipt. This replaces the per-run "Nightly audit — <run-id>" ISSUE that
+      # used to be filed: a CI run's bookkeeping belongs in the run, not the tracker.
+      # Deterministic, so the report survives a synthesis step that errored after writing it.
+      - name: Publish the triage report to the job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f triage-report.md ]; then
+            cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⚠️ No triage report" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The synthesis step wrote no \`triage-report.md\`. See the step status below." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify the audit filed output
+        if: always()
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Don't trust step outcome (continue-on-error masks it; an install crash exits
+          # before it's set). Check the real artifact the action writes on completion.
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Nightly audit synthesis completed (log: $EXEC_FILE)"
+          else
+            # Hard-fail, not a warning: a green run that audited nothing is indistinguishable
+            # from a green run that found nothing, which is how the actor-gate outage went
+            # unnoticed for a month. A flake here costs one re-run; silence costs coverage.
+            echo "::error title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            exit 1
+          fi

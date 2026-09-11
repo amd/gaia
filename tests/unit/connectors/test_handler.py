@@ -8,6 +8,7 @@ Tests cover:
 - Dispatcher raises ConnectorsError when no handler is registered
 - Dispatcher routes to registered handler
 - Grant check blocks unauthorized agents
+- Grant check FAILS CLOSED inside an agent turn with no resolvable identity
 - get_credential_sync raises in a running event loop
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+from gaia.connectors.context import _agent_context
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.handler import (
     _HANDLER_REGISTRY,
@@ -56,6 +58,9 @@ def google_spec(isolated_registries):
         type="oauth_pkce",
         description="Google OAuth",
         default_scopes=("openid",),
+        # The grant ceiling (#915). Without it the dispatcher cannot verify a
+        # scope-less request and refuses it outright.
+        available_scopes=("openid",),
     )
     isolated_registries.register(spec)
     return spec
@@ -158,10 +163,44 @@ class TestGetCredentialDispatcher:
         assert "openid" in exc_info.value.missing_scopes
 
     @pytest.mark.asyncio
-    async def test_no_agent_id_skips_grant_check(self, google_spec):
+    async def test_no_agent_id_outside_an_agent_turn_skips_grant_check(
+        self, google_spec
+    ):
+        """The documented CLI/SDK escape hatch: no agent turn, no identity to
+        check, credential returned."""
         register_handler("oauth_pkce", FakeOAuthHandler())
         result = await get_credential("google", required_scopes=["openid"])
         assert result["access_token"] == "fake-token"
+
+    # asyncio's ProactorEventLoop self-pipe needs socket.socketpair(), which
+    # tests/unit/conftest.py's network guard blocks on Windows (review C41).
+    @pytest.mark.allow_network
+    @pytest.mark.asyncio
+    async def test_no_agent_id_inside_an_agent_turn_fails_closed(self, google_spec):
+        """#915: inside an agent turn a missing identity means the context was
+        dropped (the pre-fix bare-thread bug), NOT that the caller opted out.
+        Returning the credential there is what made the grant control dead."""
+        register_handler("oauth_pkce", FakeOAuthHandler())
+        with _agent_context(None):
+            with pytest.raises(AuthRequiredError) as exc_info:
+                await get_credential("google", required_scopes=["openid"])
+        assert exc_info.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
+        assert exc_info.value.agent_id is None
+
+    # asyncio's ProactorEventLoop self-pipe needs socket.socketpair(), which
+    # tests/unit/conftest.py's network guard blocks on Windows (review C41).
+    @pytest.mark.allow_network
+    @pytest.mark.asyncio
+    async def test_omitted_required_scopes_still_checks_the_grant(
+        self, google_spec, monkeypatch, tmp_path
+    ):
+        """A caller that names no scopes must not thereby skip the check —
+        the ceiling stands in, so an ungranted agent is still refused (#915)."""
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        register_handler("oauth_pkce", FakeOAuthHandler())
+        with pytest.raises(AuthRequiredError) as exc_info:
+            await get_credential("google", agent_id="builtin:chat")
+        assert exc_info.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
 
 
 # ---------------------------------------------------------------------------

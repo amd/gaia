@@ -61,6 +61,8 @@ You can revoke access at any level:
 |---|---|
 | Malicious process reads `mcp_servers.json` | File contains only `$keyring:...` references, never raw tokens |
 | Malicious agent requests a credential it wasn't granted | `get_credential_sync` checks the grants ledger before returning; unapproved calls raise `AuthRequiredError` |
+| Agent code runs a tool in its own thread and loses its identity | The runtime copies the calling context into every tool thread; a credential request inside an agent turn with no identity is refused, never treated as an un-scoped CLI call |
+| Grant ledger written with scopes the connector never advertised | `grant_agent` rejects any scope outside the connector's catalog entry and any unknown connector id, so the Agent UI, the CLI, and the SDK share one ceiling |
 | Connector re-added after disconnect silently inherits prior tool visibility | `disconnect` wipes both grants AND activations for that `connector_id`; re-adding requires explicit re-grant + re-activate |
 | Token leak via logging | Connector code never logs token values; credentials are redacted before any log statement |
 | Token exfiltration via a rogue custom agent | Custom agents run in the same process as GAIA — they are trusted code you install yourself, analogous to a browser extension |
