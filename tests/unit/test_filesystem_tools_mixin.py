@@ -1545,7 +1545,20 @@ class TestEdgeCases:
             query="anything",
             scope=str(missing),
         )
-        assert "Search root does not exist" in result
+        assert "does not exist" in result
+        assert "is not a directory" not in result
+        assert "No files found" not in result
+
+    def test_find_files_with_file_as_scope(self, tmp_path):
+        """find_files with a file as scope says it is not a directory."""
+        report = tmp_path / "report.pdf"
+        report.write_text("data")
+        result = self.tools["find_files"](
+            query="anything",
+            scope=str(report),
+        )
+        assert "is not a directory" in result
+        assert "does not exist" not in result
         assert "No files found" not in result
 
     def test_read_file_with_encoding_fallback(self, tmp_path):

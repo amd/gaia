@@ -704,12 +704,20 @@ class FileSystemToolsMixin:
 
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
-                        # Named folders like ~/Documents can be skipped. A
-                        # caller supplied path should fail the same way
-                        # search_directory does, not look like an empty hit.
-                        if user_named_root:
-                            return f"Error: Search root does not exist: {root}"
-                        continue
+                        # Named scopes fan out over folders like ~/Documents that
+                        # need not exist; only a caller supplied path is an error.
+                        if not user_named_root:
+                            continue
+                        if not root.exists():
+                            return (
+                                f"Error: '{root}' does not exist. Pass an existing "
+                                "folder as scope, or use 'smart', 'home', 'cwd', "
+                                "or 'everywhere'."
+                            )
+                        return (
+                            f"Error: '{root}' is not a directory. Pass the folder "
+                            "to search as scope, not a file."
+                        )
 
                     if effective_type == "content":
                         # Content search (grep-like)
