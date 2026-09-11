@@ -202,6 +202,8 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			if line := strings.TrimSpace(scanner.Text()); line != "" {
+				// Checked first, not just as a case below: with both ready,
+				// select picks at random and would keep emitting after cancel.
 				select {
 				case <-ctx.Done():
 					return
