@@ -170,6 +170,7 @@ class TestReadToolsRefuseThePrivateKey:
 
         instance = type("_Stub", (mixin_cls,), {})()
         instance.path_validator = validator
+        instance._path_validator = validator
         getattr(instance, register)()
         return _TOOL_REGISTRY["read_file"]["function"]
 
@@ -212,6 +213,36 @@ class TestReadToolsRefuseThePrivateKey:
 
         assert result["status"] == "success"
         assert "attached notes" in result["content"]
+
+    def test_filesystem_read_file_refuses_the_key(self, sandbox):
+        from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
+
+        validator, key, _ = sandbox
+        read_file = self._read_file_tool(
+            FileSystemToolsMixin, "register_filesystem_tools", validator
+        )
+
+        result = read_file(str(key))
+
+        assert "Access denied" in str(result)
+        assert "PRIVATE KEY" not in str(result)
+
+    def test_filesystem_content_search_refuses_credentials(self, validator, tmp_path):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
+
+        (tmp_path / "credentials.json").write_text('{"secret": "hidden-marker"}')
+        (tmp_path / "notes.txt").write_text("visible-marker")
+        self._read_file_tool(
+            FileSystemToolsMixin, "register_filesystem_tools", validator
+        )
+        find_files = _TOOL_REGISTRY["find_files"]["function"]
+
+        result = find_files(query="marker", search_type="content", scope=str(tmp_path))
+
+        assert "visible-marker" in result
+        assert "hidden-marker" not in result
+        assert "credentials.json" not in result
 
 
 # ── Writes: files that execute on their own ──────────────────────────────

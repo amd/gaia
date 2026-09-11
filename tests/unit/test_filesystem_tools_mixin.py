@@ -207,7 +207,7 @@ class TestValidatePath:
     def test_validate_path_blocked_by_validator(self, tmp_path):
         """PathValidator can block access to a path."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         with pytest.raises(ValueError, match="Access denied"):
@@ -216,7 +216,7 @@ class TestValidatePath:
     def test_validate_path_allowed_by_validator(self, tmp_path):
         """PathValidator allows the path through."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = True
+        mock_validator.validate_read.return_value = (True, "")
         self.agent._path_validator = mock_validator
 
         result = self.agent._validate_path(str(tmp_path))
@@ -373,7 +373,7 @@ class TestBrowseDirectory:
     def test_browse_path_validation_denied(self, tmp_path):
         """Path validator denial is returned as error string."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         result = self.browse(path=str(tmp_path))
@@ -925,7 +925,7 @@ class TestReadFile:
         f = tmp_path / "secret.txt"
         f.write_text("classified")
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         result = self.read(file_path=str(f))

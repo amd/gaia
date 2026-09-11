@@ -238,8 +238,7 @@ class TestComputeAllowedPaths:
 
     def test_empty_paths_returns_cwd(self):
         result = _compute_allowed_paths([])
-        assert len(result) == 1
-        assert result[0] == str(Path.cwd().resolve())
+        assert set(result) == {str(Path.cwd().resolve()), str(_managed_documents_dir())}
 
     def test_single_file_grants_the_file_not_its_directory(self):
         result = {Path(p) for p in _compute_allowed_paths(["/docs/project/report.pdf"])}
@@ -291,11 +290,23 @@ class TestComputeAllowedPaths:
         assert Path.home().resolve() not in result
         assert attached.resolve() in result
 
-    def test_no_documents_and_an_unsafe_cwd_grants_nothing(self, monkeypatch):
-        """An empty scope, not a silent widening to $HOME."""
+    def test_no_documents_and_an_unsafe_cwd_keeps_managed_documents(self, monkeypatch):
         monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: Path.home()))
 
-        assert _compute_allowed_paths([]) == []
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
+
+    def test_cwd_inside_a_protected_directory_is_not_granted(
+        self, tmp_path, monkeypatch
+    ):
+        protected = tmp_path / "protected"
+        child = protected / "service"
+        child.mkdir(parents=True)
+        monkeypatch.setattr(
+            "gaia.ui._chat_helpers.BLOCKED_DIRECTORIES", {str(protected)}
+        )
+        monkeypatch.chdir(child)
+
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
 
     def test_returns_list_type(self):
         result = _compute_allowed_paths(["/some/path/file.txt"])

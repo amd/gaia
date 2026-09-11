@@ -947,9 +947,11 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     if directory == Path.home().resolve():
         return "it is your home directory"
     for blocked in BLOCKED_DIRECTORIES:
-        blocked_path = Path(blocked)
+        blocked_path = Path(blocked).resolve()
         if directory == blocked_path or blocked_path.is_relative_to(directory):
             return f"it contains the protected directory '{blocked}'"
+        if directory.is_relative_to(blocked_path):
+            return f"it is inside the protected directory '{blocked}'"
     return ""
 
 
@@ -967,15 +969,14 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     surfaces, rather than whichever of the user's folders a document came from.
 
     Falls back to the current working directory only when nothing is attached,
-    and refuses even that when the CWD is a root, ``$HOME``, or an ancestor of a
+    and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
     protected directory — a scope that broad is not a scope.
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
 
     Returns:
-        The allowlist, possibly empty. An empty list means no file access, which
-        ``PathValidator`` enforces as such rather than widening to the CWD.
+        The allowlist, always including the managed documents directory.
     """
     allowed = set()
     for fp in rag_file_paths:
@@ -985,22 +986,23 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
             allowed.add(str(Path(fp).resolve()))
         except (OSError, ValueError) as exc:
             logger.warning("Skipping unresolvable document path %r: %s", fp, exc)
+    managed = str(_managed_documents_dir())
     if allowed:
-        allowed.add(str(_managed_documents_dir()))
+        allowed.add(managed)
         return sorted(allowed)
 
     cwd = Path.cwd().resolve()
     reason = _unsafe_directory_grant_reason(cwd)
     if reason:
-        logger.error(
+        logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
-            "session has no attached documents, so it gets no file scope. Attach "
+            "session keeps only the managed documents directory. Attach "
             "a document, or start the Agent UI backend from a project directory.",
             cwd,
             reason,
         )
-        return []
-    return [str(cwd)]
+        return [managed]
+    return sorted({managed, str(cwd)})
 
 
 def _session_agent_kwargs(
