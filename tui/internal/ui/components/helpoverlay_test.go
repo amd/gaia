@@ -183,11 +183,18 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/memory": "/memory",
 		"/setup":  "/setup",
 		"/bypass": "/bypass",
+		"/slack":  "/slack",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		key := cmd
 		if strings.HasPrefix(cmd, "/bypass") {
 			key = "/bypass"
+		}
+		if strings.HasPrefix(cmd, "/slack") {
+			// /slack setup|skip|never are the three answers to the setup
+			// offer, which names them itself -- the help panel documents the
+			// one command, same as /bypass.
+			key = "/slack"
 		}
 		want, ok := commandText[key]
 		if !ok {

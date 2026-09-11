@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/gaiaslack"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -334,6 +335,11 @@ type ChatModel struct {
 	// auto-started because the first-boot check said not ready, or started on
 	// demand by /setup.
 	setupRunning bool
+	// slackOffered records that the one-time Slack offer has already been shown
+	// this session, so a second launch-time probe cannot repeat it. The durable
+	// answer lives in `gaia slack decline`; this only stops a duplicate inside
+	// one run.
+	slackOffered bool
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -432,6 +438,14 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
+	}
+	if m.agentID == setupAgentID && m.initialQuery == "" {
+		// The one-time Slack offer. Gated on an empty initial query so a user
+		// who launched with a question gets their answer, not an ad; and run
+		// only for the flagship, which is the agent a Slack message drives.
+		// Whether it actually shows is `gaia slack status`'s decision, not
+		// ours -- this only asks.
+		cmds = append(cmds, querySlackCmd(true /* offer */))
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
@@ -615,6 +629,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupCheckResultMsg:
 		return m.handleSetupCheckResult(msg)
+
+	case slackStatusMsg:
+		return m.handleSlackStatus(msg)
+
+	case slackDeclinedMsg:
+		return m.handleSlackDeclined(msg)
+
+	case slackSetupDoneMsg:
+		return m.handleSlackSetupDone(msg)
 
 	case setupStreamMsg:
 		if m.supersededSetup(msg.ch) {
@@ -1337,6 +1360,19 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
 		return m.startSetupRun(false /* firstBoot */)
+
+	case "/slack":
+		return m.startSlackCheck()
+
+	case "/slack setup":
+		return m.statusNote("Handing over to `"+gaiaslack.TypedCommand+"`…"),
+			runSlackSetupCmd()
+
+	case "/slack skip":
+		return m, declineSlackCmd(false)
+
+	case "/slack never":
+		return m, declineSlackCmd(true)
 	}
 
 	return m.sendQuery(query)
