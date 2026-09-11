@@ -81,6 +81,9 @@ type SubprocessClient struct {
 	// canonical selects the event dialect read off the pipe: the frozen legacy
 	// vocabulary (false) or the canonical one (true).
 	canonical bool
+	// trace records every event line this client reads, verbatim. Nil means
+	// tracing is off (--trace not passed).
+	trace *event.TraceWriter
 
 	mu      sync.Mutex
 	proc    *procHandle
@@ -118,6 +121,13 @@ func NewCanonicalSubprocessClient(path string, args []string, debug bool) *Subpr
 	c := NewSubprocessClient(path, args, debug)
 	c.canonical = true
 	return c
+}
+
+// WithTrace records every event line this client reads to w, verbatim. A nil w
+// leaves tracing off. Returns the client so it can be chained onto a constructor.
+func (s *SubprocessClient) WithTrace(w *event.TraceWriter) *SubprocessClient {
+	s.trace = w
+	return s
 }
 
 // turnState is everything one turn needs, captured under a single lock so it can
@@ -264,6 +274,17 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			line := st.scanner.Bytes()
 			if len(line) == 0 {
 				continue
+			}
+
+			// Traced BEFORE parsing, so the file keeps the bytes that actually
+			// arrived and an unreadable line is recorded rather than lost.
+			//
+			// A failure is not printed HERE: the alt screen owns the terminal
+			// mid-turn, so a raw stderr write would land on top of the UI. The
+			// writer keeps the first failure and Close() reports it once the
+			// event loop has stopped.
+			if terr := s.trace.Write(line); terr != nil && debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] trace: %v\n", terr)
 			}
 
 			var evt interface{}

@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextvars
 import datetime
 import inspect
 import json
@@ -39,6 +40,10 @@ from typing import (
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import (
+    build_verification_scope,
+    verification_check_label,
+)
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -103,6 +108,100 @@ CHUNK_TRUNCATION_SIZE = 2500
 # override every agent at once. Agents that genuinely need more (e.g. CodeAgent
 # for multi-file generation) override it explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
+
+
+def effective_skill_body(agent, skill) -> str:
+    """*skill*'s authored body with *agent*'s approved learned changes applied.
+
+    A module-level function, not a method, on purpose: it is called from
+    :meth:`Agent.get_skills_system_prompt`, which is routinely composed onto
+    lightweight doubles that carry the skill-prompt methods and nothing else. As
+    a method it made every one of those a hard dependency; as a function it
+    duck-types, and an object with no memory store simply renders its authored
+    skills — which is exactly what "no learned changes" should look like.
+
+    Resolution is cached per (skill, base digest) on the agent *instance*, which
+    outlives a session — ``gaia chat`` reuses one agent across ``/new`` and a
+    daemon sidecar is longer-lived still. So a delta changed from the CLI takes
+    effect on the next agent launch, which is what that command says.
+    ``remember_skill_lesson`` clears this cache itself, so a lesson the agent
+    learns applies from its next step.
+
+    **This must never raise.** ``_get_mixin_prompts`` invokes the calling
+    fragment inside a bare ``except`` that drops it on error, so an exception
+    here would silently delete every loaded skill's instructions. Any failure
+    floors to the authored body and says so in the log.
+    """
+    base = getattr(skill, "body", "") or ""
+    if not base:
+        return base
+
+    enabled = getattr(agent, "learned_skills_enabled", None)
+    if not callable(enabled) or not enabled():
+        return base
+
+    try:
+        from gaia.agents.base.skill_deltas import (
+            STATUS_ACTIVE,
+            SkillDelta,
+            resolve_skill_body,
+        )
+        from gaia.skills.sections import section_digest
+
+        cache = getattr(agent, "_effective_skill_cache", None)
+        if cache is None:
+            cache = {}
+            agent._effective_skill_cache = cache
+        key = (skill.name, section_digest(base))
+        if key in cache:
+            return cache[key]
+
+        store = agent._memory_store
+        # limit=None: rows come back oldest-first, so a truncated read would
+        # drop the newest deltas — the ones that win — from the body the agent
+        # runs, with nothing to show it happened.
+        rows = store.search_deltas(
+            base_name=skill.name,
+            scope=agent.learned_skill_scope(),
+            status=STATUS_ACTIVE,
+            limit=None,
+        )
+        resolved = resolve_skill_body(base, [SkillDelta.from_row(r) for r in rows])
+
+        for note in resolved.notes:
+            if note.outcome != "applied":
+                logger.warning(
+                    "[SkillDeltas] %s on %s/%s: %s",
+                    note.outcome,
+                    skill.name,
+                    note.section,
+                    note.detail,
+                )
+        if resolved.applied:
+            agent.overlaid_skills[skill.name] = list(resolved.applied)
+            logger.info(
+                "[SkillDeltas] %s running with %d learned change(s), "
+                "%+d tokens vs authored",
+                skill.name,
+                len(resolved.applied),
+                resolved.token_delta,
+            )
+            try:
+                store.touch_deltas(resolved.applied)
+            except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+
+        cache[key] = resolved.body
+        return resolved.body
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.error(
+            "[SkillDeltas] could not resolve the learned overlay for %s; using "
+            "the authored skill unchanged: %s",
+            getattr(skill, "name", "?"),
+            exc,
+            exc_info=True,
+        )
+        return base
 
 
 def default_max_steps() -> int:
@@ -208,6 +307,21 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Spawns a PowerShell child on Windows to render the notification, so it
+    # belongs with the other process-spawning tools rather than with the
+    # read-only ones. Gated on every platform on purpose: this set is keyed on
+    # tool name, not host, and a platform-conditional entry would silently stop
+    # applying the day a non-Windows backend (plyer) becomes reachable.
+    "notify_desktop",
+}
+
+# Tools whose result is nothing but a receipt for what the agent itself just
+# did. EVERY other tool is treated as bringing in content the user did not type
+# — including the skill-library reads, whose text comes from third-party
+# packages, and any name this build has never heard of. Read by
+# ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
+TOOLS_WITHOUT_EXTERNAL_CONTENT = {
+    "remember_skill_lesson",
 }
 
 
@@ -521,6 +635,19 @@ class Agent(abc.ABC):
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
 
+    # Adaptive skills (#2674): the learned overlay composed over an authored
+    # skill at render time. ``False`` is the ``--no-learned-skills`` floor and
+    # must produce a byte-identical prompt, so nothing here may be consulted
+    # before ``learned_skills_enabled()`` says so.
+    _learned_skills_enabled: bool = True
+    #: (skill name, base digest) -> resolved body. Resolution happens once per
+    #: session so the fragment is stable across turns; a delta changed from
+    #: outside the process applies on the next launch, and one this agent
+    #: learns applies at once because the write clears this.
+    _effective_skill_cache: Optional[Dict[tuple, str]] = None
+    #: skill name -> ids of the deltas currently applied to it.
+    _overlaid_skills: Optional[Dict[str, List[str]]] = None
+
     #: Proactive skill discovery: matches the user's turn against skills that
     #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
     #: has to know a skill's name. ``None`` (the default) leaves every existing
@@ -612,6 +739,9 @@ class Agent(abc.ABC):
             "get_memory_system_prompt",  # changes on any remember()/forget()
             "get_skills_system_prompt",  # per-turn body selection (#2848)
             "get_recalled_skills_system_prompt",  # per-turn procedural recall
+            # Mostly static, but the index line flips as a background index
+            # lands and the shape line changes if the project does (#3379).
+            "get_project_map_system_prompt",
         }
     )
 
@@ -745,6 +875,8 @@ Do NOT wrap conversational replies in JSON.
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn (#2899).
         self._tool_reported_usage: List[Dict[str, Any]] = []
+        # Same rationale for the verification-scope log (#3376).
+        self._turn_tool_executions: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -762,6 +894,13 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Fail closed outside the normal loop: an agent driven directly (a test,
+        # the MCP server) has no turn boundary to reset this, and "no turn" must
+        # not read as "the user just said this".
+        self._turn_saw_external_content: bool = True
+        # Set by a caller that injects content into the next turn; consumed by
+        # it. See ``mark_external_content``.
+        self._pending_external_context: bool = False
         # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
@@ -1247,6 +1386,17 @@ Do NOT wrap conversational replies in JSON.
         with a dynamic tool loader override this to return a selection.
         """
         return None
+
+    def _on_task_start(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run at the top of every turn, before the prompt is composed.
+
+        Default: no-op. Mixins that orient the agent in its environment — the
+        project map (#3379) is the first — override this and must call
+        ``super()._on_task_start(user_input)``. Anything expensive belongs
+        behind a once-per-session guard inside the override, not here.
+        """
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Hook called when a tool is about to execute (after registry lookup).
@@ -2004,6 +2154,111 @@ Do NOT wrap conversational replies in JSON.
         )
         return loaded
 
+    def learned_skills_enabled(self) -> bool:
+        """Whether the learned overlay participates in skill resolution.
+
+        ``False`` under ``--no-learned-skills`` or ``GAIA_NO_LEARNED_SKILLS``,
+        with memory off, or in an incognito session. Each of those must give a
+        prompt byte-identical to a build with no overlay at all.
+
+        The env var is what covers the agents a CLI flag cannot reach — the
+        flagship runs as a daemon sidecar and behind the UI server, and it is
+        the only agent that registers ``remember_skill_lesson``. Read at call
+        time, so it also holds for an agent constructed before it was set.
+        """
+        raw = os.getenv("GAIA_NO_LEARNED_SKILLS")
+        if raw is not None and raw.strip().lower() in ("1", "true", "yes", "on"):
+            return False
+        if not getattr(self, "_learned_skills_enabled", True):
+            return False
+        if getattr(self, "_memory_store", None) is None:
+            return False
+        if getattr(self, "_incognito", False):
+            return False
+        return True
+
+    def _begin_turn_provenance(self) -> None:
+        """Open a turn: only the user has spoken, unless a caller pushed content.
+
+        A fresh user message is the one moment when that is true, so this is
+        the single place the taint resets. Called from ``_process_query_impl``.
+        """
+        self._turn_saw_external_content = getattr(
+            self, "_pending_external_context", False
+        )
+        self._pending_external_context = False
+
+    def mark_external_content(self) -> None:
+        """Declare that the next turn carries content the user did not type.
+
+        For a caller that injects content directly rather than letting the
+        agent fetch it — the flagship's ``/query`` pushed ``context``, for
+        instance. Consumed by the next :meth:`process_query`, which would
+        otherwise open that turn believing only the user had spoken.
+        """
+        self._pending_external_context = True
+
+    def turn_content_provenance(self) -> str:
+        """Where anything the agent writes down this turn could have come from.
+
+        ``"user_instruction"`` only while the user's own message is still the
+        only thing that has arrived. Any tool returning anything — a web page,
+        an email, an issue body, a command's output, a skill listing, an MCP
+        call — flips this to ``"tool_content"`` for the rest of the turn, and
+        it resets on the next user message. The allowlist holds exactly one
+        name, the learning tool's own receipt, so a tool nobody classified
+        taints by default rather than by omission.
+
+        This exists because a learned skill change persists across sessions: a
+        page that says "the correct command is X" must not become a permanent
+        instruction the agent runs under. ``validate_delta`` refuses anything
+        but ``user_instruction``, and this is the only honest way to answer it.
+
+        **The taint is per turn.** Content pulled in an *earlier* turn is not
+        tracked — a session-wide taint would disable learning in any session
+        where the agent ever browsed, which is most of them. That residual gap
+        is why announcing the change and making undo one command is not a
+        nicety here; it is the second half of the control.
+        """
+        if getattr(self, "_turn_saw_external_content", True):
+            return "tool_content"
+        return "user_instruction"
+
+    def learned_skill_scope(self) -> str:
+        """The leak boundary for learned deltas. Never ``None``.
+
+        ``_namespaced_agent_id()`` may legitimately return ``None`` (an agent
+        that opted out of the activation layer, or one built outside the
+        registry), and a null scope would either be refused at write time or —
+        worse, if the store allowed it — pool one agent's learned changes into
+        every other agent's skills. So this falls back to the concrete class
+        name, which is stable across sessions and distinct between agents.
+        """
+        return self._namespaced_agent_id() or type(self).__name__
+
+    def _effective_skill_body(self, skill) -> str:
+        """This agent's view of *skill* with its approved learned changes applied.
+
+        Thin wrapper over :func:`effective_skill_body` so subclasses can
+        override resolution. The render path calls the module-level function
+        directly, so an agent that composes ``get_skills_system_prompt`` without
+        this method still renders its authored skills.
+        """
+        return effective_skill_body(self, skill)
+
+    @property
+    def overlaid_skills(self) -> Dict[str, List[str]]:
+        """Loaded skills currently running with an overlay -> applied delta ids.
+
+        The legibility surface: a user must be able to see that an agent is not
+        running the skill as shipped.
+        """
+        overlaid = getattr(self, "_overlaid_skills", None)
+        if overlaid is None:
+            overlaid = {}
+            self._overlaid_skills = overlaid
+        return overlaid
+
     def get_skills_system_prompt(self) -> str:
         """Render the loaded skills as a system-prompt fragment.
 
@@ -2030,7 +2285,8 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                body = effective_skill_body(self, skill)
+                sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
@@ -2041,7 +2297,8 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body_sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                    body = effective_skill_body(self, skill)
+                    body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
                     f"- {skill.name}: {_skill_menu_description(skill.description)}"
@@ -3176,7 +3433,15 @@ Do NOT wrap conversational replies in JSON.
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
 
-        worker = threading.Thread(target=_target, name=f"tool:{tool_name}", daemon=True)
+        # A new thread starts with an EMPTY context, so the agent-identity
+        # contextvar bound by process_query would be None inside every tool
+        # body — silently disabling the per-agent connector grant check
+        # (#915). Snapshot here, in the caller; copying inside _target would
+        # copy the worker's own empty context and change nothing.
+        ctx = contextvars.copy_context()
+        worker = threading.Thread(
+            target=lambda: ctx.run(_target), name=f"tool:{tool_name}", daemon=True
+        )
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
@@ -3328,7 +3593,9 @@ Do NOT wrap conversational replies in JSON.
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
         if recorder is None or getattr(self, "_tool_timing_depth", 0):
-            return self._execute_tool(tool_name, tool_args)
+            result = self._execute_tool(tool_name, tool_args)
+            self._note_verification_signal(tool_name, tool_args, result)
+            return result
 
         started = time.perf_counter()
         # Default False, set only on a clean return: a tool that RAISES must not
@@ -3339,6 +3606,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
+            self._note_verification_signal(tool_name, tool_args, result)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -3375,10 +3643,11 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Normalize common model name-construction errors before registry lookup:
-        # strip trailing "()" some models append, and convert hyphens to underscores
-        # (tool names are always snake_case; hyphens are never valid).
-        tool_name = tool_name.removesuffix("()").replace("-", "_")
+        # Exact name first — skill tools register with a literal hyphen
+        # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
+        tool_name = tool_name.removesuffix("()")
+        if tool_name not in self._tools_registry:
+            tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
@@ -3521,6 +3790,11 @@ Do NOT wrap conversational replies in JSON.
         if coercion_error is not None:
             logger.error(coercion_error)
             return {"status": "error", "error": coercion_error}
+
+        # Before dispatch, not after: a tool that times out or raises may still
+        # have pulled content into the turn, and its error string can carry it.
+        if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
+            self._turn_saw_external_content = True
 
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
@@ -4390,13 +4664,18 @@ Do NOT wrap conversational replies in JSON.
 
         Shared identity binding so that both process_query and
         on_heartbeat can resolve per-agent grants via contextvars.
+
+        Entered even when ``ns_id`` is None (an agent with no namespaced
+        identity): the block still marks an agent turn, so a credential
+        request from inside it fails closed rather than taking the ungated
+        CLI path.
         """
         # `_agent_context` is intentionally PRIVATE (issue #915): imported via
         # the private path so a malicious tool body can't forge an agent
         # identity through the public gaia.connectors API.
         from gaia.connectors.context import _agent_context
 
-        return _agent_context(ns_id) if ns_id else None
+        return _agent_context(ns_id)
 
     def _active_mcp_servers(self, manager) -> List[str]:
         """Return MCP server names whose tools should be visible to this agent.
@@ -4439,6 +4718,41 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
+    def _note_verification_signal(
+        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+    ) -> None:
+        """Record one executed tool call for this turn's verification scope.
+
+        Called from the single execution seam so every loop path — legacy,
+        native tool-calling, and the forced-call branch — is covered.
+        """
+        log = getattr(self, "_turn_tool_executions", None)
+        if log is None:
+            return
+        log.append(
+            {
+                "tool": tool_name,
+                "check_label": verification_check_label(tool_name, tool_args),
+                "failed": self._is_error_result(result),
+            }
+        )
+
+    def verification_scope_statement(self) -> str:
+        """This turn's bounded verified / partially verified / unverified line."""
+        return build_verification_scope(
+            getattr(self, "_turn_tool_executions", None) or []
+        )
+
+    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
+        """Append the scope statement to a non-empty answer (#3376).
+
+        Empty stays empty — a blank answer is a signal downstream (cancelled
+        turns skip persistence), and a scope line would make it non-blank.
+        """
+        if not answer or not answer.strip():
+            return answer
+        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+
     def process_query(
         self,
         user_input: str,
@@ -4460,11 +4774,8 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
-        identity_ctx = self._agent_identity_context(ns_id)
         try:
-            if identity_ctx is None:
-                return self._process_query_impl(user_input, max_steps, trace, filename)
-            with identity_ctx:
+            with self._agent_identity_context(ns_id):
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -4485,6 +4796,11 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._begin_turn_provenance()
+
+        # Orientation. Runs before the prompt is composed so anything it
+        # establishes is in the prompt on the turn that established it.
+        self._on_task_start(user_input)
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool
@@ -4556,6 +4872,12 @@ Do NOT wrap conversational replies in JSON.
         # reset per-turn since an Agent instance persists across queries in
         # an interactive session.
         self._tool_reported_usage: List[Dict[str, Any]] = []
+        # Executed tool calls this turn, classified for the verification-scope
+        # statement (#3376). Per-turn: an instance persists across queries.
+        self._turn_tool_executions: List[Dict[str, Any]] = []
+        # True once the emitted answer carries its scope line, so the post-loop
+        # catch-all below never appends a second one.
+        verification_scope_applied = False
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -6428,7 +6750,12 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
-                final_answer = self.finalize_answer(answer_candidate, conversation)
+                # Scope line goes on AFTER the subclass hook: a subclass that
+                # rewrites the answer must not be able to drop it (#3376).
+                final_answer = self._with_verification_scope(
+                    self.finalize_answer(answer_candidate, conversation)
+                )
+                verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
                 # can ride the same event, instead of the post-loop aggregation
@@ -6524,6 +6851,16 @@ Do NOT wrap conversational replies in JSON.
             conversation, self._tool_reported_usage
         )
 
+        # Every exit other than the parsed-answer seam sets ``final_answer``
+        # directly — cancel-event timeout, LLM connection error, context
+        # overflow, typed Lemonade error, parse give-up, loop-break summary —
+        # or leaves it None for the max-steps message below. Those are
+        # disproportionately the runs that went wrong, so they need the scope
+        # line most (#3376). The console-cancellation path returns above with a
+        # deliberately empty result and is excluded (#3386).
+        if not verification_scope_applied:
+            final_answer = self._with_verification_scope(final_answer)
+
         # Return the result
         has_errors = len(self.error_history) > 0
         has_valid_answer = (
@@ -6538,8 +6875,10 @@ Do NOT wrap conversational replies in JSON.
             "result": (
                 final_answer
                 if final_answer
-                else self._generate_max_steps_message(
-                    conversation, steps_taken, steps_limit
+                else self._with_verification_scope(
+                    self._generate_max_steps_message(
+                        conversation, steps_taken, steps_limit
+                    )
                 )
             ),
             "system_prompt": self.system_prompt,  # Include system prompt in the result

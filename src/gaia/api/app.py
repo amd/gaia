@@ -182,92 +182,69 @@ def stop_server(port: int = 8080) -> None:
     """
     Stop the API server by finding and killing processes on the port.
 
+    Only a socket LISTENING on exactly ``port`` counts, and only a GAIA or
+    Lemonade process is signalled — see :mod:`gaia.ports`. Terminating is
+    graceful on POSIX (SIGTERM, so the server can shut its workers down);
+    Windows has no equivalent, so it stays ``taskkill /F``.
+
     Args:
         port: Port number to stop server on (default: 8080)
 
     Returns:
         None
     """
-    import platform
     import signal
 
-    system = platform.system()
+    from gaia.ports import is_killable_process, listeners_on_port
 
     try:
-        if system == "Windows":
-            # Windows: Use netstat to find PID, then taskkill to stop it
-            result = subprocess.run(
-                ["netstat", "-ano"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-
-            # Parse netstat output to find PIDs listening on the port
-            pids = set()
-            for line in result.stdout.splitlines():
-                if f":{port}" in line and "LISTENING" in line:
-                    # Line format: "  TCP    0.0.0.0:8080    0.0.0.0:0    LISTENING    12345"
-                    parts = line.split()
-                    if parts and parts[-1].isdigit():
-                        pids.add(parts[-1])
-
-            if pids:
-                for pid in pids:
-                    try:
-                        subprocess.run(
-                            ["taskkill", "/F", "/PID", pid],
-                            capture_output=True,
-                            timeout=5,
-                            check=False,
-                        )
-                        print(f"🛑 Stopped API server process (PID: {pid})")
-                    except (
-                        subprocess.TimeoutExpired,
-                        subprocess.CalledProcessError,
-                    ) as e:
-                        print(f"⚠️  Failed to stop PID {pid}: {e}")
-                print("✅ API server stopped")
-            else:
-                print(f"ℹ️  No API server found running on port {port}")
-
-        else:
-            # Linux/Mac: Use lsof to find PID, then kill it
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-
-            pids = {pid for pid in result.stdout.strip().split("\n") if pid}
-
-            if pids:
-                for pid in pids:
-                    try:
-                        os.kill(int(pid), signal.SIGTERM)
-                        print(f"🛑 Stopped API server process (PID: {pid})")
-                    except (ProcessLookupError, ValueError) as e:
-                        print(f"⚠️  Failed to stop PID {pid}: {e}")
-                print("✅ API server stopped")
-            else:
-                print(f"ℹ️  No API server found running on port {port}")
-
+        listeners = listeners_on_port(port)
     except FileNotFoundError as e:
         print(f"❌ Required command not found: {e}")
         print("To stop manually, find the process using the port:")
-        if system == "Windows":
+        if sys.platform.startswith("win"):
             print(f"  netstat -ano | findstr :{port}")
             print("  taskkill /F /PID <PID>")
         else:
-            print(f"  lsof -ti :{port}")
-            print("  kill -9 <PID>")
+            print(f"  lsof -nP -iTCP:{port} -sTCP:LISTEN -t")
+            print("  kill <PID>")
+        return
     except subprocess.TimeoutExpired:
         print(f"❌ Timeout while trying to stop server on port {port}")
-    except Exception as e:
+        return
+    except (OSError, subprocess.SubprocessError) as e:
         print(f"❌ Error stopping server: {e}")
+        return
+
+    if not listeners:
+        print(f"ℹ️  No API server found running on port {port}")
+        return
+
+    stopped = False
+    for pid, name in listeners:
+        if not is_killable_process(name):
+            print(
+                f"⚠️  Refusing to stop PID {pid} ({name or 'unknown process'}) on "
+                f"port {port}: not a GAIA or Lemonade process."
+            )
+            continue
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
+            print(f"🛑 Stopped API server process (PID: {pid})")
+            stopped = True
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️  Failed to stop PID {pid}: {e}")
+
+    if stopped:
+        print("✅ API server stopped")
 
 
 def main() -> None:

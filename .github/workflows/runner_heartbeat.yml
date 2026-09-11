@@ -32,9 +32,9 @@ jobs:
           - sjlab-stx-3
       fail-fast: false  # Continue even if one runner fails
     runs-on: [self-hosted, "${{ matrix.runner }}"]
-    # Fail fast if a runner is offline. Without this the job waits the full 24h
-    # queue timeout, so an outage surfaces a day late and reports `cancelled`
-    # (ambiguous) instead of a clean failure.
+    # Caps execution only — GitHub starts this clock when a runner picks the job
+    # up, so it does NOT bound queue time. An offline runner still waits the full
+    # 24h queue limit; the `watchdog` job below is what makes that loud.
     timeout-minutes: 10
     steps:
       - name: Create heartbeat file (Windows)
@@ -59,3 +59,60 @@ jobs:
           name: heartbeat-${{ runner.name }}
           path: heartbeat-${{ runner.name }}.txt
           retention-days: 14
+
+  # Turns "no runner ever picked the job up" into a named failure in ~10 minutes
+  # instead of an unexplained `cancelled` 24h later. Runs on GitHub-hosted infra
+  # so it reports even when every self-hosted runner is down.
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fail if any heartbeat job never got a runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A healthy runner claims its job in seconds; 10 min is pure headroom.
+          deadline=$(( $(date -u +%s) + 600 ))
+          stuck=""
+
+          while :; do
+            if ! gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" > jobs.json; then
+              echo "ERROR: could not list jobs for this run — cannot tell whether the" >&2
+              echo "heartbeat jobs were picked up. Check the Actions API status." >&2
+              exit 1
+            fi
+
+            stuck=$(jq -r '[.jobs[] | select(.name | startswith("heartbeat ")) | select(.status == "queued") | .name] | join(", ")' jobs.json)
+
+            if [ -z "$stuck" ]; then
+              break
+            fi
+            if [ "$(date -u +%s)" -ge "$deadline" ]; then
+              break
+            fi
+            echo "still queued: $stuck"
+            sleep 30
+          done
+
+          if [ -n "$stuck" ]; then
+            echo "::error::No self-hosted runner picked up: $stuck"
+            echo "" >&2
+            echo "These heartbeat jobs sat queued for 10 minutes, which means no ONLINE" >&2
+            echo "runner carries the requested label. Left alone they stay queued until" >&2
+            echo "GitHub cancels them at the 24h limit, which is why this shows up as a" >&2
+            echo "bare \`cancelled\` run with no explanation." >&2
+            echo "" >&2
+            echo "This is a runner-box outage, not a workflow bug. To fix:" >&2
+            echo "  1. Confirm the outage — Settings > Actions > Runners, or:" >&2
+            echo "       gh api repos/${{ github.repository }}/actions/runners \\" >&2
+            echo "         --jq '.runners[] | \"\\(.name) \\(.status)\"'" >&2
+            echo "  2. On the affected box, restart the GitHub Actions runner service" >&2
+            echo "     (it runs as 'actions.runner.*'), then re-run this workflow." >&2
+            echo "  3. If the box is retired, remove it from the matrix in" >&2
+            echo "     .github/workflows/runner_heartbeat.yml — that matrix is the single" >&2
+            echo "     source of truth for which runners are monitored." >&2
+            exit 1
+          fi
+
+          echo "All heartbeat jobs were picked up by a runner."

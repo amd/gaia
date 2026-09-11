@@ -109,5 +109,38 @@ def test_filter_and_grouped_bare_text_still_raises():
         translate_query("(newer_than:7d) budget report", now=_NOW)
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "is:starred",
+        "after:2026/07/01",
+        "before:2026/07/08",
+        "newer:2026/07/01",
+        "older:2026/07/01",
+        "label:promotions",
+        "has:attachment",
+        "in:inbox",
+        "label:",
+    ],
+)
+def test_operator_with_no_graph_equivalent_raises_instead_of_matching_nothing(query):
+    # Before this fix each of these fell through to _graph_search_param and
+    # reached Graph as literal text, matching nothing with no error (#2996
+    # finding I62; newer:/older:/a bare "label:" with no value added after a
+    # review on this PR caught the same silent fall-through for them).
+    with pytest.raises(ValueError, match="not supported by this backend"):
+        translate_query(query, now=_NOW)
+
+
+def test_is_unsupported_value_raises_before_the_mixed_family_check():
+    # is:starred is not consumed by _IS_RE (only unread/read are). The
+    # unsupported-operator check now runs before the mixed-family check (a
+    # review on this PR), so this raises naming is:starred directly rather
+    # than telling the caller to re-run it as a separate search that would
+    # fail the same way.
+    with pytest.raises(ValueError, match="not supported by this backend"):
+        translate_query("is:unread is:starred", now=_NOW)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

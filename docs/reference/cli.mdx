@@ -399,6 +399,13 @@ gaia uninstall --purge --purge-lemonade --yes
 `--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
+<Note>
+`GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns, and **both `--venv` and `--purge` check this** before deleting anything:
+
+- If it resolves to your home directory, a directory containing it, or a drive root, `gaia uninstall` refuses and exits `64` rather than deleting `$GAIA_HOME/documents` — which on Windows and macOS is your real `Documents` folder.
+- An existing `$GAIA_HOME` must also be named `.gaia` or hold something GAIA created (`config.json`, `chat/`, `lemonade/`, `memory.db`, …). A bare `venv/` does not count, so neither tier will eat the virtualenv of a project directory that `GAIA_HOME` happens to point at. A `$GAIA_HOME` that does not exist yet is a no-op, not an error.
+</Note>
+
 ### Kill Command
 
 Stop running GAIA services.
@@ -412,7 +419,7 @@ gaia kill [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--lemonade` | flag | Kill Lemonade Server and child processes |
-| `--port` | integer | Kill process on specific port |
+| `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 
 **Examples:**
 
@@ -428,6 +435,10 @@ gaia kill --port 8080
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
+
+<Note>
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
 </Note>
 
 ### Agent Command
@@ -780,6 +791,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
 | `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
+| `--no-learned-skills` | flag | false | Run with no learned skill changes applied. Skills compose exactly as authored, so the prompt is byte-identical to a build with no overlay. Not supported with `--ui` |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
@@ -998,7 +1010,7 @@ gaia talk -i guide.pdf --no-tts
 </Card>
 
 ```bash
-gaia telegram start --token <BOT_TOKEN> --background
+gaia telegram start --token <BOT_TOKEN> --allowed-users 11111111 --background
 gaia telegram status
 gaia telegram stop
 ```
@@ -1008,7 +1020,7 @@ gaia telegram stop
 | Subcommand | Option | Default | Description |
 |-----------|--------|---------|-------------|
 | `start` | `--token` (required) | – | Telegram bot token. |
-| `start` | `--allowed-users` | allow all | Comma-separated user IDs permitted to interact. |
+| `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
 | `stop` | `--force` | false | Force stop if graceful shutdown fails. |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
@@ -1936,6 +1948,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 
 ```bash
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
 gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
@@ -1996,6 +2009,36 @@ Skills are discovered from three roots, highest precedence first:
     | `--body` | Also print the Markdown instructions |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
+  </Tab>
+
+  <Tab title="deltas">
+    ```bash
+    gaia skill deltas <name> [--pending | --archived] [--diff] [--json] [--scope AGENT]
+    gaia skill deltas <name> --approve <id> | --revert <id> | --reset
+    gaia skill deltas <name> --scope AGENT --drop-section <slug>
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--pending` | Show staged changes, if anything ever staged one (an agent's own writes apply directly) |
+    | `--archived` | Show changes reverted with `--revert` or `--reset` |
+    | `--diff` | Unified diff of the shipped skill vs the one this agent runs |
+    | `--scope` | Agent the changes belong to (default: every scope) |
+    | `--approve` | Activate a staged change |
+    | `--revert` | Archive one learned change — listed by `--archived`, never deleted |
+    | `--reset` | Archive **every** learned change, back to the shipped skill |
+    | `--drop-section` | Remove a section this agent never needs (the model cannot do this) |
+    | `--db` | Memory database to read (default: `~/.gaia/memory.db`) |
+
+    Shows what an agent **learned** about a skill and lets you undo it. An agent can adapt a skill it was given — correcting a command that fails on your machine, or reshaping a procedure written around a workflow you do not use — and that adaptation is stored in agent memory, never written to the shipped `SKILL.md`.
+
+    Learned changes are **substitutive**: a correction replaces the text it fixes rather than being appended beneath it, and a second correction to the same section supersedes the first. So a skill an agent has been taught ten things about is no larger than one it has been taught one thing about.
+
+    A learned change applies as soon as the agent makes it, and the agent says so when it does — naming the skill, the section, the reason, and the `--revert` command with the id already filled in. Only a correction that came from you can be recorded: the moment any tool has returned anything in that turn — a fetched page, an email, a command's output — the write is refused and the agent has to tell you the correction instead.
+
+    Nothing is ever deleted. `--revert` and `--reset` archive, and `--archived` lists what they retired; reverting applies from the agent's next launch, not mid-session.
+
+    To run with no learned changes at all, set `GAIA_NO_LEARNED_SKILLS=1`. That covers every agent in every process, including the ones behind the daemon and the Agent UI; `gaia chat --no-learned-skills` is the same switch for a single chat session. Either way the composed prompt is byte-identical to a build with no overlay.
   </Tab>
 
   <Tab title="create">
@@ -2895,6 +2938,74 @@ does.
 
 Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
+
+---
+
+### TUI Event Trace
+
+`--trace` writes down what the agent actually did, so a wrong answer can be
+diagnosed from a file instead of from a screenshot. Every event the TUI receives
+is appended to a JSONL file — one JSON object per line, in arrival order, with
+tool calls carrying **their arguments** and tool results carrying **their
+payloads**.
+
+```bash
+gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia tui --trace=run.jsonl             # a path you choose
+gaia tui --trace --dev                 # record to a file AND show it on screen
+```
+
+The path is printed on startup (`trace → …`). An unwritable path is a startup
+error, not a warning: a trace that is silently not being written looks exactly
+like an agent that did nothing.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--trace` | string | off | Record every agent event to a JSONL file. Bare `--trace` picks `~/.gaia/traces/<timestamp>-<agent>.jsonl`. |
+
+<Note>
+  The path must be **attached** — `--trace=run.jsonl`, not `--trace run.jsonl`.
+  A spaced value is read as a command name (the flag is legal with no value, so
+  it never consumes the next argument); the TUI says so and names the working
+  form.
+</Note>
+
+Each line wraps the event with the two things the payload itself does not carry
+— when it arrived, and where it sits in the run:
+
+```json
+{"at":"2026-09-08T18:39:32.455Z","seq":188,"event":{"type":"tool_call","tool":"find_files","args":{"query":"*.go","scope":"smart"}}}
+{"at":"2026-09-08T18:39:32.547Z","seq":189,"event":{"type":"tool_result","tool":"find_files","data":{"success":true,"summary":"Found 25 result(s)…","summary_truncated":true}}}
+```
+
+A frame the TUI could not parse is still recorded — that is the frame a trace is
+most wanted for. It carries `unparsed` (the raw text) instead of `event`, or
+`unparsed_b64` when the bytes are not valid UTF-8, since encoding those as a
+JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
+A reader must check all three keys. Events are flushed one at a time, so a run
+that crashes mid-turn still leaves everything it received.
+
+`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
+screen, `--trace` chooses what is written to disk. Use both together to watch a
+run and keep it.
+
+<Note>
+  This records the agent's externally visible behaviour — tool calls, arguments,
+  results, errors, and timings. It does **not** capture prompt size or token
+  accounting, which exist only in the agent's own per-turn recorder
+  (`GAIA_TURN_LOG`).
+</Note>
+
+<Warning>
+  A trace contains verbatim tool results — file contents, shell output, email,
+  whatever the agent read on your behalf. The file is written `0600` under a
+  `0700` directory, but attaching one to a bug report shares all of it. Read it
+  before you send it.
+</Warning>
+
+A launch that fails before the agent says anything (a refused port, an unmet
+precondition) removes its own empty trace rather than leaving a 0-byte file
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
 
 ---
 
