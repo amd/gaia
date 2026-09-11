@@ -202,7 +202,18 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			if line := strings.TrimSpace(scanner.Text()); line != "" {
-				ch <- Event{Line: line}
+				// Checked first, not just as a case below: with both ready,
+				// select picks at random and would keep emitting after cancel.
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				select {
+				case ch <- Event{Line: line}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
@@ -212,7 +223,10 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 	go func() {
 		wg.Wait()
 		waitErr := cmd.Wait()
-		ch <- Event{Done: true, Err: waitErr}
+		select {
+		case ch <- Event{Done: true, Err: waitErr}:
+		case <-ctx.Done():
+		}
 		close(ch)
 	}()
 
