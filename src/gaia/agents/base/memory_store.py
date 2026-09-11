@@ -5,7 +5,8 @@ MemoryStore: Unified data layer for agent memory.
 
 Agent-agnostic. Pure SQLite + FTS5. Zero imports from gaia.agents.
 
-Single database (~/.gaia/memory.db) with three tables:
+Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
+``GAIA_HOME`` relocate it) with three tables:
 - conversations: Every conversation turn, persistent across sessions
 - knowledge: Persistent facts, preferences, learnings — the "second brain"
 - tool_history: Every tool call the agent makes, auto-logged
@@ -107,16 +108,30 @@ VALID_CATEGORIES: frozenset = frozenset(
     }
 )
 
-#: Privileged categories that only an explicit memory tool / the system may
-#: write — never the LLM conversation extractor. A chat turn must not be able to
-#: mint a permission grant, a system fact, or a profile entry by emitting that
-#: category, so the extraction/consolidation paths validate against
-#: EXTRACTABLE_CATEGORIES below, not VALID_CATEGORIES.
+#: Privileged categories that only the system / an explicit admin path may
+#: write — never a chat turn. These rows lead the system prompt, so minting one
+#: from conversation is persistent prompt injection (and ``permission`` is a
+#: self-granted autonomy approval). ``store()`` and ``update()`` REJECT these
+#: unless the caller passes ``allow_privileged=True``; the paths that may are
+#: onboarding (``bootstrap.py``), system-context collection, ``gaia memory``,
+#: ``seed_bulk`` and the reviewed dashboard commits. The LLM extractor, the
+#: consolidation pass and the ``remember`` tool use EXTRACTABLE_CATEGORIES.
 _PRIVILEGED_CATEGORIES: frozenset = frozenset({"system", "profile", "permission"})
 
 #: Categories the LLM conversation extractor and consolidation pass may emit.
 #: Subset of VALID_CATEGORIES; mirrors the set advertised in _EXTRACTION_PROMPT.
 EXTRACTABLE_CATEGORIES: frozenset = VALID_CATEGORIES - _PRIVILEGED_CATEGORIES
+
+#: Categories a human-reviewed admin surface may write (the memory dashboard and
+#: the ``gaia memory`` review prompts): the chat-turn set plus ``profile``, which
+#: discovery and inference exist to build. Never ``system`` (collected, not
+#: typed) or ``permission`` (no review flow grants autonomy).
+USER_REVIEWED_CATEGORIES: frozenset = EXTRACTABLE_CATEGORIES | {"profile"}
+
+#: Minimum turns before a session is worth consolidating. Lives here rather
+#: than in memory.py because prune() needs the same threshold to decide which
+#: old turns are still queued for distillation.
+CONSOLIDATION_MIN_TURNS: int = 5
 
 #: Maximum stored content length (chars).  Longer content is truncated by
 #: callers before reaching store() so the database stays compact.
@@ -376,18 +391,105 @@ _V2_INDEX_SQL = [
 # ============================================================================
 
 
+def _validate_category(category: str, *, allow_privileged: bool, where: str) -> None:
+    """Reject a privileged category from a caller that did not opt in.
+
+    Unknown categories are left alone: hub agents keep their own (the email
+    agent's ``reply_behavior``), and they never render into the system prompt.
+
+    Args:
+        category: The category the caller wants to write.
+        allow_privileged: True only for admin/system callers (onboarding,
+            system-context collection, ``gaia memory``, reviewed dashboard
+            commits).
+        where: Method name, used in the error message.
+
+    Raises:
+        ValueError: The category is privileged and the caller did not opt in.
+    """
+    if category in _PRIVILEGED_CATEGORIES and not allow_privileged:
+        raise ValueError(
+            f"MemoryStore.{where}(): category={category!r} is privileged and "
+            f"the caller did not pass allow_privileged=True. Privileged rows "
+            f"lead every system prompt, so only onboarding, system-context "
+            f"collection and the memory admin paths may write them. Chat-turn "
+            f"callers (LLM extraction, consolidation, the remember tool) must "
+            f"use one of {sorted(EXTRACTABLE_CATEGORIES)}."
+        )
+
+
+MEMORY_DB_ENV = "GAIA_MEMORY_DB"
+GAIA_HOME_ENV = "GAIA_HOME"
+
+
+def resolve_memory_db_path() -> Path:
+    """Resolve the default memory DB path from the environment.
+
+    Precedence:
+
+    1. ``GAIA_MEMORY_DB`` — an explicit path to the database FILE. This is the
+       isolation switch: a test harness points it at a throwaway file so a test
+       drive never writes into the user's real second brain.
+    2. ``GAIA_HOME`` — relocates the whole ``~/.gaia`` tree; the DB lands at
+       ``$GAIA_HOME/memory.db``.
+    3. ``~/.gaia/memory.db``.
+
+    An override that names an unusable path raises. Falling back to the real
+    store on a bad override is exactly the failure this function exists to
+    prevent — a harness that thinks it is isolated but is not.
+
+    Raises:
+        ValueError: an override is set but blank, or names an existing
+            directory.
+        OSError: the override's parent directory cannot be created.
+    """
+    for env_var in (MEMORY_DB_ENV, GAIA_HOME_ENV):
+        raw = os.environ.get(env_var)
+        if raw is None:
+            continue
+        if not raw.strip():
+            raise ValueError(
+                f"{env_var} is set but empty. Point it at a writable path "
+                f"(e.g. {env_var}=/tmp/gaia-test/memory.db) or unset it to use "
+                f"the default ~/.gaia/memory.db."
+            )
+        resolved = Path(os.path.expandvars(os.path.expanduser(raw.strip())))
+        candidate = resolved / "memory.db" if env_var == GAIA_HOME_ENV else resolved
+        if candidate.is_dir():
+            raise ValueError(
+                f"{env_var}={raw!r} resolves to a directory ({candidate}), not a "
+                f"database file. Point it at a file path such as "
+                f"{candidate / 'memory.db'}."
+            )
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OSError(
+                f"{env_var}={raw!r}: cannot create the parent directory "
+                f"{candidate.parent} for the memory database: {e}"
+            ) from e
+        logger.info("[MemoryStore] using %s override: %s", env_var, candidate)
+        return candidate
+
+    gaia_dir = Path.home() / ".gaia"
+    gaia_dir.mkdir(parents=True, exist_ok=True)
+    return gaia_dir / "memory.db"
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
     def __init__(self, db_path: Path | None = None):
-        """Open/create DB at db_path. Default: ~/.gaia/memory.db
+        """Open/create DB at db_path.
+
+        When ``db_path`` is None the location comes from
+        :func:`resolve_memory_db_path` — ``GAIA_MEMORY_DB``, then ``GAIA_HOME``,
+        then ``~/.gaia/memory.db``.
 
         Uses WAL mode. Thread-safe via threading.Lock.
         """
         if db_path is None:
-            gaia_dir = Path.home() / ".gaia"
-            gaia_dir.mkdir(parents=True, exist_ok=True)
-            db_path = gaia_dir / "memory.db"
+            db_path = resolve_memory_db_path()
         else:
             db_path = Path(db_path)
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -809,17 +911,29 @@ class MemoryStore:
         context: str = "global",
         sensitive: bool = False,
         entity: str | None = None,
+        allow_privileged: bool = False,
     ) -> str:
         """Store a knowledge entry with deduplication.
 
         >80% word overlap in same category+context → replaces with newer content.
         Validates due_at is a valid ISO 8601 string if provided.
 
+        Args:
+            allow_privileged: Opt-in required to write a category in
+                ``_PRIVILEGED_CATEGORIES`` (system/profile/permission). Only
+                onboarding, system-context collection, ``gaia memory`` and the
+                reviewed dashboard commits pass it; anything reachable from a
+                chat turn must not.
+
         Returns the knowledge ID (existing if deduped, new UUID if created).
 
         Raises:
-            ValueError: If content is empty or due_at is not valid ISO 8601.
+            ValueError: If the category is privileged without
+                ``allow_privileged``, content is empty, or due_at is not valid
+                ISO 8601.
         """
+        _validate_category(category, allow_privileged=allow_privileged, where="store")
+
         # Reject empty content early — FTS5 indexes empty strings, wasting space
         # and polluting search results with no-op entries.
         if not content or not content.strip():
@@ -1363,6 +1477,7 @@ class MemoryStore:
         due_at: str | None = None,
         reminded_at: str | None = None,
         superseded_by: str | None = None,
+        allow_privileged: bool = False,
     ) -> bool:
         """Update an existing knowledge entry. Only provided fields are changed.
 
@@ -1372,7 +1487,19 @@ class MemoryStore:
             superseded_by: ID of the newer knowledge item that replaces this one.
                 When set, this item is considered historical/inactive and will be
                 excluded from active queries (search, get_by_*, system prompt).
+            allow_privileged: Opt-in required to move a row into a privileged
+                category — same rule and same callers as :meth:`store`.
+                Re-categorising an existing row is a write of that category.
+
+        Raises:
+            ValueError: Same category rules as :meth:`store`, plus a
+                self-supersede or a malformed timestamp.
         """
+        if category is not None:
+            _validate_category(
+                category, allow_privileged=allow_privileged, where="update"
+            )
+
         # A row may never supersede itself — that would set superseded_by to its
         # own id and hide it from every active query (recall, get_by_category).
         if superseded_by is not None and superseded_by == knowledge_id:
@@ -1794,6 +1921,45 @@ class MemoryStore:
         with self._lock:
             cursor = self._conn.execute(sql, (min_turns, cutoff, limit))
             return [row[0] for row in cursor.fetchall()]
+
+    def get_unconsolidated_turns(self, session_id: str, limit: int = 20) -> List[Dict]:
+        """Oldest-first turns of *session_id* that have not been consolidated.
+
+        This is the window a consolidation pass distils. It is deliberately not
+        :meth:`get_history`, which returns the NEWEST ``limit`` turns — using
+        that for consolidation leaves the oldest turns of a long session
+        unconsolidated forever while the session is re-summarised on every
+        startup (and the raw turns are then pruned undistilled).
+
+        Args:
+            session_id: Session to read.
+            limit: Window size — how many turns one pass distils.
+
+        Returns:
+            Up to ``limit`` turn dicts, oldest first. Empty when the session is
+            fully consolidated.
+        """
+        sql = """
+            SELECT id, session_id, role, content, context, timestamp
+            FROM conversations
+            WHERE session_id = ? AND consolidated_at IS NULL
+            ORDER BY id ASC
+            LIMIT ?
+        """
+        with self._lock:
+            rows = self._conn.execute(sql, (session_id, limit)).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "session_id": r[1],
+                "role": r[2],
+                "content": r[3],
+                "context": r[4],
+                "timestamp": r[5],
+            }
+            for r in rows
+        ]
 
     def mark_turns_consolidated(self, turn_ids: List[int]) -> int:
         """Set ``consolidated_at`` to now on the specified conversation turn IDs.
@@ -3246,12 +3412,33 @@ class MemoryStore:
         )
         return rowcount
 
-    def prune(self, days: int = 90) -> Dict:
+    def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict:
         """Prune old tool_history and conversation entries.
 
-        Returns counts of deleted rows.
+        Args:
+            days: Retention window. Rows older than this are eligible.
+            keep_unconsolidated: Keep old turns that a session is still queued
+                to distil — i.e. the session is long enough to consolidate
+                (``CONSOLIDATION_MIN_TURNS``) and has turns with
+                ``consolidated_at IS NULL``. Deleting those loses the
+                conversation before anything was learned from it. Sessions too
+                short to ever be consolidated are pruned normally, so this is
+                not an unbounded hold. Pass False only for an explicit purge.
+
+        Returns counts of deleted rows, plus ``conversations_retained`` — old
+        turns kept because their session is still awaiting consolidation.
         """
         cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
+
+        # Sessions still queued for consolidation. The whole session is held:
+        # deleting only its consolidated turns could drop it below the min-turn
+        # threshold and strand the rest undistilled.
+        _pending_sessions_sql = """
+            SELECT session_id FROM conversations
+            GROUP BY session_id
+            HAVING COUNT(*) >= ?
+               AND SUM(CASE WHEN consolidated_at IS NULL THEN 1 ELSE 0 END) > 0
+        """
 
         with self._lock:
             try:
@@ -3261,9 +3448,28 @@ class MemoryStore:
                 ).rowcount
 
                 # Prune conversations (delete FTS entries via trigger)
-                conv_deleted = self._conn.execute(
-                    "DELETE FROM conversations WHERE timestamp < ?", (cutoff,)
-                ).rowcount
+                conv_retained = 0
+                if keep_unconsolidated:
+                    conv_retained = self._conn.execute(
+                        f"""
+                        SELECT COUNT(*) FROM conversations
+                        WHERE timestamp < ?
+                          AND session_id IN ({_pending_sessions_sql})
+                        """,
+                        (cutoff, CONSOLIDATION_MIN_TURNS),
+                    ).fetchone()[0]
+                    conv_deleted = self._conn.execute(
+                        f"""
+                        DELETE FROM conversations
+                        WHERE timestamp < ?
+                          AND session_id NOT IN ({_pending_sessions_sql})
+                        """,
+                        (cutoff, CONSOLIDATION_MIN_TURNS),
+                    ).rowcount
+                else:
+                    conv_deleted = self._conn.execute(
+                        "DELETE FROM conversations WHERE timestamp < ?", (cutoff,)
+                    ).rowcount
 
                 # Prune low-confidence knowledge
                 knowledge_deleted = self._conn.execute(
@@ -3286,8 +3492,8 @@ class MemoryStore:
                 # with SQLITE_BUSY if a reader holds a snapshot — best-effort.
                 try:
                     self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception:
-                    pass
+                except sqlite3.OperationalError as e:
+                    logger.debug("[MemoryStore] prune: WAL checkpoint skipped: %s", e)
             except Exception:
                 # Roll back the whole prune transaction so that a failure in
                 # _rebuild_knowledge_fts_locked() (e.g. disk full) does not
@@ -3302,10 +3508,23 @@ class MemoryStore:
             conv_deleted,
             knowledge_deleted,
         )
+        if conv_retained:
+            # Loud, not silent: a growing number here means consolidation is
+            # not keeping up (LLM unreachable, or more backlog than the
+            # per-startup budget), and the turns are being kept instead of
+            # distilled.
+            logger.warning(
+                "[MemoryStore] prune: kept %d conversation turn(s) older than "
+                "%d days because their session has not been consolidated yet; "
+                "they are retained rather than lost undistilled",
+                conv_retained,
+                days,
+            )
         return {
             "tool_history_deleted": tool_deleted,
             "conversations_deleted": conv_deleted,
             "knowledge_deleted": knowledge_deleted,
+            "conversations_retained": conv_retained,
         }
 
     def rebuild_fts(self) -> None:

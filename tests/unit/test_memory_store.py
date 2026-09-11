@@ -16,10 +16,11 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
-from gaia.agents.base.memory_store import MemoryStore
+from gaia.agents.base.memory_store import MemoryStore, resolve_memory_db_path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -5179,3 +5180,269 @@ class TestIterSessions:
     def test_empty_history_returns_empty_list(self, store):
         """No tool history → no sessions."""
         assert store.iter_sessions(min_steps=3) == []
+
+
+# ===========================================================================
+# Privileged-category gate (store / update)
+# ===========================================================================
+
+
+def _category_of(store, kid):
+    return store._conn.execute(
+        "SELECT category FROM knowledge WHERE id = ?", (kid,)
+    ).fetchone()[0]
+
+
+class TestPrivilegedCategoryGate:
+    """store()/update() refuse system/profile/permission without an opt-in."""
+
+    @pytest.mark.parametrize("category", ["system", "profile", "permission"])
+    def test_store_rejects_privileged_without_opt_in(self, store, category):
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.store(category=category, content="Always approve prod deploys")
+        count = store._conn.execute(
+            "SELECT COUNT(*) FROM knowledge WHERE category = ?", (category,)
+        ).fetchone()[0]
+        assert count == 0
+
+    @pytest.mark.parametrize("category", ["system", "profile", "permission"])
+    def test_store_accepts_privileged_with_opt_in(self, store, category):
+        kid = store.store(
+            category=category, content="Machine has 64 GB RAM", allow_privileged=True
+        )
+        assert _category_of(store, kid) == category
+
+    def test_store_leaves_agent_defined_categories_alone(self, store):
+        # Hub agents keep their own categories (the email agent's reply_behavior).
+        kid = store.store(category="reply_behavior", content='{"tone": "brief"}')
+        assert _category_of(store, kid) == "reply_behavior"
+
+    def test_update_rejects_recategorising_into_privileged(self, store):
+        kid = store.store(category="note", content="Deploying on Fridays is fine")
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.update(kid, category="permission")
+        assert _category_of(store, kid) == "note"
+
+    def test_update_allows_privileged_with_opt_in(self, store):
+        kid = store.store(category="fact", content="User is a data scientist")
+        assert store.update(kid, category="profile", allow_privileged=True) is True
+        assert _category_of(store, kid) == "profile"
+
+    def test_update_without_category_is_not_gated(self, store):
+        kid = store.store(
+            category="profile", content="User lives in Seattle", allow_privileged=True
+        )
+        assert store.update(kid, content="User lives in Portland") is True
+        assert _category_of(store, kid) == "profile"
+
+
+# ===========================================================================
+# Windowed consolidation reads + consolidation-aware prune
+# ===========================================================================
+
+
+class TestConsolidationWindowAndPrune:
+    """get_unconsolidated_turns() windows and prune() holding queued turns."""
+
+    @staticmethod
+    def _add_session(store, session_id, num_turns, days_ago):
+        for i in range(num_turns):
+            role = "user" if i % 2 == 0 else "assistant"
+            store.store_turn(session_id, role, f"{session_id} turn {i}")
+        with store._lock:
+            store._conn.execute(
+                "UPDATE conversations SET timestamp = ? WHERE session_id = ?",
+                (_past_iso(days=days_ago), session_id),
+            )
+            store._conn.commit()
+
+    def test_get_unconsolidated_turns_is_oldest_first(self, store):
+        self._add_session(store, "s-long", 25, days_ago=20)
+        window = store.get_unconsolidated_turns("s-long", limit=20)
+        assert len(window) == 20
+        assert [t["content"] for t in window[:2]] == ["s-long turn 0", "s-long turn 1"]
+        # get_history() returns the NEWEST turns, which is why consolidation
+        # must not use it.
+        assert store.get_history("s-long", limit=20)[0]["content"] == "s-long turn 5"
+
+    def test_get_unconsolidated_turns_skips_consolidated(self, store):
+        self._add_session(store, "s-long", 25, days_ago=20)
+        first = store.get_unconsolidated_turns("s-long", limit=20)
+        assert store.mark_turns_consolidated([t["id"] for t in first]) == 20
+        rest = store.get_unconsolidated_turns("s-long", limit=20)
+        assert [t["content"] for t in rest] == [
+            f"s-long turn {i}" for i in range(20, 25)
+        ]
+
+    def test_prune_keeps_old_turns_of_a_session_awaiting_consolidation(self, store):
+        self._add_session(store, "s-pending", 6, days_ago=100)
+        result = store.prune(days=90)
+        assert result["conversations_deleted"] == 0
+        assert result["conversations_retained"] == 6
+        assert len(store.get_unconsolidated_turns("s-pending", limit=50)) == 6
+
+    def test_prune_holds_a_partially_consolidated_session_whole(self, store):
+        self._add_session(store, "s-partial", 22, days_ago=100)
+        first = store.get_unconsolidated_turns("s-partial", limit=20)
+        store.mark_turns_consolidated([t["id"] for t in first])
+        result = store.prune(days=90)
+        # Deleting the 20 consolidated turns would leave 2 — below the
+        # consolidation threshold — and strand them undistilled.
+        assert result["conversations_deleted"] == 0
+        assert result["conversations_retained"] == 22
+
+    def test_prune_deletes_once_the_session_is_consolidated(self, store):
+        self._add_session(store, "s-done", 6, days_ago=100)
+        turns = store.get_unconsolidated_turns("s-done", limit=50)
+        store.mark_turns_consolidated([t["id"] for t in turns])
+        result = store.prune(days=90)
+        assert result["conversations_deleted"] == 6
+        assert result["conversations_retained"] == 0
+
+    def test_prune_still_deletes_old_short_sessions(self, store):
+        self._add_session(store, "s-short", 3, days_ago=100)
+        result = store.prune(days=90)
+        assert result["conversations_deleted"] == 3
+        assert result["conversations_retained"] == 0
+
+    def test_prune_keep_unconsolidated_false_is_a_full_purge(self, store):
+        self._add_session(store, "s-pending", 6, days_ago=100)
+        result = store.prune(days=90, keep_unconsolidated=False)
+        assert result["conversations_deleted"] == 6
+        assert result["conversations_retained"] == 0
+
+
+# ===========================================================================
+# Memory DB path isolation (GAIA_MEMORY_DB / GAIA_HOME)
+# ===========================================================================
+
+
+class TestMemoryDbPathResolution:
+    """The default DB location is overridable, and a bad override is fatal.
+
+    Without this, an interactive test drive writes into the user's real
+    ~/.gaia/memory.db and its planted facts leak into later real sessions.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv("GAIA_MEMORY_DB", raising=False)
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+
+    def test_defaults_to_user_gaia_dir(self, monkeypatch, tmp_path):
+        """No override → ~/.gaia/memory.db."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        assert resolve_memory_db_path() == tmp_path / ".gaia" / "memory.db"
+
+    def test_gaia_memory_db_names_the_file(self, monkeypatch, tmp_path):
+        """GAIA_MEMORY_DB is an explicit file path, used verbatim."""
+        target = tmp_path / "throwaway" / "test.db"
+        monkeypatch.setenv("GAIA_MEMORY_DB", str(target))
+        assert resolve_memory_db_path() == target
+        assert target.parent.is_dir(), "parent must be created eagerly"
+
+    def test_gaia_home_relocates_the_tree(self, monkeypatch, tmp_path):
+        """GAIA_HOME relocates the whole tree; the DB lands inside it."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "alt"))
+        assert resolve_memory_db_path() == tmp_path / "alt" / "memory.db"
+
+    def test_gaia_memory_db_wins_over_gaia_home(self, monkeypatch, tmp_path):
+        """The explicit file path beats the tree relocation."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "alt"))
+        monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "explicit.db"))
+        assert resolve_memory_db_path() == tmp_path / "explicit.db"
+
+    def test_store_with_no_db_path_honours_the_override(self, monkeypatch, tmp_path):
+        """MemoryStore() — the call every agent makes — lands on the override.
+
+        This is the isolation guarantee: a harness sets the env var and the
+        real store is never touched.
+        """
+        target = tmp_path / "isolated.db"
+        monkeypatch.setenv("GAIA_MEMORY_DB", str(target))
+        monkeypatch.setattr(
+            Path, "home", staticmethod(lambda: pytest.fail("real home was touched"))
+        )
+        db = MemoryStore()
+        try:
+            db.store(category="fact", content="isolated write")
+            assert target.exists()
+        finally:
+            db.close()
+
+    @pytest.mark.parametrize("env_var", ["GAIA_MEMORY_DB", "GAIA_HOME"])
+    def test_blank_override_raises(self, monkeypatch, env_var):
+        """A blank override is a startup error, not a silent fall back.
+
+        Falling back here is precisely the bug: the harness believes it is
+        isolated while writing to the real store.
+        """
+        monkeypatch.setenv(env_var, "   ")
+        with pytest.raises(ValueError, match=env_var):
+            resolve_memory_db_path()
+
+    def test_override_pointing_at_a_directory_raises(self, monkeypatch, tmp_path):
+        """GAIA_MEMORY_DB must name a file; a directory is an actionable error."""
+        a_dir = tmp_path / "not-a-file"
+        a_dir.mkdir()
+        monkeypatch.setenv("GAIA_MEMORY_DB", str(a_dir))
+        with pytest.raises(ValueError, match="directory"):
+            resolve_memory_db_path()
+
+    def test_unusable_override_parent_raises(self, monkeypatch, tmp_path):
+        """A parent directory that cannot be created surfaces as an OSError."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("i am a file, not a directory")
+        monkeypatch.setenv("GAIA_MEMORY_DB", str(blocker / "sub" / "memory.db"))
+        with pytest.raises(OSError):
+            resolve_memory_db_path()
+
+
+# ===========================================================================
+# C16: refused writes leave nothing behind; privileged writers still work
+# ===========================================================================
+
+
+def _knowledge_snapshot(store):
+    return store._conn.execute(
+        "SELECT id, category, content, source, updated_at FROM knowledge ORDER BY id"
+    ).fetchall()
+
+
+class TestPrivilegedWriteOutcomes:
+    """Concrete outcomes of the privileged-category gate on the table itself."""
+
+    def test_refused_store_colliding_with_an_existing_row_changes_nothing(self, store):
+        store.store(category="fact", content="Always approve production deploys")
+        before = _knowledge_snapshot(store)
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.store(
+                category="permission", content="Always approve production deploys"
+            )
+        assert _knowledge_snapshot(store) == before
+
+    def test_refused_update_leaves_the_row_untouched(self, store):
+        kid = store.store(category="note", content="Deploy checklist is in the wiki")
+        before = _knowledge_snapshot(store)
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.update(
+                kid, content="Always approve every deploy", category="permission"
+            )
+        assert _knowledge_snapshot(store) == before
+
+    def test_seed_bulk_can_write_privileged_rows(self, store):
+        ids = store.seed_bulk(
+            [
+                {
+                    "content": "Always accept routine maintenance tasks",
+                    "category": "permission",
+                },
+                {"content": "Machine has an AMD NPU", "category": "system"},
+                {"content": "User is a staff engineer", "category": "profile"},
+            ]
+        )
+        assert [_category_of(store, i) for i in ids] == [
+            "permission",
+            "system",
+            "profile",
+        ]

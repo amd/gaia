@@ -84,7 +84,7 @@ def init_memory(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `db_path` | `Path` | `~/.gaia/memory.db` | Path to the SQLite database file |
+| `db_path` | `Path` | `GAIA_MEMORY_DB`, then `$GAIA_HOME/memory.db`, then `~/.gaia/memory.db` | Path to the SQLite database file. A blank override, or one naming a directory, raises instead of falling back to the real store |
 | `context` | `str` | `"global"` | Active context scope (e.g., `"work"`, `"personal"`, `"global"`) |
 
 **v2 startup sequence:**
@@ -95,9 +95,11 @@ def init_memory(
 4. Rebuild FAISS index from stored embeddings
 5. `apply_confidence_decay()` — 30-day decay
 6. `reconcile_memory()` — Hindsight-inspired, max 20 pairs
-7. `consolidate_old_sessions()` — max 5 sessions
-8. `prune()` — 90-day hard delete
+7. `consolidate_old_sessions()` — max 5 sessions, windowed (see [Consolidation](#consolidation))
+8. `prune()` — 90-day hard delete. Runs after consolidation, and keeps turns whose session is still queued for it
 9. Generate session UUID
+
+Steps 6–8 need the LLM, so they run on the first query rather than inside `init_memory()` itself.
 
 <Warning>
   Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.
@@ -179,10 +181,19 @@ Current time: 2026-03-25T10:30:00-0700 (Tuesday)
 Upcoming/overdue:
   - [DUE Mar 27] Online course starts next week
   - [OVERDUE Mar 24] Follow up on deployment review
-After mentioning a time-sensitive item, call update_memory to set reminded_at so you don't repeat yourself.
+Raise these only if they fit what the user just said, or if the conversation is just starting. Never derail an unrelated turn with them. They are already marked as raised — do not call update_memory for that.
 ```
 
-Always returns at least the current time. The upcoming/overdue section is included only when time-sensitive items are active. Returns an empty string only if `init_memory()` has not been called.
+Always returns at least the current time. Returns an empty string only if `init_memory()` has not been called.
+
+The upcoming/overdue section is **rate-limited, not per-turn**. It rides the first turn of a session and the first turn after `REMINDER_PAUSE_SECONDS` (30 min) of silence — a natural pause — so an `[OVERDUE ...]` block never lands on an unrelated turn.
+
+Anything included is marked as raised immediately, by the agent loop:
+
+- `reminded_at` is written to the store, so `get_upcoming()` skips it in later sessions. **An overdue item is therefore volunteered once.** It stays fully recallable — it still appears in the stable system prompt, and `recall(category='reminder')` still returns it. An item due in the *future* gets one nudge per session, since `reminded_at` is still earlier than `due_at`.
+- The id is also held in memory for the session, so a store that cannot be written (incognito) still gets no repeats.
+
+The model is not asked to maintain `reminded_at` and should not — prompt-based enforcement of this was unreliable, which is why it moved into code.
 
 ### register_memory_tools()
 
@@ -366,7 +377,7 @@ Sends the conversation turn plus existing memory to the LLM, which returns a JSO
 | Operation | Description | Required fields |
 |-----------|-------------|-----------------|
 | `add` | New knowledge not already in memory | `op`, `category`, `content`, optional: `entity`, `domain`, `confidence` (default 0.4) |
-| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, optional: `entity`, `domain` |
+| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, optional: `entity`, `domain`, `category` (an update naming `system`/`profile`/`permission` is dropped) |
 | `delete` | Remove item contradicted or invalidated | `op`, `knowledge_id`, `reason` |
 | `noop` | Information already captured — not included in output | — |
 
@@ -380,21 +391,24 @@ The extraction fetches top-10 relevant existing items first via `_hybrid_search(
 def consolidate_old_sessions(self, max_sessions: int = 5) -> Dict:
 ```
 
-Distills old conversation sessions into durable knowledge before they age out at the 90-day prune boundary. Called automatically during `init_memory()` startup.
+Distills old conversation sessions into durable knowledge before they age out at the 90-day prune boundary. Called automatically on the first query after startup, before `prune()`.
 
-**Returns:** `{"consolidated": int, "extracted_items": int}`
+**Returns:** `{"consolidated": int, "windows": int, "extracted_items": int}` — `consolidated` counts sessions that made progress, `windows` the turn windows distilled across them.
 
 **Criteria for consolidation:**
 - All turns in the session are > 14 days old
 - Session has ≥ 5 turns
 - At least one turn has `consolidated_at IS NULL`
 
-**Process:**
-1. Fetch up to 20 turns per session (oldest first)
+**Process** (windowed — a long session is walked front to back):
+1. Take the oldest 20 turns with `consolidated_at IS NULL` — one window (`get_unconsolidated_turns()`)
 2. Call LLM with consolidation prompt → returns summary + extracted knowledge
 3. Store summary as `knowledge(category="note", source="consolidation", domain="session:{id[:8]}")`
-4. Store each extracted item via `store()` (normal dedup applies)
-5. Mark all fetched turns with `consolidated_at = now`
+4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped)
+5. Mark exactly that window's turns with `consolidated_at = now` — only after steps 2–4 succeed. A failed window stays unmarked and is retried next run
+6. Repeat for the next window, up to 10 windows per session per run; anything left continues on the next run
+
+A session stays eligible until every turn is consolidated, and `prune()` keeps its old turns until then.
 
 ### Reconciliation
 
@@ -470,7 +484,7 @@ The pure data layer. Agent-agnostic -- no imports from `gaia.agents`. Thread-saf
 class MemoryStore:
     def __init__(self, db_path: Path = None):
         """Open or create the database.
-        Default path: ~/.gaia/memory.db
+        Default path: GAIA_MEMORY_DB, then $GAIA_HOME/memory.db, then ~/.gaia/memory.db
         Uses WAL mode. Thread-safe."""
 ```
 
@@ -508,6 +522,8 @@ def store(
     entity: str = None,         # Entity reference (e.g., 'person:sarah_chen')
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
+
+**Category gate:** `store()` and `update()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`.
 
 **Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context` + `entity` scope, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
 
@@ -687,11 +703,15 @@ def get_activity_timeline(self, days: int = 30) -> List[Dict]
 
 def get_recent_errors(self, limit: int = 20) -> List[Dict]
 
-def prune(self, days: int = 90) -> Dict
+def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict
     # Delete tool_history and conversations older than N days.
+    # keep_unconsolidated=True holds every turn of a session still queued for
+    # consolidation (>= 5 turns, any consolidated_at IS NULL) and logs a WARNING
+    # with the count; sessions too short to consolidate are pruned normally.
     # Also prunes low-confidence knowledge (confidence < 0.1) last used > N days ago.
-    # Returns: {"tool_history_deleted": N, "conversations_deleted": N, "knowledge_deleted": N}
-    # Called automatically on agent startup via init_memory().
+    # Returns: {"tool_history_deleted": N, "conversations_deleted": N,
+    #           "knowledge_deleted": N, "conversations_retained": N}
+    # Called automatically after consolidation on the first query.
 
 def rebuild_fts(self) -> None
     # Rebuild all FTS5 indexes from source tables.
@@ -739,10 +759,14 @@ def get_unconsolidated_sessions(
     # Criteria: all turns > older_than_days old, >= min_turns, at least one
     # turn with consolidated_at IS NULL.
 
+def get_unconsolidated_turns(self, session_id: str, limit: int = 20) -> List[Dict]
+    # Oldest-first turns of the session with consolidated_at IS NULL — the
+    # window one consolidation pass distils. Empty once fully consolidated.
+
 def mark_turns_consolidated(self, turn_ids: List[int]) -> int
     # Sets consolidated_at = now for the given conversation turn IDs.
-    # Returns count of turns marked. Turns remain until 90-day prune;
-    # consolidated_at prevents re-processing.
+    # Returns count of turns marked. consolidated_at prevents re-processing;
+    # a turn is pruned at 90 days once its whole session is consolidated.
 ```
 
 ### Reconciliation Methods (v2)
@@ -1033,6 +1057,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_items_with_embeddings(...)` | Get items that have embeddings for FAISS index **(v2)** |
 | `get_items_without_embeddings(limit)` | Get items missing embeddings for backfill **(v2)** |
 | `get_unconsolidated_sessions(...)` | Get session IDs eligible for consolidation **(v2)** |
+| `get_unconsolidated_turns(session_id, limit)` | Oldest unconsolidated turns of a session — one consolidation window |
 | `mark_turns_consolidated(turn_ids)` | Mark conversation turns as consolidated **(v2)** |
 | `get_items_for_reconciliation(...)` | Get active items with embeddings for pairwise comparison **(v2)** |
 | `store_turn(session_id, ...)` | Store conversation turn |
@@ -1051,7 +1076,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_sessions(limit)` | List conversation sessions with previews |
 | `get_activity_timeline(days)` | Daily activity counts |
 | `get_recent_errors(limit)` | Recent errors across all tools |
-| `prune(days)` | Delete old history and low-confidence knowledge |
+| `prune(days, keep_unconsolidated=True)` | Delete old history and low-confidence knowledge; keeps turns still queued for consolidation |
 | `rebuild_fts()` | Rebuild FTS5 indexes if search seems wrong |
 | `close()` | Close the database connection |
 
