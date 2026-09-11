@@ -158,11 +158,15 @@ public:
 
     /// file_edit: Surgical string replacement in a file.
     /// Args: {"path": string, "old_string": string, "new_string": string}
-    /// Returns: {"success": true, "path": string, "replacements": int,
+    /// Returns: {"success": true, "path": string, "replacements": 1,
     ///           "content_hash": string}
-    /// Rejected with {"error": ..., "stale": true} when the file changed
-    /// since it was read; a non-matching old_string returns an actionable
-    /// error rather than reporting success on a no-op.
+    /// old_string must match exactly one place. Matching several is rejected
+    /// with {"error": ..., "ambiguous": true, "match_lines": [int]} — picking
+    /// one of them would edit a region the caller never named, and it would
+    /// look like a success. Matching nothing is likewise an error rather than
+    /// a reported no-op. Rejected with {"error": ..., "stale": true} when the
+    /// file changed since it was read. Every rejection carries
+    /// "current_content" and its line range so the retry needs no extra read.
     /// On error: {"error": string}
     static ToolInfo fileEdit();
 

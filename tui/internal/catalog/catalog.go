@@ -70,15 +70,18 @@ func (c *Catalog) DiscoverBinaries() {
 		}
 	}
 
-	// Sentinels are read AFTER the binary lookup: applying them first flips
-	// every installed id to daemon transport, and the loop above skips daemon
-	// agents — which made the install-root lookup unreachable.
+	// Resolve paths before applying installed metadata so a completed binary
+	// install can still provide its executable path for diagnostics.
 	c.LoadInstalledAgents()
 }
 
 // SentinelName is the file gaia.hub.installer writes into an agent's install
 // directory when the install completes. Its presence IS the installed state.
 const SentinelName = ".installed"
+
+// ArtifactKindBinary is the sentinel's artifact_kind for a frozen executable.
+// It mirrors installer.ARTIFACT_KIND_BINARY and identifies daemon sidecars.
+const ArtifactKindBinary = "binary"
 
 // InstallRoot is the directory the daemon installs hub agents into. It mirrors
 // gaia.hub.installer.default_install_root() exactly — a client that looked
@@ -396,10 +399,11 @@ func (c *Catalog) SetStatus(id string, status AgentStatus) {
 // InstalledRecord is one ~/.gaia/agents/<id>/.installed sentinel, the local
 // source of truth for "this agent is installed" (gaia.hub.installer).
 type InstalledRecord struct {
-	ID         string `json:"id"`
-	Version    string `json:"version"`
-	Language   string `json:"language"`
-	Executable string `json:"executable"`
+	ID           string `json:"id"`
+	Version      string `json:"version"`
+	Language     string `json:"language"`
+	ArtifactKind string `json:"artifact_kind"`
+	Executable   string `json:"executable"`
 }
 
 // Warnings returns problems found while reading local state — an unreadable
@@ -477,7 +481,7 @@ func (c *Catalog) LoadInstalledAgents() {
 	records, warnings := LocalInstalls()
 	c.warnings = append(c.warnings, warnings...)
 	for _, record := range records {
-		c.applyInstalledRecord(record.ID, record.Version)
+		c.applyInstalledRecord(record.ID, record.Version, record.ArtifactKind)
 	}
 }
 
@@ -486,7 +490,7 @@ func (c *Catalog) LoadInstalledAgents() {
 // index carries. upsertHubEntry would overwrite a cached name, publisher, tier,
 // and size with blanks, degrading "Email · AMD · 31.1 MB" to a bare id in
 // exactly the offline case this function exists to serve.
-func (c *Catalog) applyInstalledRecord(id, version string) {
+func (c *Catalog) applyInstalledRecord(id, version, artifactKind string) {
 	idx := -1
 	for i := range c.agents {
 		if c.agents[i].ID == id {
@@ -506,12 +510,14 @@ func (c *Catalog) applyInstalledRecord(id, version string) {
 	}
 	a := &c.agents[idx]
 	a.FromHub = true
-	// A sentinel under the install root means the daemon installed it as an
-	// HTTP sidecar it supervises, so there is no binary for the TUI to spawn --
-	// same invariant upsertHubEntry applies. Seeded entries reach here with
-	// whatever transport the seed guessed, and a seeded subprocess agent that
-	// kept it would be spawned over stdio and fed a frozen REST binary.
-	a.Transport = TransportDaemon
+	// Binary artifacts are daemon-supervised sidecars, so keep the #3062
+	// correction for them. A wheel/cpp sentinel can also belong to a seeded
+	// subprocess agent such as the flagship; its seed transport is authoritative
+	// because the install record proves installation, not how the TUI must talk
+	// to that id. Unknown ids retain the daemon default set above.
+	if artifactKind == ArtifactKindBinary {
+		a.Transport = TransportDaemon
+	}
 	a.InstalledVersion = version
 	if version != "" {
 		a.Version = version

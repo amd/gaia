@@ -916,7 +916,7 @@ def test_registry_hold_blocks_ensure_for_the_duration(monkeypatch):
 
     reg = registry_mod.SidecarRegistry({"toy": spec})
     reg._manager_factory = _Manager
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: False)
     reg.ensure("toy")
 
     ensured = threading.Event()
@@ -999,7 +999,7 @@ def test_hold_stops_the_manager_that_replaced_the_one_it_first_read(monkeypatch)
     from gaia.daemon.sidecars import registry as registry_mod
 
     spec = _toy_spec()
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: False)
 
     class _RacyRegistry(registry_mod.SidecarRegistry):
         """Swaps the manager in exactly once, between the first holder read and
