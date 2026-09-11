@@ -15,6 +15,13 @@ contract version is tracked separately as
   when Google omits its default-false `organizer.self` and attendee organizer
   fields. Mixed sent/received claims remain guarded, so self-organized events
   cannot be mistaken for received invites.
+- **Asking to put a message back in your inbox now actually works (#2626).**
+  `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
+  add the inbox label and then archive the message in the same call, undoing
+  themselves while reporting success. Both now skip the archive when the
+  target resolves to `INBOX`; every other target keeps the existing
+  move-out-of-inbox behavior. Gmail only — a folder-based mailbox (Outlook)
+  has no `INBOX` label and rejects it with an actionable error.
 - **A calendar listing no longer looks complete when it isn't (#2664).**
   `list_calendar_events` returned the provider's first page as if it were the
   whole window, so a busy week silently lost everything past the 25th event.

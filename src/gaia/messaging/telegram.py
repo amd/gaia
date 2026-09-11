@@ -122,6 +122,7 @@ class TelegramAdapter:
         self.token = token
         self.allowed_users = set(allowed_users)
         self.application = None
+        self._poll_thread: Optional[threading.Thread] = None
         log.info(
             "Telegram adapter configured with %d allowed user id(s)",
             len(self.allowed_users),
@@ -262,9 +263,10 @@ class TelegramAdapter:
     def start(self, token: str, background: bool = False) -> None:
         """Start the telegram Application and run polling.
 
-        If `background` is True, the `Application` instance is returned and not
-        run (caller can manage its lifecycle). Otherwise, this call blocks and
-        runs `run_polling()` until interrupted.
+        If `background` is True, polling runs in a non-daemon thread so a CLI
+        return cannot take the service process down. The application remains
+        available to the caller for lifecycle control. Otherwise, this call
+        blocks and runs `run_polling()` until interrupted.
         """
         # If running in background mode, create PID/log files early so tests
         # and supervisor systems can detect the process even if the
@@ -373,20 +375,50 @@ class TelegramAdapter:
             )
             hs_thread.start()
 
-            def _run_polling():
+            polling_loop: Optional[asyncio.AbstractEventLoop] = None
+            loop_ready = threading.Event()
+
+            def _stop_application(*_):
+                stop_event.set()
+                if polling_loop is None:
+                    log.error(
+                        "Telegram polling loop never started; cannot stop it cleanly"
+                    )
+                    return
                 try:
-                    app.run_polling()
+                    polling_loop.call_soon_threadsafe(polling_loop.stop)
+                except RuntimeError as e:
+                    log.error(
+                        "Telegram polling loop could not be stopped; "
+                        "use gaia telegram stop --force: %s",
+                        e,
+                    )
+
+            def _run_polling():
+                nonlocal polling_loop
+                polling_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(polling_loop)
+                loop_ready.set()
+                try:
+                    # PTB's default signal handlers only work in the main
+                    # thread. The background thread owns this event loop.
+                    app.run_polling(stop_signals=None)
                 finally:
                     # cleanup
                     stop_event.set()
 
-            poll_thread = threading.Thread(target=_run_polling, daemon=True)
+            # This thread owns the background service lifetime. A daemon thread
+            # dies as soon as the CLI handler returns, leaving only a stale PID
+            # file and a bot that never polls.
+            poll_thread = threading.Thread(target=_run_polling, daemon=False)
+            self._poll_thread = poll_thread
             poll_thread.start()
+            loop_ready.wait(timeout=10)
 
             # Register signal handlers for graceful shutdown (works in main thread only)
             try:
-                signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
-                signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+                signal.signal(signal.SIGTERM, _stop_application)
+                signal.signal(signal.SIGINT, _stop_application)
             except (ValueError, OSError) as e:
                 # Not all environments allow signal registration
                 log.debug("Signal registration skipped: %s", e)
