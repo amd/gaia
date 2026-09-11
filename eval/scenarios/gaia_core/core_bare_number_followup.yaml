@@ -1,0 +1,44 @@
+id: core_bare_number_followup
+name: "Core — Bare-Number Follow-Up on a Generated List"
+category: gaia_core
+agent_type: gaia
+severity: high
+tags: [t2_compound]
+description: |
+  The agent produces a numbered list of its own, then the user refers to
+  items by bare number. The referent lives in the AGENT's previous output,
+  not the user's — a stricter history test than pronoun follow-ups.
+
+persona: student
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask for exactly three study techniques for memorizing vocabulary, as a numbered list"
+    user_message: "Give me exactly three study techniques for memorizing vocabulary, as a numbered list. One line each."
+    ground_truth:
+      expected_behavior: "A numbered list of exactly three distinct techniques"
+    success_criteria: "Agent produces a numbered list with exactly three techniques (e.g. spaced repetition, flashcards, mnemonics — any three reasonable ones)."
+
+  - turn: 2
+    objective: "Ask to expand on item 2 by bare number"
+    user_message: "tell me more about 2"
+    ground_truth:
+      expected_behavior: "Expands on the SECOND technique from its own turn-1 list"
+    success_criteria: |
+      Agent elaborates on the same technique it listed as #2 in turn 1 —
+      the topic must match its own earlier item. FAIL if it asks what "2"
+      refers to, or expands a different item than the one it numbered 2.
+
+  - turn: 3
+    objective: "Ask which of the three is best for a test in two days"
+    user_message: "Which of those three would you pick if my test is in two days?"
+    ground_truth:
+      expected_behavior: "Picks one of ITS OWN three techniques and justifies briefly"
+    success_criteria: "Agent picks one of the exact techniques from its turn-1 list (referring to it by name or number) with a short rationale. FAIL if it introduces a technique not on its list or asks which three the user means."
+
+expected_outcome: |
+  The agent tracks its own generated list across turns and resolves bare
+  numeric references against it.

@@ -1,0 +1,44 @@
+id: core_follow_up_pronoun
+name: "Core — Follow-Up That Cannot Stand Alone"
+category: gaia_core
+agent_type: gaia
+severity: critical
+tags: [t2_compound, tui]
+description: |
+  Follow-up questions that are meaningless without the previous turn's
+  content. The ladder ran green for a day while every turn reached the model
+  with no history — self-contained prompts hide that. These cannot.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask for the three largest countries in the world by land area"
+    user_message: "Name the three largest countries in the world by land area, largest first."
+    ground_truth:
+      expected_answer: "Russia, Canada, China (or United States — either is acceptable for third)"
+    success_criteria: "Agent lists Russia first, Canada second; third may be China or the USA. No tools needed."
+
+  - turn: 2
+    objective: "Ask for the capital of 'the second one' — a reference only history can resolve"
+    user_message: "What's the capital of the second one?"
+    ground_truth:
+      expected_answer: "Ottawa"
+    success_criteria: |
+      Agent answers Ottawa (capital of Canada, the second country it listed).
+      CRITICAL FAIL if it asks "the second what?" or which country the user
+      means — the referent is one turn back.
+
+  - turn: 3
+    objective: "Bare comparative follow-up: 'and the first?'"
+    user_message: "and the first?"
+    ground_truth:
+      expected_answer: "Moscow"
+    success_criteria: "Agent answers Moscow without asking for clarification."
+
+expected_outcome: |
+  Both follow-ups resolve against the turn-1 list. Asking which item is
+  meant is the lost-history failure this scenario exists to catch.

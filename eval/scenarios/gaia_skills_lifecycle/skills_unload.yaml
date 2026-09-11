@@ -1,0 +1,39 @@
+id: skills_unload
+name: "Skills — Unload and Verify Gone"
+category: gaia_skills_lifecycle
+agent_type: gaia
+severity: high
+description: |
+  Load, unload, then verify the skill is no longer active — and that the
+  agent doesn't keep claiming its capabilities afterwards.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "github-triage installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the github-triage skill"
+    user_message: "Load the github-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Unload it"
+    user_message: "Actually, unload it — I don't need it this session."
+    ground_truth:
+      expected_behavior: "Skill unloads"
+    success_criteria: "Agent unloads it (unload_skill in agent_tools[]) and confirms."
+
+  - turn: 3
+    objective: "Verify it is gone"
+    user_message: "What's loaded now?"
+    ground_truth:
+      expected_answer: "No skills loaded (github-triage remains installed, just not loaded)"
+    success_criteria: "Agent reports github-triage is no longer loaded (real check expected in agent_tools[]). Distinguishing installed-but-not-loaded is a plus. Claiming it is still loaded is a FAIL."
+
+expected_outcome: |
+  Unload takes effect and the agent's self-report matches reality.

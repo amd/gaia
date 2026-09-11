@@ -235,12 +235,14 @@ class GaiaAgent(
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
-    # Installing a skill writes third-party code under ~/.gaia/skills and
-    # removing one deletes it, so both are gated the way file mutation is.
+    # Installing/capturing a skill writes third-party content under
+    # ~/.gaia/skills and removing one deletes it, so all three are gated the way
+    # file mutation is. capture_skill additionally feeds pasted/fetched text
+    # into the system prompt — never without the human seeing the request.
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
-        {"install_skill", "remove_skill"}
+        {"install_skill", "capture_skill", "remove_skill"}
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):

@@ -1,0 +1,27 @@
+id: web_live_search_canary
+name: "Web — Live Search Canary (Non-Gating)"
+category: gaia_web
+agent_type: gaia
+severity: low
+tags: [live]
+description: |
+  The one real-network scenario in this category: a web search that must
+  return a verifiable real-world result. Non-gating — it runs in nightly
+  full runs only and failure signals network/search-backend drift, not an
+  agent regression.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to search the web for the AMD GAIA open-source project and say where its source code is hosted"
+    user_message: "search the web for the AMD GAIA open-source project — where's its source code hosted?"
+    ground_truth:
+      expected_answer: "GitHub — github.com/amd/gaia"
+    success_criteria: "Agent performs a real search (search_web in agent_tools[]) and reports github.com/amd/gaia (any answer clearly identifying the amd/gaia GitHub repository passes). An answer with no search call is a FAIL even if correct."
+
+expected_outcome: |
+  A real search call returning the real repository location.

@@ -298,3 +298,15 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /context.md
 /savings.md
 /labels.txt
+# Per-run gaia eval fixture hub (built by tests/fixtures/gaia/prepare_fixture_hub.py;
+# signed with an ephemeral key that must never be committed)
+tests/fixtures/gaia/fixture_hub/_prepared/
+eval/results/gaia-local-tui-validation/tui-home/
+
+# Eval RUN OUTPUTS are reproducible artifacts, never PR content: the corpus,
+# fixtures, and harness (util/tui_eval.py, util/tui_judge.py, util/tui_aggregate.py,
+# util/launch-tui-*.ps1) are what ship — the captured transcripts/reports they
+# produce stay local.
+eval/results/gaia-local-tui-validation/
+eval/results/gaia-haiku-scorecard/
+docs/plans/flagship-architecture-findings.md

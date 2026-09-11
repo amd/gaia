@@ -1,0 +1,41 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/capture/meeting-notes/SKILL.md served by
+# serve_fixtures.py at /capture/meeting-notes/SKILL.md — requires
+# GAIA_WEB_ALLOWED_HOSTS=127.0.0.1. See GAIA_FIXTURE_VALUES.md.
+id: capture_from_url
+name: "Capture — Skill Fetched from a URL"
+category: gaia_skills_capture
+agent_type: gaia
+severity: high
+description: |
+  The user points the agent at a URL serving a raw SKILL.md. The agent must
+  capture it with the real capture_skill tool (SSRF-guarded fetch), then load
+  it on request.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1; GAIA_AUTO_APPROVE_TOOLS=1."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to capture the skill at the fixture URL"
+    user_message: "grab this skill and add it to your library: http://127.0.0.1:8765/capture/meeting-notes/SKILL.md"
+    ground_truth:
+      expected_behavior: "capture_skill called with the URL; reports meeting-notes captured at the experimental tier"
+    success_criteria: |
+      CRITICAL: agent_tools[] must include a capture_skill call whose source
+      is the given URL. The answer names the captured skill (meeting-notes)
+      and does not claim it is loaded/active yet unless load_skill was also
+      actually called. Claiming success without the tool call is a FAIL.
+
+  - turn: 2
+    objective: "Load the captured skill"
+    user_message: "ok load it"
+    ground_truth:
+      expected_behavior: "load_skill('meeting-notes') succeeds; instructions active"
+    success_criteria: "agent_tools[] must include load_skill for meeting-notes, and the agent confirms the skill's instructions are now active (the Andromeda notes format)."
+
+expected_outcome: |
+  A URL capture through the SSRF-guarded fetch path, then a real load — no
+  fabricated 'downloaded it' talk without the matching tool calls.

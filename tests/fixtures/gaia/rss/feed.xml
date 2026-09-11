@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Widgetworks Release Notes</title>
+    <link>http://127.0.0.1:8765/rss/feed.xml</link>
+    <description>Release announcements for Widgetworks (deterministic gaia-eval fixture).</description>
+    <lastBuildDate>Tue, 18 Aug 2026 09:00:00 GMT</lastBuildDate>
+    <item>
+      <title>v2.4.0 — Offline mode ships</title>
+      <guid isPermaLink="false">widgetworks-release-v2.4.0</guid>
+      <pubDate>Tue, 18 Aug 2026 09:00:00 GMT</pubDate>
+      <description>Widgetworks 2.4.0 adds full offline mode: projects open and save without a connection and sync when one returns.</description>
+    </item>
+    <item>
+      <title>v2.3.1 — Hotfix for sync loop</title>
+      <guid isPermaLink="false">widgetworks-release-v2.3.1</guid>
+      <pubDate>Mon, 10 Aug 2026 14:30:00 GMT</pubDate>
+      <description>Fixes a bug where interrupted uploads could leave the sync engine retrying the same batch indefinitely.</description>
+    </item>
+    <item>
+      <title>v2.3.0 — New importer for legacy projects</title>
+      <guid isPermaLink="false">widgetworks-release-v2.3.0</guid>
+      <pubDate>Sat, 01 Aug 2026 08:00:00 GMT</pubDate>
+      <description>Adds an importer for pre-2.0 project archives, including attachments and revision history.</description>
+    </item>
+  </channel>
+</rss>

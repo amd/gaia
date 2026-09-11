@@ -699,24 +699,42 @@ class TestToolNameSanitization:
 
     def test_slash_name_is_sanitized_and_mapped(self, fake_anthropic):
         p = _provider(fake_anthropic)
-        converted = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
+        converted, name_map = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
         assert converted[0]["name"] == "rss-digest_fetch_rss"
-        assert p._restore_tool_name("rss-digest_fetch_rss") == "rss-digest/fetch_rss"
+        assert (
+            p._restore_tool_name(name_map, "rss-digest_fetch_rss")
+            == "rss-digest/fetch_rss"
+        )
 
     def test_valid_names_pass_through_untouched(self, fake_anthropic):
         p = _provider(fake_anthropic)
-        converted = p._to_anthropic_tools(self._tools("read_file", "query-docs"))
+        converted, name_map = p._to_anthropic_tools(
+            self._tools("read_file", "query-docs")
+        )
         assert [t["name"] for t in converted] == ["read_file", "query-docs"]
-        assert p._restore_tool_name("read_file") == "read_file"
+        assert p._restore_tool_name(name_map, "read_file") == "read_file"
+
+    def test_map_is_per_call_not_per_provider(self, fake_anthropic):
+        """One provider instance serving two tool sets must not let the second
+        rewrite the first's names — the map belongs to the call."""
+        p = _provider(fake_anthropic)
+        _, first = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
+        _, second = p._to_anthropic_tools(self._tools("notes/save_note"))
+
+        assert first["rss-digest_fetch_rss"] == "rss-digest/fetch_rss"
+        assert second["notes_save_note"] == "notes/save_note"
+        # The first call's map is untouched by the second.
+        assert "notes_save_note" not in first
+        assert "rss-digest_fetch_rss" not in second
 
     def test_unmapped_returned_name_fails_loudly(self, fake_anthropic, caplog):
         """A miss means request and response were shaped against different
         tool sets. Returning the name unmapped surfaces later as "unknown
         tool", blaming the model for a bug that is here."""
         p = _provider(fake_anthropic)
-        p._to_anthropic_tools(self._tools("read_file"))
+        _, name_map = p._to_anthropic_tools(self._tools("read_file"))
         with pytest.raises(RuntimeError, match="not in the tool set sent"):
-            p._restore_tool_name("some_other_tool")
+            p._restore_tool_name(name_map, "some_other_tool")
         # The user-facing message stays short; the diagnostic goes to the log.
         assert "read_file" in caplog.text
 

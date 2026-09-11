@@ -1,0 +1,35 @@
+# FIXTURE-SYNC: ~/gaia-eval/mini_repo/ (tempkeeper) — see
+# GAIA_FIXTURE_VALUES.md.
+id: code_find_class_method
+name: "Code — Locate a Method by Behavior"
+category: gaia_code
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  A behavior-phrased question ("where is the median computed?") must
+  resolve to the real class method, not a plausible guess.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Staged fixture repo at ~/gaia-eval/mini_repo/ (staged by eval setup)."
+
+turns:
+  - turn: 1
+    objective: "Ask where the median of the temperature readings is computed in ~/gaia-eval/mini_repo"
+    user_message: "In ~/gaia-eval/mini_repo, where is the median of the temperature readings computed?"
+    ground_truth:
+      expected_answer: "ReadingStore.median in tempkeeper/store.py"
+    success_criteria: "CRITICAL: Agent names the ReadingStore class, its median method, and tempkeeper/store.py, backed by real search/read calls in agent_tools[] (indexing first is fine). Invented names are an automatic FAIL."
+
+  - turn: 2
+    objective: "Ask how readings get INTO that store"
+    user_message: "And how do readings get INTO that store in the first place?"
+    ground_truth:
+      expected_answer: "Via ReadingStore.add; load_readings in tempkeeper/io.py parses them from CSV"
+    success_criteria: "Agent names ReadingStore.add and load_readings (tempkeeper/io.py) from real reads — the actual ingestion path."
+
+expected_outcome: |
+  Behavior questions map to the real method and its real feeder function.

@@ -1,0 +1,15 @@
+{
+  "_comment": "The six contract aggregates for sales.csv (eval/scenarios/GAIA_FIXTURE_VALUES.md). Regenerate with _gen_sales.py if the CSV ever changes \u2014 never edit by hand.",
+  "row_count": 12,
+  "total_revenue": 18600,
+  "top_product_by_revenue": {
+    "product": "Gadget Pro",
+    "revenue": 7200
+  },
+  "north_region_revenue": 6150,
+  "top_month_by_revenue": {
+    "month": "2026-03",
+    "revenue": 7050
+  },
+  "distinct_products": 3
+}

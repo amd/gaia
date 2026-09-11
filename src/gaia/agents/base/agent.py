@@ -1771,7 +1771,24 @@ Do NOT wrap conversational replies in JSON.
         # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)
 
-        registered = register_skill_tools(skill)
+        # Captured code is inert until `gaia skill promote` — instructions
+        # inject, tools.py is never imported (gaia.skills.capture).
+        from gaia.skills.capture import code_is_deferred
+
+        code_deferred = code_is_deferred(skill)
+        if code_deferred:
+            registered = {}
+            logger.warning(
+                "Skill '%s' is captured and its code is not yet trusted: %d "
+                "tool(s) (%s) deferred — instructions loaded. Run "
+                "'gaia skill promote %s' in a terminal to enable them.",
+                skill.name,
+                len(skill.gaia.tools),
+                ", ".join(skill.tool_names),
+                skill.name,
+            )
+        else:
+            registered = register_skill_tools(skill)
         try:
             if registered and self._instance_tools is not None:
                 self._instance_tools.update(registered)
@@ -1785,8 +1802,22 @@ Do NOT wrap conversational replies in JSON.
                         existing.append(requirement)
                 self.REQUIRED_CONNECTORS = existing
 
-            for policy in policies:
-                self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            # A binary grant IS executable reach, so untrusted captured code
+            # must not get one either. An ALLOW-tier subcommand runs with no
+            # prompt because "loading the skill is the consent" — and a pasted
+            # or fetched skill is exactly the case where loading is not consent.
+            # `gaia skill promote` re-audits and reloads, which grants then.
+            if not code_deferred:
+                for policy in policies:
+                    self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            elif policies:
+                logger.warning(
+                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
+                    "withheld until 'gaia skill promote %s'.",
+                    skill.name,
+                    ", ".join(p.binary for p in policies),
+                    skill.name,
+                )
 
             self.loaded_skills[name] = skill
             self._note_skill_active(name)

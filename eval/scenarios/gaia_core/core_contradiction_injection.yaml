@@ -1,0 +1,68 @@
+id: core_contradiction_injection
+name: "Core — In-Session Contradiction Handling (Adversarial)"
+category: gaia_core
+agent_type: gaia
+severity: critical
+tags: [t4_adversarial]
+description: |
+  The user states two conflicting facts in the same session without ever
+  acknowledging the conflict. When the contradiction matters for an answer,
+  the agent must either ask which is correct or explicitly cite the latest
+  statement — never silently pick one, and never blend the two.
+  Session-history variant (no memory tools required).
+
+persona: adversarial_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "State fact version A"
+    user_message: "Planning my dad's birthday dinner. He's turning 70 and he's vegetarian."
+    ground_truth:
+      expected_behavior: "Engages with the dinner plan"
+    success_criteria: "Agent engages helpfully, noting 70th birthday and vegetarian."
+
+  - turn: 2
+    objective: "Neutral filler on the same topic"
+    user_message: "It'll be 8 people at our place. Any theme ideas?"
+    ground_truth:
+      expected_behavior: "Theme ideas for a home dinner for 8"
+    success_criteria: "Agent gives reasonable ideas."
+
+  - turn: 3
+    objective: "Inject the contradiction casually"
+    user_message: "For the main course I'm thinking of doing his favourite — a proper beef wellington, since he loves beef."
+    ground_truth:
+      expected_behavior: "Surfaces the conflict with turn 1's 'vegetarian'"
+    success_criteria: |
+      Agent must notice and surface the contradiction (vegetarian in turn 1
+      vs beef-lover now) — by asking which is right or pointing out the
+      conflict. CRITICAL FAIL if it just proceeds to help plan a beef
+      wellington with no mention of the earlier vegetarian statement.
+
+  - turn: 4
+    objective: "Resolve ambiguously — user waves it off without picking"
+    user_message: "oh right, well, whatever works. give me a menu"
+    ground_truth:
+      expected_behavior: "Does not silently pick a side; asks, or offers a menu that explicitly handles both cases"
+    success_criteria: "Agent either asks directly which is true, or presents a menu labelled for both possibilities (vegetarian main + optional beef) while naming the unresolved question. FAIL if it silently commits to beef or silently commits to vegetarian."
+
+  - turn: 5
+    objective: "User finally resolves: latest wins"
+    user_message: "sorry — he WAS vegetarian for years but went back to eating meat last spring. beef is fine."
+    ground_truth:
+      expected_behavior: "Accepts the resolution; beef is now the operative fact"
+    success_criteria: "Agent accepts the clarified fact and proceeds with a beef-inclusive menu."
+
+  - turn: 6
+    objective: "Verify the resolved state, not the stale one"
+    user_message: "so to confirm, what dietary constraint do we actually have for him?"
+    ground_truth:
+      expected_answer: "None — he eats meat now; the vegetarian info was outdated"
+    success_criteria: "Agent states he eats meat (no vegetarian constraint), reflecting the turn-5 resolution. FAIL if it reverts to 'vegetarian' or hedges as if unresolved."
+
+expected_outcome: |
+  The contradiction is surfaced when injected, never silently resolved, and
+  after the user's explicit resolution the latest fact governs all answers.

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -348,7 +349,9 @@ def _documents_exist(scenario_data: dict) -> bool:
     return True
 
 
-def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
+def find_scenarios(
+    scenario_id=None, category=None, extra_dirs=None, tags=None, exclude_tags=None
+):
     """Find scenario YAML files matching filters.
 
     Args:
@@ -358,6 +361,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             Scenarios from extra_dirs override built-in scenarios with the same ID.
         tags: List of tags to filter by. If specified, only scenarios whose ``tags``
             field contains at least one of these tags are returned (OR logic).
+        exclude_tags: List of tags to exclude. A scenario carrying ANY of these
+            tags is dropped, after the include filters are applied.
 
     Returns list of (path, data) tuples. Raises RuntimeError if any YAML is
     unparseable or fails schema validation.
@@ -416,6 +421,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             scenario_tags = set(data.get("tags", []))
             if not scenario_tags.intersection(tags):
                 continue
+        if exclude_tags and set(data.get("tags", [])).intersection(exclude_tags):
+            continue
         scenarios.append((path, data))
     return scenarios
 
@@ -677,14 +684,37 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         if isinstance(flags, list):
             all_flags.update(flags)
 
+    # Tool calls come from the judge's observed agent_tools, which is recorded
+    # for every turn whether or not the backend reported inference stats — so
+    # this is available even when performance is flagged no_stats.
+    tool_calls_per_turn = [
+        len(turn.get("agent_tools") or []) for turn in result.get("turns", [])
+    ]
+    total_tool_calls = sum(tool_calls_per_turn)
+
     if tps_values or ttft_values or total_input or total_output:
         avg_tps = sum(tps_values) / len(tps_values) if tps_values else None
         avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else None
         result["performance_summary"] = {
             "avg_tokens_per_second": round(avg_tps, 1) if avg_tps else None,
+            # min/max alongside the average: an average hides the slow turn,
+            # and the slow turn is the one a user notices.
+            "min_tokens_per_second": round(min(tps_values), 1) if tps_values else None,
+            "max_tokens_per_second": round(max(tps_values), 1) if tps_values else None,
             "avg_time_to_first_token": round(avg_ttft, 3) if avg_ttft else None,
+            "min_time_to_first_token": (
+                round(min(ttft_values), 3) if ttft_values else None
+            ),
+            "max_time_to_first_token": (
+                round(max(ttft_values), 3) if ttft_values else None
+            ),
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
+            "turns_measured": len(tps_values),
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": (
+                max(tool_calls_per_turn) if tool_calls_per_turn else None
+            ),
             "flags": sorted(all_flags),
         }
         if avg_tps:
@@ -694,7 +724,83 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
                 file=sys.stderr,
             )
     else:
+        # Stays None with no inference stats — deliberately. scorecard.py counts
+        # any dict here toward `scenarios_with_data`, so emitting a stats-less
+        # summary would inflate that number and overstate what was measured.
+        # Tool usage is reported separately below instead.
         result["performance_summary"] = None
+
+    # Tool usage is measured from the judge's observed calls, so it is real even
+    # when the backend reported no inference stats — kept out of
+    # performance_summary so it can never be mistaken for stats coverage.
+    if tool_calls_per_turn:
+        result["tool_usage"] = {
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": max(tool_calls_per_turn),
+            "turns": len(tool_calls_per_turn),
+        }
+
+
+#: A scenario's result is judged when the judge actually scored it; infra
+#: failures say nothing about quality and must not count toward a pass rate.
+_STABILITY_JUDGED = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
+
+
+def summarize_attempts(attempts: list) -> dict:
+    """Fold N runs of one scenario into a single result carrying stability.
+
+    The representative result is the WORST judged attempt, so a scenario that
+    fails intermittently never reports as a clean pass. ``stability`` is what
+    n=1 cannot express:
+
+    ``stable-pass`` every judged attempt passed; ``flaky`` some did and some did
+    not — the case that silently looks like either a pass or a hard failure at
+    n=1; ``stable-fail`` none passed.
+    """
+    if not attempts:
+        raise ValueError("summarize_attempts requires at least one attempt")
+    if len(attempts) == 1:
+        return attempts[0]
+
+    judged = [a for a in attempts if a.get("status") in _STABILITY_JUDGED]
+    passes = [a for a in judged if a.get("status") == "PASS"]
+    # Worst-first: a FAIL outranks a PASS as the representative outcome.
+    representative = min(
+        judged or attempts,
+        key=lambda a: (a.get("status") == "PASS", a.get("overall_score") or 0.0),
+    )
+    result = dict(representative)
+
+    scores = [
+        a["overall_score"]
+        for a in judged
+        if isinstance(a.get("overall_score"), (int, float))
+    ]
+    if judged:
+        pass_rate = len(passes) / len(judged)
+        stability = (
+            "stable-pass"
+            if len(passes) == len(judged)
+            else "stable-fail" if not passes else "flaky"
+        )
+    else:
+        pass_rate = None
+        stability = None
+
+    result["stability"] = {
+        "runs": len(attempts),
+        "judged": len(judged),
+        "pass_count": len(passes),
+        "pass_rate": round(pass_rate, 4) if pass_rate is not None else None,
+        "stability": stability,
+        "score_avg": round(statistics.fmean(scores), 3) if scores else None,
+        "score_min": round(min(scores), 3) if scores else None,
+        "score_max": round(max(scores), 3) if scores else None,
+        # stdev needs 2+ points; a single judged attempt has no spread to report.
+        "score_stdev": round(statistics.stdev(scores), 3) if len(scores) > 1 else None,
+        "statuses": [a.get("status") for a in attempts],
+    }
+    return result
 
 
 def preflight_check(backend_url, scenarios=None):
@@ -905,6 +1011,7 @@ def run_scenario_subprocess(
     keep_sessions=False,
     extra_corpus_dirs=None,
     agent_type=None,
+    attempt=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
@@ -1245,10 +1352,17 @@ def run_scenario_subprocess(
             file=sys.stderr,
         )
 
-    # Write trace file
+    # Write trace file. With --iterations every attempt gets its OWN trace:
+    # writing them all to <sid>.json would leave only the last attempt on disk,
+    # so a `flaky` verdict could never be investigated, and resume would reload
+    # a single attempt in place of the summarized result and silently change the
+    # scorecard. The summarized <sid>.json is written by the caller.
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
-    trace_path = traces_dir / f"{scenario_id}.json"
+    if attempt is not None:
+        trace_path = traces_dir / f"{scenario_id}.attempt{attempt}.json"
+    else:
+        trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -1702,8 +1816,10 @@ class AgentEvalRunner:
         extra_scenario_dirs=None,
         extra_corpus_dirs=None,
         tags=None,
+        exclude_tags=None,
         output_format=None,
         agent_type=None,
+        iterations=1,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -1713,6 +1829,12 @@ class AgentEvalRunner:
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
         self.tags = tags or []
+        self.exclude_tags = exclude_tags or []
+        if iterations is None:
+            iterations = 1
+        if int(iterations) < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+        self.iterations = int(iterations)
         self.output_format = output_format
         self.agent_type = agent_type
 
@@ -1788,11 +1910,14 @@ class AgentEvalRunner:
             category=category,
             extra_dirs=self.extra_scenario_dirs,
             tags=self.tags if self.tags else None,
+            exclude_tags=self.exclude_tags if self.exclude_tags else None,
         )
         if not scenarios:
             filter_desc = f"id={scenario_id}, category={category}"
             if self.tags:
                 filter_desc += f", tags={self.tags}"
+            if self.exclude_tags:
+                filter_desc += f", exclude_tags={self.exclude_tags}"
             print(
                 f"[ERROR] No scenarios found ({filter_desc})",
                 file=sys.stderr,
@@ -1879,20 +2004,40 @@ class AgentEvalRunner:
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
             # Per-scenario agent_type from YAML overrides CLI --agent-type
             scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
-            result = run_scenario_subprocess(
-                scenario_path,
-                scenario_data,
-                run_dir,
-                self.backend_url,
-                self.model,
-                self.budget,
-                effective_timeout,
-                keep_sessions=keep_sessions,
-                extra_corpus_dirs=(
-                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
-                ),
-                agent_type=scenario_agent_type,
-            )
+            # Repeat the scenario N times so a flaky result is distinguishable
+            # from a hard failure — at N=1 they are indistinguishable.
+            attempts = []
+            for attempt_idx in range(1, self.iterations + 1):
+                if self.iterations > 1:
+                    print(
+                        f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
+                        flush=True,
+                    )
+                attempts.append(
+                    run_scenario_subprocess(
+                        scenario_path,
+                        scenario_data,
+                        run_dir,
+                        self.backend_url,
+                        self.model,
+                        self.budget,
+                        effective_timeout,
+                        keep_sessions=keep_sessions,
+                        extra_corpus_dirs=(
+                            self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                        ),
+                        agent_type=scenario_agent_type,
+                        attempt=(attempt_idx if self.iterations > 1 else None),
+                    )
+                )
+            result = summarize_attempts(attempts)
+            if self.iterations > 1:
+                # The summarized result is what resume must reload — never one
+                # attempt, which would drop `stability` and could flip status.
+                (run_dir / "traces" / f"{sid}.json").write_text(
+                    json.dumps(result, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
             results.append(result)
 
             completed[sid] = result.get("status")

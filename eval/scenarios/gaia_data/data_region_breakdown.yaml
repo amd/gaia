@@ -1,0 +1,36 @@
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+id: data_region_breakdown
+name: "Data — Regional Breakdown With an Exact Slice"
+category: gaia_data
+agent_type: gaia
+severity: high
+description: |
+  A per-region breakdown where one slice has a pinned expected value
+  (North = $6,150) and the parts must sum to the pinned total ($18,600).
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at ~/gaia-eval/csv/sales.csv (staged by eval setup)."
+
+turns:
+  - turn: 1
+    objective: "Ask for revenue by region from ~/gaia-eval/csv/sales.csv"
+    user_message: "Break down revenue by region from ~/gaia-eval/csv/sales.csv."
+    ground_truth:
+      expected_answer: "Three regions (North, South, West); North = $6,150; regions sum to $18,600"
+    success_criteria: |
+      Agent produces a per-region breakdown via real data tooling in
+      agent_tools[]. North must be exactly $6,150 and the region values must
+      sum to $18,600. FAIL on invented regions or numbers that don't sum.
+
+  - turn: 2
+    objective: "Follow-up: what share of total does North represent?"
+    user_message: "What share of the total does North represent?"
+    ground_truth:
+      expected_answer: "About 33% ($6,150 of $18,600)"
+    success_criteria: "Agent answers ~33% (accept 33-33.1%), consistent with its own turn-1 numbers."
+
+expected_outcome: |
+  A consistent breakdown: North $6,150, total $18,600, share ~33%.

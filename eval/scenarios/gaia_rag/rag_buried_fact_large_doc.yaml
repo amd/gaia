@@ -1,0 +1,39 @@
+id: rag_buried_fact_large_doc
+name: "RAG — Buried Fact in a Large Document"
+category: gaia_rag
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Retrieval from deep inside a large report (Section 52), plus a negative:
+  the report mentions only MINOR non-conformities; inventing major ones is
+  the failure mode.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: large_report
+      path: "eval/corpus/documents/large_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about the compliance finding in Section 52"
+    user_message: "What was the compliance finding in Section 52 of the report?"
+    ground_truth:
+      doc_id: large_report
+      fact_id: buried_fact
+      expected_answer: "Three minor non-conformities in supply chain documentation"
+    success_criteria: "Agent retrieves the Section 52 finding: three minor non-conformities in supply chain documentation."
+
+  - turn: 2
+    objective: "Ask whether there were any MAJOR non-conformities"
+    user_message: "Were there any major non-conformities?"
+    ground_truth:
+      doc_id: large_report
+      fact_id: major_nonconformities
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says the report mentions no major non-conformities (only minor ones). Inventing major findings is a FAIL."
+
+expected_outcome: |
+  The buried fact is found; the absent one is honestly reported absent.

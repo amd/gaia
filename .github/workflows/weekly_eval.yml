@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: MIT
 #
 # Weekly eval sweep (#1964). Runs the email eval suite (triage + drafting +
-# action-item) once a week on the self-hosted Lemonade runner and OPENS A GITHUB
-# ISSUE if the eval does not pass, so a regression that the report-mode run only
-# logs is escalated into the tracker once a week instead of scrolling past.
+# action-item) AND the full judged gaia-agent suite once a week on the
+# self-hosted Lemonade runner and OPENS A GITHUB ISSUE per suite if it does
+# not pass, so a regression that the report-mode runs only log is escalated
+# into the tracker once a week instead of scrolling past.
 #
-# This calls the SAME reusable workflow the nightly and the release gates use
-# (test_email_agent_eval.yml), so there is one eval definition, not a fork. That
-# callee owns the `lemonade-eval` concurrency group, which is what keeps every
-# eval serial on the single Lemonade slot — this caller MUST NOT also claim it
-# (see the concurrency block below).
+# This calls the SAME reusable workflows the PR and release gates use
+# (test_email_agent_eval.yml, test_gaia_agent_eval.yml), so there is one eval
+# definition per suite, not a fork. The callees own the `lemonade-eval`
+# concurrency group, which is what keeps every eval serial on the single
+# Lemonade slot — this caller MUST NOT also claim it (see the concurrency
+# block below); the two suites here queue behind each other FIFO on that slot.
 #
 # A non-pass here is always a real signal, never a silent skip: the action-item
 # eval REQUIRES the Claude judge (no fuzzy fallback), so a missing/broken judge, a
@@ -46,6 +48,14 @@ jobs:
   email-eval:
     name: Weekly email eval suite
     uses: ./.github/workflows/test_email_agent_eval.yml
+    secrets: inherit
+
+  # The FULL judged gaia suite (all 13 categories — the workflow_call default).
+  # Queues behind the email suite on the callee-owned `lemonade-eval` slot;
+  # the callee's own timeout budget covers the multi-hour run.
+  gaia-eval:
+    name: Weekly gaia eval suite
+    uses: ./.github/workflows/test_gaia_agent_eval.yml
     secrets: inherit
 
   open-issue-on-failure:
@@ -105,6 +115,59 @@ jobs:
           EOF
           )"
           # One rolling issue: comment on the open one if it exists, else open it.
+          EXISTING="$(gh issue list --state open --label eval-failure \
+            --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+            echo "commented on existing issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label eval-failure
+          fi
+
+  open-issue-on-gaia-failure:
+    name: Open an issue if the weekly gaia eval did not pass
+    needs: gaia-eval
+    # Same `!= 'success'` reasoning as the email notifier above: 'cancelled'
+    # and 'skipped' are weeks with no evidence and must be said out loud.
+    if: ${{ always() && needs.gaia-eval.result != 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: File (or update) the rolling gaia eval-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVAL_RESULT: ${{ needs.gaia-eval.result }}
+        run: |
+          set -euo pipefail
+          # STABLE DEDUP KEY — do not reword (same contract as the email
+          # notifier: the lookup searches this exact title).
+          TITLE="Weekly eval failure: gaia eval suite"
+          gh label create eval-failure --color B60205 \
+            --description "Automated weekly eval failure" --force
+          BODY="$(cat <<EOF
+          The weekly gaia agent eval suite (\`test_gaia_agent_eval.yml\`, called by \`weekly_eval.yml\`) did not pass.
+
+          - Run: ${RUN_URL}
+          - Trigger: ${EVENT_NAME}
+          - Result: \`${EVAL_RESULT}\`
+
+          If the result is \`failure\`: it is one of a Lemonade / embedder / backend infra error, the Claude
+          judge being unavailable, an integrity failure (zero judged or unmeasured scenarios), or an enforced
+          (\`enforce: true\`) gate breach from a manifest under \`tests/fixtures/gaia/\`. Open the run log above
+          to see which category/stage failed.
+
+          If the result is \`cancelled\`: check for a manual cancel, or a run that waited out GitHub's 24h
+          job-queue limit behind a long occupant of the shared \`lemonade-eval\` slot. No gaia eval ran this
+          week; re-dispatch \`weekly_eval.yml\`.
+          EOF
+          )"
           EXISTING="$(gh issue list --state open --label eval-failure \
             --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
           if [ -n "${EXISTING}" ]; then

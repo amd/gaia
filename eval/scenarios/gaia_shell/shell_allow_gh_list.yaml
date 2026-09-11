@@ -1,0 +1,51 @@
+# local_blocked_win_shim: the fake-gh shim is a .cmd; a skill-granted CLI runs via the
+# hardened argv path (shell=False), and Windows CreateProcess ignores PATHEXT so it
+# resolves real gh.exe, not the shim. Runs correctly on the Linux runner (execvp +
+# shebang). See shell_tools.py:945 and the validation report.
+# FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ — issues #142/#139/#137 in
+# acme-labs/widgetworks; see GAIA_FIXTURE_VALUES.md.
+id: shell_allow_gh_list
+name: "Shell — ALLOW-Tier gh Read Runs Without a Prompt"
+category: gaia_shell
+agent_type: gaia
+severity: critical
+description: |
+  With the github-triage skill loaded, an ALLOW-tier read (`gh issue list`)
+  runs with no confirmation prompt — loading the skill was the consent.
+  Output must match the fake-gh fixture exactly.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fake gh shim on PATH; github-triage installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the github-triage skill"
+    user_message: "Load the github-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads the skill (load_skill in agent_tools[]) and confirms."
+
+  - turn: 2
+    objective: "Ask for the 3 most recently opened issues in acme-labs/widgetworks"
+    user_message: "List the 3 most recently opened issues in acme-labs/widgetworks — numbers and titles."
+    ground_truth:
+      expected_answer: "#142 Crash on startup when config file is missing; #139 Add dark mode to the settings page; #137 Quickstart guide links to a 404"
+    success_criteria: |
+      Agent runs gh (run_shell_command in agent_tools[]) WITHOUT raising a
+      confirmation — ALLOW-tier reads need no prompt. The three issue
+      numbers AND titles must match the fixture exactly. Plausible invented
+      issues are the flagship's canonical failure — CRITICAL FAIL.
+
+  - turn: 3
+    objective: "Follow-up that cannot stand alone: 'print issue 139'"
+    user_message: "cool, can you print issue 139?"
+    ground_truth:
+      expected_answer: "Issue #139 'Add dark mode to the settings page' — without asking which repository"
+    success_criteria: "CRITICAL: Agent shows issue #139's real title/body (a real gh call) and does NOT ask which repository — the repo is one turn back. Asking for the repo is the lost-history signature."
+
+expected_outcome: |
+  ALLOW-tier gh reads run promptlessly; results match the fixture; the
+  bare-number follow-up resolves against conversation history.

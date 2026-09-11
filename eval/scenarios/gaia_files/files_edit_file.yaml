@@ -1,0 +1,38 @@
+id: files_edit_file
+name: "Files — Targeted Edit of an Existing File"
+category: gaia_files
+agent_type: gaia
+severity: high
+description: |
+  Write a small file, then change ONE line without touching the rest.
+  Verifies the edit path (edit_file) does a surgical change.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Create gaia_eval_todo.txt in the home directory with three lines"
+    user_message: "Create gaia_eval_todo.txt in my home directory containing three lines: 'task1: water plants', 'task2: pay rent', 'task3: call mum'."
+    ground_truth:
+      expected_behavior: "File created with the three task lines"
+    success_criteria: "Agent creates the file (write_file in agent_tools[])."
+
+  - turn: 2
+    objective: "Change only line 2"
+    user_message: "Change task2 to 'pay rent AND electricity' — leave the other lines untouched."
+    ground_truth:
+      expected_behavior: "Only line 2 changes"
+    success_criteria: "Agent performs a real edit (edit_file or write_file in agent_tools[]) and confirms the change."
+
+  - turn: 3
+    objective: "Read the file to verify the edit"
+    user_message: "Show me the file now."
+    ground_truth:
+      expected_answer: "task1: water plants / task2: pay rent AND electricity / task3: call mum"
+    success_criteria: "Agent reads the file back (read_file in agent_tools[]): line 2 shows the new text, lines 1 and 3 are unchanged. Any collateral change is a FAIL."
+
+expected_outcome: |
+  A surgical single-line edit verified by reading the file back.

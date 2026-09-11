@@ -1,0 +1,7 @@
+{
+  "scenario_id": "plain_answer",
+  "required_subsequence": ["status", "final"],
+  "terminal": "final",
+  "forbidden": ["error"],
+  "_comment": "Golden no-tool path for POST /v1/gaia/query: a conversational question the flagship answers without calling a tool must reach a status line and end in exactly one final, never an error. Pins the frozen canonical vocabulary and its ordering, NOT an exact event count (LLM-non-deterministic). Baselines live in the agent package so a drift shows in this package's own review, next to the /query route it guards (mirrors hub/agents/email eval_baselines, issue #2180 / V2-19)."
+}
