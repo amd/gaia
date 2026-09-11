@@ -70,9 +70,80 @@ def test_failed_reindex_keeps_the_existing_generation(indexed_repo, failure):
             sdk, "_encode_texts_with_sync", side_effect=RuntimeError("embed")
         )
     else:
-        failing_call = patch.object(sdk, "_read_file_safe", return_value=None)
+        failing_call = patch.object(
+            sdk, "_read_file_safe", side_effect=PermissionError("access denied")
+        )
     with failing_call, pytest.raises((OSError, RuntimeError)):
         sdk.index_repository()
+    assert sdk._meta_path.read_bytes() == before
+    assert sdk._faiss_index.ntotal == 1
+    assert CodeIndexSDK(sdk.config).get_status()["total_chunks"] == 1
+
+
+@pytest.mark.parametrize(
+    "change", ["binary", "policy", "vanished_stat", "vanished_read"]
+)
+def test_intentional_skips_can_establish_an_empty_index(indexed_repo, change):
+    sdk, source = indexed_repo
+    if change == "binary":
+        source.write_bytes(b"\x00binary content")
+        context = patch.object(
+            sdk, "_load_embedder", side_effect=AssertionError("no model")
+        )
+    elif change == "policy":
+        context = patch.object(
+            sdk._path_validator, "is_path_allowed", return_value=False
+        )
+    else:
+        target = "os.path.getsize" if change == "vanished_stat" else "builtins.open"
+        original = os.path.getsize if change == "vanished_stat" else open
+
+        def disappear(path, *args, **kwargs):
+            if Path(path) == source:
+                source.unlink(missing_ok=True)
+            return original(path, *args, **kwargs)
+
+        context = patch(target, side_effect=disappear)
+    with context:
+        assert sdk.index_repository().chunks_created == 0
+    assert not sdk.is_indexed()
+    assert not sdk._meta_path.exists()
+    assert not sdk._index_path.exists()
+
+
+@pytest.mark.parametrize("candidate", ["no_files", "binary", "empty_text"])
+@pytest.mark.parametrize("limit", ["max_walk_entries", "max_files"])
+def test_truncated_scan_cannot_establish_empty_index(indexed_repo, candidate, limit):
+    sdk, source = indexed_repo
+    source.unlink()
+    nested = source.parent / "nested"
+    nested.mkdir()
+    (nested / "hidden.py").write_text("def hidden(): pass\n", encoding="utf-8")
+    if candidate == "binary":
+        source.write_bytes(b"\x00binary")
+    elif candidate == "empty_text":
+        source.write_text("", encoding="utf-8")
+    setattr(sdk.config, limit, 0)
+    before = sdk._meta_path.read_bytes()
+    with pytest.raises(RuntimeError, match="max_walk_entries"):
+        sdk.index_repository()
+    assert sdk._meta_path.read_bytes() == before
+    assert sdk._faiss_index.ntotal == 1
+
+
+def test_actual_read_permission_error_retains_cache(indexed_repo):
+    sdk, source = indexed_repo
+    original = open
+
+    def deny_source(path, *args, **kwargs):
+        if Path(path) == source:
+            raise PermissionError("source locked")
+        return original(path, *args, **kwargs)
+
+    before = sdk._meta_path.read_bytes()
+    with patch("builtins.open", side_effect=deny_source):
+        with pytest.raises(RuntimeError, match="permissions and retry"):
+            sdk.index_repository()
     assert sdk._meta_path.read_bytes() == before
     assert sdk._faiss_index.ntotal == 1
     assert CodeIndexSDK(sdk.config).get_status()["total_chunks"] == 1
@@ -94,7 +165,7 @@ def test_discovery_errors_do_not_erase_previous_index(indexed_repo, failure):
     index_before = sdk._index_path.read_bytes()
     if failure == "missing_root":
         source.parent.rename(source.parent.with_name("temporarily-unavailable"))
-        with pytest.raises(OSError):
+        with pytest.raises(RuntimeError, match="available and readable"):
             sdk.index_repository()
     else:
         target = "os.scandir" if failure == "walk" else "os.path.getsize"
@@ -106,7 +177,7 @@ def test_discovery_errors_do_not_erase_previous_index(indexed_repo, failure):
             return original(path)
 
         with patch(target, side_effect=deny_repository_access):
-            with pytest.raises(OSError, match="access denied"):
+            with pytest.raises(RuntimeError, match="access denied"):
                 sdk.index_repository()
     assert sdk._meta_path.read_bytes() == metadata_before
     assert sdk._index_path.read_bytes() == index_before

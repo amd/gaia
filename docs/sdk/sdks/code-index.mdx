@@ -62,13 +62,14 @@ sdk = CodeIndexSDK(config)
 
 ### `index_repository() -> IndexResult`
 
-A successful rebuild with no source chunks clears any previous index, including
-its disk cache. If discovered files cannot be read or used and no chunks remain,
-the rebuild raises an error and retains the previous index instead.
-Directory traversal or file metadata errors also abort the rebuild and retain
-the previous index, rather than treating an unavailable repository as empty.
-
 Discover source files, parse them, embed via Lemonade, and persist a FAISS index. Re-runs are incremental — unchanged files (matched by SHA-256) reuse their existing embeddings.
+
+A complete rebuild with no source chunks clears any previous index and disk
+cache. Binary, out-of-scope, and vanished files are intentionally skipped. An
+empty result after a read failure or scan limit raises an actionable error and
+retains the previous index. Directory traversal and file metadata errors also
+abort the rebuild, except missing files (including dangling symlinks), which are
+skipped. A scan limit still permits indexing the nonempty results found so far.
 
 ```python
 result = sdk.index_repository()
