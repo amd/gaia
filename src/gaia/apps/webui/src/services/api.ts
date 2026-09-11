@@ -453,7 +453,26 @@ export async function toggleSessionPrivacy(id: string): Promise<Session> {
 }
 
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
-    return apiFetch('GET', `/sessions/${sessionId}/messages`);
+    const pageSize = 100;
+    const path = `/sessions/${sessionId}/messages`;
+    const first = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `${path}?limit=${pageSize}&offset=0`,
+    );
+    const messages = [...first.messages];
+    // Bound this load to its initial count; a running agent may keep appending.
+    // The next refresh retrieves those newer messages.
+    const total = first.total;
+    while (messages.length < total) {
+        const limit = Math.min(pageSize, total - messages.length);
+        const page = await apiFetch<{ messages: Message[]; total: number }>(
+            'GET', `${path}?limit=${limit}&offset=${messages.length}`,
+        );
+        if (page.messages.length === 0) {
+            throw new Error('Incomplete transcript received. Please reload the conversation.');
+        }
+        messages.push(...page.messages);
+    }
+    return { messages, total };
 }
 
 export async function exportSession(sessionId: string): Promise<{ content: string }> {
