@@ -28,6 +28,7 @@ from gaia.logger import get_logger
 
 class KokoroTTS:
     log = get_logger(__name__)
+    PLAYBACK_TIMEOUT_SLACK = 5.0
 
     def __init__(self):
         # Check for required dependencies
@@ -329,6 +330,21 @@ class KokoroTTS:
         self.log.debug("Starting speech streaming")
         buffer = ""
         audio_buffer = queue.Queue(maxsize=100)  # Buffer for processed audio chunks
+        audio_duration = 0.0
+        playback_errors = []
+        stop_playback = threading.Event()
+
+        def enqueue_audio(audio):
+            nonlocal audio_duration
+            audio_duration += len(audio) / 24000
+            try:
+                audio_buffer.put(
+                    audio, timeout=audio_duration + self.PLAYBACK_TIMEOUT_SLACK
+                )
+            except queue.Full as error:
+                raise TimeoutError(
+                    "Audio output stalled while buffering playback"
+                ) from error
 
         # Initialize audio stream
         stream = sd.OutputStream(
@@ -345,7 +361,7 @@ class KokoroTTS:
         def audio_playback_thread():
             playing = True
             try:
-                while True:
+                while not stop_playback.is_set():
                     try:
                         audio_chunk = audio_buffer.get(timeout=0.1)
                     except queue.Empty:
@@ -361,13 +377,22 @@ class KokoroTTS:
                     try:
                         stream.write(np.array(audio_chunk, dtype=np.float32))
                     except Exception as e:
-                        self.log.error(f"Error in playback thread: {e}", exc_info=True)
+                        playback_errors.append(e)
                         playing = False
+            except Exception as e:
+                playback_errors.append(e)
             finally:
-                stream.stop()
-                stream.close()
-                if status_callback:
-                    status_callback(False)
+                try:
+                    stream.stop()
+                except Exception as e:
+                    playback_errors.append(e)
+                finally:
+                    try:
+                        stream.close()
+                        if status_callback:
+                            status_callback(False)
+                    except Exception as e:
+                        playback_errors.append(e)
 
         # Start playback thread
         playback_thread = threading.Thread(target=audio_playback_thread)
@@ -377,6 +402,8 @@ class KokoroTTS:
         try:
             while True:
                 try:
+                    if interrupt_event and interrupt_event.is_set():
+                        break
                     chunk = text_queue.get(timeout=0.1)
 
                     if chunk == "__END__" or (
@@ -387,9 +414,8 @@ class KokoroTTS:
                             processed_text = self.preprocess_text(buffer.strip())
                             if processed_text:  # Only process if there's actual text
                                 self.generate_speech(
-                                    processed_text, stream_callback=audio_buffer.put
+                                    processed_text, stream_callback=enqueue_audio
                                 )
-                        audio_buffer.put(None)  # Signal playback thread to exit
                         break
 
                     buffer += chunk
@@ -405,19 +431,34 @@ class KokoroTTS:
                             processed_text = self.preprocess_text(text_to_process)
                             if processed_text:  # Double check after preprocessing
                                 self.generate_speech(
-                                    processed_text, stream_callback=audio_buffer.put
+                                    processed_text, stream_callback=enqueue_audio
                                 )
                         buffer = sentences[-1]
 
                 except queue.Empty:
                     continue
 
-        except Exception as e:
-            self.log.error(f"Error in streaming: {e}")
         finally:
-            audio_buffer.put(None)  # Ensure playback thread exits
-            # Synthesis outruns playback; return only once the audio has played.
-            playback_thread.join()
+            deadline = time.monotonic() + audio_duration + self.PLAYBACK_TIMEOUT_SLACK
+            try:
+                audio_buffer.put(None, timeout=max(0, deadline - time.monotonic()))
+            except queue.Full as error:
+                stop_playback.set()
+                raise TimeoutError(
+                    "Audio output stalled while finishing playback"
+                ) from error
+            playback_thread.join(timeout=max(0, deadline - time.monotonic()))
+            if playback_thread.is_alive():
+                stop_playback.set()
+                raise TimeoutError(
+                    "Audio playback exceeded its duration plus cleanup allowance; "
+                    "microphone remains paused. Restart voice chat after checking "
+                    "the output device."
+                )
+            if playback_errors:
+                raise RuntimeError(
+                    f"Audio playback failed: {playback_errors[0]}"
+                ) from playback_errors[0]
 
     def set_voice(self, voice_name: str) -> None:
         """Change the current voice."""

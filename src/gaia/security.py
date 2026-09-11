@@ -654,7 +654,8 @@ class PathValidator:
         """
         if not self._can_prompt():
             logger.info(
-                "Auto-approving overwrite of %s (non-interactive context, "
+                "Auto-approving overwrite of %s (no interactive requester on "
+                "this process's stdin, "
                 "backup will be created)",
                 path,
             )

@@ -124,6 +124,9 @@ class AudioClient:
         """
         Process transcribed voice input and get AI response.
 
+        Capture stays paused until streamed playback has fully finished;
+        transcriptions queued meanwhile are discarded before capture resumes.
+
         Args:
             text: Transcribed text to process
             get_stats_callback: Optional callback for performance stats
@@ -136,6 +139,9 @@ class AudioClient:
         Returns once playback has finished. The microphone is paused for the
         whole utterance and anything transcribed meanwhile is discarded, so
         the assistant never hears its own reply as the next user turn.
+        Playback cleanup is bounded by synthesized audio duration plus five
+        seconds. On a device timeout, the call raises and capture stays paused;
+        restart voice chat after checking the output device.
         """
         pass
 

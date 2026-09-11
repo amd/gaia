@@ -104,6 +104,11 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 ## Configuration Options
 
+The microphone stays paused throughout playback. If the output device stalls
+beyond the synthesized audio duration plus five seconds, voice chat reports an
+error and keeps capture paused. Check the output device, then restart voice chat;
+`gaia talk --no-tts` disables spoken output.
+
 Customize your voice interaction experience:
 
 <Tabs>

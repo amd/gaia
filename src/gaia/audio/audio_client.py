@@ -199,7 +199,8 @@ class AudioClient:
 
         # Initialize TTS streaming
         text_queue = None
-        tts_finished = threading.Event()  # Add event to track TTS completion
+        tts_thread = None
+        tts_errors = []
         interrupt_event = self._playback_interrupt
         interrupt_event.clear()
 
@@ -223,30 +224,26 @@ class AudioClient:
             self._start_stdin_listener()
 
             if self.enable_tts:
-                text_queue = queue.Queue(maxsize=100)
+                text_queue = queue.Queue()
 
                 # Define status callback to update speaking state
                 def tts_status_callback(is_speaking):
                     self.is_speaking = is_speaking
-                    if not is_speaking:  # When TTS finishes speaking
-                        tts_finished.set()
-                        if self.whisper_asr:
-                            self.whisper_asr.resume_recording()
-                    else:  # When TTS starts speaking
-                        if self.whisper_asr:
-                            self.whisper_asr.pause_recording()
                     self.log.debug(f"TTS speaking state: {is_speaking}")
 
-                self.tts_thread = threading.Thread(
-                    target=self.tts.generate_speech_streaming,
-                    args=(text_queue,),
-                    kwargs={
-                        "status_callback": tts_status_callback,
-                        "interrupt_event": interrupt_event,
-                    },
-                    daemon=True,
-                )
-                self.tts_thread.start()
+                def run_tts():
+                    try:
+                        self.tts.generate_speech_streaming(
+                            text_queue,
+                            status_callback=tts_status_callback,
+                            interrupt_event=interrupt_event,
+                        )
+                    except Exception as error:
+                        tts_errors.append(error)
+
+                tts_thread = threading.Thread(target=run_tts, daemon=True)
+                self.tts_thread = tts_thread
+                tts_thread.start()
 
             # Use LLMClient streaming instead of WebSocket
             accumulated_response = ""
@@ -304,9 +301,6 @@ class AudioClient:
                 if text_queue:
                     text_queue.put("__END__")
                 raise e
-            finally:
-                if self.tts_thread and self.tts_thread.is_alive():
-                    self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
 
             print("\n")
             # Get performance stats from LLMClient
@@ -331,14 +325,22 @@ class AudioClient:
                 text_queue.put("__END__")
             raise e
         finally:
-            if self.tts_thread and self.tts_thread.is_alive():
-                # Wait for TTS to finish before resuming recording
-                tts_finished.wait(timeout=2.0)  # Add reasonable timeout
-                self.tts_thread.join(timeout=1.0)
-
-            # Only resume recording after TTS is completely finished
-            if self.whisper_asr:
+            if tts_thread and tts_thread.is_alive():
+                text_queue.put("__END__")
+                tts_thread.join()
+            self.is_speaking = False
+            self._drain_transcription_queue()
+            # A timed-out device may still be playing; keep capture muted.
+            if self.whisper_asr and not any(
+                isinstance(error, TimeoutError) for error in tts_errors
+            ):
                 self.whisper_asr.resume_recording()
+            if tts_errors:
+                raise RuntimeError(
+                    f"Text-to-speech failed: {tts_errors[0]}. "
+                    "Run `gaia test --test-type tts-streaming` to check audio "
+                    "output, or use `gaia talk --no-tts`."
+                ) from tts_errors[0]
 
     def initialize_tts(self):
         """Initialize TTS if enabled."""
@@ -454,10 +456,11 @@ class AudioClient:
                     "output, or use `gaia talk --no-tts`."
                 ) from tts_errors[0]
         finally:
-            # Always resume -- a crash here must not leave the microphone dead.
             self.is_speaking = False
             self._drain_transcription_queue()
-            if self.whisper_asr:
+            if self.whisper_asr and not any(
+                isinstance(error, TimeoutError) for error in tts_errors
+            ):
                 self.whisper_asr.resume_recording()
 
     def _check_mic_levels(self):

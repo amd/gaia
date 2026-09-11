@@ -789,7 +789,7 @@ async def async_main(action, **kwargs):
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             use_chatgpt=kwargs.get("use_chatgpt", False),
-            claude_model=kwargs.get("claude_model", "claude-sonnet-5"),
+            claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
             base_url=lemonade_base_url,
             # RAG configuration
             rag_documents=rag_documents,

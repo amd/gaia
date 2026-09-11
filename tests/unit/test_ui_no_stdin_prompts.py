@@ -20,7 +20,7 @@ from gaia.ui.sse_handler import SSEOutputHandler as UiSSEOutputHandler
     "console_cls, expected",
     [
         (AgentConsole, True),
-        (SilentConsole, False),
+        (SilentConsole, True),
         (UiSSEOutputHandler, False),
         (ApiSSEOutputHandler, False),
     ],
@@ -129,9 +129,10 @@ def test_ui_turn_is_denied_without_prompting_the_server_tty(project_layout):
     assert allowed is False
 
 
-def test_cli_turn_still_prompts_and_the_answer_is_honoured(project_layout):
+@pytest.mark.parametrize("console_cls", [AgentConsole, SilentConsole])
+def test_cli_turn_still_prompts_and_the_answer_is_honoured(project_layout, console_cls):
     project, outside = project_layout
-    validator = _agent_validator(project, AgentConsole)
+    validator = _agent_validator(project, console_cls)
     prompts = []
     with (
         patch("gaia.security._is_interactive", return_value=True),

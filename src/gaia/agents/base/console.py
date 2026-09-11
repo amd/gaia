@@ -693,6 +693,8 @@ class TerminalConfirmationMixin:
     ``auto_approve_confirmations_enabled`` / progress hooks this relies on.
     """
 
+    supports_stdin_prompts: bool = True
+
     CONFIRMATION_PROMPT = "Allow this? [y]es / [N]o / [a]lways for this tool: "
     CONFIRMATION_PROMPT_NO_ALWAYS = "Allow this? [y]es / [N]o: "
 
@@ -850,8 +852,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
     Confirmation-gated tools prompt on the terminal when stdin is interactive and
     are denied otherwise (#2210) — see ``confirm_tool_execution``.
     """
-
-    supports_stdin_prompts: bool = True
 
     def __init__(self, auto_approve_gated_tools: bool = False):
         """Initialize the AgentConsole with appropriate display capabilities.

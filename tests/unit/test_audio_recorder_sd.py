@@ -11,6 +11,39 @@ import numpy as np
 import pytest
 
 
+@pytest.mark.parametrize("resume", [False, True])
+def test_streaming_asr_drains_paused_audio_and_discards_overlap(mock_sd, resume):
+    from gaia.audio.audio_recorder import AudioRecorder
+    from gaia.audio.whisper_asr import WhisperAsr
+
+    asr = WhisperAsr.__new__(WhisperAsr)
+    AudioRecorder.__init__(asr, device_index=0)
+    asr.RATE = 10
+    asr.CHUNK = 10
+    asr.is_recording = True
+    reads = 0
+
+    def read(_size):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            asr.pause_recording()
+        if reads == 3:
+            if resume:
+                asr.resume_recording()
+            asr.is_recording = False
+        return np.full((10, 1), reads, dtype=np.float32), False
+
+    mock_sd.InputStream.return_value.read.side_effect = read
+    with patch("gaia.audio.whisper_asr.sd", mock_sd):
+        asr._record_audio_streaming()
+
+    assert reads == 3, "paused capture must drain the device instead of sleeping"
+    if resume:
+        np.testing.assert_array_equal(asr.audio_queue.get_nowait(), np.full(10, 3))
+    assert asr.audio_queue.empty()
+
+
 @pytest.fixture
 def mock_sd():
     """Mock sounddevice module."""
