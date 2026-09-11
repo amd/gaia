@@ -653,6 +653,22 @@ class FileSystemToolsMixin:
                     else:
                         effective_type = "name"
 
+                # Validate a caller supplied scope before any search path can
+                # answer; named scopes fan out over folders that need not exist.
+                if scope not in ("smart", "home", "cwd", "everywhere"):
+                    scope_root = Path(scope).expanduser().resolve()
+                    if not scope_root.exists():
+                        return (
+                            f"Error: '{scope_root}' does not exist. Pass an existing "
+                            "folder as scope, or use 'smart', 'home', 'cwd', "
+                            "or 'everywhere'."
+                        )
+                    if not scope_root.is_dir():
+                        return (
+                            f"Error: '{scope_root}' is not a directory. Pass the "
+                            "folder to search as scope, not a file."
+                        )
+
                 # Try index first if available
                 if mixin._fs_index and effective_type in (
                     "name",
@@ -692,8 +708,6 @@ class FileSystemToolsMixin:
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = _get_search_roots(scope)
-                named_scopes = ("smart", "home", "cwd", "everywhere")
-                user_named_root = scope not in named_scopes
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
@@ -704,20 +718,7 @@ class FileSystemToolsMixin:
 
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
-                        # Named scopes fan out over folders like ~/Documents that
-                        # need not exist; only a caller supplied path is an error.
-                        if not user_named_root:
-                            continue
-                        if not root.exists():
-                            return (
-                                f"Error: '{root}' does not exist. Pass an existing "
-                                "folder as scope, or use 'smart', 'home', 'cwd', "
-                                "or 'everywhere'."
-                            )
-                        return (
-                            f"Error: '{root}' is not a directory. Pass the folder "
-                            "to search as scope, not a file."
-                        )
+                        continue
 
                     if effective_type == "content":
                         # Content search (grep-like)

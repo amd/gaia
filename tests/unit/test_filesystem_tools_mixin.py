@@ -686,6 +686,23 @@ class TestFindFiles:
         assert "index" in result.lower()
         mock_index.query_files.assert_called_once()
 
+    def test_find_missing_scope_errors_before_index(self, tmp_path):
+        """A missing caller scope errors even when the index could answer."""
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="indexed", scope=str(tmp_path / "does_not_exist"))
+        assert "does not exist" in result
+        assert "indexed.txt" not in result
+        mock_index.query_files.assert_not_called()
+
     def test_find_index_fallback(self, tmp_path):
         """Falls back to filesystem search when index query fails."""
         _populate_directory(tmp_path)
