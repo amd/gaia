@@ -67,6 +67,9 @@ type procHandle struct {
 	// kill racing the reap must never terminate by a handle already closed.
 	group   *processGroup
 	killErr error
+	// groupKilled: macOS refuses (EPERM) a second group kill once only the
+	// unreaped leader is left, so a repeat kill must not reach the kernel.
+	groupKilled bool
 }
 
 // reap waits for the child and returns its final state. Safe to call more than
@@ -112,8 +115,12 @@ func (p *procHandle) kill() error {
 
 func (p *procHandle) killLocked() error {
 	if p.group != nil {
+		if p.groupKilled {
+			return nil
+		}
 		gerr := p.group.terminate()
 		if gerr == nil {
+			p.groupKilled = true
 			// The group includes the process we started. Killing it again races
 			// its exit, and Windows answers TerminateProcess on a dying process
 			// with "Access is denied" — a failure report for a kill that worked.
