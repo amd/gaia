@@ -1,0 +1,293 @@
+---
+title: "Transcription & Meeting Notes"
+description: "Point the GAIA agent at a recording and get back a speaker-labelled transcript, a brief, and action items — all local."
+icon: "file-audio"
+---
+
+<Info>
+  **Source:** [`hub/skills/transcribe-meeting/`](https://github.com/amd/gaia/tree/main/hub/skills/transcribe-meeting) · [`src/gaia/audio/`](https://github.com/amd/gaia/tree/main/src/gaia/audio)
+</Info>
+
+You have a 46-minute recording and you need to know what was decided and who owes
+what. Type one thing:
+
+```
+transcribe C:\recordings\staff-meeting.mp4 and give me the action items
+```
+
+The agent decodes the file, transcribes it on Lemonade, **saves the transcript to
+disk and tells you the path**, labels who said what, repairs the words the
+recognizer was unsure of, and hands you a brief. Nothing leaves the machine.
+
+## What you get
+
+The transcript is always written to a file, and the agent always reports where.
+That path is the durable artifact — transcription costs real minutes of compute,
+and the file outlives the chat session you ran it in.
+
+- **`~/.gaia/transcripts/staff-meeting.txt`** — the raw transcript, written
+  before anything else runs, so a failure in a later stage never costs you the
+  expensive part. Plain prose, no speaker labels — acoustic diarization runs
+  alongside it and writes a separate timings file that the next stage reads.
+- **`staff-meeting.transcript.md`** — the readable version: mis-hearings
+  corrected and split into speaker turns, opening with a `## Speakers` list.
+  Voices are separated straight from the audio (pyannote + WeSpeaker models,
+  running locally), so `Speaker 1` / `Speaker 2` reflect distinct voices, not
+  guesswork. The *names* attached to those voices — `Priya Raman` instead of
+  `Speaker 1` — are still inferred from what's said, so treat the names, not
+  the voice separation, as best-effort. See
+  [How speakers are separated and named](#how-speakers-are-separated-and-named).
+- **A brief** — Executive Brief, Key Facts, Scope, Action Items, Insights, and
+  Risks / Blockers, written by the [`summarize`](/guides/starter-skills) skill.
+
+The transcript is also indexed, so afterwards you can just ask
+*"what did Priya say about the pricing change?"* and get an answer quoted from
+the recording rather than from the summary of it.
+
+### Long recordings are summarised in sections, not in one gulp
+
+A 46-minute meeting is around 135,000 characters — more than twice what fits in
+a single tool result. So the transcript is never handed to the summarizer as one
+block. It goes to a file, and the summarizer reads that file forward in
+sections.
+
+This matters because the alternative fails quietly. When a transcript is passed
+inline and gets truncated, what comes back is not an obviously broken summary —
+it is a fluent, confident brief of the first third of the meeting, with the
+decisions and action items from the last twenty minutes simply absent. Nothing
+in the output tells you they are missing. Reading from the file removes the
+possibility.
+
+The practical consequence: the agent chains the three stages itself —
+`transcribe_media`, then `refine_transcript`, then indexing and the summary —
+reporting the transcript path along the way rather than stopping to ask. On a
+real 46-minute, 4-speaker meeting this takes about 10 minutes total: roughly
+9.3 minutes to transcribe — which now includes acoustic diarization, about 3.9
+of those minutes — and around 30 seconds to refine, since attaching a name to
+an already-separated voice is a much smaller job than the old per-section
+guesswork. It is not instant, and it is not meant to be — a summary that
+appears in seconds is a summary of the opening minutes.
+
+## Quick start
+
+<Steps>
+  <Step title="Install the skill">
+    ```bash
+    gaia skill import hub/skills/transcribe-meeting
+    gaia skill import hub/skills/summarize
+    ```
+
+    `import` copies each folder into `~/.gaia/skills/`, where the agent finds
+    them by name. `transcribe-meeting` delegates the brief to `summarize`, so
+    install both.
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    ```bash
+    lemonade-server serve
+    ```
+
+    Transcription runs on the same local server as chat — `Whisper-Large-v3-Turbo`
+    by default, downloaded on first use.
+  </Step>
+
+  <Step title="Ask">
+    In the TUI or Agent UI, name the file and say what you want:
+
+    ```
+    transcribe ~/recordings/standup.m4a — who owns what?
+    ```
+
+    First run installs what's missing (see [First run](#first-run) below) and
+    reports each step as it goes.
+  </Step>
+</Steps>
+
+## How it works
+
+| Stage | What happens |
+|---|---|
+| Decode | ffmpeg extracts audio from the container — mp4, mkv, mov, m4a, mp3, wav. |
+| Transcribe | `transcribe_media` sends the audio to Lemonade's `/api/v1/audio/transcriptions` and writes a plain-text transcript to disk. It then runs acoustic speaker diarization on the same audio — pyannote segmentation + WeSpeaker embedding, both local — and writes who-spoke-when to a timings file alongside. Diarization failing is never fatal: it's logged, and the pipeline carries on without it. |
+| Save | The agent gets back the transcript's **path**, a short preview, duration, and the low-confidence words it flagged — not the transcript text. |
+| Refine | `refine_transcript` reads the file back in sections. Where diarization succeeded, its only job is putting a name to each already-separated voice; where it didn't, it falls back to inferring turns from pauses and content, as before. Either way it fixes mis-hearings it's confident about. Output is a markdown file that states which method attributed the speakers, with a `## Speakers` list and `Name: text` turns — no timestamps. |
+| Index + brief | The refined transcript is indexed for Q&A and summarized section by section from the file. |
+
+The raw transcript is written **before** refining or summarizing runs, so a
+failure in a later stage never costs you the expensive part.
+
+The preview the agent receives is the first 1200 characters — enough to confirm
+it transcribed the right recording, and deliberately far too little to summarise
+from. Everything the agent says about the meeting comes from reading the saved
+file.
+
+### How speakers are separated and named
+
+Two different claims are being made here, and they carry different amounts of
+confidence.
+
+**Telling voices apart is real acoustic diarization**, not a guess from text.
+`transcribe_media` runs pyannote's segmentation network and a WeSpeaker
+embedding model — both ONNX, executed locally via `sherpa-onnx` — against the
+same audio it just transcribed. No PyTorch, no HuggingFace account or gated
+licence: the models are plain GitHub release downloads (~33 MB total), used
+under their original MIT terms. On a real 46-minute, 4-speaker meeting this
+found 4 speakers against a ground truth of 4.
+
+**Attaching a real name to a voice is still inferred from what's said** —
+self-introduction, being addressed by name, role cues — exactly as before.
+On that same recording, the naming pass recovered one participant's real
+name; speakers with no naming evidence in the conversation stay `Speaker 1`,
+`Speaker 2`, and so on. The output looks like this:
+
+```markdown
+## Speakers
+
+- Priya Raman
+- Dan Okafor
+- Speaker 3
+- Speaker 4
+
+## Transcript
+
+Priya Raman: Let's get started — thanks everyone for joining...
+
+Dan Okafor: Sure, from the platform side...
+```
+
+Treat the *names* as best-effort — a confident-looking wrong name is
+possible — but not the voice split behind them: that part doesn't depend on
+what was said.
+
+If diarization can't run at all (see [First run](#first-run)), `refine_transcript`
+falls back to the old text-only method instead: turns are split on pauses in
+the recording and named from context alone, with lettered labels like
+`Speaker A`, `Speaker B`. The transcript file's header always says which
+method produced it.
+
+**Known limits, both measured on real recordings:**
+
+- Very short clips can miss a speaker entirely — on a 90-second clip where a
+  second voice contributed only a few interjecting words, diarization
+  reported one speaker.
+- The clustering that decides speaker *count* when it isn't known is
+  threshold-tuned (default `0.65`): `0.50` over-split one recording into 10
+  clusters, `0.75` collapsed the same recording to 2.
+
+### Corrections cover the whole transcript, not just the uncertain parts
+
+`transcribe_media` reports the words Whisper itself was least confident about —
+up to 25 of them, though it also tells the agent the true total — as a hint
+about where mistakes are more likely. `refine_transcript` doesn't limit its
+edits to those: it re-reads the *entire* transcript, section by section, and
+is told to fix a mis-hearing only when it's confident, leaving anything
+ambiguous exactly as transcribed. It keeps every point that was made — no
+summarizing or shortening at this stage. Measured on the same 46-minute test
+recording, content retention came out at 99.7%.
+
+## First run
+
+Transcription needs pieces that GAIA does not install up front, because most
+users never transcribe anything. They arrive on first use instead:
+
+| Component | Size | Notes |
+|---|---|---|
+| ffmpeg | ~80 MB | Installed via winget / brew / apt if it isn't on `PATH`. |
+| Whisper-Large-v3-Turbo | 1.62 GB | Pulled by Lemonade on first transcription. |
+| `sherpa-onnx` + speaker models | ~40 MB + ~33 MB | Installed for diarization on first transcription. Not fatal if it can't — the transcript is still produced, falling back to text-only speaker inference, and the file says which method ran. |
+
+Each step reports progress rather than sitting on a spinner. If one can't
+complete, it fails with the command that fixes it.
+
+<Warning>
+  The NPU build (`whisper-v3-turbo-FLM`) returns no word-level timing, which
+  `transcribe_media` needs to flag low-confidence words. Requesting it fails
+  loudly instead of silently skipping that step — use a whispercpp model such
+  as the default, `Whisper-Large-v3-Turbo`, instead.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ffmpeg not found and no package manager available">
+    Install it yourself and re-run — `winget install ffmpeg` on Windows,
+    `brew install ffmpeg` on macOS, `sudo apt-get install -y ffmpeg` on Debian /
+    Ubuntu. GAIA checks `PATH`, so a fresh shell may be needed afterwards.
+  </Accordion>
+
+  <Accordion title="Speakers came back as 'Speaker 1', 'Speaker 2' (or 'Speaker A', 'Speaker B')">
+    Numbered labels mean diarization ran and separated real voices, but found
+    nothing in the conversation to name them — no self-introduction, nobody
+    addressed by name. Lettered labels mean diarization itself didn't run
+    (see [First run](#first-run)) and turns were inferred from pauses
+    instead. Either way, tell the agent who's who and ask it to rewrite the
+    transcript.
+  </Accordion>
+
+  <Accordion title="A short clip only found one speaker">
+    Diarization needs enough speech per voice to build a reliable acoustic
+    profile. On a 90-second clip where a second person contributed only a few
+    interjecting words, it reported one speaker. Longer recordings with more
+    speech per person are markedly more reliable.
+  </Accordion>
+
+  <Accordion title="I got the transcript but no summary">
+    The agent is meant to chain the whole pipeline itself — refine, index, then
+    summarize — so this shouldn't need a nudge. If it stops after reporting the
+    transcript path, just ask it to continue from that file; each stage tells
+    the agent what to call next.
+  </Accordion>
+
+  <Accordion title="Names in the speaker list look wrong">
+    The *names* are inferred from the conversation's words, not voiceprints —
+    that part can be wrong even though the voice separation underneath it is
+    acoustic. Tell the agent the correct mapping and ask it to rewrite the
+    transcript.
+  </Accordion>
+
+  <Accordion title="It is slower than I expected">
+    Roughly 9× realtime warm on GPU for transcription, plus acoustic
+    diarization on the same audio — together about 9.3 minutes for a
+    46-minute meeting. Refinement is quick by comparison, around 30 seconds,
+    since attaching a name to an already-separated voice is a small job. The
+    first run also includes the model downloads — Whisper, plus the
+    diarization models.
+  </Accordion>
+</AccordionGroup>
+
+## Not this
+
+- **Live voice conversation with the agent** — that is [Voice Interaction](/guides/talk).
+- **Summarizing a document that isn't a recording** — [Document Q&A](/guides/chat#document-qa-rag).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Starter Skills" icon="puzzle-piece" href="/guides/starter-skills">
+    Fork `transcribe-meeting` into your own meeting format
+  </Card>
+
+  <Card title="Voice Interaction" icon="microphone" href="/guides/talk">
+    Talk to the agent live instead of transcribing a file
+  </Card>
+
+  <Card title="Document Q&A" icon="comments" href="/guides/chat">
+    Ask questions across the transcripts you've indexed
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Every `gaia` command and flag
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

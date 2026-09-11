@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -61,6 +62,30 @@ DEFAULT_LEMONADE_URL = (
 )
 
 
+def _embedded_lemonade_url() -> str:
+    """The embedded server's base URL, or the packaged default.
+
+    ``gaia lemonade embedded`` binds a port chosen at start time and records it
+    alongside its API key. Nothing exports either, so a client that assumed the
+    default port looked at an address with nothing on it and reported the models
+    as missing — while the embedded server held every one of them.
+    """
+    state = _read_embedded_lemonade_state()
+    port = state.get("port") if state else None
+    if isinstance(port, int) and port > 0:
+        return f"http://{DEFAULT_HOST}:{port}"
+    return DEFAULT_LEMONADE_URL
+
+
+def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
+    """Read ~/.gaia/lemonade/state.json, or None when there is no such server."""
+    try:
+        state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
 def _get_lemonade_config() -> tuple:
     """
     Get Lemonade host, port, and base_url from environment or defaults.
@@ -73,7 +98,7 @@ def _get_lemonade_config() -> tuple:
     """
     from urllib.parse import urlparse
 
-    base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    base_url = os.getenv("LEMONADE_BASE_URL") or _embedded_lemonade_url()
     # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
     if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
         base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
@@ -91,20 +116,63 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
+def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
+    """Resolve the Lemonade base URL: argument, env var, embedded server, default.
+
+    The public counterpart to :func:`resolve_lemonade_api_key`, and the only
+    thing callers should use to answer "where is Lemonade?".
+
+    Always returns a URL ending in ``/api/<version>`` — including one passed in
+    explicitly, since users routinely configure the bare origin. Callers can
+    therefore append endpoint paths directly; a caller that adds ``/api/v1``
+    itself will produce a doubled path.
+
+    Callers that instead wrote ``os.getenv("LEMONADE_BASE_URL", "http://…")``
+    inline could not see GAIA's own embedded server, which binds a port chosen
+    at start time. Every one of those copies had to be found and changed for
+    the embedded server to be usable at all.
+    """
+    if base_url is None:
+        return _get_lemonade_config()[2]
+    trimmed = base_url.rstrip("/")
+    suffix = f"/api/{LEMONADE_API_VERSION}"
+    return trimmed if trimmed.endswith(suffix) else f"{trimmed}{suffix}"
+
+
+#: Where GAIA's embedded Lemonade records the credential it generated.
+EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
+
+
+def _embedded_lemonade_api_key() -> Optional[str]:
+    """The key GAIA's own embedded Lemonade generated for itself, if present.
+
+    ``gaia lemonade embedded`` starts a private server that mints an API key
+    and writes it here. Nothing exports it, so every GAIA client that resolved
+    the key from the environment alone got 401 from a server that was healthy
+    and serving — which the readiness screen then reported as "Lemonade not
+    running", and offered to install a second one onto the same port.
+    """
+    state = _read_embedded_lemonade_state()
+    key = state.get("api_key") if state else None
+    return key.strip() or None if isinstance(key, str) else None
+
+
 def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
-    """Resolve the Lemonade API key from argument, env var, or None.
+    """Resolve the Lemonade API key: argument, env var, embedded server, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
     servers (which would reject it).
+
+    An explicit argument or env var always wins — a configured credential must
+    never be overridden by whatever a local state file happens to hold.
     """
     if api_key is not None:
         return api_key
     env_value = os.getenv("LEMONADE_API_KEY")
-    if env_value is None:
-        return None
-    stripped = env_value.strip()
-    return stripped or None
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return _embedded_lemonade_api_key()
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -154,8 +222,6 @@ def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
 # responses from llama.cpp. Consumed by:
-#   - ``_ensure_model_loaded`` (this module), as the fallback ctx_size when
-#     loading a model that isn't in the ``MODELS`` registry.
 #   - ``gaia.llm.lemonade_manager`` — re-exported as ``DEFAULT_CONTEXT_SIZE``.
 #   - ``gaia.ui.routers.system`` — drives the "context window too small"
 #     banner and the pre-flight load ctx requirement.
@@ -182,6 +248,48 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) -> int:
+    """Resolve the requested local window for startup and subsequent reloads.
+
+    An explicit client ``ctx_size_override`` remains a separate exact pin.
+    GPU/CPU profile sizes are defaults, not model capability ceilings.
+    """
+    if device is None:
+        from gaia.config import GaiaConfig
+
+        device = GaiaConfig.load().default_device
+    if model and model.lower().endswith("-flm"):
+        device = "npu"
+    ctx = profile_ctx_size(device)
+    if model:
+        for requirement in MODELS.values():
+            if _model_ids_match(requirement.model_id, model):
+                ctx = requirement.min_ctx_size
+                break
+
+    override = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if override:
+        try:
+            ctx = int(override)
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            ) from exc
+        if ctx <= 0:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            )
+
+    if (device or "").strip().lower() == "npu" and ctx > NPU_CTX_SIZE:
+        get_logger(__name__).warning(
+            "Requested context %d exceeds the NPU ceiling; using %d tokens.",
+            ctx,
+            NPU_CTX_SIZE,
+        )
+        ctx = NPU_CTX_SIZE
+    return ctx
 
 
 # ``_handle_large_tool_result``'s truncation trigger/target were tuned as a
@@ -1241,8 +1349,10 @@ class LemonadeClient:
             if hasattr(self, "_log_file") and self._log_file:
                 try:
                     self._log_file.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not close Lemonade log file: %s", exc
+                    )
                 self._log_file = None
 
             # Ensure port is free
@@ -3215,21 +3325,7 @@ class LemonadeClient:
             self._ensure_pinned_load(model)
             return
 
-        # Determine the ctx_size GAIA expects for this model. This lookup
-        # happens BEFORE the "already loaded" check so we can detect a
-        # model that's loaded at the wrong window and reload it — pre-#1030
-        # follow-up the function returned early on any match, leaving
-        # Gemma 4 loaded at Lemonade's default 32K even after GAIA
-        # bumped MODELS[…].min_ctx_size to 65536. That's why
-        # ``summarize_document`` kept hitting LemonadeContextOverflowError
-        # at 35K-token sections.
-        expected_ctx: Optional[int] = None
-        for _key, _req in MODELS.items():
-            if _req.model_id == model:
-                expected_ctx = _req.min_ctx_size
-                break
-        if expected_ctx is None:
-            expected_ctx = DEFAULT_CONTEXT_SIZE
+        expected_ctx = resolve_ctx_size(model=model)
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is
@@ -3302,18 +3398,6 @@ class LemonadeClient:
             else:
                 print(f"🔄 Loading model: {model}...")
 
-        # ``expected_ctx`` was resolved above (either from MODELS or the
-        # GAIA-wide default). Pass it explicitly to /load so Lemonade
-        # doesn't fall back to its own 4096-token default and silently
-        # truncate GAIA's larger prompts.
-        if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
-            req.model_id == model for req in MODELS.values()
-        ):
-            self.log.info(
-                f"Model '{model}' not in MODELS registry; "
-                f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
-            )
-
         # The actual load failure is the one this method must NOT swallow
         # (#2053): a model that is present but fails to load (bad recipe, OOM,
         # corrupt checkpoint) previously got hidden by a blanket
@@ -3343,8 +3427,10 @@ class LemonadeClient:
                 )
             else:
                 print(f"✅ Model loaded: {model}")
-        except Exception:
-            pass  # Ignore print errors
+        except Exception as exc:
+            get_logger(__name__).warning(
+                "Could not display model load confirmation: %s", exc
+            )
 
     def _consume_pull_stream(self, model_name: str, phase: str) -> bool:
         """Drive ``pull_model_stream`` to completion, logging progress at INFO.
@@ -4072,8 +4158,10 @@ class LemonadeClient:
             for model in models.get("data", []):
                 if _model_ids_match(model.get("id"), model_id):
                     return model.get("downloaded", False)
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning(
+                "Could not query model download status: %s", exc
+            )
         return False
 
     def download_agent_models(
@@ -4170,8 +4258,8 @@ class LemonadeClient:
                 # Also check for partial match
                 if model_id.lower() in model.get("id", "").lower():
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not query loaded models: %s", exc)
         return False
 
     def _check_lemonade_installed(self) -> bool:
@@ -4191,8 +4279,10 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning(
+                "Lemonade health check failed before installation check: %s", exc
+            )
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -4439,8 +4529,10 @@ class LemonadeClient:
                         status = self.get_status()
                         status.running = True
                         return status
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Lemonade startup health probe failed: %s", exc
+                    )
                 time.sleep(2)
 
             if not quiet:

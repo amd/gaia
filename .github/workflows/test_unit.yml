@@ -121,6 +121,12 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "✅ Packaging integrity checks passed"
 
+      - name: Test context override startup and reload contract
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          pytest tests/unit/test_context_size_resolution.py tests/unit/test_lemonade_client_ctx_override.py tests/unit/test_lemonade_model_loading.py tests/integration/test_context_override_reload.py -v --tb=short
+
       - name: Run unit tests
         env:
           # Skip memory init — Lemonade isn't available in this CI job; the

@@ -40,6 +40,28 @@ is `INFO`.
 
 ---
 
+## Local context window
+
+Set `GAIA_CTX_SIZE` to a positive integer token count to override the requested
+context window for CLI startup and subsequent local-model reloads. For example:
+
+```bash
+GAIA_CTX_SIZE=131072 gaia chat
+```
+
+The GPU/CPU profile defaults to 65,536 tokens; unknown local models use the same
+profile default. Registered models retain their own default when no override is
+set. NPU/FLM requests are capped at 32,768 tokens with a warning. Invalid nonempty
+values fail with an actionable error; unset or blank values use the default.
+
+Larger windows require model support and more KV-cache memory. The override is a
+requested window, not proof of the backend's effective capacity. A model already
+loaded with a sufficient window is reused; lowering the value takes effect on the
+next load rather than forcing eviction. SDK `ctx_size_override` remains a separate
+instance-scoped exact pin and takes precedence over this environment variable.
+
+This setting does not change installer profile defaults or overflow recovery.
+
 ## 16.2 Configuration in Code
 
 ```python

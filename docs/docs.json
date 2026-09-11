@@ -87,7 +87,8 @@
                     "pages": [
                       "guides/gaia",
                       "guides/chat",
-                      "guides/talk"
+                      "guides/talk",
+                      "guides/transcription"
                     ]
                   },
                   {
@@ -373,6 +374,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"

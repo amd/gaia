@@ -3,6 +3,7 @@ package preflight
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -312,6 +313,22 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 
+	// Installed but stopped is the commonest way to land here, and it is the one
+	// case this screen can resolve by itself. Starting is not installing: an
+	// absent Lemonade still falls through to the `f` key below, because pulling
+	// gigabytes needs a human to agree.
+	if started, base, trace := tryAutoStartLemonade(ctx); started {
+		row.State = StateOK
+		row.Line = "started for you, running at " + base
+		row.Raw = probe + "\n" + trace
+		return row
+	} else if trace != "" {
+		// A failed attempt is reported, never swallowed: the row goes red as it
+		// always did, and `d details` now shows what was run and how it failed.
+		probe += "\n" + trace
+		row.Raw = probe
+	}
+
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
 	row.Line = "not running"
@@ -347,9 +364,63 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 
 // probeLemonade asks the local model server for its model list, which is the
 // smallest call that proves it is actually serving rather than merely bound.
+// embeddedLemonade is what `gaia lemonade embedded` records about the private
+// server it runs: a port chosen at start time, and a generated API key.
+type embeddedLemonade struct {
+	Port   int    `json:"port"`
+	APIKey string `json:"api_key"`
+}
+
+// readEmbeddedLemonade loads that state file, or returns nil.
+//
+// Both fields matter and neither was used here. The port is picked when the
+// server starts — 63207 on the machine this was found on — so probing the
+// fixed 13305/8000 could never reach it; and the key means an unauthenticated
+// probe gets 401 from a server that is healthy and serving. Together they made
+// this screen report "Lemonade not running" for GAIA's own model server, then
+// offer to install a second one.
+func readEmbeddedLemonade() *embeddedLemonade {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".gaia", "lemonade", "state.json"))
+	if err != nil {
+		return nil
+	}
+	var state embeddedLemonade
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil
+	}
+	state.APIKey = strings.TrimSpace(state.APIKey)
+	return &state
+}
+
+// lemonadeAPIKey resolves the credential a local Lemonade may demand.
+//
+// LEMONADE_API_KEY wins when set, so an explicitly configured credential is
+// never overridden by whatever a local state file happens to hold.
+func lemonadeAPIKey() string {
+	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
+		return key
+	}
+	if state := readEmbeddedLemonade(); state != nil {
+		return state.APIKey
+	}
+	return ""
+}
+
 // It returns the base URL it settled on, whether it answered, and a trace for
 // the details pane.
-func probeLemonade(ctx context.Context) (base string, reachable bool, trace string) {
+// probeLemonade asks whether a local model server is answering, and where.
+//
+// A var so a test can decide that answer. Without it every row-level test here
+// depends on whether the developer running `go test` happens to have Lemonade
+// up — which silently skipped the entire auto-start path on any machine that
+// did, testing nothing while reporting green.
+var probeLemonade = probeLemonadeHTTP
+
+func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace string) {
 	ctx, cancel := context.WithTimeout(ctx, lemonadeProbeTimeout)
 	defer cancel()
 
@@ -359,6 +430,11 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 		// probing — a local server on 13305 proves nothing about it.
 		bases = []string{strings.TrimRight(override, "/")}
 	} else {
+		// GAIA's own embedded server first: its port is chosen at start time,
+		// so it is never one of the fixed ones below.
+		if state := readEmbeddedLemonade(); state != nil && state.Port > 0 {
+			bases = append(bases, fmt.Sprintf("http://localhost:%d/api/v1", state.Port))
+		}
 		for _, port := range lemonadePorts {
 			bases = append(bases, "http://localhost:"+port+"/api/v1")
 		}
@@ -371,6 +447,9 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
+		if key := lemonadeAPIKey(); key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
@@ -378,6 +457,11 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 		}
 		resp.Body.Close()
 		traces = append(traces, fmt.Sprintf("GET %s/models -> HTTP %d", b, resp.StatusCode))
+		if resp.StatusCode == http.StatusUnauthorized {
+			traces = append(traces, "  (401: a server IS listening but rejected the "+
+				"credential — set LEMONADE_API_KEY, or check "+
+				"~/.gaia/lemonade/state.json for the embedded server's key)")
+		}
 		if resp.StatusCode == http.StatusOK {
 			return b, true, strings.Join(traces, "\n")
 		}

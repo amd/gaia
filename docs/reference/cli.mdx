@@ -2532,23 +2532,19 @@ gaia test --test-type TYPE [OPTIONS]
 
   <Tab title="ASR Tests">
     **Test Types:**
-    - `asr-file-transcription` - Test ASR file transcription
     - `asr-microphone` - Test ASR microphone input
     - `asr-list-audio-devices` - List audio input devices
 
     **Options:**
-    - `--input-audio-file` - Input audio file path
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
     - `--whisper-model-size` - Whisper model size (default: base)
 
-    **Examples:**
+    <Note>
+      These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
+    </Note>
 
-    Test file transcription:
-    ```bash
-    gaia test --test-type asr-file-transcription \
-      --input-audio-file ./data/audio/test.m4a
-    ```
+    **Examples:**
 
     Test microphone (30 seconds):
     ```bash
