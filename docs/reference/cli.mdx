@@ -2941,6 +2941,74 @@ Most callers should not speak this API directly — the
 
 ---
 
+### TUI Event Trace
+
+`--trace` writes down what the agent actually did, so a wrong answer can be
+diagnosed from a file instead of from a screenshot. Every event the TUI receives
+is appended to a JSONL file — one JSON object per line, in arrival order, with
+tool calls carrying **their arguments** and tool results carrying **their
+payloads**.
+
+```bash
+gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia tui --trace=run.jsonl             # a path you choose
+gaia tui --trace --dev                 # record to a file AND show it on screen
+```
+
+The path is printed on startup (`trace → …`). An unwritable path is a startup
+error, not a warning: a trace that is silently not being written looks exactly
+like an agent that did nothing.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--trace` | string | off | Record every agent event to a JSONL file. Bare `--trace` picks `~/.gaia/traces/<timestamp>-<agent>.jsonl`. |
+
+<Note>
+  The path must be **attached** — `--trace=run.jsonl`, not `--trace run.jsonl`.
+  A spaced value is read as a command name (the flag is legal with no value, so
+  it never consumes the next argument); the TUI says so and names the working
+  form.
+</Note>
+
+Each line wraps the event with the two things the payload itself does not carry
+— when it arrived, and where it sits in the run:
+
+```json
+{"at":"2026-09-08T18:39:32.455Z","seq":188,"event":{"type":"tool_call","tool":"find_files","args":{"query":"*.go","scope":"smart"}}}
+{"at":"2026-09-08T18:39:32.547Z","seq":189,"event":{"type":"tool_result","tool":"find_files","data":{"success":true,"summary":"Found 25 result(s)…","summary_truncated":true}}}
+```
+
+A frame the TUI could not parse is still recorded — that is the frame a trace is
+most wanted for. It carries `unparsed` (the raw text) instead of `event`, or
+`unparsed_b64` when the bytes are not valid UTF-8, since encoding those as a
+JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
+A reader must check all three keys. Events are flushed one at a time, so a run
+that crashes mid-turn still leaves everything it received.
+
+`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
+screen, `--trace` chooses what is written to disk. Use both together to watch a
+run and keep it.
+
+<Note>
+  This records the agent's externally visible behaviour — tool calls, arguments,
+  results, errors, and timings. It does **not** capture prompt size or token
+  accounting, which exist only in the agent's own per-turn recorder
+  (`GAIA_TURN_LOG`).
+</Note>
+
+<Warning>
+  A trace contains verbatim tool results — file contents, shell output, email,
+  whatever the agent read on your behalf. The file is written `0600` under a
+  `0700` directory, but attaching one to a bug report shares all of it. Read it
+  before you send it.
+</Warning>
+
+A launch that fails before the agent says anything (a refused port, an unmet
+precondition) removes its own empty trace rather than leaving a 0-byte file
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
+
+---
+
 ### Cache Command
 
 Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,

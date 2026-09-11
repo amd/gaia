@@ -53,6 +53,9 @@ type SSEOptions struct {
 	Interactive bool
 	// Logf receives progress and best-effort-failure notes. Never given a token.
 	Logf func(format string, args ...any)
+	// Trace records every canonical event this client receives, verbatim. Nil
+	// means tracing is off (--trace not passed).
+	Trace *event.TraceWriter
 }
 
 // SSEClient drives one agent through the GAIA daemon's relay: it ensures the
@@ -370,6 +373,11 @@ func (s *SSEClient) consume(
 		payload, ok := reader.Next()
 		if !ok {
 			break
+		}
+		// Traced BEFORE parsing, so the file keeps the bytes that actually
+		// arrived and an unparseable frame is recorded rather than lost.
+		if err := s.opts.Trace.Write(payload); err != nil {
+			s.opts.Logf("trace: %v", err)
 		}
 		evt := event.ParseCanonicalEvent(payload)
 		if malformed, bad := evt.(event.CanonicalMalformedEvent); bad {
