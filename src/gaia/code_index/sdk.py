@@ -208,11 +208,13 @@ class CodeIndexSDK:
         new_chunks: List[CodeChunk] = []
         new_file_hashes: Dict[str, str] = {}
         files_indexed = 0
+        skipped_files = []
 
         for file_path in source_files:
             rel_path = str(Path(file_path).relative_to(self._repo_root))
             content = self._read_file_safe(file_path)
             if content is None:
+                skipped_files.append(rel_path)
                 continue
 
             file_hash = hashlib.sha256(
@@ -242,6 +244,13 @@ class CodeIndexSDK:
 
         all_chunks = reused_chunks + new_chunks
         if not all_chunks:
+            if skipped_files:
+                raise RuntimeError(
+                    "Cannot confirm an empty code index: source files could not "
+                    "be read or used. The previous index was retained. Check "
+                    f"permissions and file contents: {', '.join(skipped_files[:5])}"
+                )
+            self.clear_index()
             self.log.warning("No chunks to index")
             return IndexResult(
                 files_indexed=0,
