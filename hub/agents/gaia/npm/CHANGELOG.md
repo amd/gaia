@@ -12,6 +12,11 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Fixed
+
+- Windows npm launchers now find the Python daemon CLI even when npm passes the
+  package script as argv[1], preserving unrelated tools in shared PATH directories.
+
 ### Added
 
 - **A project map at task start.** In a code repository the agent now opens
