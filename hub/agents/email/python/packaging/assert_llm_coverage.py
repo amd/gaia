@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -96,6 +97,15 @@ def check(eval_dir: Path) -> int:
             file=sys.stderr,
         )
         _emit_summary("- **LLM coverage**: ❌ none — heuristic-only run, results void")
+        return 1
+
+    if (
+        isinstance(classified, bool)
+        or not isinstance(classified, (int, float))
+        or not math.isfinite(classified)
+    ):
+        print("ERROR: llm_classified_count must be a finite number.", file=sys.stderr)
+        _emit_summary("- **LLM coverage**: invalid classification count; results void")
         return 1
 
     if float(classified) <= 0:
