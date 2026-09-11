@@ -84,7 +84,7 @@ appears in seconds is a summary of the opening minutes.
 
   <Step title="Start Lemonade Server">
     ```bash
-    lemonade-server serve
+    gaia init
     ```
 
     Transcription runs on the same local server as chat — `Whisper-Large-v3-Turbo`
@@ -158,6 +158,10 @@ Dan Okafor: Sure, from the platform side...
 Treat the *names* as best-effort — a confident-looking wrong name is
 possible — but not the voice split behind them: that part doesn't depend on
 what was said.
+
+If a model request for naming or consolidating speakers fails, refinement
+returns an error. Retry after restoring the model connection; anonymous labels
+are reserved for voices without naming evidence, not failed requests.
 
 If diarization can't run at all (see [First run](#first-run)), `refine_transcript`
 falls back to the old text-only method instead: turns are split on pauses in
