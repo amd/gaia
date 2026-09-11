@@ -199,6 +199,14 @@ class OutputHandler(ABC):
     blocking_confirmation: bool = False
     """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
 
+    supports_stdin_prompts: bool = False
+    """Whether the person driving this handler is on the *process's* stdin.
+
+    A server-side handler shares the process stdin with the operator but not
+    with the requester, so a blocking ``input()`` there hangs the request
+    forever while stealing the operator's keystrokes.
+    """
+
     auto_approve_gated_tools: bool = False
     """Explicit opt-in: approve confirmation-gated tools with no human present.
 
@@ -842,6 +850,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
     Confirmation-gated tools prompt on the terminal when stdin is interactive and
     are denied otherwise (#2210) — see ``confirm_tool_execution``.
     """
+
+    supports_stdin_prompts: bool = True
 
     def __init__(self, auto_approve_gated_tools: bool = False):
         """Initialize the AgentConsole with appropriate display capabilities.

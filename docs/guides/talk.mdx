@@ -76,7 +76,9 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
     ⠴ Listening...
     ```
 
-    Say "exit" or "quit" to end the session
+    Say "stop" to end the session, or press Ctrl+C.
+
+    <Note>GAIA mutes the microphone while it is speaking, so it never answers its own reply. Wait for it to finish before you speak.</Note>
   </Step>
 </Steps>
 
@@ -84,7 +86,7 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 <CardGroup cols={2}>
   <Card title="Exit Session" icon="door-open">
-    Say **"exit"** or **"quit"**
+    Say **"stop"** (or press Ctrl+C)
   </Card>
 
   <Card title="Clear History" icon="rotate-right">
@@ -92,11 +94,11 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
   </Card>
 
   <Card title="Trigger Response" icon="pause">
-    Natural pauses (>1 second)
+    Pause longer than `--silence-threshold` (default 0.5 seconds)
   </Card>
 
   <Card title="Stop Playback" icon="stop">
-    Press **Enter** during audio
+    Press **Enter** while GAIA is speaking (terminal only)
   </Card>
 </CardGroup>
 
@@ -138,9 +140,25 @@ Customize your voice interaction experience:
     <Note>If voice detection is not picking up your speech, try lowering the threshold. If it triggers on background noise, raise it.</Note>
   </Tab>
 
+  <Tab title="Model & Backend">
+    ```bash
+    # Use a specific local model and a longer reply budget
+    gaia talk --model Qwen3-Coder-30B-A3B-Instruct-GGUF --max-tokens 1024
+
+    # Point at a Lemonade Server on another host or port
+    gaia talk --base-url http://192.168.1.20:13305/api/v1
+
+    # Use a cloud provider instead of local Lemonade
+    gaia talk --use-claude --claude-model claude-sonnet-4-20250514
+    gaia talk --use-chatgpt --model gpt-4o
+    ```
+
+    <Note>Defaults: `Gemma-4-E4B-it-GGUF`, 512 tokens, local Lemonade. `--use-claude` needs `ANTHROPIC_API_KEY`; `--use-chatgpt` needs `OPENAI_API_KEY` and an explicit `--model`.</Note>
+  </Tab>
+
   <Tab title="Performance Stats">
     ```bash
-    # Show performance statistics
+    # Print performance statistics after each reply (--show-stats also works)
     gaia talk --stats
     ```
   </Tab>

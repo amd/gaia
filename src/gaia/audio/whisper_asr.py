@@ -173,6 +173,7 @@ class WhisperAsr(AudioRecorder):
 
     def start_recording_streaming(self):
         """Start recording in streaming mode."""
+        self.record_thread = None
         self.is_recording = True
         self.record_thread = threading.Thread(target=self._record_audio_streaming)
         self.record_thread.start()

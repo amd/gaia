@@ -343,25 +343,26 @@ class KokoroTTS:
 
         # Playback thread function
         def audio_playback_thread():
+            playing = True
             try:
                 while True:
                     try:
                         audio_chunk = audio_buffer.get(timeout=0.1)
-                        if audio_chunk is None:  # Exit signal
-                            if status_callback:
-                                status_callback(False)
-                            break
-                        if interrupt_event and interrupt_event.is_set():
-                            break
-                        if status_callback:
-                            status_callback(True)
-                        stream.write(np.array(audio_chunk, dtype=np.float32))
                     except queue.Empty:
                         continue
-            except Exception as e:
-                self.log.error(f"Error in playback thread: {e}")
-                if status_callback:
-                    status_callback(False)
+                    if audio_chunk is None:  # Exit signal
+                        break
+                    # Keep draining after an interrupt or device error: the
+                    # synthesis side blocks on a full buffer otherwise.
+                    if not playing or (interrupt_event and interrupt_event.is_set()):
+                        continue
+                    if status_callback:
+                        status_callback(True)
+                    try:
+                        stream.write(np.array(audio_chunk, dtype=np.float32))
+                    except Exception as e:
+                        self.log.error(f"Error in playback thread: {e}", exc_info=True)
+                        playing = False
             finally:
                 stream.stop()
                 stream.close()
@@ -415,7 +416,8 @@ class KokoroTTS:
             self.log.error(f"Error in streaming: {e}")
         finally:
             audio_buffer.put(None)  # Ensure playback thread exits
-            playback_thread.join(timeout=2.0)
+            # Synthesis outruns playback; return only once the audio has played.
+            playback_thread.join()
 
     def set_voice(self, voice_name: str) -> None:
         """Change the current voice."""

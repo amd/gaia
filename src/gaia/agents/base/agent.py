@@ -1301,6 +1301,16 @@ Do NOT wrap conversational replies in JSON.
             return SilentConsole(silence_final_answer=silence_final_answer)
         return AgentConsole()
 
+    def _console_accepts_stdin_prompts(self) -> bool:
+        """True when a blocking ``input()`` on this process reaches the requester.
+
+        Server-side consoles (SSE, API) share the operator's stdin but not the
+        user, so prompting there hangs the request instead of asking anyone.
+        """
+        return bool(
+            getattr(getattr(self, "console", None), "supports_stdin_prompts", False)
+        )
+
     @abc.abstractmethod
     def _register_tools(self):
         """
@@ -6787,10 +6797,14 @@ Do NOT wrap conversational replies in JSON.
                 self.console.print_warning(max_steps_msg)
 
                 # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
-                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
+                # A server's TTY says nothing about the requester; ask the console.
                 import sys
 
-                has_stdin = sys.stdin and sys.stdin.isatty()
+                has_stdin = (
+                    self._console_accepts_stdin_prompts()
+                    and sys.stdin
+                    and sys.stdin.isatty()
+                )
                 if has_stdin and not (
                     hasattr(self, "silent_mode") and self.silent_mode
                 ):

@@ -763,6 +763,13 @@ async def async_main(action, **kwargs):
         index_file = kwargs.get("index")
         rag_documents = [index_file] if index_file else None
 
+        if kwargs.get("use_chatgpt") and not kwargs.get("model"):
+            raise ValueError(
+                "gaia talk --use-chatgpt needs --model <openai-model-id> "
+                "(for example --model gpt-4o); the default model is a local "
+                "Lemonade model the OpenAI API does not serve."
+            )
+
         config = TalkConfig(
             whisper_model_size=kwargs.get("whisper_model_size", "base"),
             audio_device_index=kwargs.get(
@@ -772,10 +779,18 @@ async def async_main(action, **kwargs):
             mic_threshold=kwargs.get("mic_threshold", 0.003),
             enable_tts=not kwargs.get("no_tts", False),
             system_prompt=None,  # Could add this as a parameter later
-            show_stats=kwargs.get("stats", False),
+            # ``--stats``/``--show-stats`` land on dest ``show_stats``.
+            show_stats=kwargs.get("show_stats", False),
             logging_level=kwargs.get(
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
+            # LLM backend selection (#124)
+            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            max_tokens=kwargs.get("max_tokens", 512),
+            use_claude=kwargs.get("use_claude", False),
+            use_chatgpt=kwargs.get("use_chatgpt", False),
+            claude_model=kwargs.get("claude_model", "claude-sonnet-5"),
+            base_url=lemonade_base_url,
             # RAG configuration
             rag_documents=rag_documents,
         )

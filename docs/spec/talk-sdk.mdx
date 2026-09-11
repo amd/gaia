@@ -134,6 +134,8 @@ class TalkConfig:
     # General settings
     use_claude: bool = False
     use_chatgpt: bool = False
+    claude_model: str = "claude-sonnet-5"  # Used when use_claude=True
+    base_url: Optional[str] = None         # Lemonade URL (None = LEMONADE_BASE_URL)
     show_stats: bool = False
     logging_level: str = "INFO"
 
@@ -414,6 +416,8 @@ def __init__(self, config: Optional[TalkConfig] = None):
         logging_level=self.config.logging_level,
         use_claude=self.config.use_claude,
         use_chatgpt=self.config.use_chatgpt,
+        claude_model=self.config.claude_model,
+        base_url=self.config.base_url,
     )
     self.chat_sdk = AgentSDK(chat_config)
 
@@ -422,11 +426,15 @@ def __init__(self, config: Optional[TalkConfig] = None):
         whisper_model_size=self.config.whisper_model_size,
         audio_device_index=self.config.audio_device_index,
         silence_threshold=self.config.silence_threshold,
+        mic_threshold=self.config.mic_threshold,
         enable_tts=self.config.enable_tts,
         logging_level=self.config.logging_level,
         use_claude=self.config.use_claude,
         use_chatgpt=self.config.use_chatgpt,
         system_prompt=self.config.system_prompt,
+        model=self.config.model,
+        claude_model=self.config.claude_model,
+        base_url=self.config.base_url,
     )
 
     self.show_stats = self.config.show_stats

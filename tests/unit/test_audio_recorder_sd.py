@@ -184,3 +184,38 @@ class TestRecording:
         assert not recorder.is_paused
 
         recorder.stop_recording()
+
+
+class TestPauseAndCaptureFailure:
+    def test_pause_discards_mic_audio_but_keeps_draining(self, recorder, mock_sd):
+        """While paused the device is read and thrown away, never queued."""
+        mock_stream = mock_sd.InputStream.return_value
+        loud_audio = np.full((2048, 1), 0.1, dtype=np.float32)
+        mock_stream.read.return_value = (loud_audio, False)
+
+        recorder.pause_recording()
+        recorder.is_recording = True
+        recorder.record_thread = threading.Thread(target=recorder._record_audio)
+        recorder.record_thread.start()
+        try:
+            time.sleep(0.5)
+        finally:
+            recorder.is_recording = False
+            recorder.record_thread.join(timeout=2.0)
+
+        assert mock_stream.read.call_count > 1
+        assert recorder.audio_queue.empty()
+
+    def test_dead_capture_thread_reads_as_not_recording(self, recorder, mock_sd):
+        """A device error must not leave callers waiting on 'Listening...'."""
+        mock_stream = mock_sd.InputStream.return_value
+        mock_stream.read.side_effect = OSError("device unplugged")
+
+        recorder.start_recording()
+        try:
+            recorder.record_thread.join(timeout=2.0)
+            assert not recorder.is_recording
+            assert recorder.capture_failed
+        finally:
+            recorder.stop_recording()  # also ends the non-daemon process thread
+        assert not recorder.capture_failed
