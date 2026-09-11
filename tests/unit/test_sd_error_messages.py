@@ -14,7 +14,15 @@ from __future__ import annotations
 import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.lemonade_launcher import LemonadeTooling
 from gaia.sd.mixin import SDToolsMixin
+
+_MODERN_LINUX = LemonadeTooling(
+    found=True,
+    kind="modern",
+    client_path="/usr/bin/lemonade",
+    server_launcher="/usr/bin/lemond",
+)
 
 _TIMEOUT = LemonadeClientError(
     "Request failed: HTTPConnectionPool(host='localhost', port=13305): "
@@ -28,7 +36,16 @@ _REFUSED = LemonadeClientError(
 )
 
 
-def test_a_download_timeout_is_not_reported_as_an_unreachable_server():
+@pytest.fixture
+def modern_linux(mocker):
+    """Resolve a modern Linux install — `lemonade` client, `lemond` daemon."""
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade", return_value=_MODERN_LINUX
+    )
+
+
+def test_a_download_timeout_is_not_reported_as_an_unreachable_server(modern_linux):
     """The regression: both errors carry 'HTTPConnectionPool'."""
     message = SDToolsMixin._describe_client_error(_TIMEOUT, model="SDXL-Turbo")
 
@@ -39,16 +56,47 @@ def test_a_download_timeout_is_not_reported_as_an_unreachable_server():
     assert "cannot reach" not in message.lower()
 
 
-def test_a_refused_connection_says_the_server_is_not_running():
+def test_a_refused_connection_says_the_server_is_not_running(modern_linux):
     message = SDToolsMixin._describe_client_error(_REFUSED, model="SDXL-Turbo")
 
     assert "cannot reach" in message.lower()
-    assert "lemonade-server serve" in message
+    assert "systemctl --user start lemond" in message
     assert "timed out" not in message.lower()
 
 
+def test_the_remedies_never_name_a_binary_a_modern_install_lacks(modern_linux):
+    """`lemonade-server` was removed in Lemonade 10.7 — pointing a user at it
+    is advice that fails at the shell. Both branches must route through the
+    launcher hints (issue #1867)."""
+    timeout_message = SDToolsMixin._describe_client_error(_TIMEOUT, model="SDXL-Turbo")
+    refused_message = SDToolsMixin._describe_client_error(_REFUSED, model="SDXL-Turbo")
+
+    assert "lemonade-server" not in timeout_message
+    assert "lemonade-server" not in refused_message
+    assert "/usr/bin/lemonade pull SDXL-Turbo" in timeout_message
+    assert "/usr/bin/lemonade load SDXL-Turbo" in timeout_message
+
+
+def test_a_legacy_install_still_gets_the_command_it_actually_has(mocker):
+    """The hint tells the truth per host: a real legacy CLI is still named."""
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="/usr/local/bin/lemonade-server",
+            server_launcher="/usr/local/bin/lemonade-server",
+        ),
+    )
+
+    message = SDToolsMixin._describe_client_error(_REFUSED, model="SDXL-Turbo")
+
+    assert "/usr/local/bin/lemonade-server serve" in message
+
+
 @pytest.mark.parametrize("error", [_TIMEOUT, _REFUSED], ids=["timeout", "refused"])
-def test_the_raw_error_survives_for_debugging(error):
+def test_the_raw_error_survives_for_debugging(error, modern_linux):
     """A friendlier message must not delete the detail a bug report needs."""
     assert "13305" in SDToolsMixin._describe_client_error(
         error, model="SDXL-Turbo"

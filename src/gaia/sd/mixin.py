@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
-from gaia.llm.lemonade_launcher import describe_client_hint
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -437,6 +437,9 @@ class SDToolsMixin:
         in its text, so a substring test for "connect" reports a live server as
         unreachable and sends the user off to restart something that was fine.
         Timeouts are checked first.
+
+        Remedies come from the launcher hints, never a literal command — the
+        modern install ships ``lemonade``/``lemond``, not ``lemonade-server``.
         """
         raw = str(error)
         lowered = raw.lower()
@@ -445,15 +448,16 @@ class SDToolsMixin:
             return (
                 f"Timed out waiting for {model}; the server is running but did "
                 "not answer in time. First use of an SD model both downloads "
-                "and loads several GB. Pre-fetch it with `lemonade-server pull "
-                f"{model}`, confirm it loads with `lemonade-server load "
-                f"{model}`, then retry. ({raw})"
+                "and loads several GB. Pre-fetch it "
+                f"({describe_client_hint('pull', model).instruction}), confirm "
+                f"it loads ({describe_client_hint('load', model).instruction}), "
+                f"then retry. ({raw})"
             )
         if "connection refused" in lowered or "failed to establish" in lowered:
             return (
-                "Cannot reach Lemonade Server. Start it with "
-                "`lemonade-server serve`, or set LEMONADE_BASE_URL to a running "
-                f"server. ({raw})"
+                "Cannot reach Lemonade Server "
+                f"({describe_start_hint().instruction}), or set "
+                f"LEMONADE_BASE_URL to a running server. ({raw})"
             )
         return f"Image generation failed for {model}: {raw}"
 
