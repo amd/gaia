@@ -1,13 +1,20 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Contract tests for ``packaging/gen_binaries_lock.py`` (schema 3.0, two lanes).
+Contract tests for ``packaging/gen_binaries_lock.py`` (schema 3.0: three
+components across two lanes).
 
 The lock this writes is the integrity gate the npm client enforces on every
-download, and half of it now points at the ``terminal-hub`` lane — which this
+download, and part of it points at the ``terminal-hub`` lane — which this
 package does not publish. A wrong filename or a wrong lane version there is not
 a build failure anywhere; it is a 404 on a user's first run. These tests cover
 the generator's loud failures as much as its happy path.
+
+``sidecar`` and ``stdio`` are two freezes of the same agent sharing ONE hub
+directory, so a swapped filename between them hash-verifies at publish time and
+only surfaces as the TUI talking to a REST binary on a user's box. That is why
+the happy path here feeds metas for all three components: a release that skips
+one leaves its lane on the committed placeholders.
 """
 
 from __future__ import annotations
@@ -42,6 +49,16 @@ SIDECAR_ARTIFACTS = {
     "darwin-x64": "gaia-agent-darwin-x64",
     "linux-x64": "gaia-agent-linux-x64",
 }
+STDIO_ARTIFACTS = {
+    "win32-x64": "gaia-agent-stdio-win32-x64.exe",
+    "darwin-arm64": "gaia-agent-stdio-darwin-arm64",
+    "darwin-x64": "gaia-agent-stdio-darwin-x64",
+    "linux-x64": "gaia-agent-stdio-linux-x64",
+}
+
+# Both frozen transports install under the name the TUI spawns; only the TUI
+# itself is renamed. Mirrors the meta-emitting step in release_agent_gaia.yml.
+_BASE_EXECUTABLE = {"sidecar": "gaia-agent", "stdio": "gaia-agent", "tui": "gaia-tui"}
 
 
 def _sha(text: str) -> str:
@@ -54,7 +71,7 @@ def _record(component: str, platform: str, filename: str) -> dict:
         "component": component,
         "platform": platform,
         "filename": filename,
-        "executable": ("gaia-agent" if component == "sidecar" else "gaia-tui")
+        "executable": _BASE_EXECUTABLE[component]
         + (".exe" if filename.endswith(".exe") else ""),
         "sha256": _sha(body),
         "size": len(body),
@@ -93,15 +110,28 @@ def _run(lock: Path, metas: list[Path], **overrides) -> int:
 
 
 def _all_metas(tmp_path: Path) -> list[Path]:
+    """Every meta a full release emits — all three components, all platforms."""
     metas = [
         _write_meta(tmp_path, _record("sidecar", p, f))
         for p, f in SIDECAR_ARTIFACTS.items()
+    ]
+    metas += [
+        _write_meta(tmp_path, _record("stdio", p, f))
+        for p, f in STDIO_ARTIFACTS.items()
     ]
     metas += [
         _write_meta(tmp_path, _record("tui", p, f))
         for p, f in gen.TUI_ARTIFACT_NAMES.items()
     ]
     return metas
+
+
+def test_the_test_fixtures_track_the_generators_artifact_tables():
+    # These local tables exist so a rename in the generator has to be made
+    # deliberately in both places rather than silently agreeing with itself.
+    assert SIDECAR_ARTIFACTS == gen.SIDECAR_ARTIFACT_NAMES
+    assert STDIO_ARTIFACTS == gen.STDIO_ARTIFACT_NAMES
+    assert set(_BASE_EXECUTABLE) == set(gen.COMPONENTS)
 
 
 def test_committed_lock_is_the_schema_this_generator_writes():
@@ -128,6 +158,7 @@ def test_full_release_writes_both_lanes(tmp_path, capsys):
     assert "baseUrl" not in written
 
     sidecar = written["components"]["sidecar"]
+    stdio = written["components"]["stdio"]
     tui = written["components"]["tui"]
     assert sidecar["componentVersion"] == AGENT_VERSION
     assert sidecar["baseUrl"] == SIDECAR_BASE
@@ -135,9 +166,24 @@ def test_full_release_writes_both_lanes(tmp_path, capsys):
     assert tui["baseUrl"] == TUI_BASE
     # The two lanes are genuinely different — the whole point of schema 3.0.
     assert tui["baseUrl"] != sidecar["baseUrl"]
+    # stdio is the same freeze published beside the sidecar, so it rides the
+    # gaia lane rather than carrying a third version that could drift.
+    assert stdio["componentVersion"] == AGENT_VERSION
+    assert stdio["baseUrl"] == SIDECAR_BASE
 
     assert set(sidecar["platforms"]) == set(SIDECAR_ARTIFACTS)
+    assert set(stdio["platforms"]) == set(STDIO_ARTIFACTS)
     assert set(tui["platforms"]) == set(gen.TUI_ARTIFACT_NAMES)
+    for platform, entry in stdio["platforms"].items():
+        assert entry["filename"] == STDIO_ARTIFACTS[platform]
+        assert entry["sha256"] == _sha(f"stdio-{platform}")
+        # One directory, two transports: the sidecar's name must never appear
+        # on a stdio entry, or the installer hands the TUI a REST server.
+        assert entry["filename"] != sidecar["platforms"][platform]["filename"]
+    # Both transports install as `gaia-agent` — that collision is why the npm
+    # client consumes only one of them (see npm/test/lock.test.ts).
+    assert stdio["platforms"]["win32-x64"]["executable"] == "gaia-agent.exe"
+    assert stdio["platforms"]["linux-x64"]["executable"] == "gaia-agent"
     for platform, entry in tui["platforms"].items():
         assert entry["filename"] == gen.TUI_ARTIFACT_NAMES[platform]
         assert entry["sha256"] == _sha(f"tui-{platform}")
@@ -168,10 +214,11 @@ def test_partial_metas_keep_the_other_platforms(tmp_path):
     )
     assert _run(lock, [only]) == 0
     after = json.loads(lock.read_text(encoding="utf-8"))
-    assert (
-        after["components"]["tui"]["platforms"]
-        == before["components"]["tui"]["platforms"]
-    )
+    for untouched in ("tui", "stdio"):
+        assert (
+            after["components"][untouched]["platforms"]
+            == before["components"][untouched]["platforms"]
+        )
     assert set(after["components"]["sidecar"]["platforms"]) == set(SIDECAR_ARTIFACTS)
 
 
@@ -185,6 +232,40 @@ def test_rejects_a_tui_filename_terminal_hub_does_not_publish(tmp_path):
         _run(lock, [bad])
     assert "gaia-win-x64.exe" in str(e.value)
     assert "terminal-hub" in str(e.value)
+
+
+@pytest.mark.parametrize(
+    "component, other",
+    [("sidecar", "stdio"), ("stdio", "sidecar")],
+)
+def test_rejects_the_two_gaia_lane_transports_swapping_filenames(
+    tmp_path, component, other
+):
+    # sidecar and stdio publish into ONE agents/gaia/<version>/ directory, so a
+    # crossed filename uploads and hash-verifies cleanly. Nothing downstream
+    # catches it — the user just gets the wrong transport.
+    lock = _seed_lock(tmp_path)
+    names = {"sidecar": SIDECAR_ARTIFACTS, "stdio": STDIO_ARTIFACTS}
+    bad = _record(component, "linux-x64", names[other]["linux-x64"])
+    with pytest.raises(SystemExit) as e:
+        _run(lock, [_write_meta(tmp_path, bad)])
+    assert names[component]["linux-x64"] in str(e.value)
+
+
+def test_rejects_a_stale_stdio_filename_in_the_committed_lock(tmp_path):
+    # The whole-lock revalidation must cover stdio, not just sidecar and tui —
+    # an entry with no meta this run keeps its committed value.
+    lock = _seed_lock(tmp_path)
+    data = json.loads(lock.read_text(encoding="utf-8"))
+    data["components"]["stdio"]["platforms"]["linux-x64"][
+        "filename"
+    ] = "gaia-agent-linux-x64"
+    lock.write_text(json.dumps(data), encoding="utf-8")
+    only_tui = _write_meta(tmp_path, _record("tui", "linux-x64", "gaia-linux-x64"))
+    with pytest.raises(SystemExit) as e:
+        _run(lock, [only_tui])
+    assert "stale committed value" in str(e.value)
+    assert "gaia-agent-stdio-linux-x64" in str(e.value)
 
 
 def test_rejects_a_stale_committed_entry_no_meta_overwrites(tmp_path):

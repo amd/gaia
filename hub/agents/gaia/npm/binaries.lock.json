@@ -32,6 +32,36 @@
         }
       }
     },
+    "stdio": {
+      "componentVersion": "0.1.1",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
+      "platforms": {
+        "win32-x64": {
+          "filename": "gaia-agent-stdio-win32-x64.exe",
+          "executable": "gaia-agent.exe",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-arm64": {
+          "filename": "gaia-agent-stdio-darwin-arm64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-x64": {
+          "filename": "gaia-agent-stdio-darwin-x64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "linux-x64": {
+          "filename": "gaia-agent-stdio-linux-x64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        }
+      }
+    },
     "tui": {
       "componentVersion": "0.23.0",
       "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",

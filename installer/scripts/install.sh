@@ -447,12 +447,18 @@ install_tui() {
     print_success "Terminal hub $version installed to $GAIA_BIN/gaia-tui"
 }
 
-# The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
-# child process, so without this binary the flagship is listed but cannot run —
-# which is what `curl | sh` left behind before: a UI with no agent under it.
+# The flagship agent's frozen STDIO build. The terminal hub spawns `gaia-agent`
+# as a child process, so without this binary the flagship is listed but cannot
+# run — which is what `curl | sh` left behind before: a UI with no agent under it.
 #
 # Installed into $GAIA_BIN because that is the directory this installer owns and
 # has already put on PATH, so the hub's exec.LookPath finds gaia-agent there.
+#
+# STDIO, not the sidecar: `agents/gaia/` publishes two programs whose artifact
+# names differ by one word, and only one can be spawned. `gaia-agent-<platform>`
+# is the REST sidecar the daemon supervises — it binds a port and never reads
+# stdin, so under this name it satisfies the hub's readiness check and then
+# feeds uvicorn's startup log to a JSON line scanner (#3062).
 #
 # Only a checksum mismatch is fatal. A missing build or a failed download leaves
 # a working hub and a working Python CLI, so those warn and continue rather than
@@ -467,7 +473,7 @@ install_flagship_agent() {
         echo "  The terminal hub still works; the GAIA agent will show as unavailable."
         return 0
     fi
-    filename="gaia-agent-${platform}"
+    filename="gaia-agent-stdio-${platform}"
 
     py=""
     if ! py="$(terminal_hub_python)"; then

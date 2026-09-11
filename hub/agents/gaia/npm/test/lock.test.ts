@@ -44,9 +44,31 @@ const EXPECTED_EXECUTABLE: Record<string, string> = {
 };
 
 describe("shipped binaries.lock.json", () => {
-  it("parses with the two-lane schema", () => {
+  it("carries every lane this package consumes", () => {
     expect(lock.schemaVersion).toMatch(/^3\./);
-    expect(Object.keys(lock.components).sort()).toEqual([...COMPONENTS].sort());
+    // A superset, not an exact match: the lock is the release's record of every
+    // artifact published from the gaia lane, and the native installers read a
+    // lane this package deliberately does not (see the `stdio` test below).
+    for (const component of COMPONENTS) {
+      expect(Object.keys(lock.components)).toContain(component);
+    }
+  });
+
+  // `gaia-agent-stdio-*` is the stdin/stdout JSONL child the TUI spawns; the
+  // `sidecar` lane is the REST server this package starts. Both install under
+  // the name `gaia-agent`, so adding `stdio` to COMPONENTS would make `fetch`
+  // download both into one cache directory and leave which transport `npx`
+  // installed up to whichever landed last.
+  it("records the stdio lane without consuming it", () => {
+    const stdio = lock.components["stdio"];
+    expect(stdio, "the release must record the TUI's stdio child").toBeDefined();
+    expect([...COMPONENTS]).not.toContain("stdio");
+
+    for (const [platform, entry] of Object.entries(stdio!.platforms)) {
+      expect(entry.filename, `stdio/${platform} must not be the REST sidecar`).toMatch(
+        /^gaia-agent-stdio-/,
+      );
+    }
   });
 
   // Pinning the literal version here would only force an edit every release;
