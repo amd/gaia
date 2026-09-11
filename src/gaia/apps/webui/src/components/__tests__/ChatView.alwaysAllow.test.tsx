@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * ChatView's client-side auto-approve for `tool_confirm`: only an explicit
+ * ChatView's client-side auto-approve for `permission_request`: only an explicit
  * "allow for the rest of this chat" grant skips the prompt, only in the chat
  * that granted it, and a one-off (remember=false) allow never does.
  */
@@ -46,8 +46,8 @@ const DOC_AGENT: AgentInfo = {
     tools_count: 3,
 };
 
-const toolConfirm = (confirmId: string, tool = 'run_shell_command') =>
-    ({ type: 'tool_confirm', confirm_id: confirmId, tool, args: { command: 'dir' } }) as unknown as StreamEvent;
+const permissionRequest = (confirmId: string, tool = 'run_shell_command') =>
+    ({ type: 'permission_request', confirm_id: confirmId, tool, args: { command: 'dir' } }) as unknown as StreamEvent;
 
 let captured: api.StreamCallbacks | null = null;
 
@@ -65,7 +65,6 @@ beforeEach(() => {
     mockedApi.cancelStream.mockResolvedValue(undefined as never);
     mockedApi.updateSession.mockResolvedValue(undefined as never);
     mockedApi.confirmTool.mockResolvedValue(undefined as never);
-    mockedApi.confirmToolExecution.mockResolvedValue(undefined as never);
     mockedApi.sendMessageStream.mockImplementation((_sid, _msg, cbs) => {
         captured = cbs as api.StreamCallbacks;
         return new AbortController();
@@ -118,28 +117,29 @@ const pendingPrompts = () =>
         .getState()
         .notifications.filter((n) => n.type === 'permission_request' && !n.response);
 
-describe('ChatView tool_confirm auto-approve', () => {
+describe('ChatView permission_request auto-approve', () => {
     it('a remember=false allow is never auto-approved later', async () => {
         await openChat(CHAT_A);
 
-        emit(toolConfirm('c1'));
+        emit(permissionRequest('c1'));
         expect(pendingPrompts().map((n) => n.id)).toEqual(['c1']);
         expect(pendingPrompts()[0].sessionId).toBe('chat-A');
         await act(() => useNotificationStore.getState().respondToPermission('c1', 'allow', false));
 
-        emit(toolConfirm('c2'));
-        expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
+        emit(permissionRequest('c2'));
+        expect(mockedApi.confirmTool).toHaveBeenCalledTimes(1);
         expect(pendingPrompts().map((n) => n.id)).toEqual(['c2']);
     });
 
     it('an "allow for the rest of this chat" grant auto-approves the next call in that chat', async () => {
         await openChat(CHAT_A);
 
-        emit(toolConfirm('c1'));
+        emit(permissionRequest('c1'));
         await act(() => useNotificationStore.getState().respondToPermission('c1', 'allow', true));
 
-        emit(toolConfirm('c2'));
-        expect(mockedApi.confirmToolExecution).toHaveBeenCalledWith('chat-A', 'c2', 'allow', false);
+        emit(permissionRequest('c2'));
+        expect(mockedApi.confirmTool).toHaveBeenCalledTimes(2);
+        expect(mockedApi.confirmTool).toHaveBeenLastCalledWith('chat-A', true);
         expect(pendingPrompts()).toEqual([]);
     });
 
@@ -149,8 +149,8 @@ describe('ChatView tool_confirm auto-approve', () => {
         });
         await openChat(CHAT_B);
 
-        emit(toolConfirm('c9'));
-        expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
+        emit(permissionRequest('c9'));
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
         expect(pendingPrompts().map((n) => n.id)).toEqual(['c9']);
     });
 
@@ -161,8 +161,8 @@ describe('ChatView tool_confirm auto-approve', () => {
         await openChat(CHAT_A);
         useNotificationStore.getState().revokeAlwaysAllow('chat-A', 'run_shell_command');
 
-        emit(toolConfirm('c3'));
-        expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
+        emit(permissionRequest('c3'));
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
         expect(pendingPrompts().map((n) => n.id)).toEqual(['c3']);
     });
 });

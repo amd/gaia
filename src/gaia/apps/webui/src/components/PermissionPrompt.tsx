@@ -202,7 +202,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
           <span>
             Allow this tool for the rest of this chat
             <small className="permission-remember-hint">
-              Only in this chat, until GAIA restarts. Revoke any time in Settings → Tools &amp; Permissions.
+              Only in this chat, until you reload or restart GAIA. Revoke any time in Settings → Tools &amp; Permissions.
             </small>
           </span>
         </label>

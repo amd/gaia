@@ -714,7 +714,6 @@ export type StreamEventType =
     | 'tool_end'     // Tool execution completed
     | 'tool_result'  // Tool result summary
     | 'tool_args'    // Tool arguments detail
-    | 'tool_confirm' // Tool requires user confirmation (blocking)
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
@@ -759,11 +758,11 @@ export interface StreamEvent {
     };
     /** Agent ID of the newly created agent (for agent_created events). */
     agent_id?: string;
-    /** Confirmation ID (for tool_confirm events). */
+    /** Confirmation ID (for permission_request events). */
     confirm_id?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
-    /** Timeout in seconds (for tool_confirm events). */
+    /** Timeout in seconds (for permission_request events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;

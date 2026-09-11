@@ -41,7 +41,7 @@ export function SessionToolGrants() {
                 <p className="perm-session-grants-empty">
                     No tools are auto-approved. Ticking &ldquo;Allow this tool for the rest of
                     this chat&rdquo; on a permission prompt adds one here. A grant covers only that
-                    chat and ends when GAIA restarts.
+                    chat and ends when you reload or restart GAIA.
                 </p>
             ) : (
                 <ul className="perm-session-grant-list">
@@ -51,7 +51,7 @@ export function SessionToolGrants() {
                             <li key={`${sessionId}:${tool}`} className="perm-session-grant">
                                 <code className="perm-tool-name">{tool}</code>
                                 <span className="perm-session-grant-note">
-                                    in &ldquo;{title}&rdquo; until restart
+                                    in &ldquo;{title}&rdquo; until reload or restart
                                 </span>
                                 <button
                                     className="perm-session-grant-revoke"

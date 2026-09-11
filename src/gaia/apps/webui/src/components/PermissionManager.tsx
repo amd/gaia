@@ -15,7 +15,6 @@ import {
   Info,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
-import { SessionToolGrants } from './SessionToolGrants';
 import type { PermissionTier, ToolPermission } from '../types/agent';
 import './PermissionManager.css';
 
@@ -277,9 +276,6 @@ export function PermissionManager({ agentId }: PermissionManagerProps) {
           </button>
         )}
       </div>
-
-      {/* Session always-allow grants — revocable here and in Settings */}
-      <SessionToolGrants />
 
       {/* Tier legend */}
       <div className="perm-legend">

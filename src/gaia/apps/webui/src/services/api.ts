@@ -492,7 +492,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
     'permission_request', 'needs_confirmation', 'policy_alert',
 ]);
 
@@ -686,16 +686,6 @@ export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
 }
 
 // -- Tool Confirmation ---------------------------------------------------------
-
-/** Resolve a pending tool execution confirmation (Allow or Deny). */
-export async function confirmToolExecution(
-    sessionId: string,
-    confirmId: string,
-    action: 'allow' | 'deny',
-    remember: boolean,
-): Promise<void> {
-    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
-}
 
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {

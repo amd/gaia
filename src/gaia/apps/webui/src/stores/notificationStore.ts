@@ -39,7 +39,7 @@ export function purgeLegacyAlwaysAllow(): void {
             localStorage.removeItem(LEGACY_ALWAYS_ALLOW_TOOLS_KEY);
             console.warn(
                 '[notificationStore] Discarded a persisted "always allow" tool list from an ' +
-                'earlier version — grants now cover one chat until GAIA restarts and are ' +
+                'earlier version — grants now cover one chat until you reload or restart GAIA and are ' +
                 'revocable in Settings → Tools & Permissions.'
             );
         }
@@ -132,13 +132,19 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   setTypeFilter: (type) => set({ typeFilter: type }),
 
   respondToPermission: async (id, action, remember) => {
-    // Find the notification to get the session ID for the REST call
     const notification = get().notifications.find((n) => n.id === id);
-    const sessionId = notification?.agentId;
+    const chatSessionId = notification?.sessionId;
 
-    // Try Electron IPC first, then fall back to REST API
+    // Chat prompts belong to the backend even when Electron IPC is available.
     const electronApi = window.gaiaAPI;
-    if (electronApi?.notification?.respondPermission) {
+    if (chatSessionId) {
+      try {
+        await confirmTool(chatSessionId, action === 'allow');
+      } catch (err) {
+        console.error('[notificationStore] Failed to send permission response via REST:', err);
+        return;
+      }
+    } else if (notification && electronApi?.notification?.respondPermission) {
       try {
         await electronApi.notification.respondPermission(id, action, remember);
       } catch (err) {
@@ -147,19 +153,13 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         // The permission prompt remains actionable so the user can retry.
         return;
       }
-    } else if (sessionId) {
-      // Web browser mode — call the REST endpoint
-      try {
-        await confirmTool(sessionId, action === 'allow');
-      } catch (err) {
-        console.error('[notificationStore] Failed to send permission response via REST:', err);
-        return;
-      }
+    } else {
+      console.error('[notificationStore] No permission response destination for notification:', id);
+      return;
     }
     // Grant only within the chat that asked. A request with no chat session
     // (an OS agent) has nothing to auto-approve here; its remember flag
     // already went to the agent above.
-    const chatSessionId = notification?.sessionId;
     const tool = notification?.tool;
     if (action === 'allow' && remember && chatSessionId && tool) {
       set((state) =>

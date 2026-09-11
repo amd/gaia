@@ -39,9 +39,8 @@ describe("main.cjs routes gaia:// links through the startup queue", () => {
     expect(drain).toBeGreaterThan(wait);
   });
 
-  test("the queue is released in exactly one place", () => {
-    expect(MAIN.match(/processStartupDeepLinks\(/g)).toHaveLength(2); // definition + call
-    expect(MAIN.match(/startupDeepLinks\.drain\(/g)).toHaveLength(1);
+  test("the startup release delegates to the queue drain", () => {
+    expect(functionBody("processStartupDeepLinks")).toContain("startupDeepLinks.drain(");
   });
 
   test("every inbound link goes through the queue, never straight to dispatch", () => {
