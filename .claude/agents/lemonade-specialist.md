@@ -80,7 +80,8 @@ Always read `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI deployments can r
 ## CLI
 
 ```bash
-# Server lifecycle — GAIA starts Lemonade itself when it needs it.
+# Server lifecycle — `gaia init` is the only thing in the tree that starts
+# the server; the runtime path only checks and errors out on a stopped one.
 gaia init                              # Installs Lemonade and starts it
 gaia lemonade embedded start           # Private, self-contained instance
 
