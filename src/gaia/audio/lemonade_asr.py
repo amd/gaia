@@ -289,6 +289,8 @@ def _write_chunk_wav(source: Path, chunk: _Chunk, dest: Path) -> None:
         frames = reader.readframes(frame_count)
         params = reader.getparams()
 
+    # pylint: disable=no-member
+    # "wb" makes this a Wave_write; pylint reads wave.open as always Wave_read.
     with wave.open(str(dest), "wb") as writer:
         writer.setnchannels(params.nchannels)
         writer.setsampwidth(params.sampwidth)
