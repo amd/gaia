@@ -317,6 +317,7 @@ class ShellToolsMixin:
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
     - get_shell_state: Read the session's directory and changed environment
+    - set_shell_variable: Set an environment variable for later commands
     - reset_shell_session: Return the session to the state it started in
 
     Commands share one :class:`ShellSession` per agent, so a directory change or
@@ -350,7 +351,10 @@ class ShellToolsMixin:
         """
         validator = getattr(self, "path_validator", None)
         if validator is not None:
-            guard: Callable[[str], bool] = validator.is_path_allowed
+
+            def guard(path: str) -> bool:
+                return validator.is_path_allowed(path, prompt_user=False)
+
             return guard
         checker: Optional[Callable[[str], bool]] = getattr(
             self, "_is_path_allowed", None

@@ -100,6 +100,12 @@ class TestWorkingDirectoryPersists:
 
 
 class TestEnvironmentPersists:
+    def test_terminal_dimensions_are_not_persisted_as_agent_changes(self, session):
+        session.run(export_command("COLUMNS", "80"))
+        session.run(export_command("LINES", "24"))
+        assert "COLUMNS" not in session.environment()
+        assert "LINES" not in session.environment()
+
     def test_exported_variable_survives_to_the_next_command(self, session):
         session.run(export_command("GAIA_TEST_VAR", "persisted"))
 
@@ -250,6 +256,17 @@ class TestSerialisation:
 
 
 class TestExecution:
+    def test_unused_host_session_cleans_up_when_collected(self, tmp_path):
+        import gc
+
+        shell = ShellSession(start_cwd=str(tmp_path))
+        shell.run("echo hello")
+        directory = shell._temp_dir
+        assert os.path.isdir(directory)
+        del shell
+        gc.collect()
+        assert not os.path.exists(directory)
+
     def test_exit_code_is_reported(self, session):
         result = session.run("exit 3")
 
