@@ -10,6 +10,7 @@ model with the required `ctx_size` instead of asking the user to run a manual
 `lemonade-server serve --ctx-size N` command.
 """
 
+import logging
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,16 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError, LemonadeStatus
 from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+
+# A co-loaded non-LLM model. Its tiny ctx_size must never be mistaken for the
+# server's, and its presence must never be mistaken for "a chat model is up".
+TRANSCRIPTION_MODEL = {
+    "id": "Whisper-Large-v3-Turbo",
+    "model_name": "Whisper-Large-v3-Turbo",
+    "type": "transcription",
+    "labels": [],
+    "recipe_options": {"ctx_size": 4096},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -303,3 +314,90 @@ def test_default_context_size_literal():
     """Belt-and-braces: assert the *literal* 32768 — testing-against-the-import
     is circular and would silently accept a value-drift regression."""
     assert DEFAULT_CONTEXT_SIZE == 32768
+
+
+# ---------------------------------------------------------------------------
+# Case 9 — only a non-LLM model loaded: init path must preload a real LLM
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_only_non_llm_model_loaded_triggers_preload(mock_cls):
+    """A transcription model is not a chat model. The loose "not an image
+    model" check counted it as an LLM, so GAIA skipped the preload and ran
+    with nothing to answer from."""
+    client = _make_client_mock(
+        _status(running=True, context_size=0, loaded_models=[TRANSCRIPTION_MODEL])
+    )
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[TRANSCRIPTION_MODEL]),
+        _status(
+            running=True,
+            context_size=32768,
+            loaded_models=[
+                TRANSCRIPTION_MODEL,
+                {"id": "Gemma-4-E4B-it-GGUF", "type": "llm"},
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
+
+    assert ok is True
+    client.load_model.assert_called_once()
+    assert client.load_model.call_args.kwargs.get("ctx_size") == 32768
+
+
+# ---------------------------------------------------------------------------
+# Case 10 — only a non-LLM model loaded on re-check: warn loudly, never assume
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_recheck_with_only_non_llm_model_warns_loudly(mock_cls, caplog, capsys):
+    """On the already-initialised re-check path, a non-LLM-only server reports
+    context_size=0. That must produce an actionable warning — not a silent
+    "context is fine" that caches min_context_size."""
+    client = _make_client_mock(
+        _status(running=True, context_size=0, loaded_models=[TRANSCRIPTION_MODEL])
+    )
+    mock_cls.return_value = client
+
+    LemonadeManager._initialized = True
+    LemonadeManager._context_size = 0
+    LemonadeManager._last_recheck_time = 0.0
+
+    with caplog.at_level(logging.WARNING, logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(min_context_size=32768, quiet=False)
+
+    assert ok is True
+    client.load_model.assert_not_called()
+
+    # The loud part: what failed, what to do, where to look.
+    for surface in (caplog.text, capsys.readouterr().err):
+        assert "no LLM loaded" in surface
+        assert "Whisper-Large-v3-Turbo" in surface
+        assert "gaia init" in surface
+        assert "server.log" in surface
+
+    # The silent part that must NOT happen: caching min_context_size as if a
+    # chat model were up.
+    assert LemonadeManager.get_context_size() == 0
+
+
+# ---------------------------------------------------------------------------
+# Case 11 — the shared predicate is the single source of truth
+# ---------------------------------------------------------------------------
+
+
+def test_is_llm_model_entry_rejects_non_llm_types():
+    from gaia.llm.lemonade_client import is_llm_model_entry
+
+    assert is_llm_model_entry({"type": "llm"}) is True
+    assert is_llm_model_entry(TRANSCRIPTION_MODEL) is False
+    assert is_llm_model_entry({"type": "embedding"}) is False
+    assert is_llm_model_entry({"type": "image"}) is False
+    # Catalog-derived rows carry no ``type`` — fall back to labels.
+    assert is_llm_model_entry({"id": "Gemma-4-E4B-it-GGUF"}) is True
+    assert is_llm_model_entry({"labels": ["embeddings"]}) is False
