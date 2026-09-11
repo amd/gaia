@@ -765,6 +765,10 @@ class TestNonStreamingEmailFailsLoud:
         registry.resolve_model.return_value = None
         fake_agent = MagicMock()
         fake_agent.model_id = "SomeModel-GGUF"
+        fake_agent.device = None
+        fake_agent.system_prompt = "Test"
+        fake_agent._openai_tools = []
+        fake_agent.chat.config.max_tokens = 8192
         fake_agent.process_query.return_value = "ok"
         fake_agent.conversation_history = []
         fake_agent.indexed_files = set()

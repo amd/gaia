@@ -4829,7 +4829,9 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        messages = []
+        from gaia.agents.base.history import TurnMessages
+
+        messages = TurnMessages()
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
         # set). Built here so it spans the whole turn — the total it reports is
@@ -4890,6 +4892,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
+        messages.recorded.clear()
         messages.append({"role": "user", "content": user_input})
 
         # Use provided max_steps or fall back to class default
@@ -5403,7 +5406,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -5549,7 +5552,7 @@ Do NOT wrap conversational replies in JSON.
                             # model still sees its tool-call history, but cap
                             # any single tool-result content to 500 chars and
                             # drop all-but-last-2 tool results entirely.
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -6849,6 +6852,7 @@ Do NOT wrap conversational replies in JSON.
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
             }
+            self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below.
             self._finish_turn_record("", steps_taken)
             return self.last_result
@@ -6909,6 +6913,8 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
         }
+
+        result["model_messages"] = messages.finish(result["result"])
 
         # Write trace to file if requested
         if trace:

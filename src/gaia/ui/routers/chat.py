@@ -165,7 +165,10 @@ async def send_message(
         else:
             try:
                 db.add_message(request.session_id, "user", request.message)
-                response_text = await srv._get_chat_response(db, session, request)
+                model_messages = []
+                response_text = await srv._get_chat_response(
+                    db, session, request, model_messages=model_messages
+                )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
                     response_text = _clean_answer_json(response_text)
@@ -174,7 +177,12 @@ async def send_message(
                     response_text = _RAG_RESULT_JSON_SUB_RE.sub("", response_text)
                     response_text = _fix_double_escaped(response_text)
                     response_text = response_text.strip()
-                msg_id = db.add_message(request.session_id, "assistant", response_text)
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    response_text,
+                    model_messages=model_messages or None,
+                )
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
