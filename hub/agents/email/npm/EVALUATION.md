@@ -86,6 +86,6 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
   `stx` pool) and `email_scorecard_refresh.yml` (manual dispatch only; a full-corpus
   run regenerates `SCORECARD.md`, a subset run smoke-tests the pipeline without
   committing). The drafting eval needs a Claude judge credential —
-  `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`. With neither it
+  `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (takes precedence when both are set). With neither it
   exits non-zero and fails the build; never a skip, never a pass.
 </details>
