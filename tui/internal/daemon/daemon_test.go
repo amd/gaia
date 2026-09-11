@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,6 +36,7 @@ type fakeDaemon struct {
 	statusCode   int
 	ensureStatus int
 	ensureDetail string
+	ensureBody   []byte
 	authSeen     []string
 	paths        []string
 }
@@ -100,8 +102,13 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"service": service, "pid": pid, "api_version": DAEMONAPIVersionForTest})
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			f.t.Fatalf("read ensure request body: %v", err)
+		}
 		f.mu.Lock()
 		code, detail := f.ensureStatus, f.ensureDetail
+		f.ensureBody = append([]byte(nil), body...)
 		f.mu.Unlock()
 		if code != http.StatusOK {
 			w.WriteHeader(code)
@@ -173,6 +180,12 @@ func (f *fakeDaemon) sawPath(want string) bool {
 		}
 	}
 	return false
+}
+
+func (f *fakeDaemon) lastEnsureBody() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.ensureBody...)
 }
 
 // testClient builds a Client with fast timeouts and no real launcher.
@@ -467,6 +480,7 @@ func TestDoFailsWhenTokenDidNotRotate(t *testing.T) {
 func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
 
 	inst, err := testClient(t, nil).EnsureAgent(context.Background(), "email")
 	if err != nil {
@@ -480,6 +494,45 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	}
 	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
 		t.Error("ensure was never called")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["mode"] != "user" {
+		t.Fatalf("ensure request mode = %q, want user", body["mode"])
+	}
+	if _, ok := body["dev_src_dir"]; ok {
+		t.Fatal("user-mode ensure request must not contain dev_src_dir")
+	}
+}
+
+func TestEnsureAgentSendsCallerDevCheckout(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["mode"] != "dev" {
+		t.Fatalf("ensure request mode = %q, want dev", body["mode"])
+	}
+	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("resolve test checkout root: %v", err)
+	}
+	want := filepath.Join(
+		filepath.Clean(filepath.FromSlash(strings.TrimSpace(string(root)))),
+		"hub", "agents", "email", "python",
+	)
+	if body["dev_src_dir"] != want {
+		t.Fatalf("ensure request dev_src_dir = %q, want %q", body["dev_src_dir"], want)
 	}
 }
 

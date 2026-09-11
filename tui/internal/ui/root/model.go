@@ -9,6 +9,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -60,6 +61,9 @@ type FlagshipModel struct {
 	// model overrides the agent's own default (--model). Only a daemon-backed
 	// agent can honour it; cli.checkModelSupported refuses it for the rest.
 	model string
+	// trace records every agent event to a JSONL file (--trace). Nil when off.
+	// Owned by the caller of RunFlagship, which closes it after the event loop.
+	trace *event.TraceWriter
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -185,6 +189,14 @@ func (m FlagshipModel) WithClaude(enabled bool, model string) FlagshipModel {
 // shape the rules forbid.
 func (m FlagshipModel) WithModel(model string) FlagshipModel {
 	m.model = model
+	return m
+}
+
+// WithTrace records every agent event to w (--trace). The caller keeps
+// ownership and closes w once the event loop has stopped, so a copy of this
+// model made by Bubble Tea can never close the file out from under a live turn.
+func (m FlagshipModel) WithTrace(w *event.TraceWriter) FlagshipModel {
+	m.trace = w
 	return m
 }
 
@@ -358,6 +370,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
 		Model:             m.model,
+		Trace:             m.trace,
 		BypassPermissions: m.bypassPermissions,
 		UseClaude:         m.useClaude,
 		ClaudeModel:       m.claudeModel,

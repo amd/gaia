@@ -648,13 +648,18 @@ class _ExecHost(ShellToolsMixin):
 def shell_tool(monkeypatch):
     """Return a factory for the real ``run_shell_command`` closure."""
 
-    def build(bypass: bool):
+    def build(bypass: bool, granted: str = ""):
         host = _ExecHost(bypass)
+        if granted:
+            from gaia.skills.binaries import BinaryGrants
+
+            host._granted_binaries = BinaryGrants()
+            host._granted_binaries.grant(granted, skill_name="test")
         captured = {}
 
         def fake_tool(**kwargs):
             def wrap(fn):
-                captured[kwargs["name"]] = fn
+                captured[kwargs.get("name", fn.__name__)] = fn
                 return fn
 
             return wrap
@@ -669,6 +674,22 @@ def shell_tool(monkeypatch):
 
 
 class TestExecutorUnderBypass:
+    def test_granted_cli_redirection_reaches_the_shell_under_bypass(
+        self, shell_tool, monkeypatch
+    ):
+        import subprocess
+
+        seen = {}
+
+        def run(args, **kwargs):
+            seen.update(args=args, shell=kwargs.get("shell"))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        monkeypatch.setattr("gaia.agents.tools.shell_tools.subprocess.run", run)
+        result = shell_tool(bypass=True, granted="gh")("gh issue list > out.txt")
+        assert result["status"] == "success", result
+        assert seen == {"args": "gh issue list > out.txt", "shell": True}
+
     def test_a_compound_command_actually_runs(self, shell_tool, tmp_path):
         """The whole point of #3373: `a && b` reaches a shell and succeeds."""
         run = shell_tool(bypass=True)

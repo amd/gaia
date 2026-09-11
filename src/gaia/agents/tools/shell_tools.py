@@ -454,8 +454,8 @@ class ShellToolsMixin:
         One source of truth, read live: the session's output handler carries
         ``bypass_permissions``, set only by the sidecar's ``PermissionState``
         from ``--bypass-permissions`` or the TUI's ``/bypass``. Every gate reads
-        this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
-        tool description, the executor — so they cannot hold different opinions
+        this — ``_validate_shell_command``, ``skill_grant_covers_call``, and the
+        executor — so they cannot hold different opinions
         about whether a command is legal.
 
         Read live rather than resolved once because bypass is toggleable
@@ -934,32 +934,6 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="run_shell_command",
-            description=(
-                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
-                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
-                "navigation (pwd), and system information. "
-                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
-                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": "The shell command to execute (e.g., 'ls -la', 'pwd', 'cat file.txt')",
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the command in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": "Timeout in seconds (default: 30)",
-                    "required": False,
-                },
-            },
         )
         def run_shell_command(
             command: str, working_directory: Optional[str] = None, timeout: int = 30
@@ -1152,7 +1126,7 @@ class ShellToolsMixin:
                     and bool(granted)
                     and _is_granted_binary(segments[0][0], granted)
                 )
-                use_shell = (os.name == "nt" or bypass) and not lone_granted_segment
+                use_shell = bypass or (os.name == "nt" and not lone_granted_segment)
 
                 # Build the command string for execution
                 # On Windows with shell=True, use the ORIGINAL command string

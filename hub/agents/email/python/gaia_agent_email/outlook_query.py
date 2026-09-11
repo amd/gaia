@@ -75,6 +75,11 @@ _UNSUPPORTED_OPERATOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A colon word inside a quoted phrase (``subject:"check in: monday"``) is
+# not an operator (#3592); _UNSUPPORTED_OPERATOR_RE is searched against a
+# copy with quoted spans blanked (length preserved) instead of ``remainder``.
+_QUOTED_SPAN_RE = re.compile(r'"[^"]*"')
+
 # Graph has no calendar-aware relative-date filter, so a month is 30 days
 # and a year is 365, the same approximation Gmail's own "1 month ago"
 # reading makes, and precise enough for a recency window, not a ledger.
@@ -169,11 +174,14 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
     # second search term, so naming it beats telling the caller to re-run it
     # as a separate search that would fail the exact same way (review on
     # this PR).
-    unsupported = _UNSUPPORTED_OPERATOR_RE.search(remainder)
+    unsupported = _UNSUPPORTED_OPERATOR_RE.search(
+        _QUOTED_SPAN_RE.sub(lambda m: "#" * len(m.group(0)), remainder)
+    )
     if unsupported:
+        start, end = unsupported.span()
         raise ValueError(
             "search_messages: on Outlook, "
-            f"{unsupported.group(0)!r} is not supported by this backend and "
+            f"{remainder[start:end]!r} is not supported by this backend and "
             "would silently match nothing if sent as search text. Supported "
             "operators are is:unread, is:read, newer_than:, older_than:, "
             f"from:, and subject:, so drop {unsupported.group('op')}: from "
