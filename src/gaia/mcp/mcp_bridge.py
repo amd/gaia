@@ -254,7 +254,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         origin = self._request_origin()
         if origin and is_allowed_origin(origin, ALLOWED_ORIGINS_ENV_VAR):
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
+        self.send_header("Vary", "Origin")
 
     def _reject_foreign_origin(self):
         """Send 403 for a request from an untrusted browser origin. True when rejected.

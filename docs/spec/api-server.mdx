@@ -196,9 +196,10 @@ class ModelListResponse(BaseModel):
 ### API Endpoints
 
 ```python
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from gaia.api.local_http import build_caller_guard, cors_config
 
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -881,3 +882,10 @@ Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 
 </small>
+
+### VS Code client authentication
+
+Run **GAIA: Set API Key** from the VS Code command palette and enter the same value
+as the server's `GAIA_API_KEY`. The extension stores it in VS Code SecretStorage and
+uses it for model discovery and chat completions. Leave the input blank to clear
+it; cancelling preserves the existing key. Keyless loopback servers continue to work.

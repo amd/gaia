@@ -46,8 +46,7 @@ BLOCKED_URLS = [
 
 
 @pytest.mark.parametrize("url", BLOCKED_URLS)
-def test_fetch_webpage_refuses_internal_targets(full_profile_tools, url, monkeypatch):
-    monkeypatch.delenv("GAIA_WEB_ALLOWED_HOSTS", raising=False)
+def test_fetch_webpage_refuses_internal_targets(full_profile_tools, url):
     _, registry = full_profile_tools
     with patch("httpx.get") as bare_httpx:
         result = _tool(registry, "fetch_webpage")(url)
@@ -57,8 +56,7 @@ def test_fetch_webpage_refuses_internal_targets(full_profile_tools, url, monkeyp
 
 
 @pytest.mark.parametrize("url", BLOCKED_URLS)
-def test_open_url_refuses_internal_targets(full_profile_tools, url, monkeypatch):
-    monkeypatch.delenv("GAIA_WEB_ALLOWED_HOSTS", raising=False)
+def test_open_url_refuses_internal_targets(full_profile_tools, url):
     _, registry = full_profile_tools
     with patch("webbrowser.open") as opener:
         result = _tool(registry, "open_url")(url)
@@ -184,3 +182,26 @@ def test_cgnat_and_mapped_private_ranges_are_blocked(ip):
 @pytest.mark.parametrize("ip", ["100.63.255.255", "100.128.0.1", "93.184.216.34"])
 def test_neighbouring_public_ranges_stay_reachable(ip):
     assert not web_client._is_blocked_ip(ipaddress.ip_address(ip))
+
+
+def test_inline_web_client_is_closed_during_agent_cleanup(full_profile_tools):
+    agent, _ = full_profile_tools
+    client = agent._inline_web_client()
+    with patch.object(client, "close") as close:
+        agent.__del__()
+    close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("certificate config failed"), ImportError("missing dependency")]
+)
+def test_open_url_reports_client_initialization_failure(full_profile_tools, failure):
+    agent, registry = full_profile_tools
+    with (
+        patch.object(agent, "_inline_web_client", side_effect=failure),
+        patch("webbrowser.open") as opener,
+    ):
+        result = _tool(registry, "open_url")("https://example.com")
+    assert result["status"] == "error"
+    assert str(failure) in result["error"]
+    opener.assert_not_called()

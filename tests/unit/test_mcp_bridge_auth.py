@@ -425,3 +425,12 @@ class TestConfigurationContract:
         bridge_mod.start_server(host="localhost", port=0)
 
         assert captured["auth_token"] == "from-env"
+
+
+@pytest.mark.parametrize(
+    "origin", [None, "https://foreign.example", "http://localhost:4200"]
+)
+def test_cors_responses_always_vary_by_origin(server_factory, origin):
+    base, _ = server_factory(auth_token=None)
+    _, headers, _ = _raw(f"{base}/health", origin=origin)
+    assert headers.get("vary") == "Origin"

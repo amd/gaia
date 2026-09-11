@@ -1528,10 +1528,12 @@ No documents are currently indexed.
 
             @tool
             def open_url(url: str) -> dict:
-                """Open a URL in the system's default web browser.
+                """Open a public URL in the system's default web browser.
+
+                Refuses private, loopback, and link-local addresses.
 
                 Args:
-                    url: The URL to open (must start with http:// or https://)
+                    url: Public http:// or https:// URL to open
 
                 Returns:
                     Dictionary with status and confirmation message
@@ -1542,7 +1544,7 @@ No documents are currently indexed.
                     # Same SSRF screen as fetch_webpage: an injected link to a
                     # loopback admin page would open with the user's cookies.
                     self._inline_web_client().validate_url(url)
-                except ValueError as e:
+                except (ValueError, OSError, ImportError) as e:
                     logger.warning("open_url refused %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
                 try:
@@ -2397,6 +2399,11 @@ No documents are currently indexed.
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if getattr(self, "_inline_web", None):
+                self._inline_web.close()
+        except Exception as e:
+            logger.error(f"Error closing inline web client during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()
