@@ -589,7 +589,12 @@ func (s *Server) handleText(w http.ResponseWriter, r *http.Request) {
 	if !s.injectable(w) {
 		return
 	}
-	s.debugf("inject: text %q (%d runes)", req.Text, len(keys))
+	// Length only, never the content. This endpoint types into whatever field
+	// currently has focus, and the gateway screen's token field is one of
+	// them — logging the text wrote a credential to the TUI debug log in
+	// cleartext, which the masked input does nothing to prevent. The rune
+	// count is the part with diagnostic value anyway.
+	s.debugf("inject: text (%d runes)", len(keys))
 	seq, settled := s.send(msgs, time.Duration(req.DelayMS)*time.Millisecond)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sent_runes": len(keys),

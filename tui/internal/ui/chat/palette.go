@@ -36,6 +36,7 @@ var paletteCommands = []paletteCommand{
 	{"/bypass", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
+	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the

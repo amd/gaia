@@ -8,6 +8,7 @@ This module provides a client for interacting with the Lemonade server's
 OpenAI-compatible API and additional functionality.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -38,6 +39,9 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.logger import get_logger
+
+# For the module-level helpers; the client class keeps its own ``self.log``.
+log = get_logger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -491,6 +495,159 @@ AGENT_PROFILES = {
 }
 
 
+# Recipe Lemonade stamps on a cloud-offloaded model (>= 11.8). Such a model is
+# proxied to a remote gateway: no local weights, no router slot, and it can be
+# neither pulled nor loaded. See ``docs/guides/llm-gateway.mdx``.
+CLOUD_RECIPE = "cloud"
+
+# Cloud models are discovered live from the gateway, so there is no static
+# registry to consult. Populated from every ``/api/v1/models`` response and read
+# by ``is_cloud_model`` / ``is_tool_calling_model``.
+#
+# Rebound wholesale under ``_CLOUD_LOCK`` rather than mutated in place, so a
+# concurrent reader always sees a complete map. Readers take no lock: reading a
+# module global is atomic and a slightly stale map is harmless, whereas a
+# half-built one is not.
+_CLOUD_MODELS: Dict[str, Dict[str, Any]] = {}
+# The provider namespaces present in the catalog, e.g. ``{"amd"}``. Lets an
+# unknown id be attributed to a registered gateway instead of guessing from
+# punctuation alone.
+_CLOUD_PROVIDERS: frozenset = frozenset()
+_CLOUD_LOCK = threading.Lock()
+
+# Gateway models observed to answer a streaming request with no tokens at all.
+# The AMD gateway currently does this for every model except Gemma-4-31B: a
+# stream returns 200 and then nothing, while the same prompt non-streaming
+# works. Nothing in the catalogue advertises this, so it can only be learned by
+# trying. Remembered so the empty stream is paid once per model, not per turn.
+_CLOUD_NON_STREAMING: set = set()
+
+
+_NON_STREAMING_LOADED = False
+
+
+def _load_non_streaming() -> None:
+    """Seed the learned set from ``~/.gaia/gateway.json``, once per process.
+
+    Imported here rather than at module scope because ``gaia.llm.gateway``
+    depends on this module; the direction only inverts for this one preference.
+    """
+    global _NON_STREAMING_LOADED
+    if _NON_STREAMING_LOADED:
+        return
+    _NON_STREAMING_LOADED = True
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        stored = GatewayState.load().non_streaming_models
+    except Exception as e:  # noqa: BLE001 - a preference, never fatal
+        log.debug(f"Could not read the learned non-streaming models: {e}")
+        return
+    with _CLOUD_LOCK:
+        _CLOUD_NON_STREAMING.update(m for m in stored if m)
+
+
+def mark_non_streaming(model_id: str) -> None:
+    """Record that *model_id* returns nothing when streamed, for good."""
+    if not model_id:
+        return
+    _load_non_streaming()
+    with _CLOUD_LOCK:
+        if model_id in _CLOUD_NON_STREAMING:
+            return
+        _CLOUD_NON_STREAMING.add(model_id)
+        learned = sorted(_CLOUD_NON_STREAMING)
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+        state.non_streaming_models = learned
+        state.save()
+    except Exception as e:  # noqa: BLE001 - the in-memory set still holds
+        log.debug(f"Could not persist the learned non-streaming models: {e}")
+
+
+def streams_ok(model_id: Optional[str]) -> bool:
+    """False when *model_id* is known to return nothing on a streaming call."""
+    if not model_id:
+        return False
+    _load_non_streaming()
+    return model_id not in _CLOUD_NON_STREAMING
+
+
+def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
+    """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
+
+    Rebuilds the map wholesale so uninstalling a gateway provider drops its
+    models instead of leaving them classified as cloud forever.
+    """
+    if not isinstance(models_payload, dict):
+        return
+    entries = models_payload.get("data")
+    if not isinstance(entries, list):
+        return
+    discovered: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("recipe") != CLOUD_RECIPE:
+            continue
+        model_id = entry.get("id")
+        if not model_id:
+            continue
+        labels = entry.get("labels") or []
+        discovered[model_id] = {
+            "tool_calling": "tool-calling" in labels,
+            "labels": list(labels),
+            "ctx_size": entry.get("context_length"),
+        }
+    # Rebind rather than clear()+update(): the UI and daemon call list_models()
+    # from several threads, and a reader landing between the two saw an empty
+    # map and routed a gateway model down the local download path. Rebinding is
+    # atomic, so a reader sees either the old map or the new one.
+    global _CLOUD_MODELS, _CLOUD_PROVIDERS
+    with _CLOUD_LOCK:
+        _CLOUD_MODELS = discovered
+        _CLOUD_PROVIDERS = frozenset(
+            mid.split(".", 1)[0] for mid in discovered if "." in mid
+        )
+
+
+def is_cloud_model(model_id: Optional[str]) -> bool:
+    """True when *model_id* is served by a Lemonade cloud provider.
+
+    Only meaningful once a ``/api/v1/models`` response has been seen; a caller
+    that must be correct on a cold cache should list models first.
+    """
+    return bool(model_id) and model_id in _CLOUD_MODELS
+
+
+def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Discovered capability metadata for a cloud model, or None."""
+    if not model_id:
+        return None
+    info = _CLOUD_MODELS.get(model_id)
+    return dict(info) if info is not None else None
+
+
+def known_cloud_providers() -> frozenset:
+    """Provider namespaces seen in the catalog, e.g. ``{"amd"}``."""
+    return _CLOUD_PROVIDERS
+
+
+def may_be_cloud_model(model_id: Optional[str]) -> bool:
+    """Cheap pre-filter: could *model_id* possibly be cloud-routed?
+
+    Cloud models are namespaced ``<provider>.<id>``, so anything without a dot
+    or already in ``MODELS`` is local and costs no network call to rule out.
+
+    A dot alone is NOT enough to conclude "cloud" — plenty of legitimate local
+    checkpoints carry one (``Qwen3.5-35B-A3B``). This only says "worth asking
+    the catalog"; the answer comes from the catalog itself.
+    """
+    if not model_id or "." not in model_id:
+        return False
+    return not any(mr.model_id == model_id for mr in MODELS.values())
+
+
 def is_tool_calling_model(model_id: Optional[str]) -> bool:
     """Return True if model_id supports native OpenAI tool_calls via Lemonade.
 
@@ -503,6 +660,10 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     for mr in MODELS.values():
         if mr.model_id == model_id:
             return mr.tool_calling
+    cloud = _CLOUD_MODELS.get(model_id)
+    if cloud is not None:
+        # Gateways advertise this per model; trust them over the GGUF default.
+        return bool(cloud["tool_calling"])
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
@@ -1014,6 +1175,9 @@ class LemonadeClient:
         self.model = model
         self.server_process = None
         self.log = get_logger(__name__)
+        # Gateway models already announced as non-streaming, so the reason is
+        # given once rather than before every answer.
+        self._announced_non_streaming: set = set()
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key)
@@ -1660,6 +1824,12 @@ class LemonadeClient:
             # retrying would just repeat the same failing request.
             raise error
 
+        if is_cloud_model(model):
+            # There is nothing to download. A missing-model error here means the
+            # gateway rejected the id or lost its key — surface that, don't
+            # bury it under a download attempt that cannot succeed.
+            raise error
+
         self.log.info(
             f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
             f"attempting auto-download and load..."
@@ -1879,7 +2049,33 @@ class LemonadeClient:
         # when the consumer finishes or closes the stream.
         with self._model_slot_lease(model):
             self._ensure_model_loaded(model, auto_download)
-            yield from self._stream_chat_chunks(
+
+            # Known not to stream: go straight to the non-streaming call rather
+            # than making the user wait for an empty stream every turn.
+            if is_cloud_model(model) and not streams_ok(model):
+                # Said once per process, not once per turn: the console handler
+                # writes INFO to stdout, so repeating it would interleave a log
+                # line with every streamed reply in `gaia chat`.
+                if model not in self._announced_non_streaming:
+                    self._announced_non_streaming.add(model)
+                    self.log.info(
+                        f"'{model}' does not support streaming on this gateway; "
+                        f"answering without streaming instead."
+                    )
+                yield from self._chat_completion_as_single_chunk(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    tools=tools,
+                    **kwargs,
+                )
+                return
+
+            produced = False
+            for chunk in self._stream_chat_chunks(
                 model=model,
                 messages=messages,
                 temperature=temperature,
@@ -1889,7 +2085,90 @@ class LemonadeClient:
                 logprobs=logprobs,
                 tools=tools,
                 **kwargs,
-            )
+            ):
+                produced = True
+                yield chunk
+
+            # A cloud model that streamed nothing has not "finished" — the
+            # gateway accepted the request and sent no tokens. Falling back is
+            # announced, never silent: the user is told what happened and why,
+            # and the model is remembered so the next turn skips the empty
+            # stream entirely.
+            if not produced and is_cloud_model(model):
+                mark_non_streaming(model)
+                self._announced_non_streaming.add(model)
+                self.log.warning(
+                    f"'{model}' returned no tokens when streamed. This gateway "
+                    f"does not stream that model; retrying without streaming. "
+                    f"Later turns will skip streaming for it automatically."
+                )
+                yield from self._chat_completion_as_single_chunk(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    tools=tools,
+                    **kwargs,
+                )
+
+    def _chat_completion_as_single_chunk(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_completion_tokens: int = 1000,
+        stop: Optional[Union[str, List[str]]] = None,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Run a non-streaming completion, shaped like one streaming chunk.
+
+        Lets a caller that asked to stream consume a model that cannot, without
+        the caller having to know the difference.
+        """
+        response = self.chat_completions(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_completion_tokens=max_completion_tokens,
+            stop=stop,
+            stream=False,
+            timeout=timeout,
+            tools=tools,
+            auto_download=False,  # already ensured by the caller
+            **kwargs,
+        )
+        choice = (response.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        delta = {
+            "role": message.get("role", "assistant"),
+            "content": message.get("content") or "",
+        }
+        # Without this a tool call on a non-streaming model reaches the agent as
+        # an empty turn. The index is required, not cosmetic: consumers key
+        # fragments by it, so N unindexed calls would all fold into slot 0 and
+        # concatenate into one unparseable call.
+        if message.get("tool_calls"):
+            delta["tool_calls"] = [
+                {**call, "index": call.get("index", i)}
+                for i, call in enumerate(message["tool_calls"])
+            ]
+        yield {
+            "id": response.get("id", ""),
+            "object": "chat.completion.chunk",
+            "model": response.get("model", model),
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": choice.get("finish_reason", "stop"),
+                }
+            ],
+            "usage": response.get("usage"),
+        }
 
     def _stream_chat_chunks(
         self,
@@ -2428,7 +2707,72 @@ class LemonadeClient:
         url = f"{self.base_url}/models"
         if show_all:
             url += "?show_all=true"
-        return self._send_request("get", url)
+        result = self._send_request("get", url)
+        record_cloud_models(result)
+        return result
+
+    def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:
+        """Re-read the catalog so cloud-model classification is current.
+
+        Returns the discovered cloud models keyed by id.
+        """
+        self.list_models()
+        # Snapshot the global first: iterating it directly can raise
+        # "dictionary changed size" if another thread rebuilds mid-iteration.
+        snapshot = _CLOUD_MODELS
+        return {mid: dict(info) for mid, info in snapshot.items()}
+
+    def _is_cloud_model(self, model: str) -> bool:
+        """Cloud check that warms the catalog once when the id could match.
+
+        Local ids short-circuit on ``may_be_cloud_model`` without any request.
+
+        An id the catalog does not list is treated as cloud only when its
+        namespace matches a REGISTERED gateway provider. Discovery runs only
+        once a provider has a working token, so an absent or expired one leaves
+        gateway models out of the catalog — and falling through to the local
+        path then reports "model not found, run `gaia init` to reinstall it",
+        sending the user to fix the wrong thing.
+
+        Matching on the provider namespace rather than "has a dot" matters: a
+        legitimate local checkpoint like ``Llama-3.2-1B-Instruct-Hybrid`` can be
+        missing from a device-filtered catalog, and calling it cloud would
+        silently skip the download it actually needs.
+        """
+        if is_cloud_model(model):
+            return True
+        if not may_be_cloud_model(model):
+            return False
+        try:
+            catalog = self.list_models()
+        except LemonadeClientError as e:
+            # Re-raise with context rather than guessing. Returning False here
+            # sent gateway models down the local download path, which fails
+            # with an unrelated message.
+            raise LemonadeClientError(
+                f"Could not read Lemonade's model catalog at {self.base_url} to "
+                f"determine whether '{model}' is gateway-hosted: {e}. "
+                f"Check the server is running (`gaia gateway status`)."
+            ) from e
+        if is_cloud_model(model):
+            return True
+
+        # Not in the catalog. Only claim it for a gateway whose namespace is
+        # actually registered.
+        provider = model.split(".", 1)[0]
+        if provider not in known_cloud_providers():
+            return False
+        known_locally = any(
+            _model_ids_match(entry.get("id"), model)
+            for entry in (catalog.get("data") or [])
+        )
+        if not known_locally:
+            self.log.debug(
+                f"'{model}' names registered gateway provider '{provider}' but "
+                f"is absent from the catalog; treating it as gateway-hosted so "
+                f"the error names the real cause"
+            )
+        return not known_locally
 
     def get_model_details(self, model_id: str) -> Dict[str, Any]:
         """
@@ -2812,6 +3156,15 @@ class LemonadeClient:
         try:
             # Check if model is already downloaded
             models_response = self.list_models()
+            # list_models() refreshed the cloud map — a gateway model is
+            # "available" the moment it is discovered; there is nothing to pull.
+            if is_cloud_model(model_name):
+                if show_progress:
+                    self.log.info(
+                        f"{_emoji('☁️', '[CLOUD]')} Model is gateway-hosted, "
+                        f"no download needed: {model_name}"
+                    )
+                return True
             for model in models_response.get("data", []):
                 if _model_ids_match(model.get("id"), model_name):
                     if model.get("downloaded", False):
@@ -3163,8 +3516,21 @@ class LemonadeClient:
         silent fallback. When the broker IS configured but unreachable, the
         underlying context manager raises loudly rather than racing the slot.
 
+        Cloud-routed models occupy no slot, so leasing one would stall every
+        local agent for the length of a remote request.
+
+        The cloud check WARMS the catalog rather than reading the cache. The
+        callers that matter — ``chat_completions`` and its streaming twin —
+        take this lease *before* ``_ensure_model_loaded`` runs, so on a fresh
+        process the cache is still cold here. Reading it strictly meant the
+        first gateway turn of every process held the single local slot for the
+        whole remote request, which is the exact stall this exists to avoid.
+
         Deferred import keeps ``gaia.daemon`` off the standalone import path.
         """
+        if self._is_cloud_model(model):
+            return contextlib.nullcontext()
+
         from gaia.daemon.broker_client import model_lease
 
         def _on_wait(reason: str) -> None:
@@ -3202,12 +3568,24 @@ class LemonadeClient:
         if not auto_download:
             return  # Skip if auto_download disabled
 
+        # A cloud model is proxied to a gateway: nothing to download, no local
+        # slot to pin. Taking the lease here would stall local agents for the
+        # length of a remote request.
+        if self._is_cloud_model(model):
+            self.log.debug(f"'{model}' is cloud-routed; skipping download/load")
+            return
+
         with self._model_slot_lease(model):
             self._ensure_model_loaded_locked(model)
 
     def _ensure_model_loaded_locked(self, model: str) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
+        # Defence in depth for direct callers: this must precede the pinned-load
+        # branch below, which would otherwise unload the resident local model to
+        # pin a ctx window a cloud model does not have.
+        if is_cloud_model(model):
+            return
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
@@ -3992,6 +4370,10 @@ class LemonadeClient:
                         "model_name": name,
                         "type": hm.get("type"),
                         "labels": catalog.get("labels", []),
+                        # Carried through so consumers can tell a gateway-routed
+                        # model from a local one. Without it every ctx-size and
+                        # slot decision downstream treats a cloud model as local.
+                        "recipe": catalog.get("recipe", ""),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
                         "_health": hm,
@@ -4614,6 +4996,15 @@ def create_lemonade_client(
     # Auto-load model if requested
     if auto_load:
         try:
+            # A gateway model has no local weights and no slot — pulling and
+            # loading are both meaningless, and load would evict the resident
+            # local model to pin a window this model does not have.
+            if client._is_cloud_model(model_name):
+                client.log.info(
+                    f"Model '{model_name}' is gateway-hosted; skipping pull/load"
+                )
+                return client
+
             # Check if auto_pull is enabled and model needs to be pulled first
             if auto_pull:
                 # Check if model is available

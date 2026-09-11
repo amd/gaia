@@ -16,6 +16,11 @@ LEMONADE_VERSION = "11.8.1"
 # (INIT_PROFILES[...]["min_lemonade_version"]).
 LEMONADE_MIN_VERSION = "10.2.0"
 
+# Cloud offload (`lemonade cloud install`, /api/v1/cloud/auth) landed in 11.8.0.
+# Only the LLM-gateway path requires it, so it is checked there rather than
+# raising LEMONADE_MIN_VERSION for every user.
+LEMONADE_GATEWAY_MIN_VERSION = "11.8.0"
+
 
 def get_package_version() -> str:
     """Get the installed package version from importlib.metadata.

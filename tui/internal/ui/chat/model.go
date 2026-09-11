@@ -79,6 +79,9 @@ type preScanDegradedMsg struct{ notice string }
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
 
+// OpenGatewayMsg signals the root model to open the AMD LLM gateway screen.
+type OpenGatewayMsg struct{}
+
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -1289,6 +1292,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	switch query {
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
+
+	case "/gateway":
+		return m, func() tea.Msg { return OpenGatewayMsg{} }
 
 	case "/clear":
 		m.messages = nil

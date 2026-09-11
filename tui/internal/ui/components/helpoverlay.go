@@ -199,6 +199,7 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /bypass
               /setup /memory /model
+              /gateway
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close

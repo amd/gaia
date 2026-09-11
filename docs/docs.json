@@ -79,7 +79,8 @@
                     "group": "Setup & Hardware",
                     "pages": [
                       "guides/hardware-advisor",
-                      "guides/npu"
+                      "guides/npu",
+                      "guides/llm-gateway"
                     ]
                   },
                   {
