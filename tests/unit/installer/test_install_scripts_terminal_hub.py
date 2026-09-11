@@ -665,7 +665,7 @@ def test_the_agent_artifact_is_the_stdio_build(sh_text, ps1_text, script):
         for line in text.splitlines()
         if not line.lstrip().startswith("#") and line.strip()
     )
-    for wrong in ('"gaia-agent-${platform}"', '"gaia-agent-$lockPlatform.exe"'):
+    for wrong in ("gaia-agent-${platform}", "gaia-agent-$lockPlatform.exe"):
         assert wrong not in code, f"install.{script} asks for the REST sidecar"
 
 
