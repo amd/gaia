@@ -739,6 +739,17 @@ class FileSearchToolsMixin:
                         "error": f"Directory not found: {directory}",
                     }
 
+                # rglob over a file yields nothing, which would read as
+                # "no matches" instead of "you passed the wrong path".
+                if not directory.is_dir():
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"Path is not a directory: {directory}. Pass the folder "
+                            "to search, or use read_file for a single file."
+                        ),
+                    }
+
                 # Text file extensions to search
                 text_extensions = {
                     ".txt",

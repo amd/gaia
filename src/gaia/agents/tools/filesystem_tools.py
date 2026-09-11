@@ -45,6 +45,40 @@ def _format_date(timestamp: float) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+#: Scopes that deliberately impose no ceiling: ``smart`` is documented to reach
+#: indexed directories outside the home folders, ``everywhere`` is the whole
+#: drive. Every other scope names one place the results must sit under.
+_UNBOUNDED_SCOPES = frozenset({"smart", "everywhere"})
+
+#: The index applies its LIMIT before the scope filter can run, so a narrowed
+#: search asks for more rows than it needs to still fill a page after filtering.
+_INDEX_SCOPE_OVERFETCH = 10
+
+
+def _scope_roots(scope: str) -> list:
+    """Directories an index hit must sit under; empty when the scope is open."""
+    if scope in _UNBOUNDED_SCOPES:
+        return []
+    if scope == "cwd":
+        raw = Path.cwd()
+    elif scope == "home":
+        raw = Path.home()
+    else:
+        raw = Path(scope)
+    return [raw.expanduser().resolve()]
+
+
+def _path_in_roots(path: str, roots: list) -> bool:
+    """True when ``path`` is one of ``roots`` or lives beneath one."""
+    if not roots:
+        return True
+    try:
+        candidate = Path(path).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+    return any(candidate == root or root in candidate.parents for root in roots)
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -675,6 +709,9 @@ class FileSystemToolsMixin:
                     "auto",
                     "metadata",
                 ):
+                    # The index spans every indexed directory, so the caller's
+                    # scope has to be applied to its rows too.
+                    scope_roots = _scope_roots(scope)
                     try:
                         index_results = mixin._fs_index.query_files(
                             name=query if effective_type != "metadata" else None,
@@ -687,8 +724,18 @@ class FileSystemToolsMixin:
                             max_size=max_size,
                             modified_after=min_date,
                             modified_before=max_date,
-                            limit=max_results,
+                            limit=(
+                                max_results * _INDEX_SCOPE_OVERFETCH
+                                if scope_roots
+                                else max_results
+                            ),
                         )
+                        if scope_roots:
+                            index_results = [
+                                r
+                                for r in index_results
+                                if _path_in_roots(r.get("path", ""), scope_roots)
+                            ][:max_results]
                         if index_results:
                             lines = [
                                 f"Found {len(index_results)} result(s) from index:\n"

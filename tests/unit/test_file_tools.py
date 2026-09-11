@@ -913,6 +913,19 @@ class TestReadToolsSandbox:
         assert self._denied(result)
         assert "not found" not in result.get("error", "").lower()
 
+    def test_search_file_content_rejects_a_file_as_directory(
+        self, sandboxed_read_tools
+    ):
+        """A file passed as the search directory is an error, not 0 matches."""
+        tools, safe_dir, _ = sandboxed_read_tools
+        target = safe_dir / "notes.txt"
+        target.write_text("TOKEN=abc\n", encoding="utf-8")
+
+        result = tools["search_file_content"]("TOKEN", directory=str(target))
+
+        assert result["status"] == "error"
+        assert "not a directory" in result["error"].lower()
+
     def test_get_file_info_outside_sandbox_denied(self, sandboxed_read_tools):
         tools, _, secret_dir = sandboxed_read_tools
         secret = secret_dir / "notes.txt"
