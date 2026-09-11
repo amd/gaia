@@ -86,7 +86,7 @@ The working memory tier is bounded by the LLM's context window. The stable prefi
 
 ### Single Database: `~/.gaia/memory.db`
 
-`GAIA_MEMORY_DB` overrides the database file (a test harness points it at a throwaway file so a test drive never touches the user's real memory), and `GAIA_HOME` relocates the whole `~/.gaia` tree. An override that is blank or names a directory raises rather than falling back to the real store (`resolve_memory_db_path` in `memory_store.py`).
+`GAIA_MEMORY_DB` overrides the database file (a test harness points it at a throwaway file so a test drive never touches the user's real memory), and `GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset. `GAIA_HOME` does not relocate config, logs, or all other `~/.gaia` state; config uses `GAIA_CONFIG_DIR`. Complete test isolation requires a separate OS user or container. An override that is blank or names a directory raises rather than falling back to the real store (`resolve_memory_db_path` in `memory_store.py`).
 
 One file, six tables. WAL mode for concurrent reads. Schema version 3.
 
@@ -286,15 +286,17 @@ UPDATE schema_version SET version = 3, migrated_at = <now>;
 
 **Privileged categories.** `system`, `profile`, and `permission` lead every system
 prompt, so they are writable only by the system or an explicit admin path -- never from a
-chat turn. `MemoryStore.store()` and `update()` enforce it: both raise `ValueError` for a
-privileged category unless the caller passes `allow_privileged=True`, which only
+chat turn. `MemoryStore.store()`, `update()`, and `delete()` enforce it: they raise
+`ValueError` for an existing or requested privileged category unless the caller passes `allow_privileged=True`, which only
 onboarding, system-context collection, `gaia memory`, `seed_bulk`, and the reviewed
 dashboard writes do. The LLM extractor (including `update` ops that carry a category),
-consolidation, and the `remember`/`update_memory` tools validate against
+consolidation, and the `remember`/`update_memory`/`forget` tools validate against
 `EXTRACTABLE_CATEGORIES` (the other six). The dashboard models `KnowledgeCreate` and
 `KnowledgeUpdate` -- which `commit-discovery` and `commit-inference` also go through --
 accept `USER_REVIEWED_CATEGORIES`: those six plus `profile`, never `system` or
-`permission`.
+`permission`. Inference commits accept only `profile`. Invalid commit batches return
+HTTP 422 before mutation; storage failures return HTTP 500 with a correlation ID
+and the number already stored (the batch is not atomic).
 
 ### Recommended Domain Naming
 
@@ -406,7 +408,7 @@ Stale facts naturally lose confidence. If "Project uses React 18" hasn't been re
 
 ### Prune
 
-`prune(days=90)` hard-deletes conversations and tool_history older than 90 days, except turns whose session is still queued for consolidation (>= 5 turns, any `consolidated_at IS NULL`). Those are held -- the whole session, so deleting its consolidated turns cannot strand the rest below the turn threshold -- and a WARNING reports the count. Sessions too short to consolidate are pruned normally. On startup `prune()` runs after consolidation. Knowledge items are self-regulating via confidence decay -- items below 0.1 can be pruned.
+`prune(days=90)` hard-deletes conversations and tool_history older than 90 days, except turns whose session is still queued for consolidation (>= 5 turns, any `consolidated_at IS NULL`). Those are held -- the whole session, so deleting its consolidated turns cannot strand the rest below the turn threshold -- and a WARNING reports the count. Sessions too short to consolidate are pruned normally. All turns older than twice the retention window (180 days by default) are deleted even if consolidation fails repeatedly or the session remains active. On startup `prune()` runs after consolidation. Knowledge items are self-regulating via confidence decay -- items below 0.1 can be pruned.
 
 ---
 
@@ -705,8 +707,8 @@ Session ({n} turns, {first_ts} to {last_ts}):
 4. Store summary: `knowledge(category="note", source="consolidation", domain="session:{id[:8]}", confidence=0.5)`
 5. Store each extracted item via `store()` (normal dedup applies; privileged categories are dropped)
 6. Mark exactly that window: `UPDATE conversations SET consolidated_at=now WHERE id IN (...)` -- only after steps 3-5 succeed; a failed window stays unmarked and is retried next run
-7. Repeat from step 2 until the session is fully consolidated or the per-run cap (10 windows) is hit; the rest continues next run
-8. `consolidated_at` prevents re-processing; once the whole session is consolidated its turns are subject to the 90-day prune
+7. Repeat from step 2 until complete or a budget is reached: ten windows per session, five model calls total, or ten seconds elapsed across the run. An in-flight call finishes; remaining windows resume next run
+8. `consolidated_at` prevents re-processing; once the whole session is consolidated its turns are subject to the 90-day prune; all turns expire at 180 days regardless
 
 ### Storage Impact
 
@@ -746,7 +748,7 @@ The Mem0-style extraction only sees the current conversation + top-10 existing i
 
 ### Solution: Periodic Reconciliation
 
-On startup, after confidence decay and before consolidation, run a reconciliation pass:
+On startup, after confidence decay and before consolidation, run a reconciliation pass over `EXTRACTABLE_CATEGORIES` only. Trusted system, profile, and permission rows are excluded before model classification; recall confidence bookkeeping is unchanged:
 
 1. **Find high-similarity pairs**: For each context, compute pairwise embedding similarity among active items. Flag pairs with cosine similarity > 0.85.
 2. **Classify relationship**: For each flagged pair, a single LLM call classifies the relationship:
@@ -784,7 +786,7 @@ With reconciliation:
 
 ```python
 def reconcile_memory(self, max_pairs: int = 20) -> Dict:
-    """Background reconciliation of high-similarity knowledge pairs.
+    """Background reconciliation of high-similarity knowledge pairs. Privileged `system`, `profile`, and `permission` rows are excluded before model classification; normal confidence bookkeeping during recall is unchanged.
     Called on startup after decay, before consolidation.
     Returns: {pairs_checked, reinforced, contradicted, weakened, neutral}"""
 ```
@@ -798,10 +800,13 @@ init_memory()
   3. Backfill embeddings for items missing them
   4. Rebuild FAISS index from stored embeddings
   5. apply_confidence_decay()                          [30-day decay]
-  6. reconcile_memory()                                [Hindsight-inspired, max 20 pairs]
-  7. consolidate_old_sessions()                        [max 5 sessions, windowed]
-  8. prune()                                           [90-day hard delete; keeps queued turns]
-  9. Generate session UUID
+  6. Generate session UUID
+
+First query: _run_memory_post_init() [deferred until the LLM is available]
+  7. reconcile_memory()                                [max 20 pairs]
+  8. consolidate_old_sessions()                        [max 5 calls, 10s between calls]
+  9. _synthesize_skills()
+ 10. prune()                                           [90 days; queued turns at most 180 days]
 ```
 
 ---
@@ -1378,7 +1383,7 @@ Sessions older than 14 days are consolidated automatically on startup:
                                    domain="session:{session_id[:8]}")
   -> Each extracted knowledge item goes through normal store() with dedup
   -> Marks that window's turns consolidated_at=now; a long session is walked front to back
-  -> prune() deletes a session's turns only once the whole session is consolidated
+  -> prune() holds queued sessions until consolidation, with an absolute 180-day ceiling
   -> Old conversations become searchable via consolidated summary notes
   -> DB growth slows; useful signal is preserved indefinitely as knowledge
 ```
@@ -1984,13 +1989,13 @@ class MemoryStore:
                metadata: dict = None, context: str = None,
                sensitive: bool = None, entity: str = None,
                due_at: str = None, reminded_at: str = None,
-               superseded_by: str = None) -> bool
+               superseded_by: str = None, allow_privileged: bool = False) -> bool
         """Update an existing knowledge entry. Only provided fields are changed.
         Sets updated_at to now. Returns False if ID not found.
         Normalizes reminded_at and due_at to tz-aware ISO 8601.
         When superseded_by is set, marks this item as replaced by a newer item."""
     def update_confidence(self, knowledge_id: str, delta: float) -> None
-    def delete(self, knowledge_id: str) -> bool
+    def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
 
     # --- Embeddings ---
     def store_embedding(self, knowledge_id: str, embedding: bytes) -> bool
@@ -2033,7 +2038,7 @@ class MemoryStore:
         """Decay confidence for items not used in N days. Called once per session start."""
     def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict
         """Hard-delete conversations and tool_history older than N days,
-        holding turns whose session is still queued for consolidation."""
+        holding queued turns only up to twice the retention window."""
     def rebuild_fts(self) -> None
         """Rebuild FTS5 indexes from source tables."""
     def close(self) -> None
@@ -2068,7 +2073,7 @@ class MemoryMixin:
 
     def init_memory(self, db_path: Path = None, context: str = "global") -> None
         """Initialize memory store with an active context scope.
-        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay, memory reconciliation, session consolidation, and pruning (in that order)."""
+        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay. Reconciliation, bounded consolidation, skill synthesis, and pruning are deferred to the first query (in that order)."""
     @property
     def memory_store(self) -> MemoryStore
     @property

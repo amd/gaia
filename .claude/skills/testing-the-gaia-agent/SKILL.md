@@ -155,8 +155,10 @@ raises at startup rather than falling back to the real store — a harness that 
 it is isolated but is not is the whole failure mode. If the agent will not start,
 read the error; do not unset the variable.
 
-`GAIA_HOME` relocates the entire `~/.gaia` tree (memory included) if you want one switch
-for everything, but `GAIA_MEMORY_DB` wins where both are set.
+`GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset. It
+does not isolate the whole `~/.gaia` tree: config uses `GAIA_CONFIG_DIR`, and logs
+and other state may still use the real home directory. Use a separate OS user or
+container when the harness needs complete isolation.
 
 ## Which surface you are testing
 

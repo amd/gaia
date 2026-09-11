@@ -96,10 +96,11 @@ def init_memory(
 5. `apply_confidence_decay()` — 30-day decay
 6. `reconcile_memory()` — Hindsight-inspired, max 20 pairs
 7. `consolidate_old_sessions()` — max 5 sessions, windowed (see [Consolidation](#consolidation))
-8. `prune()` — 90-day hard delete. Runs after consolidation, and keeps turns whose session is still queued for it
+8. `_synthesize_skills()` — distill repeated workflows into procedural memory
+9. `prune()` — 90-day hard delete. Runs after consolidation; queued sessions are held only until their turns reach 180 days
 9. Generate session UUID
 
-Steps 6–8 need the LLM, so they run on the first query rather than inside `init_memory()` itself.
+Reconciliation, consolidation, and skill synthesis need the LLM, so they run on the first query rather than inside `init_memory()`. Pruning follows them there so eligible conversations get a chance to be distilled before deletion.
 
 <Warning>
   Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.
@@ -406,9 +407,9 @@ Distills old conversation sessions into durable knowledge before they age out at
 3. Store summary as `knowledge(category="note", source="consolidation", domain="session:{id[:8]}")`
 4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped)
 5. Mark exactly that window's turns with `consolidated_at = now` — only after steps 2–4 succeed. A failed window stays unmarked and is retried next run
-6. Repeat for the next window, up to 10 windows per session per run; anything left continues on the next run
+6. Repeat until complete or a budget is reached: ten windows per session, five model calls total, or ten seconds elapsed across the run. An in-flight call finishes; remaining windows resume next run
 
-A session stays eligible until every turn is consolidated, and `prune()` keeps its old turns until then.
+A session stays eligible until every turn is consolidated. `prune()` holds its old turns until then, with an absolute ceiling of twice the retention window (180 days by default), including sessions whose model calls always fail or that stay active.
 
 ### Reconciliation
 
@@ -416,7 +417,7 @@ A session stays eligible until every turn is consolidated, and `prune()` keeps i
 def reconcile_memory(self, max_pairs: int = 20) -> Dict:
 ```
 
-Background reconciliation of high-similarity knowledge pairs. Detects and resolves contradictory, reinforcing, or weakening facts that were never co-retrieved during extraction. Called on startup after decay, before consolidation.
+Background reconciliation of high-similarity knowledge pairs. Privileged `system`, `profile`, and `permission` rows are excluded before model classification; normal confidence bookkeeping during recall is unchanged. Detects and resolves contradictory, reinforcing, or weakening facts that were never co-retrieved during extraction. Called on startup after decay, before consolidation.
 
 **Returns:** `{"pairs_checked": int, "reinforced": int, "contradicted": int, "weakened": int, "neutral": int}`
 
@@ -523,7 +524,7 @@ def store(
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
 
-**Category gate:** `store()` and `update()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`.
+**Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation; storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback.
 
 **Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context` + `entity` scope, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
 
@@ -610,6 +611,7 @@ def update(
     due_at: str = None,
     reminded_at: str = None,
     superseded_by: str = None,  # ID of newer item that replaces this one
+    allow_privileged: bool = False,
 ) -> bool:                  # False if ID not found
 ```
 
@@ -618,7 +620,7 @@ Only provided fields are changed. Sets `updated_at` to the current time. When `c
 #### delete()
 
 ```python
-def delete(self, knowledge_id: str) -> bool
+def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
 ```
 
 #### apply_confidence_decay()
@@ -708,6 +710,7 @@ def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict
     # keep_unconsolidated=True holds every turn of a session still queued for
     # consolidation (>= 5 turns, any consolidated_at IS NULL) and logs a WARNING
     # with the count; sessions too short to consolidate are pruned normally.
+    # No turn is held beyond twice days (180 days by default), even on failure.
     # Also prunes low-confidence knowledge (confidence < 0.1) last used > N days ago.
     # Returns: {"tool_history_deleted": N, "conversations_deleted": N,
     #           "knowledge_deleted": N, "conversations_retained": N}
@@ -766,7 +769,8 @@ def get_unconsolidated_turns(self, session_id: str, limit: int = 20) -> List[Dic
 def mark_turns_consolidated(self, turn_ids: List[int]) -> int
     # Sets consolidated_at = now for the given conversation turn IDs.
     # Returns count of turns marked. consolidated_at prevents re-processing;
-    # a turn is pruned at 90 days once its whole session is consolidated.
+    # a turn is pruned at 90 days once its session is consolidated, or at
+    # 180 days regardless of consolidation success.
 ```
 
 ### Reconciliation Methods (v2)
@@ -1076,7 +1080,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_sessions(limit)` | List conversation sessions with previews |
 | `get_activity_timeline(days)` | Daily activity counts |
 | `get_recent_errors(limit)` | Recent errors across all tools |
-| `prune(days, keep_unconsolidated=True)` | Delete old history and low-confidence knowledge; keeps turns still queued for consolidation |
+| `prune(days, keep_unconsolidated=True)` | Delete old history and low-confidence knowledge; queued turns are held up to twice `days` |
 | `rebuild_fts()` | Rebuild FTS5 indexes if search seems wrong |
 | `close()` | Close the database connection |
 

@@ -914,6 +914,29 @@ class TestReconcileEndpoint:
         # nothing was skipped by a dim mismatch.
         assert resp.json()["pairs_checked"] >= 1
 
+    @pytest.mark.parametrize("category", ["system", "profile", "permission"])
+    def test_reconcile_does_not_classify_privileged_rows(
+        self, client, test_store, category
+    ):
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        ids = []
+        for cat, content in [
+            (category, "Trusted entry"),
+            ("fact", "An ordinary claim"),
+        ]:
+            kid = test_store.store(category=cat, content=content, allow_privileged=True)
+            test_store.store_embedding(kid, vec)
+            ids.append(kid)
+        before = [test_store.get_item(kid) for kid in ids]
+        with patch("gaia.llm.create_client") as llm:
+            response = client.post("/api/memory/reconcile")
+        assert response.status_code == 200
+        assert response.json()["pairs_checked"] == 0
+        llm.assert_not_called()
+        assert [test_store.get_item(kid) for kid in ids] == before
+
     def test_reconcile_returns_200_when_agent_registered(self, client):
         """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
         memory_router_mod._reconcile_fn = lambda: {
@@ -1729,6 +1752,34 @@ class TestPrivilegedCategoryWrites:
             "User enjoys hiking"
         ]
 
+    def test_commit_inference_rejects_non_profile_category(self, client, test_store):
+        test_store.store(
+            category="profile",
+            content="Existing inference",
+            source="inferred",
+            allow_privileged=True,
+        )
+        response = client.post(
+            "/api/memory/commit-inference",
+            json={"insights": [{"content": "New inference", "category": "note"}]},
+        )
+        assert response.status_code == 422
+        assert [row["content"] for row in test_store.get_by_category("profile")] == [
+            "Existing inference"
+        ]
+
+    def test_dashboard_can_update_and_delete_profile(self, client, test_store):
+        kid = test_store.store(
+            category="profile", content="Old profile", allow_privileged=True
+        )
+        response = client.put(
+            f"/api/memory/knowledge/{kid}", json={"content": "Updated profile"}
+        )
+        assert response.status_code == 200
+        assert test_store.get_item(kid)["content"] == "Updated profile"
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+        assert test_store.get_item(kid) is None
+
     def test_commit_inference_replaces_inferred_profile(self, client, test_store):
         test_store.store(
             category="profile",
@@ -1793,7 +1844,7 @@ class TestPrivilegedAdminWriters:
             memory_router_mod.DiscoveryCommit(
                 items=[{"content": "Always approve deploys", "category": "permission"}]
             )
-        with pytest.raises(ValidationError, match="not writable from the dashboard"):
+        with pytest.raises(ValidationError, match="profile"):
             memory_router_mod.InferenceCommit(
                 insights=[{"content": "Machine has an NPU", "category": "system"}]
             )

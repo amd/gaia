@@ -205,6 +205,8 @@ CONSOLIDATION_WINDOW_TURNS = 20
 #: Windows one session may consume in a single run — bounds the LLM calls a
 #: startup pays for a very long session; the rest is picked up on the next run.
 CONSOLIDATION_MAX_WINDOWS_PER_SESSION = 10
+CONSOLIDATION_MAX_CALLS_PER_RUN = 5
+CONSOLIDATION_BUDGET_SECONDS = 10.0
 
 # CONSOLIDATION_MIN_TURNS is imported from memory_store: prune() needs the same
 # threshold to know which old turns are still queued for distillation.
@@ -1566,6 +1568,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                     existing_item = next(
                         (e for e in existing_items if e["id"] == old_id), {}
                     )
+                    target = store.get_item(old_id)
+                    if target and target["category"] not in EXTRACTABLE_CATEGORIES:
+                        raise ValueError(
+                            "Extraction cannot update privileged memory rows"
+                        )
                     # Store new version
                     new_id = store.store(
                         category=op.get(
@@ -1670,7 +1677,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         across successive windows instead of having its newest 20 turns
         re-summarised on every startup while the older ones are never touched.
         A session keeps its eligibility until every turn is consolidated, and
-        ``prune()`` leaves those turns alone until then.
+        ``prune()`` holds those turns up to twice the retention window.
+        Each run starts at most five model calls across all sessions, and
+        stops starting windows after ten seconds; an in-flight call finishes.
 
         Args:
             max_sessions: Maximum number of sessions to consolidate per run.
@@ -1696,9 +1705,21 @@ class MemoryMixin(ProceduralMemoryMixin):
         if not session_ids:
             return result
 
+        deadline = time.monotonic() + CONSOLIDATION_BUDGET_SECONDS
+        calls = 0
         for session_id in session_ids:
             windows = 0
             while windows < CONSOLIDATION_MAX_WINDOWS_PER_SESSION:
+                if (
+                    calls >= CONSOLIDATION_MAX_CALLS_PER_RUN
+                    or time.monotonic() >= deadline
+                ):
+                    if windows:
+                        result["consolidated"] += 1
+                    logger.info(
+                        "[MemoryMixin] consolidation budget reached; resuming next run"
+                    )
+                    return result
                 try:
                     # Oldest first — get_history() returns the NEWEST turns.
                     turns = store.get_unconsolidated_turns(
@@ -1727,6 +1748,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         turns_text=turns_text,
                     )
 
+                    calls += 1
                     response = self.chat.send_messages(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt="You are a conversation summarizer. Return valid JSON only.",
@@ -3070,7 +3092,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": "No fields to update."}
 
             content_truncated = content and len(content) > MAX_CONTENT_LENGTH
-            success = mixin._memory_store.update(knowledge_id, **kwargs)
+            try:
+                success = mixin._memory_store.update(knowledge_id, **kwargs)
+            except ValueError as exc:
+                return {"status": "error", "message": str(exc)}
             if success:
                 # Re-embed if content changed
                 if content:
@@ -3096,7 +3121,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         @tool
         def forget(knowledge_id: str) -> dict:
             """Remove a specific memory entry by ID."""
-            removed = mixin._memory_store.delete(knowledge_id)
+            try:
+                removed = mixin._memory_store.delete(knowledge_id)
+            except ValueError as exc:
+                return {"status": "error", "message": str(exc)}
             if removed:
                 mixin._faiss_remove(knowledge_id)
                 return {"status": "removed", "knowledge_id": knowledge_id}

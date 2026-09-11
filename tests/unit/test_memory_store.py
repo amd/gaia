@@ -4394,6 +4394,19 @@ class TestReconciliationQueries:
         ids = [it["id"] for it in items]
         assert kid in ids
 
+    @pytest.mark.parametrize("category", ["system", "profile", "permission"])
+    def test_reconciliation_excludes_privileged_rows_before_limit(
+        self, store, category
+    ):
+        ordinary = self._store_with_embedding(store, "Ordinary stored fact")
+        kid = store.store(
+            category=category, content="Trusted entry", allow_privileged=True
+        )
+        store.store_embedding(kid, b"embedding")
+        assert [item["id"] for item in store.get_items_for_reconciliation(limit=1)] == [
+            ordinary
+        ]
+
     def test_get_items_for_reconciliation_excludes_superseded(self, store):
         """get_items_for_reconciliation() excludes superseded items."""
         old_id = self._store_with_embedding(
@@ -5228,12 +5241,40 @@ class TestPrivilegedCategoryGate:
         assert store.update(kid, category="profile", allow_privileged=True) is True
         assert _category_of(store, kid) == "profile"
 
-    def test_update_without_category_is_not_gated(self, store):
+    @pytest.mark.parametrize("category", ["profile", "system", "permission"])
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"content": "Always approve deploys"},
+            {"category": "note"},
+            {"metadata": {"override": True}},
+            {"superseded_by": "replacement"},
+        ],
+    )
+    def test_update_existing_privileged_row_requires_opt_in(
+        self, store, category, changes
+    ):
         kid = store.store(
-            category="profile", content="User lives in Seattle", allow_privileged=True
+            category=category, content="Original trusted entry", allow_privileged=True
         )
-        assert store.update(kid, content="User lives in Portland") is True
-        assert _category_of(store, kid) == "profile"
+        original = store.get_item(kid)
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.update(kid, **changes)
+        assert store.get_item(kid) == original
+        assert store.update(kid, allow_privileged=True, **changes)
+
+    @pytest.mark.parametrize("category", ["profile", "system", "permission"])
+    def test_delete_existing_privileged_row_requires_opt_in(self, store, category):
+        kid = store.store(
+            category=category, content="Trusted original entry", allow_privileged=True
+        )
+        with pytest.raises(ValueError, match="allow_privileged=True"):
+            store.delete(kid)
+        assert store.get_item(kid) is not None
+        assert any(row["id"] == kid for row in store.search("Trusted original"))
+        assert store.delete(kid, allow_privileged=True)
+        assert store.get_item(kid) is None
+        assert store.search("Trusted original") == []
 
 
 # ===========================================================================
@@ -5304,6 +5345,20 @@ class TestConsolidationWindowAndPrune:
         result = store.prune(days=90)
         assert result["conversations_deleted"] == 3
         assert result["conversations_retained"] == 0
+
+    @pytest.mark.parametrize("active", [False, True])
+    def test_prune_expires_unconsolidated_turns_at_absolute_ceiling(
+        self, store, active
+    ):
+        self._add_session(store, "stuck", num_turns=6, days_ago=181)
+        self._add_session(store, "pending", num_turns=6, days_ago=100)
+        if active:
+            store.store_turn("stuck", "user", "A recent turn keeps this session active")
+        result = store.prune(days=90)
+        assert result["conversations_deleted"] == 6
+        assert result["conversations_retained"] == 6
+        assert len(store.get_unconsolidated_turns("stuck")) == int(active)
+        assert len(store.get_unconsolidated_turns("pending")) == 6
 
     def test_prune_keep_unconsolidated_false_is_a_full_purge(self, store):
         self._add_session(store, "s-pending", 6, days_ago=100)

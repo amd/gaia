@@ -27,7 +27,9 @@ by a test.
 has no such cleanup, so isolation has to come from the environment. A blank value,
 or one naming a directory, is a startup error rather than a fall back to the real
 store — if the agent refuses to start, fix the path, don't unset the variable.
-`GAIA_HOME` moves the whole `~/.gaia` tree if you want one switch for everything.
+`GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset; it
+does not relocate config, logs, or every other `~/.gaia` path. Config uses
+`GAIA_CONFIG_DIR`. Use a separate OS user or container for complete isolation.
 
 ## Start it
 

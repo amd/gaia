@@ -1487,9 +1487,9 @@ class MemoryStore:
             superseded_by: ID of the newer knowledge item that replaces this one.
                 When set, this item is considered historical/inactive and will be
                 excluded from active queries (search, get_by_*, system prompt).
-            allow_privileged: Opt-in required to move a row into a privileged
-                category — same rule and same callers as :meth:`store`.
-                Re-categorising an existing row is a write of that category.
+            allow_privileged: Opt-in required to change an existing privileged row
+                or move a row into a privileged category — same callers as
+                :meth:`store`.
 
         Raises:
             ValueError: Same category rules as :meth:`store`, plus a
@@ -1582,6 +1582,9 @@ class MemoryStore:
 
         with self._lock:
             try:
+                self._validate_existing_category_locked(
+                    knowledge_id, allow_privileged=allow_privileged, where="update"
+                )
                 rowcount = self._conn.execute(sql, tuple(params)).rowcount
                 if rowcount > 0:
                     # Re-sync FTS if content/category/domain changed
@@ -1615,10 +1618,26 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def delete(self, knowledge_id: str) -> bool:
-        """Delete a knowledge entry by ID. Returns False if not found."""
+    def _validate_existing_category_locked(
+        self, knowledge_id: str, *, allow_privileged: bool, where: str
+    ) -> None:
+        row = self._conn.execute(
+            "SELECT category FROM knowledge WHERE id = ?", (knowledge_id,)
+        ).fetchone()
+        if row:
+            _validate_category(row[0], allow_privileged=allow_privileged, where=where)
+
+    def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+        """Delete an entry; privileged rows require an explicit admin opt-in.
+
+        Returns False if not found. Raises ValueError for a privileged row
+        unless allow_privileged=True, with the same callers as store().
+        """
         with self._lock:
             try:
+                self._validate_existing_category_locked(
+                    knowledge_id, allow_privileged=allow_privileged, where="delete"
+                )
                 # Delete from FTS first
                 self._conn.execute(
                     "DELETE FROM knowledge_fts WHERE rowid = "
@@ -1861,11 +1880,18 @@ class MemoryStore:
         Used by the reconciliation pipeline to find near-duplicates and
         contradictions via cosine similarity on stored embeddings.
 
-        Filters: superseded_by IS NULL, embedding IS NOT NULL.
+        Filters: superseded_by IS NULL, embedding IS NOT NULL, and only
+        EXTRACTABLE_CATEGORIES. Model reconciliation must not alter trusted rows.
         Returns items with ALL fields including the embedding BLOB.
         """
-        conditions = ["superseded_by IS NULL", "embedding IS NOT NULL"]
-        params: list = []
+        categories = sorted(EXTRACTABLE_CATEGORIES)
+        placeholders = ", ".join("?" for _ in categories)
+        conditions = [
+            "superseded_by IS NULL",
+            "embedding IS NOT NULL",
+            f"category IN ({placeholders})",
+        ]
+        params: list = list(categories)
 
         if context is not None:
             conditions.append("context = ?")
@@ -3422,13 +3448,16 @@ class MemoryStore:
                 (``CONSOLIDATION_MIN_TURNS``) and has turns with
                 ``consolidated_at IS NULL``. Deleting those loses the
                 conversation before anything was learned from it. Sessions too
-                short to ever be consolidated are pruned normally, so this is
-                not an unbounded hold. Pass False only for an explicit purge.
+                short to ever be consolidated are pruned normally. All turns
+                older than twice ``days`` are deleted even if consolidation
+                never succeeds. Pass False only for an explicit purge.
 
         Returns counts of deleted rows, plus ``conversations_retained`` — old
         turns kept because their session is still awaiting consolidation.
         """
-        cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
+        now = datetime.now().astimezone()
+        cutoff = (now - timedelta(days=days)).isoformat()
+        absolute_cutoff = (now - timedelta(days=2 * days)).isoformat()
 
         # Sessions still queued for consolidation. The whole session is held:
         # deleting only its consolidated turns could drop it below the min-turn
@@ -3453,18 +3482,19 @@ class MemoryStore:
                     conv_retained = self._conn.execute(
                         f"""
                         SELECT COUNT(*) FROM conversations
-                        WHERE timestamp < ?
+                        WHERE timestamp < ? AND timestamp >= ?
                           AND session_id IN ({_pending_sessions_sql})
                         """,
-                        (cutoff, CONSOLIDATION_MIN_TURNS),
+                        (cutoff, absolute_cutoff, CONSOLIDATION_MIN_TURNS),
                     ).fetchone()[0]
                     conv_deleted = self._conn.execute(
                         f"""
                         DELETE FROM conversations
                         WHERE timestamp < ?
-                          AND session_id NOT IN ({_pending_sessions_sql})
+                          AND (timestamp < ?
+                               OR session_id NOT IN ({_pending_sessions_sql}))
                         """,
-                        (cutoff, CONSOLIDATION_MIN_TURNS),
+                        (cutoff, absolute_cutoff, CONSOLIDATION_MIN_TURNS),
                     ).rowcount
                 else:
                     conv_deleted = self._conn.execute(

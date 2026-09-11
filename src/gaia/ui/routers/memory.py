@@ -9,7 +9,7 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -467,7 +467,7 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
 @router.delete("/api/memory/knowledge/{knowledge_id}")
 def delete_knowledge(knowledge_id: str) -> Dict:
     """Delete a knowledge entry from the dashboard."""
-    success = _get_store().delete(knowledge_id)
+    success = _get_store().delete(knowledge_id, allow_privileged=True)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     return {"status": "deleted", "knowledge_id": knowledge_id}
@@ -1561,6 +1561,7 @@ class DiscoveryCommitItem(KnowledgeCreate):
 class InferenceCommitItem(KnowledgeCreate):
     """One approved inference insight. Always stored as a global ``profile`` row."""
 
+    category: Literal["profile"] = "profile"
     domain: Optional[str] = "general"
     confidence: float = 0.7
 
