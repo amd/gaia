@@ -163,5 +163,13 @@ def test_unsupported_operator_after_a_quoted_phrase_still_raises():
         translate_query('subject:"check in: monday" has:attachment', now=_NOW)
 
 
+def test_unsupported_operator_with_a_quoted_value_names_the_original_text():
+    # The guard matches against a masked copy, so the error has to slice the
+    # unmasked remainder or it reports the mask characters instead of the
+    # operator's real quoted value.
+    with pytest.raises(ValueError, match=r"'has:\"my file\"' is not supported"):
+        translate_query('has:"my file"', now=_NOW)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
