@@ -147,8 +147,8 @@ on:
   # their diff at all, ended up wearing a red X from an LLM-quality gate and
   # burning hours of the scarcest runner pool. `pull_request` filters on the
   # PR's own base..head diff, so the gate fires only when the PR itself edits a
-  # path below. `branches: [main]` and the `types:` list follow
-  # test_email_agent_eval.yml; `ready_for_review` is what runs the gate on a PR
+  # path below. The `types:` list follows test_email_agent_eval.yml;
+  # `ready_for_review` is what runs the gate on a PR
   # that was opened as a draft (see the draft clause in the job `if:`).
   #
   # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. This change is mechanism only:
