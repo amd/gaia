@@ -21,3 +21,10 @@ cpp/third_party/sqlite/sqlite3.h -diff
 # without a union merge, sibling PRs merged close together conflict on the
 # same insertion point.
 hub/agents/email/python/CHANGELOG.md merge=union
+
+# The dev launch scripts and the gaia-agent shim are executed by a POSIX shell
+# and located by the TUI on PATH. A CRLF checkout breaks the shebang ("bad
+# interpreter"), and both must stay executable or exec.LookPath cannot find
+# them — which silently sends the TUI to the last INSTALLED agent instead.
+scripts/dev/run-tui.sh text eol=lf
+scripts/dev/bin/gaia-agent text eol=lf

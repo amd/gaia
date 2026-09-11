@@ -41,6 +41,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioToolsMixin,
     BrowserToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
@@ -49,7 +50,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    is_tool_calling_model,
+    resolve_lemonade_base_url,
+)
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
@@ -201,6 +206,7 @@ class ChatAgent(
     VLMToolsMixin,
     ScreenshotToolsMixin,
     SDToolsMixin,
+    AudioToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -283,12 +289,10 @@ class ChatAgent(
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
 
-        # Resolve effective base_url: config value > env var > default
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
+        # config value > env var > embedded server > packaged default. Resolved
+        # centrally: an inline default here cannot see GAIA's embedded Lemonade,
+        # which binds a port chosen at start time.
+        effective_base_url = resolve_lemonade_base_url(config.base_url)
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -463,9 +467,10 @@ class ChatAgent(
         # never register RAG tools and can't use this restore — never trigger
         # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
         # before evaluating it.
-        _uses_rag = "doc_rag" in get_profile_spec(
-            getattr(config, "prompt_profile", "full")
-        ).tool_groups
+        _uses_rag = (
+            "doc_rag"
+            in get_profile_spec(getattr(config, "prompt_profile", "full")).tool_groups
+        )
         if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
@@ -1042,7 +1047,7 @@ No documents are currently indexed.
 
 **IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
+**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already
@@ -1478,8 +1483,10 @@ No documents are currently indexed.
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
         try:
+            # getattr: tools can register from super().__init__(), before
+            # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=getattr(self, "_base_url", "http://localhost:13305/api/v1")
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"

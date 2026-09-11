@@ -364,7 +364,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -382,7 +382,7 @@ gaia uninstall --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
 gaia uninstall --purge
 ```
 
@@ -396,7 +396,8 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
+`--purge` permanently deletes your chat history, uploaded documents, configuration,
+and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
 <Note>
@@ -1022,9 +1023,10 @@ gaia telegram stop
 | `start` | `--token` (required) | – | Telegram bot token. |
 | `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
+| `start` | `--health-port` | 8768 | Health server port (background mode). |
 | `stop` | `--force` | false | Force stop if graceful shutdown fails. |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
-| `status` | `--health-port` | 8765 | Health server port. |
+| `status` | `--health-port` | 8768 | Health server port. |
 
 [→ Telegram Adapter Guide](/guides/telegram-adapter)
 
@@ -1552,6 +1554,7 @@ serving everything else.
 gaia lemonade embedded start      # download if needed, then run
 gaia lemonade embedded status
 gaia lemonade embedded stop
+gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
 Both the port and the API key change on every start, and requests without the key
@@ -1583,6 +1586,7 @@ file to point them at it. Automatic preference is coming with the startup wiring
 | `start` | Start the private instance, downloading the artifact if missing |
 | `stop` | Stop the private instance |
 | `status` | Show installed version, running port, and installed backends |
+| `uninstall` | Remove the private runtime and downloaded backends |
 | `install` | Download and unpack the artifact without starting it |
 | `install-backend SPEC` | Download an inference backend, e.g. `llamacpp:vulkan` |
 
@@ -1639,6 +1643,8 @@ are picked up immediately.
 <Note>
 `cache/` is deliberately shared across versions. Backends run from 141 MB to
 4.3 GB, so a Lemonade version bump re-downloads the 5 MB server, not the backends.
+`gaia uninstall --purge` and `gaia lemonade embedded uninstall` remove this
+directory, including those downloaded backends.
 </Note>
 
 After a Lemonade version bump, stop the old instance before starting the new one —
@@ -2526,23 +2532,19 @@ gaia test --test-type TYPE [OPTIONS]
 
   <Tab title="ASR Tests">
     **Test Types:**
-    - `asr-file-transcription` - Test ASR file transcription
     - `asr-microphone` - Test ASR microphone input
     - `asr-list-audio-devices` - List audio input devices
 
     **Options:**
-    - `--input-audio-file` - Input audio file path
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
     - `--whisper-model-size` - Whisper model size (default: base)
 
-    **Examples:**
+    <Note>
+      These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
+    </Note>
 
-    Test file transcription:
-    ```bash
-    gaia test --test-type asr-file-transcription \
-      --input-audio-file ./data/audio/test.m4a
-    ```
+    **Examples:**
 
     Test microphone (30 seconds):
     ```bash

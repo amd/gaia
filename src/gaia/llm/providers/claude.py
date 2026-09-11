@@ -284,23 +284,131 @@ class ClaudeProvider(LLMClient):
         return converted
 
     def _split_system(self, messages: List[dict]) -> tuple:
-        """Hoist role=system entries out of the array into the ``system`` param."""
+        """Hoist system text and translate OpenAI tool history for Anthropic."""
         system_parts: List[str] = []
         cleaned: List[dict] = []
-        for msg in messages:
+        index = 0
+        while index < len(messages):
+            msg = messages[index]
             role = msg.get("role", "user")
             content = msg.get("content")
             if role == "system":
                 if content:
                     system_parts.append(str(content))
+                index += 1
+                continue
+            if role == "assistant" and msg.get("tool_calls"):
+                blocks = self._tool_use_content(msg)
+                expected_ids = {
+                    block["id"] for block in blocks if block["type"] == "tool_use"
+                }
+                result_messages = []
+                result_index = index + 1
+                while result_index < len(messages) and expected_ids:
+                    result = messages[result_index]
+                    if result.get("role") != "tool":
+                        break
+                    tool_call_id = result.get("tool_call_id")
+                    if tool_call_id not in expected_ids:
+                        break
+                    result_messages.append(result)
+                    expected_ids.remove(tool_call_id)
+                    result_index += 1
+                if not expected_ids:
+                    cleaned.append({"role": "assistant", "content": blocks})
+                    for result in result_messages:
+                        self._append_tool_result(cleaned, result)
+                    index = result_index
+                    continue
+                raise ValueError(
+                    "Claude tool-call history requires a complete, immediately "
+                    "adjacent result group; missing tool_call_id(s): "
+                    + ", ".join(sorted(expected_ids))
+                    + ". Append every role='tool' result directly after the "
+                    "assistant turn that requested it — any user/system message "
+                    "injected between them must come after the group."
+                )
+            if role == "tool":
+                cleaned.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[Tool result: {msg.get('name', 'tool')}] "
+                            f"{msg.get('content', '')}"
+                        ),
+                    }
+                )
+                index += 1
                 continue
             if content is None or content == "":
                 # Anthropic rejects empty message content outright.
                 logger.debug("Dropping empty %s message for Claude request", role)
+                index += 1
                 continue
             cleaned.append({"role": role, "content": content})
+            index += 1
         system = "\n\n".join(system_parts) if system_parts else self._system_prompt
         return system, cleaned
+
+    @staticmethod
+    def _tool_use_content(message: dict) -> List[dict]:
+        content = message.get("content")
+        blocks = []
+        if content:
+            if isinstance(content, list):
+                blocks.extend(content)
+            else:
+                blocks.append({"type": "text", "text": str(content)})
+        for tool_call in message["tool_calls"]:
+            function = tool_call.get("function") or {}
+            tool_call_id = tool_call.get("id")
+            name = function.get("name")
+            if not tool_call_id or not name:
+                raise ValueError("Claude tool calls require both an id and a name.")
+            arguments = function.get("arguments") or "{}"
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Claude tool call {tool_call_id!r} has invalid JSON arguments."
+                    ) from exc
+            if not isinstance(arguments, dict):
+                raise ValueError(
+                    f"Claude tool call {tool_call_id!r} arguments must decode to an object."
+                )
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_call_id,
+                    "name": name,
+                    "input": arguments,
+                }
+            )
+        return blocks
+
+    @staticmethod
+    def _append_tool_result(cleaned: List[dict], message: dict) -> None:
+        tool_call_id = message.get("tool_call_id")
+        if not tool_call_id:
+            raise ValueError("Claude tool results require a tool_call_id.")
+        block = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": message.get("content") or "[tool returned no output]",
+        }
+        if (
+            cleaned
+            and cleaned[-1]["role"] == "user"
+            and isinstance(cleaned[-1]["content"], list)
+            and all(
+                isinstance(item, dict) and item.get("type") == "tool_result"
+                for item in cleaned[-1]["content"]
+            )
+        ):
+            cleaned[-1]["content"].append(block)
+            return
+        cleaned.append({"role": "user", "content": [block]})
 
     def _build_params(
         self,
