@@ -63,8 +63,8 @@ class SystemStatus(BaseModel):
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # started from a GUI — there is no shell command to give, and inventing one
-    # is the bug.
+    # requiring GUI/manual configuration, including service context changes.
+    # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)
