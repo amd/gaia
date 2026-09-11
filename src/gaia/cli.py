@@ -1886,7 +1886,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
             "tts-preprocessing",
             "tts-streaming",
             "tts-audio-file",
-            "asr-file-transcription",
             "asr-microphone",
             "asr-list-audio-devices",
         ],
@@ -1895,10 +1894,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     test_parser.add_argument(
         "--test-text",
         help="Text to use for TTS tests",
-    )
-    test_parser.add_argument(
-        "--input-audio-file",
-        help="Input audio file path for ASR file transcription test",
     )
     test_parser.add_argument(
         "--output-audio-file",
@@ -3485,22 +3480,7 @@ Let me know your answer!
                 print(f"❌ Error: Failed to initialize ASR: {e}")
                 return
 
-            if args.test_type == "asr-file-transcription":
-                if not args.input_audio_file:
-                    print(
-                        "❌ Error: --input-audio-file is required for asr-file-transcription test"
-                    )
-                    return
-                try:
-                    text = asr.transcribe_file(args.input_audio_file)
-                    print("\nTranscription result:")
-                    print("-" * 40)
-                    print(text)
-                    print("-" * 40)
-                except Exception as e:
-                    print(f"❌ Error transcribing file: {e}")
-
-            elif args.test_type == "asr-microphone":
+            if args.test_type == "asr-microphone":
                 print(f"\nRecording for {args.recording_duration} seconds...")
                 print("Speak into your microphone...")
 

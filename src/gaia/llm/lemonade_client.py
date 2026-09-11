@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -61,6 +62,30 @@ DEFAULT_LEMONADE_URL = (
 )
 
 
+def _embedded_lemonade_url() -> str:
+    """The embedded server's base URL, or the packaged default.
+
+    ``gaia lemonade embedded`` binds a port chosen at start time and records it
+    alongside its API key. Nothing exports either, so a client that assumed the
+    default port looked at an address with nothing on it and reported the models
+    as missing — while the embedded server held every one of them.
+    """
+    state = _read_embedded_lemonade_state()
+    port = state.get("port") if state else None
+    if isinstance(port, int) and port > 0:
+        return f"http://{DEFAULT_HOST}:{port}"
+    return DEFAULT_LEMONADE_URL
+
+
+def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
+    """Read ~/.gaia/lemonade/state.json, or None when there is no such server."""
+    try:
+        state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
 def _get_lemonade_config() -> tuple:
     """
     Get Lemonade host, port, and base_url from environment or defaults.
@@ -73,7 +98,7 @@ def _get_lemonade_config() -> tuple:
     """
     from urllib.parse import urlparse
 
-    base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    base_url = os.getenv("LEMONADE_BASE_URL") or _embedded_lemonade_url()
     # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
     if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
         base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
@@ -91,20 +116,63 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
+def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
+    """Resolve the Lemonade base URL: argument, env var, embedded server, default.
+
+    The public counterpart to :func:`resolve_lemonade_api_key`, and the only
+    thing callers should use to answer "where is Lemonade?".
+
+    Always returns a URL ending in ``/api/<version>`` — including one passed in
+    explicitly, since users routinely configure the bare origin. Callers can
+    therefore append endpoint paths directly; a caller that adds ``/api/v1``
+    itself will produce a doubled path.
+
+    Callers that instead wrote ``os.getenv("LEMONADE_BASE_URL", "http://…")``
+    inline could not see GAIA's own embedded server, which binds a port chosen
+    at start time. Every one of those copies had to be found and changed for
+    the embedded server to be usable at all.
+    """
+    if base_url is None:
+        return _get_lemonade_config()[2]
+    trimmed = base_url.rstrip("/")
+    suffix = f"/api/{LEMONADE_API_VERSION}"
+    return trimmed if trimmed.endswith(suffix) else f"{trimmed}{suffix}"
+
+
+#: Where GAIA's embedded Lemonade records the credential it generated.
+EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
+
+
+def _embedded_lemonade_api_key() -> Optional[str]:
+    """The key GAIA's own embedded Lemonade generated for itself, if present.
+
+    ``gaia lemonade embedded`` starts a private server that mints an API key
+    and writes it here. Nothing exports it, so every GAIA client that resolved
+    the key from the environment alone got 401 from a server that was healthy
+    and serving — which the readiness screen then reported as "Lemonade not
+    running", and offered to install a second one onto the same port.
+    """
+    state = _read_embedded_lemonade_state()
+    key = state.get("api_key") if state else None
+    return key.strip() or None if isinstance(key, str) else None
+
+
 def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
-    """Resolve the Lemonade API key from argument, env var, or None.
+    """Resolve the Lemonade API key: argument, env var, embedded server, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
     servers (which would reject it).
+
+    An explicit argument or env var always wins — a configured credential must
+    never be overridden by whatever a local state file happens to hold.
     """
     if api_key is not None:
         return api_key
     env_value = os.getenv("LEMONADE_API_KEY")
-    if env_value is None:
-        return None
-    stripped = env_value.strip()
-    return stripped or None
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return _embedded_lemonade_api_key()
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
