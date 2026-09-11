@@ -29,6 +29,12 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+from gaia.mcp.ports import (
+    AGENT_UI_MCP_PORT,
+    MCP_BRIDGE_PORT,
+    TELEGRAM_HEALTH_PORT,
+    TUI_MCP_PORT,
+)
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
@@ -1650,6 +1656,12 @@ def build_parser():
         action="store_true",
         help="Run adapter in background/daemon mode (writes PID and health endpoint)",
     )
+    t_start.add_argument(
+        "--health-port",
+        type=int,
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
+    )
 
     # Stop subcommand
     t_stop = telegram_subparsers.add_parser(
@@ -1673,8 +1685,8 @@ def build_parser():
     t_status.add_argument(
         "--health-port",
         type=int,
-        default=8765,
-        help="Health server port (default: 8765)",
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
     )
 
     telegram_parser.set_defaults(action="telegram")
@@ -2400,7 +2412,10 @@ Examples:
         help="Host to bind the server to (default: localhost)",
     )
     mcp_start_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to listen on (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to listen on (default: {MCP_BRIDGE_PORT})",
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
@@ -2442,7 +2457,10 @@ Examples:
         "--host", default="localhost", help="Host to check (default: localhost)"
     )
     mcp_status_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to check (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to check (default: {MCP_BRIDGE_PORT})",
     )
     mcp_status_parser.add_argument(
         "--auth-token",
@@ -2460,7 +2478,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_test_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_test_parser.add_argument(
         "--query", default="Hello, GAIA!", help="Test query to send"
@@ -2481,7 +2502,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_agent_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_agent_parser.add_argument(
         "request", help="Natural language request for the orchestrator agent"
@@ -2507,7 +2531,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_serve_parser.add_argument(
-        "--port", type=int, default=8766, help="Port to listen on (default: 8766)"
+        "--port",
+        type=int,
+        default=AGENT_UI_MCP_PORT,
+        help=f"Port to listen on (default: {AGENT_UI_MCP_PORT})",
     )
     mcp_serve_parser.add_argument(
         "--backend",
@@ -2528,7 +2555,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_tui_parser.add_argument(
-        "--port", type=int, default=8767, help="Port to listen on (default: 8767)"
+        "--port",
+        type=int,
+        default=TUI_MCP_PORT,
+        help=f"Port to listen on (default: {TUI_MCP_PORT})",
     )
     mcp_tui_parser.add_argument(
         "--stdio",
@@ -2599,6 +2629,9 @@ Examples:
     embedded_subparsers.add_parser("stop", help="Stop the private Lemonade instance")
     embedded_subparsers.add_parser(
         "status", help="Show whether the private instance is installed and running"
+    )
+    embedded_subparsers.add_parser(
+        "uninstall", help="Remove the private instance and downloaded backends"
     )
     embedded_install_parser = embedded_subparsers.add_parser(
         "install", help="Download and unpack the embeddable artifact"
@@ -3299,6 +3332,7 @@ def main():
                     token=args.token,
                     allowed_users=allowed,
                     background=getattr(args, "background", False),
+                    health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
             except TelegramAllowlistError as e:
                 # Show the remedy rather than a traceback.
@@ -3345,7 +3379,7 @@ def main():
             import urllib.request
 
             host = getattr(args, "health_host", "127.0.0.1")
-            port = getattr(args, "health_port", 8765)
+            port = getattr(args, "health_port", TELEGRAM_HEALTH_PORT)
             url = f"http://{host}:{port}/healthz"
             try:
                 with urllib.request.urlopen(url, timeout=1) as resp:
@@ -7176,7 +7210,7 @@ def handle_lemonade_command(args):
 
 
 def handle_lemonade_embedded_command(args):
-    """Handle ``gaia lemonade embedded {start,stop,status,install,install-backend}``.
+    """Handle ``gaia lemonade embedded`` lifecycle actions.
 
     Args:
         args: Parsed arguments for the embedded subcommand.
@@ -7211,6 +7245,11 @@ def handle_lemonade_embedded_command(args):
                 print("Embedded Lemonade is not running")
         elif action == "status":
             _print_embedded_status(manager)
+        elif action == "uninstall":
+            if manager.uninstall():
+                print("✅ Embedded Lemonade uninstalled")
+            else:
+                print("Embedded Lemonade is not installed")
         elif action == "install":
             path = manager.install(force=getattr(args, "force", False))
             print(f"✅ Embedded Lemonade {manager.version} installed at {path}")

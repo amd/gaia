@@ -26,12 +26,13 @@ FIXED_NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=timezone.utc)
 class RecordingCalendar:
     """Records the kwargs of every ``list_events`` call."""
 
-    def __init__(self):
+    def __init__(self, response=None):
         self.calls = []
+        self.response = response or {"items": []}
 
     def list_events(self, **kwargs):
         self.calls.append(kwargs)
-        return {"items": []}
+        return self.response
 
 
 class TestDefaultForwardWindow:
@@ -85,6 +86,38 @@ class TestDefaultForwardWindow:
             {"time_min": "2026-08-01T00:00:00Z", "time_max": None},
             {"time_min": None, "time_max": "2026-08-01T00:00:00Z"},
         ]
+
+
+def test_provider_next_page_is_reported_as_truncated():
+    cal = RecordingCalendar(
+        {
+            "items": [{"id": f"event-{i}"} for i in range(25)],
+            "nextPageToken": "page-2",
+        }
+    )
+
+    out = list_calendar_events_impl(
+        cal,
+        time_min="2026-08-01T00:00:00Z",
+        time_max="2026-08-31T00:00:00Z",
+    )
+
+    assert len(out["events"]) == 25
+    assert out["count"] == 25
+    assert out["truncated"] is True
+
+
+def test_full_page_without_provider_next_page_is_not_marked_truncated():
+    cal = RecordingCalendar({"items": [{"id": f"event-{i}"} for i in range(25)]})
+
+    out = list_calendar_events_impl(
+        cal,
+        time_min="2026-08-01T00:00:00Z",
+        time_max="2026-08-31T00:00:00Z",
+    )
+
+    assert out["count"] == 25
+    assert out["truncated"] is False
 
 
 if __name__ == "__main__":

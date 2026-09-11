@@ -40,6 +40,49 @@ class _Host(ShellToolsMixin):
     """Minimal host: the mixin only needs its own __init__ for rate limiting."""
 
 
+def test_granted_pytest_receives_test_timeout_without_disabling_policy(monkeypatch):
+    from gaia.skills.binaries import BinaryGrants
+
+    host, tools = _shell_tools()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("pytest", skill_name="test")
+    monkeypatch.setattr(subprocess, "Popen", _completes(stdout="passed"))
+    result = tools["run_shell_command"]("pytest tests/unit")
+    assert result["status"] == "success", result
+    assert result["timeout_class"] == "test"
+    assert result["timeout"] == 900
+
+
+def test_stop_terminates_running_command_and_preserves_partial_output(monkeypatch):
+    import threading
+
+    host, tools = _shell_tools()
+    host._cancel_event = threading.Event()
+    killed = []
+
+    class CancelsDuringRead(_FakeProcess):
+        def communicate(self, timeout=None):
+            host._cancel_event.set()
+            raise subprocess.TimeoutExpired("ls", timeout)
+
+    process = CancelsDuringRead()
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(
+        shell_tools,
+        "terminate_process_tree",
+        lambda child: (killed.append(child) or "partial output", ""),
+    )
+    result = tools["run_shell_command"]("ls", timeout=1800)
+    assert result["cancelled"] is True
+    assert result["stdout"] == "partial output"
+    assert result["duration_seconds"] < 1
+    assert killed == [process]
+
+
+def test_unspaced_pipeline_takes_longest_timeout():
+    assert classify_command("ls|pytest tests/unit").name == "test"
+
+
 def _shell_tools():
     """The registered tool callables, by name."""
     captured = {}
@@ -49,7 +92,7 @@ def _shell_tools():
 
     def spy(**kwargs):
         def decorate(fn):
-            captured[kwargs.get("name")] = fn
+            captured[kwargs.get("name", fn.__name__)] = fn
             return original(**kwargs)(fn)
 
         return decorate
@@ -249,7 +292,7 @@ def test_each_class_reaches_subprocess_with_its_default(
 
     result = tools["run_shell_command"](command)
 
-    assert seen["timeout"] == expected_timeout
+    assert 0 < seen["timeout"] <= 0.25
     assert result["timeout"] == expected_timeout
     assert result["timeout_class"] == expected_class
 
@@ -262,7 +305,7 @@ def test_an_explicit_timeout_still_overrides_the_class(monkeypatch, unrestricted
 
     result = tools["run_shell_command"]("pytest --version", timeout=60)
 
-    assert seen["timeout"] == 60
+    assert 0 < seen["timeout"] <= 0.25
     assert result["timeout"] == 60
 
 
@@ -407,7 +450,7 @@ class TestWaitForCondition:
         host, tools = _shell_tools()
         host._cancel_event = threading.Event()
         host._cancel_event.set()
-        monkeypatch.setattr(subprocess, "Popen", _completes(returncode=1))
+        monkeypatch.setattr(subprocess, "Popen", _never_runs("cancelled predicate"))
 
         result = tools["wait_for_condition"]("ls nope", timeout=WAIT_MAX_TIMEOUT)
 

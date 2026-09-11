@@ -58,10 +58,15 @@ The agent runs local inference only: the sidecar's `/query` endpoint rejects any
 
     ```bash
     uv pip install -e hub/agents/gaia/python    # once
-    gaia daemon start-agent gaia --mode dev
+    GAIA_GAIA_AGENT_MODE=dev gaia-tui
     ```
 
-    Dev mode always runs from **the daemon's own checkout**. If the daemon is already running from a different checkout, it refuses loudly and names both paths rather than quietly serving the wrong source. Check what's running with `gaia daemon agents`; stop it with `gaia daemon stop-agent gaia`.
+    Set `GAIA_GAIA_AGENT_MODE=dev` on the TUI launch as well as on any manual
+    `gaia daemon start-agent gaia --mode dev` launch. The TUI sends its caller
+    checkout to the daemon, so both sides agree on the source tree. Dev mode
+    refuses loudly if a sidecar is already running from a different checkout;
+    check what's running with `gaia daemon agents` and stop it with `gaia daemon
+    stop-agent gaia`.
 
     Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
   </Tab>
@@ -104,7 +109,7 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 `run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
 
-How long a command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop.
+How long an allowed command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. These limits do not grant execution permission: for example, running `pytest` requires a loaded skill with a `shell:execute:pytest` grant, and ungranted installers remain refused. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop. Stop terminates a running command's process tree instead of waiting for its full timeout.
 
 **Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
 
