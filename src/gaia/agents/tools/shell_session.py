@@ -57,8 +57,9 @@ logger = logging.getLogger(__name__)
 #: Separates the reported cwd from the environment dump in the state file.
 _ENV_MARKER = "---GAIA-ENV---"
 
-#: Variables every shell rewrites on its own. Replaying them would make the
-#: session drift a little further from the parent on every command. PATH is
+#: Variables the shell — or the bookkeeping awk — rewrites on its own. Replaying
+#: them would make the session drift a little further from the parent on every
+#: command, and show the model changes it never made. PATH is
 #: deliberately absent: it is what virtualenv activation changes, so a session
 #: that dropped it would activate a venv and then not use it.
 _VOLATILE_ENV_NAMES = frozenset(
@@ -78,6 +79,9 @@ _VOLATILE_ENV_NAMES = frozenset(
         "CMDCMDLINE",
         "CMDEXTVERSION",
         "__GAIA_RC",
+        # gawk setenv()s these into its own environment before BEGIN runs.
+        "AWKPATH",
+        "AWKLIBPATH",
     }
 )
 

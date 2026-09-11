@@ -22,7 +22,8 @@ from gaia.agents.tools.shell_session import (
 
 #: True when the session runs commands as a cmd.exe batch file. Setting
 #: GAIA_SHELL to a POSIX shell exercises the other script flavour on the same
-#: box — worth doing before touching the script generator.
+#: box — worth doing before touching the script generator. Pointed at Git Bash,
+#: expect the inherited-environment test to fail: msys rewrites HOME and PATH.
 IS_WINDOWS = os.name == "nt" and not os.environ.get("GAIA_SHELL", "").strip()
 
 
@@ -106,17 +107,34 @@ class TestEnvironmentPersists:
         result = session.run(echo_var_command("GAIA_TEST_VAR"))
         assert "persisted" in result.stdout
 
-    def test_inherited_variables_are_not_reported_as_changes(self, session):
+    def test_inherited_variables_are_not_reported_as_changes(self, tmp_path):
         """Only what the session actually diverged, or Windows folds every name."""
-        session.run("echo hello")
+        # Own session: pytest rewrites PYTEST_CURRENT_TEST between setup and call.
+        shell = ShellSession(start_cwd=str(tmp_path))
+        try:
+            shell.run("echo hello")
 
-        # The bug this pins: Windows folds variable names and os.environ
-        # upper-cases them, so comparing raw made every inherited variable both
-        # an override and a removal — the session would replay the whole
-        # environment and unset it at the same time.
-        diverged = session.environment()
-        assert len(diverged) < len(os.environ) / 4, diverged
-        assert session.removed_environment() == []
+            # The bug this pins: Windows folds variable names and os.environ
+            # upper-cases them, so comparing raw made every inherited variable
+            # both an override and a removal — the session would replay the
+            # whole environment and unset it at the same time.
+            diverged = shell.environment()
+            assert diverged == {}, diverged
+            assert shell.removed_environment() == []
+        finally:
+            shell.close()
+
+    def test_the_bookkeeping_awk_is_not_reported_as_a_change(self, session):
+        """gawk setenv()s AWKPATH/AWKLIBPATH before BEGIN, so `env` shows them.
+
+        Exported here rather than waited on: only gawk injects them, and the
+        session must suppress them on every host, not just the ones with gawk.
+        """
+        session.run(export_command("AWKPATH", "/gaia-test-awkpath"))
+        session.run(export_command("AWKLIBPATH", "/gaia-test-awklibpath"))
+
+        assert "AWKPATH" not in session.environment()
+        assert "AWKLIBPATH" not in session.environment()
 
     def test_set_env_applies_to_the_next_command(self, session):
         session.set_env("GAIA_TEST_PRESET", "from-api")
