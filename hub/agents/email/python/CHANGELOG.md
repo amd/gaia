@@ -104,6 +104,12 @@ contract version is tracked separately as
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
   this. `translate_query` now raises an actionable error naming the
   unsupported operator instead of degrading to a phrase match.
+- **An Outlook search on an ordinary quoted phrase containing a colon word
+  (`subject:"check in: monday"`) no longer raises the unsupported-operator
+  error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.
+  anywhere in the query with no notion of quoting, so a colon word inside a
+  quoted value was mistaken for an operator. It now only matches outside a
+  quoted span; a real unsupported operator that follows one still raises.
 
 ### Changed
 
