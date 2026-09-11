@@ -24,6 +24,7 @@ func TestInstalledFlagshipRejectsBypassBeforeReadiness(t *testing.T) {
 		{"--bypass-permissions"},
 		{"run", "gaia", "--bypass-permissions", "--query", "hello"},
 		{"run", "email", "--bypass-permissions", "--query", "hello"},
+		{"chat", "--subprocess", "missing-agent-binary", "--bypass-permissions", "--query", "hello"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		cmd := exec.CommandContext(ctx, bin, args...)

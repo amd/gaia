@@ -47,6 +47,7 @@ var chatCmd = &cobra.Command{
 				{"timeout", "nothing bounds an interactive session; press ctrl+c to leave it"},
 				{"use-claude", "you own the command line here — append --use-claude to it yourself"},
 				{"claude-model", "you own the command line here — append --claude-model to it yourself"},
+				{"bypass-permissions", "you own the command line here — pass permission options in that command if it supports them"},
 			} {
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
