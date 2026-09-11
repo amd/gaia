@@ -37,6 +37,9 @@ func TestInstalledFlagshipRejectsBypassBeforeReadiness(t *testing.T) {
 		if strings.Contains(string(output), altScreenEnter) {
 			t.Fatal("invalid flag opened the UI")
 		}
+		if len(args) > 1 && args[0] == "chat" && strings.Contains(string(output), "--agent <id>") {
+			t.Fatalf("bypass refusal recommended an unsupported agent launch: %s", output)
+		}
 		if _, err := os.Stat(filepath.Join(home, ".gaia", "daemon", "instance.json")); !os.IsNotExist(err) {
 			t.Fatalf("invalid option launched a daemon: %v", err)
 		}

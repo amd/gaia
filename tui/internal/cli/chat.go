@@ -39,6 +39,11 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("--agent and --subprocess are mutually exclusive: pick one")
 		}
 		if subprocess != "" {
+			if cmd.Flags().Changed("bypass-permissions") {
+				return fmt.Errorf("--bypass-permissions is not supported with --subprocess: " +
+					"pass permission options inside the subprocess command if it supports them, " +
+					"or drop --bypass-permissions")
+			}
 			// Both were accepted and then silently dropped here — RunChat is
 			// given neither. (--query IS honoured: it opens the chat and sends
 			// that first message.)
@@ -47,7 +52,6 @@ var chatCmd = &cobra.Command{
 				{"timeout", "nothing bounds an interactive session; press ctrl+c to leave it"},
 				{"use-claude", "you own the command line here — append --use-claude to it yourself"},
 				{"claude-model", "you own the command line here — append --claude-model to it yourself"},
-				{"bypass-permissions", "you own the command line here — pass permission options in that command if it supports them"},
 			} {
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
