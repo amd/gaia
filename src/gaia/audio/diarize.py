@@ -197,6 +197,18 @@ def _ensure_package(say: Callable[[str], None]) -> None:
     if _package_installed():
         return
 
+    if getattr(sys, "frozen", False):
+        # pip cannot help here: sys.executable is this .exe, not an
+        # interpreter, and a frozen app does not import from the system's
+        # site-packages either. The engine has to be bundled at build time.
+        raise DiarizationError(
+            "Speaker identification is missing from this build of GAIA. It "
+            "has to be bundled when the binary is built, not installed "
+            "afterwards. Rebuild with the 'diarize' extra installed "
+            "(pip install -e '.[api,rag,diarize]' before running freeze.py), "
+            f"or use a source checkout. See {DOCS_URL}"
+        )
+
     say("Installing the speaker-identification engine (about 40 MB, once)...")
     try:
         subprocess.run(

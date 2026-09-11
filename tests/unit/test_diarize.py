@@ -96,6 +96,22 @@ class TestInstallFailures:
                 diarize._ensure_package(lambda _m: None)
         assert run.call_args.kwargs.get("stdin") == subprocess.DEVNULL
 
+    def test_a_frozen_build_refuses_to_pip_install(self):
+        """Regression: the shipped binary silently had no speaker ID.
+
+        Inside PyInstaller, sys.executable is the .exe — so `sys.executable -m
+        pip install` can never work, and the frozen app would not import from
+        site-packages anyway. It must say the engine has to be bundled.
+        """
+        with patch.object(diarize, "_package_installed", return_value=False):
+            with patch.object(diarize.sys, "frozen", True, create=True):
+                with patch("subprocess.run") as run:
+                    with pytest.raises(DiarizationError) as e:
+                        diarize._ensure_package(lambda _m: None)
+        run.assert_not_called()
+        assert "bundled" in str(e.value)
+        assert "diarize" in str(e.value)
+
     def test_download_failure_is_actionable(self, tmp_path):
         """The message must say what failed and where to read more."""
         import requests

@@ -3,6 +3,7 @@
 """Tests for AudioToolsMixin — the agent-facing transcription surface."""
 
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -472,6 +473,102 @@ class TestRefineTranscript:
         threshold, _ = budget_for_ctx(NPU_CTX_SIZE)
         assert size < threshold, f"refine result is {size} chars"
         assert "text" not in result
+
+
+class TestNamingSurvivesReplyOverflow:
+    """A long meeting must not lose speaker labels to the reply budget."""
+
+    def test_overflow_splits_the_batch_instead_of_failing(self):
+        """Regression: a 46-min transcript failed refinement outright.
+
+        finish_reason='length' — the model spent its whole budget reasoning
+        and emitted no content, so the stage died and the summary came back
+        with no speakers at all.
+        """
+        batch = [
+            [{"start": float(i), "end": i + 0.5, "text": f"Sentence {i}."}]
+            for i in range(16)
+        ]
+        seen = []
+
+        def fake(self, prompt):
+            # Count the numbered turn lines, not the word "[pause" — the
+            # instructions mention it too.
+            n = len(re.findall(r"^\d+\. ", prompt, re.MULTILINE))
+            seen.append(n)
+            if n > 4:
+                raise RuntimeError("no transcript text (finish_reason='length')")
+            return "\n".join(f"{i}: Speaker A" for i in range(1, n + 1))
+
+        with patch.object(Host, "_llm_text", fake):
+            named = Host()._name_turns(batch, [])
+
+        assert len(named) == 16, "every turn must still be labelled"
+        assert max(seen) > 4 and min(seen) <= 4, "it should have split down"
+
+    def test_a_small_batch_that_overflows_still_raises(self):
+        """Splitting forever would hide a real problem."""
+        batch = [[{"start": 0.0, "end": 1.0, "text": "One."}]]
+
+        def always_overflow(self, prompt):
+            raise RuntimeError("no transcript text (finish_reason='length')")
+
+        with patch.object(Host, "_llm_text", always_overflow):
+            with pytest.raises(RuntimeError, match="finish_reason"):
+                Host()._name_turns(batch, [])
+
+
+class TestDegradedSpeakerIdIsVisible:
+    """Silently dropping speaker labels reads as "there was one speaker"."""
+
+    def test_a_failed_diarizer_is_reported_on_the_result(self, tmp_path):
+        source = tmp_path / "meeting.mp4"
+        source.write_bytes(b"stub")
+        wav = tmp_path / "meeting.wav"
+        wav.write_bytes(b"stub")
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=120.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=wav),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+            patch.object(
+                Host, "_diarize_if_possible", lambda self, w: self._fail_diar()
+            ),
+        ):
+            Host._fail_diar = lambda self: (
+                setattr(self, "_diarization_error", "sherpa-onnx is not installed."),
+                [],
+            )[1]
+            client.return_value.transcribe.return_value = _transcript()
+            result = Host()._transcribe_media(
+                str(source), output_path=str(tmp_path / "t.txt")
+            )
+
+        assert result["status"] == "success"
+        note = result.get("speaker_identification", "")
+        assert "no speaker labels" in note
+        assert "sherpa-onnx" in note
+
+    def test_a_working_diarizer_adds_no_note(self, tmp_path):
+        source = tmp_path / "meeting.mp4"
+        source.write_bytes(b"stub")
+        wav = tmp_path / "meeting.wav"
+        wav.write_bytes(b"stub")
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=120.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=wav),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+            patch.object(Host, "_diarize_if_possible", lambda self, w: []),
+        ):
+            client.return_value.transcribe.return_value = _transcript()
+            result = Host()._transcribe_media(
+                str(source), output_path=str(tmp_path / "t.txt")
+            )
+
+        assert "speaker_identification" not in result
 
 
 class TestTranscriptionStatus:

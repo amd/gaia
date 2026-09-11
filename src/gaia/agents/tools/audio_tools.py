@@ -41,6 +41,10 @@ TURN_GAP_SECONDS = 0.8
 # transcript the model can hold in view, not by its reply budget.
 REFINE_TURNS_PER_CALL = 40
 
+# Below this a batch is small enough that an overflow is not the batch's
+# fault, so failing is more honest than splitting forever.
+MIN_TURNS_PER_CALL = 4
+
 # A real meeting has a handful of voices. Without this the model assigned
 # a new speaker per sentence — sixty of them in a four-person meeting.
 MAX_SPEAKERS = 8
@@ -544,6 +548,11 @@ class AudioToolsMixin:
                     for span in spans[:MAX_REPORTED_SPANS]
                 ],
                 "low_confidence_span_count": len(spans),
+                **(
+                    {"speaker_identification": note}
+                    if (note := self._diarization_note())
+                    else {}
+                ),
             }
         except ToolCancelled:
             # The agent stopped waiting; don't burn minutes of GPU finishing
@@ -827,7 +836,26 @@ class AudioToolsMixin:
             "2: Speaker A\n3: Priya\n\n"
             f"Turns:\n{listing}"
         )
-        labels = _parse_turn_labels(self._llm_text(prompt), len(texts))
+        try:
+            reply = self._llm_text(prompt)
+        except RuntimeError as e:
+            # A reasoning model spends its reply budget thinking; on a long
+            # transcript that leaves nothing for the answer. Halving the batch
+            # is better than failing the stage — the naming is per-turn and the
+            # halves concatenate.
+            if "finish_reason" not in str(e) or len(batch) <= MIN_TURNS_PER_CALL:
+                raise
+            mid = len(batch) // 2
+            logger.info(
+                "Naming reply overflowed at %d turns; retrying as %d + %d",
+                len(batch),
+                mid,
+                len(batch) - mid,
+            )
+            return self._name_turns(batch[:mid], speaker_notes) + self._name_turns(
+                batch[mid:], speaker_notes
+            )
+        labels = _parse_turn_labels(reply, len(texts))
         for name in labels:
             if name not in speaker_notes and len(speaker_notes) < MAX_SPEAKERS:
                 speaker_notes.append(name)
@@ -983,6 +1011,17 @@ class AudioToolsMixin:
             logger.warning("Speaker identification unavailable: %s", e)
             self._diarization_error = str(e)
             return []
+
+    def _diarization_note(self):
+        """What to tell the caller when voices could not be separated."""
+        reason = getattr(self, "_diarization_error", None)
+        if not reason:
+            return None
+        return (
+            "Speaker identification did not run, so this transcript has no "
+            f"speaker labels. Reason: {reason} Say this plainly in your reply "
+            "rather than presenting the summary as if speakers were identified."
+        )
 
     def _write_transcript(self, transcript, source: Path, output_path: Optional[str]):
         """Persist the transcript before any later stage can fail."""
