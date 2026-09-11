@@ -262,7 +262,10 @@ class TelegramAdapter:
             pass
 
     def start(
-        self, token: str, background: bool = False, health_port: int = TELEGRAM_HEALTH_PORT
+        self,
+        token: str,
+        background: bool = False,
+        health_port: int = TELEGRAM_HEALTH_PORT,
     ) -> None:
         """Start the telegram Application and run polling.
 

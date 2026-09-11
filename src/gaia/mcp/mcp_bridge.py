@@ -496,7 +496,11 @@ def resolve_bind_host(host, authenticated=False):
 
 
 def start_server(
-    host="localhost", port=MCP_BRIDGE_PORT, base_url=None, verbose=False, auth_token=None
+    host="localhost",
+    port=MCP_BRIDGE_PORT,
+    base_url=None,
+    verbose=False,
+    auth_token=None,
 ):
     """Start the HTTP MCP server."""
     # Fix Windows Unicode
@@ -572,7 +576,9 @@ def build_parser():
 
     parser = argparse.ArgumentParser(description="GAIA MCP Bridge - HTTP Native")
     parser.add_argument("--host", default="localhost", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=MCP_BRIDGE_PORT, help="Port to listen on")
+    parser.add_argument(
+        "--port", type=int, default=MCP_BRIDGE_PORT, help="Port to listen on"
+    )
     parser.add_argument(
         "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
     )

@@ -14,13 +14,11 @@ import sys
 import threading
 from unittest.mock import MagicMock
 
-import pytest
-
 sys.path.insert(0, os.path.abspath("src"))
 
 from gaia.cli import build_parser  # noqa: E402
-from gaia.mcp import ports  # noqa: E402
 from gaia.mcp import mcp_bridge  # noqa: E402
+from gaia.mcp import ports  # noqa: E402
 from gaia.mcp.servers import agent_ui_mcp, tui_mcp  # noqa: E402
 from gaia.messaging import telegram  # noqa: E402
 
@@ -47,17 +45,20 @@ def test_tui_mcp_module_default_matches_cli():
     assert tui_mcp.MCP_DEFAULT_PORT == ports.TUI_MCP_PORT == 8767
 
 
+def test_agent_ui_router_launches_on_agent_ui_port():
+    """The Agent UI's own start-server endpoint must not aim at the bridge's port."""
+    from gaia.ui.routers import mcp as ui_mcp_router
+
+    assert ui_mcp_router._agent_mcp_port == ports.AGENT_UI_MCP_PORT
+    assert ui_mcp_router.StartAgentServerRequest().port == ports.AGENT_UI_MCP_PORT
+
+
 def test_cli_mcp_parser_defaults_follow_port_map():
     parser = build_parser()
     assert parser.parse_args(["mcp", "start"]).port == ports.MCP_BRIDGE_PORT
     assert parser.parse_args(["mcp", "status"]).port == ports.MCP_BRIDGE_PORT
-    assert (
-        parser.parse_args(["mcp", "test"]).port == ports.MCP_BRIDGE_PORT
-    )
-    assert (
-        parser.parse_args(["mcp", "agent", "hello"]).port
-        == ports.MCP_BRIDGE_PORT
-    )
+    assert parser.parse_args(["mcp", "test"]).port == ports.MCP_BRIDGE_PORT
+    assert parser.parse_args(["mcp", "agent", "hello"]).port == ports.MCP_BRIDGE_PORT
     assert parser.parse_args(["mcp", "serve"]).port == ports.AGENT_UI_MCP_PORT
     assert parser.parse_args(["mcp", "tui"]).port == ports.TUI_MCP_PORT
 
@@ -146,9 +147,7 @@ def test_run_telegram_forwards_health_port(monkeypatch, tmp_path):
 
     def spy_start(self, token, background=False, health_port=None):
         seen["health_port"] = health_port
-        return real_start(
-            self, token, background=background, health_port=health_port
-        )
+        return real_start(self, token, background=background, health_port=health_port)
 
     monkeypatch.setattr(telegram.TelegramAdapter, "start", spy_start)
     bound_holder = {}
