@@ -6,7 +6,7 @@ import { safeUrlTransform } from '../markdown';
 
 describe('safeUrlTransform', () => {
     it.each([
-        'https://amd-gaia.ai/docs',
+        'https://amd-gaia.ai/docs/guides/chat',
         'http://localhost:4200',
         'HTTPS://AMD-GAIA.AI',
         'mailto:someone@example.com',
