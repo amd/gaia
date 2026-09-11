@@ -35,6 +35,23 @@ from gaia.audio.lemonade_asr import (
     is_flm_model,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_embedded_server(monkeypatch, tmp_path_factory):
+    """Ignore an embedded Lemonade running on the developer's own machine.
+
+    The URL and key now fall back to ``~/.gaia/lemonade/state.json``, so
+    without this every assertion about the default endpoint depends on
+    whether the person running pytest happens to have GAIA's own server up —
+    and on which port it grabbed. Tests that want that path opt in by
+    pointing the constant at a state file they wrote.
+    """
+    from gaia.llm import lemonade_client as lc
+
+    absent = tmp_path_factory.mktemp("no-embedded") / "state.json"
+    monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", absent)
+
+
 # Captured verbatim from Lemonade v11.5.0 (Whisper-Base) on a TTS probe saying
 # "...ship the transcription feature with speaker diarization next week." The
 # mis-heard "diarization" is the low-confidence run the correction pass targets.
@@ -357,9 +374,25 @@ class TestFlmGuard:
 
 class TestBaseUrlResolution:
     def test_defaults_to_lemonade_client_config(self, monkeypatch):
+        """With no env and no embedded server, the packaged default applies."""
         monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
         client = LemonadeASRClient()
         assert client.base_url == "http://localhost:13305/api/v1"
+
+    def test_follows_the_embedded_server(self, monkeypatch, tmp_path):
+        """Transcription has to reach GAIA's own server, wherever it bound."""
+        import json
+
+        from gaia.llm import lemonade_client as lc
+
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"port": 63207, "api_key": "k"}), encoding="utf-8")
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", state)
+        client = LemonadeASRClient()
+        assert client.base_url == "http://localhost:63207/api/v1"
+        assert client.api_key == "k"
 
     def test_honours_lemonade_base_url_env(self, monkeypatch):
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:9000")

@@ -11,7 +11,6 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
-from pathlib import Path
 import shutil
 import signal
 import socket
@@ -21,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -80,8 +80,6 @@ def _embedded_lemonade_url() -> str:
 def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
     """Read ~/.gaia/lemonade/state.json, or None when there is no such server."""
     try:
-        import json
-
         state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
