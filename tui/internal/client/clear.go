@@ -10,10 +10,14 @@ import (
 // ConversationResetter clears agent-owned context with an acknowledged round trip.
 // Calls must be serialized with Send.
 type ConversationResetter interface {
+	SupportsConversationReset() bool
 	ClearConversation(context.Context) error
 }
 
+// Must match CLEAR_CONVERSATION_QUERY in gaia_agent/stdio.py.
 const clearConversationQuery = "\x00gaia:clear_conversation\x00"
+
+func (s *SubprocessClient) SupportsConversationReset() bool { return s.canonical }
 
 func (s *SubprocessClient) ClearConversation(ctx context.Context) error {
 	if !s.canonical {

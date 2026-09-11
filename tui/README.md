@@ -271,6 +271,8 @@ rm -rf "$TMPHOME"
 flagship keeps its running process, selected model, loaded skills, and permission
 settings. If the agent cannot acknowledge the reset, the transcript remains visible
 with an error. Stored long-term memories are unaffected.
+Legacy `--subprocess` and `--mock` connections clear the view with a visible note
+that their agent-side context is unchanged, because their protocol has no reset.
 
 
 ## The `tui` prefix

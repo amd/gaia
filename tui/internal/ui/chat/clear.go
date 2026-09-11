@@ -14,22 +14,31 @@ type conversationClearedMsg struct {
 }
 
 func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
-	if resetter, ok := m.client.(client.ConversationResetter); ok {
+	if resetter, ok := m.client.(client.ConversationResetter); ok && resetter.SupportsConversationReset() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		m.cancelFn = cancel
 		m.streaming = true
+		m.activity = []ActivityItem{{Kind: "status", Content: "Clearing conversation"}}
+		m.logPeakRows = 0
+		m.buffer = ""
+		m.followTail = true
+		m.queryStart = time.Now()
+		m.firstToken = false
+		m.ttft = 0
+		m.totalSteps = 0
+		m.updateViewport()
 		m.turnSeq++
 		seq := m.turnSeq
-		return m, func() tea.Msg {
+		return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 			defer cancel()
 			return conversationClearedMsg{turnSeq: seq, err: resetter.ClearConversation(ctx)}
-		}
+		})
 	}
 	if resetter, ok := m.client.(client.TranscriptResetter); ok {
 		resetter.ResetTranscript()
 		m.messages = nil
 	} else {
-		m.messages = append(m.messages, Message{Role: RoleError, Content: "This agent connection cannot clear conversation context."})
+		m.messages = []Message{{Role: RoleStatus, Content: "View cleared. This connection cannot reset the agent's conversation context; that context is unchanged."}}
 	}
 	m.updateViewport()
 	return m, nil
