@@ -3,6 +3,7 @@ package preflight
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -347,6 +348,37 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 
 // probeLemonade asks the local model server for its model list, which is the
 // smallest call that proves it is actually serving rather than merely bound.
+// lemonadeAPIKey resolves the credential a local Lemonade may demand.
+//
+// GAIA's embedded server (`gaia lemonade embedded`, ~/.gaia/lemonade) generates
+// an API key and writes it to its state file. An unauthenticated probe gets 401
+// from it, which this screen used to report as "Lemonade not running" — while
+// the server was healthy and serving. The user was then offered a second
+// install that would fight for the same port.
+//
+// LEMONADE_API_KEY wins when set, so an explicitly configured credential is
+// never overridden by whatever a local state file happens to hold.
+func lemonadeAPIKey() string {
+	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
+		return key
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".gaia", "lemonade", "state.json"))
+	if err != nil {
+		return ""
+	}
+	var state struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(state.APIKey)
+}
+
 // It returns the base URL it settled on, whether it answered, and a trace for
 // the details pane.
 func probeLemonade(ctx context.Context) (base string, reachable bool, trace string) {
@@ -371,6 +403,9 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
+		if key := lemonadeAPIKey(); key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
@@ -378,6 +413,11 @@ func probeLemonade(ctx context.Context) (base string, reachable bool, trace stri
 		}
 		resp.Body.Close()
 		traces = append(traces, fmt.Sprintf("GET %s/models -> HTTP %d", b, resp.StatusCode))
+		if resp.StatusCode == http.StatusUnauthorized {
+			traces = append(traces, "  (401: a server IS listening but rejected the "+
+				"credential — set LEMONADE_API_KEY, or check "+
+				"~/.gaia/lemonade/state.json for the embedded server's key)")
+		}
 		if resp.StatusCode == http.StatusOK {
 			return b, true, strings.Join(traces, "\n")
 		}

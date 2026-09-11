@@ -11,6 +11,7 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
+from pathlib import Path
 import shutil
 import signal
 import socket
@@ -91,20 +92,45 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
+#: Where GAIA's embedded Lemonade records the credential it generated.
+EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
+
+
+def _embedded_lemonade_api_key() -> Optional[str]:
+    """The key GAIA's own embedded Lemonade generated for itself, if present.
+
+    ``gaia lemonade embedded`` starts a private server that mints an API key
+    and writes it here. Nothing exports it, so every GAIA client that resolved
+    the key from the environment alone got 401 from a server that was healthy
+    and serving — which the readiness screen then reported as "Lemonade not
+    running", and offered to install a second one onto the same port.
+    """
+    try:
+        import json
+
+        state = json.loads(EMBEDDED_LEMONADE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    key = state.get("api_key")
+    return key.strip() or None if isinstance(key, str) else None
+
+
 def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
-    """Resolve the Lemonade API key from argument, env var, or None.
+    """Resolve the Lemonade API key: argument, env var, embedded server, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
     servers (which would reject it).
+
+    An explicit argument or env var always wins — a configured credential must
+    never be overridden by whatever a local state file happens to hold.
     """
     if api_key is not None:
         return api_key
     env_value = os.getenv("LEMONADE_API_KEY")
-    if env_value is None:
-        return None
-    stripped = env_value.strip()
-    return stripped or None
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return _embedded_lemonade_api_key()
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
