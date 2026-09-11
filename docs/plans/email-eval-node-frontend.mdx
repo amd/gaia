@@ -127,7 +127,8 @@ therefore drive a **dev-mode sidecar** via `connectSidecar()` rather than
 
 ```bash
 # Terminal 1 — Lemonade (canonical discovery port is 13305, NOT 8000)
-lemonade-server serve
+# Start Lemonade through `gaia init`; the standalone server CLI was removed.
+# The default discovery port is 13305.
 
 # Terminal 2 — email sidecar from source
 GAIA_EMAIL_AGENT_MODE=dev PYTHONPATH=$(pwd)/src \

@@ -223,3 +223,17 @@ def test_skipped_gate_variant_blocks_the_build(monkeypatch):
     _install_fakes(monkeypatch, summary)
 
     assert mod.main() == 1
+
+
+def test_missing_judge_transport_fails_before_generation(monkeypatch):
+    _set_model_env(monkeypatch)
+    generate = MagicMock()
+    monkeypatch.setattr(mod, "generate_briefings", generate)
+    monkeypatch.setattr(
+        mod,
+        "make_claude_judge",
+        MagicMock(side_effect=RuntimeError("claude CLI missing")),
+    )
+    with pytest.raises(RuntimeError, match="claude CLI missing"):
+        mod.main()
+    generate.assert_not_called()

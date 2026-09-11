@@ -20,8 +20,8 @@ make this gate block once a baseline confirms the bars.
 
 Config comes from the environment (shell-agnostic):
   EMAIL_EVAL_MODEL         Lemonade model id (required)
-  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, preferred (driven via the `claude` CLI)
-  ANTHROPIC_API_KEY        Judge credential, fallback (neither set -> loud failure)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential when no API key is set (driven via the `claude` CLI)
+  ANTHROPIC_API_KEY        Judge credential, takes precedence (neither set -> loud failure)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
