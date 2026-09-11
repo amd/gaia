@@ -14,6 +14,9 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
+  runtime API keys, discovered models, and remote-inference status.
+
 - **A project map at task start.** In a code repository the agent now opens
   every task knowing the directory shape, the likely entry points, which
   commands are installed, and the three platform differences that change

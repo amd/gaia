@@ -53,9 +53,12 @@ func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) 
 // will actually spawn, and whether this session runs on Claude.
 func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions {
 	if m.pfLocal != nil {
-		return *m.pfLocal
+		opts := *m.pfLocal
+		opts.Model = m.model
+		opts.ClaudeMode = m.useClaude
+		return opts
 	}
-	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude}
+	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude, Model: m.model}
 }
 
 // preflightTransport builds the gate's transport on first use and keeps it for

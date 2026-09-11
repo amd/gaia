@@ -118,6 +118,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), extra...)
 		}
+		if opts.Model != "" {
+			if agent.ID != catalog.FlagshipID {
+				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
+			}
+			args = append(append([]string{}, args...), "--model", opts.Model)
+		}
 		if agent.CanonicalEvents {
 			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
 		}

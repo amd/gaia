@@ -198,7 +198,7 @@ const chatHelpText = `  GAIA Chat
   Ctrl+C      Quit
 
   Commands    /help /clear /bypass
-              /setup /memory /model
+              /setup /memory /model /provider
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close

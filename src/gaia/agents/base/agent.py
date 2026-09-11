@@ -906,26 +906,33 @@ Do NOT wrap conversational replies in JSON.
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
 
-        # Read base_url from environment if not provided
+        # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+            base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            LemonadeManager.ensure_ready(
-                min_context_size=min_context_size,
-                quiet=silent_mode,
-                base_url=base_url,
-                required_min_device=required_min_device,
-                device=device,
-            )
+            if cloud_model_provider(model_id):
+                # The local manager preloads a chat model even on an idle server.
+                LemonadeClient(base_url=base_url, verbose=False).health_check()
+            else:
+                LemonadeManager.ensure_ready(
+                    min_context_size=min_context_size,
+                    quiet=silent_mode,
+                    base_url=base_url,
+                    required_min_device=required_min_device,
+                    device=device,
+                )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -4146,10 +4153,14 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
+
+            if cloud_model_provider(getattr(self, "model_id", None)):
+                return False
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
@@ -4159,7 +4170,9 @@ Do NOT wrap conversational replies in JSON.
             resp = httpx.get(
                 health_url,
                 timeout=3.0,
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 return False

@@ -21,6 +21,7 @@ import (
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -126,9 +127,10 @@ var (
 )
 
 type ChatModel struct {
-	messages  []Message
-	activity  []ActivityItem
-	streaming bool
+	providerPanel *providers.Model
+	messages      []Message
+	activity      []ActivityItem
+	streaming     bool
 	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
 	// doneMsg confirms the run's channel actually closed. It exists only to
 	// let the doneMsg handler distinguish "this settlement was a cancel" (so
@@ -438,7 +440,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// hold the initial query, if any, until the check -- and the setup
 		// run it may trigger -- resolves (setupCheckResultMsg / setupEvent
 		// handlers call releaseAfterSetupGate to send it then).
-		cmds = append(cmds, checkSetupCmd(m.claudeMode))
+		cmds = append(cmds, checkSetupCmd(m.skipLocalChatSetup()))
 	} else if m.initialQuery != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
@@ -575,7 +577,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if len(next.queued) == 0 || next.streaming ||
-		next.setupChecking || next.setupRunning {
+		next.setupChecking || next.setupRunning || next.providerPanel != nil {
 		return next, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
@@ -594,6 +596,32 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.providerPanel != nil {
+		switch v := msg.(type) {
+		case providers.ClosedMsg:
+			m.providerPanel = nil
+			return m, nil
+		case providers.SelectedMsg:
+			m.providerPanel = nil
+			if c, ok := m.client.(interface{ SetModelBeforeStart(string) bool }); ok && c.SetModelBeforeStart(v.ID) {
+				m.claudeMode = false
+				m.modelRemote = false
+				m = m.applyLaunchClaude()
+			}
+			return m.submit("/model " + v.ID)
+		default:
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = size.Width
+				m.height = size.Height
+				m.resize()
+			}
+			updated, cmd := m.providerPanel.Update(msg)
+			panel := updated.(providers.Model)
+			m.providerPanel = &panel
+			return m, cmd
+		}
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -1287,6 +1315,16 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	}
 
 	switch query {
+	case "/provider":
+		if !m.supportsModelCommand() {
+			m.messages = append(m.messages, Message{Role: RoleError, Content: "Provider setup is available for the GAIA flagship agent."})
+			m.updateViewport()
+			return m, nil
+		}
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height)
+		m.providerPanel = &panel
+		m.palette.open = false
+		return m, panel.Init()
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
@@ -2597,6 +2635,9 @@ func (m ChatModel) contentHeaderRows() int {
 }
 
 func (m ChatModel) View() string {
+	if m.providerPanel != nil {
+		return m.providerPanel.View()
+	}
 	if m.width == 0 {
 		return m.renderWelcome()
 	}

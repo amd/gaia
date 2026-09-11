@@ -1,0 +1,85 @@
+---
+title: "Choose an AI provider"
+description: "Run GAIA locally or connect Fireworks AI and AMD LLM Gateway through Lemonade."
+---
+
+GAIA's terminal UI offers **Local**, **Fireworks AI**, and **AMD LLM Gateway**.
+Lemonade runs local models and routes cloud chat requests. The header names the
+active provider and marks remote inference; document and memory embeddings stay
+on your Lemonade server.
+
+## Connect from the TUI
+
+1. Start `gaia tui`. During setup, press **p** to choose an AI provider. In chat,
+   enter **`/provider`** from the command palette.
+2. Select **Fireworks AI**. Paste your API key into the masked field and press
+   **Enter**. Keys go directly to your local Lemonade server, never through the
+   conversation or the agent.
+3. Pick a discovered model. **Gemma 4 31B IT**
+   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it.
+   Type to filter the list; use **↑/↓** and **Enter** to select.
+
+The model list comes from Lemonade's provider discovery. A listed model may still
+require deployment or additional account access to serve requests. GAIA does not create a paid
+Fireworks deployment or silently substitute another model when Gemma is absent.
+Fireworks chat sends conversation history to Fireworks and may incur usage charges.
+
+For **AMD LLM Gateway**, enter your organization's OpenAI-compatible HTTPS base
+URL. The default authentication header is `Authorization`, with the prefix
+`Bearer ` (including its trailing space). For gateways using a bare API key,
+enter the required header name and leave the prefix empty. Use **Tab** to move
+between fields, then paste the key and press **Enter**.
+
+For **Local**, select a downloaded chat model. If none are installed, close the
+panel and run setup. Selecting a cloud provider before setup downloads only the
+local embedding models, not an unused local chat model.
+
+## Keys and settings
+
+- Pasted keys live in **Lemonade process memory** and disappear when Lemonade
+  restarts. GAIA does not save them in config files, transcripts, control logs,
+  traces, or command-line arguments.
+- Provider URLs and authentication-header settings are saved by Lemonade and
+  shared with its other clients. Runtime keys are also available to other clients
+  of that same Lemonade server.
+- Leave the key field blank to use a credential already configured in Lemonade.
+  `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
+  server process**, take precedence over pasted keys. A conflict is reported
+  explicitly.
+- **Ctrl+D** in provider setup clears that provider's runtime key. Environment
+  keys remain active. **Esc** cancels input or an in-progress connection.
+- Interactive provider administration requires a **loopback Lemonade server**.
+  For a shared remote Lemonade deployment, have its administrator configure
+  providers and credentials on the server.
+
+For Lemonade's own authentication, an explicit SDK `api_key` takes precedence
+over `LEMONADE_API_KEY`. Otherwise GAIA reads its embedded-server credential from
+`$GAIA_HOME/lemonade/state.json` (`~/.gaia` by default) and uses it only for the
+matching local HTTP server and port.
+
+Cloud routing requires Lemonade **11.8.1 or later** and is experimental upstream.
+An empty model list is reported as a discovery problem, not a successful connection.
+Check credentials, account model access, the gateway URL, and Lemonade's server log.
+
+## Switching and validation
+
+Use `/provider` to reconnect or switch destinations, or `/model <id>` to select
+an already-discovered model. Successful switches preserve the current conversation
+and loaded skills. A failed switch keeps the previous model. Selection applies to
+this running session; if the agent restarts, the TUI reports any reversion to its
+launch model.
+
+For development, build `tui/bin/gaia-tui` and launch the checkout with:
+
+```bash
+scripts/dev/run-tui.sh --dev --control
+```
+
+Use the control API to inspect screens and drive the same session. Developer mode
+shows agent progress and tool details; pasted credentials remain masked and input
+contents are omitted from control diagnostics.
+
+See [Lemonade cloud offload](https://lemonade-server.ai/docs/guide/configuration/cloud/)
+for server administration and
+[Gemma 4 31B IT on Fireworks](https://fireworks.ai/models/fireworks/gemma-4-31b-it)
+for model availability and deployment requirements.
