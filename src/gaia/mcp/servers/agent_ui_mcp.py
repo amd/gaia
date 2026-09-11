@@ -312,12 +312,39 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def get_messages(session_id: str) -> Dict[str, Any]:
         """Get all messages in a session (with agent steps and tool outputs)."""
-        data = _api(backend_url, "get", f"/sessions/{session_id}/messages")
-        if data.get("status") == "error":
-            return data
+        raw_messages = []
+        total = None
+        while total is None or len(raw_messages) < total:
+            offset = len(raw_messages)
+            limit = 100 if total is None else min(100, total - offset)
+            data = _api(
+                backend_url,
+                "get",
+                f"/sessions/{session_id}/messages",
+                params={"limit": limit, "offset": offset},
+            )
+            if data.get("status") == "error":
+                return data
+            page = data.get("messages", [])
+            if total is None:
+                # Freeze the initial count so active chats cannot extend this
+                # request forever. A later call can retrieve newly added rows.
+                total = data.get("total", len(page))
+                if not isinstance(total, int) or total < 0:
+                    return {
+                        "status": "error",
+                        "detail": "Invalid message total from backend. Retry get_messages.",
+                    }
+            if not page and offset < total:
+                return {
+                    "status": "error",
+                    "detail": "The transcript changed or ended before all messages "
+                    "were retrieved. Retry get_messages to retrieve the current session.",
+                }
+            raw_messages.extend(page[: total - offset])
         # Simplify for readability
         messages = []
-        for m in data.get("messages", []):
+        for m in raw_messages:
             msg = {
                 "role": m["role"],
                 "content": m["content"][:2000],
@@ -338,7 +365,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             if stats:
                 msg["stats"] = stats
             messages.append(msg)
-        return {"messages": messages, "total": data.get("total", len(messages))}
+        return {"messages": messages, "total": total}
 
     @mcp.tool()
     def send_message(session_id: str, message: str) -> Dict[str, Any]:
