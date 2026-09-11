@@ -1088,7 +1088,10 @@ def run_scenario_subprocess(
                     "status": "ERRORED",
                     "overall_score": None,
                     "turns": [],
-                    "error": f"JSON parse error: {e}. stdout: {proc.stdout[:300]}",
+                    "error": (
+                        f"JSON parse error: {e}. stdout: {proc.stdout[:300]}"
+                        f"\nstderr: {proc.stderr[:300]}"
+                    ),
                     "elapsed_s": elapsed,
                     "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
                 }
@@ -1101,6 +1104,7 @@ def run_scenario_subprocess(
             "status": "TIMEOUT",
             "overall_score": None,
             "turns": [],
+            "error": f"subprocess exceeded {timeout}s timeout",
             "elapsed_s": elapsed,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }

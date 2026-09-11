@@ -1093,6 +1093,12 @@ class TestRunScenarioSubprocess:
         assert "on-stderr" in result["error"]
         assert "on-stdout" in result["error"]
 
+    def test_malformed_json_includes_stderr_diagnostic(self, mocker):
+        result = self._run(mocker, "{broken", stderr="Output stream interrupted")
+        assert result["status"] == "ERRORED"
+        assert "{broken" in result["error"]
+        assert "Output stream interrupted" in result["error"]
+
     def test_nonzero_exit_error_never_empty(self, mocker):
         """A silent exit must still say something — an empty string explains nothing."""
         result = self._run(mocker, "", returncode=3, stderr="")
@@ -2671,6 +2677,8 @@ class TestRunner:
         assert result["status"] == "TIMEOUT"
         assert result["overall_score"] is None
         assert result["scenario_id"] == "timeout_test"
+        assert "timeout" in result["error"]
+        assert "30s" in result["error"]
         assert "elapsed_s" in result
         assert isinstance(result["elapsed_s"], float)
 
