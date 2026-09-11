@@ -80,9 +80,8 @@ Always read `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI deployments can r
 ## CLI
 
 ```bash
-# Server lifecycle — `gaia init` is the only thing in the tree that starts
-# the server; the runtime path only checks and errors out on a stopped one.
-gaia init                              # Installs Lemonade and starts it
+# Server lifecycle — never hard-code a start command (see the note below).
+gaia init                              # Installs Lemonade and sets it up
 gaia lemonade embedded start           # Private, self-contained instance
 
 # Model management (Lemonade's own CLI)
@@ -110,7 +109,7 @@ launch, `describe_start_hint()` for anything shown to a user. Context size is th
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Connection refused` on port 13305 | Server not running | `gaia init` installs and starts it. To tell a user how to restart it, print `describe_start_hint().instruction` — never hard-code a command |
+| `Connection refused` on port 13305 | Server not running | Print `describe_start_hint().instruction` — it resolves the platform-correct command. `gaia init` if Lemonade isn't installed at all |
 | Model 404 | Not downloaded | `lemonade pull <model>` or `gaia download` |
 | NPU unavailable | Not Ryzen AI 300-series or Linux (NPU is Win11 only today) | Fall back to llamacpp |
 | OOM after overriding to a large model | <24 GB system/VRAM for `Qwen3.5-35B-A3B-GGUF` | Drop the override — the default `Gemma-4-E4B-it-GGUF` is ~3 GB |

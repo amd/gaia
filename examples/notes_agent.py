@@ -142,7 +142,7 @@ def main():
         print(f"Database initialized. Ready!\n")
     except Exception as e:
         print(f"Error initializing agent: {e}")
-        print("\nMake sure Lemonade Server is running — `gaia init` installs and starts it:")
+        print("\nMake sure Lemonade Server is running. To install and start it:")
         print("  gaia init")
         return
 

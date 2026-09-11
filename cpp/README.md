@@ -46,14 +46,14 @@ sudo apt install lemonade-server
 
 Or browse all platform options on the [Lemonade v11.8.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v11.8.1).
 
-The installers register the server with the OS, so it is already running after a
-reboot or login: Windows starts `LemonadeServer.exe` from the tray, Linux runs the
-`lemond` systemd unit, macOS runs the Lemonade app. There is no cross-platform
-`serve` command — Lemonade removed the `lemonade-server` CLI in 10.7. To start one
-by hand on Windows, use the repo's helper:
+How the server starts depends on the install, and there is no cross-platform
+`serve` command — Lemonade removed the `lemonade-server` CLI in 10.7. Windows
+starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
+`lemond` systemd unit; macOS installs a LaunchDaemon. On Windows you can also
+start one from the repo:
 
 ```powershell
-.\installer\scripts\start-lemonade.ps1 -Port 13305
+.\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)

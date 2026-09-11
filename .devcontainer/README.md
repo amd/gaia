@@ -31,8 +31,9 @@ A fully configured dev container for GAIA with Python 3.12, Claude Code, and AMD
 ## Running GAIA
 
 ```bash
-# Install the LLM backend, download models, and start the server.
-# There is no portable "serve" command to run instead.
+# The image does not ship Lemonade. Either install it in the container
+# with `gaia init`, or point LEMONADE_BASE_URL at a server on the host
+# (see "Lemonade Server not starting" below — that is the NPU path).
 gaia init
 
 # Test LLM connectivity

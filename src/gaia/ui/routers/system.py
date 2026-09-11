@@ -450,9 +450,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     try:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
-        # Resolve WITH the required ctx so the command already carries it
-        # (LEMONADE_CTX_SIZE on modern tooling). A caller appending its own
-        # flag is how the dead `--ctx-size` survived in the banner.
+        # Resolve WITH the required ctx so the rendered command carries it;
+        # callers must print it verbatim, never append their own flag.
         hint = describe_start_hint(_MIN_CONTEXT_SIZE)
         status.start_instruction = hint.instruction
         status.start_command = hint.command

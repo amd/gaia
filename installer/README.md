@@ -27,7 +27,7 @@ Empty subdirectories (`nsis/`, `debian/`, `macos/`, `linux/`) are placeholders k
 | `install.sh` | One-shot Linux/macOS installer pulled via `curl ... \| bash` |
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
-| `start-lemonade.ps1` / `.sh` / `.bat` | Launch a local Lemonade Server for development and CI |
+| `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
 ### Building the Agent UI installer locally
 
