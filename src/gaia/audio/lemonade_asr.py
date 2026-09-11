@@ -62,10 +62,18 @@ DEFAULT_CONTEXT_WORDS = 6
 MAX_CHUNK_SECONDS = 40 * 60
 
 # Real acoustic context on both sides of a cut, so a word never lands split
-# across two independently-decoded chunks. 15s is enough pause-and-context for
-# the model to fully capture boundary words; the overhead (15s re-transcribed
-# per seam) is negligible against a 40-minute chunk.
-CHUNK_OVERLAP_SECONDS = 15.0
+# across two independently-decoded chunks. This does NOT fully eliminate seam
+# artifacts: measured on the same real 84-minute recording at both 15s and
+# 30s, each run dropped a few words at exactly one of the two seams — the
+# artifact moved rather than disappeared. Root cause looks like Whisper's own
+# segment-boundary placement being a little non-deterministic right at a
+# chunk's cold-start opening (no prior audio to build context from), which the
+# cutpoint rule can only partition on, not correct. 30s is a reasonable
+# default (negligible overhead against a 40-minute chunk) but is a mitigation,
+# not a fix — treat an occasional dropped word or two at a chunk boundary as a
+# known, accepted imperfection of this pipeline, same category as diarization
+# accuracy.
+CHUNK_OVERLAP_SECONDS = 30.0
 
 _FLM_RE = re.compile(r"(?:^|[-_.])flm(?:$|[-_.])", re.IGNORECASE)
 
