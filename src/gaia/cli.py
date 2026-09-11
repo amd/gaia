@@ -138,10 +138,8 @@ def initialize_lemonade_for_agent(
         if not success:
             sys.exit(1)
     """
-    from gaia.llm.lemonade_client import profile_ctx_size
+    from gaia.llm.lemonade_client import resolve_ctx_size
     from gaia.llm.lemonade_manager import LemonadeManager
-
-    log = get_logger(__name__)
 
     # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
@@ -156,39 +154,9 @@ def initialize_lemonade_for_agent(
     if skip_if_external and (use_claude or use_chatgpt):
         return True, base_url or env_base_url
 
-    # One context size per device profile, never a per-agent literal: every
-    # agent asking for the same window is what keeps a single
-    # (model, ctx_size) pair resident, so switching agents never reloads.
-    # Keyed on device, not agent, because the NPU's FLM build caps below the
-    # GPU window and would fail to load at it.
-    # Users on tight RAM can override with the ``GAIA_CTX_SIZE`` env var.
-    required_ctx = profile_ctx_size(_configured_device())
-
-    # Env-var override: lets users on lower-memory hardware dial back
-    # (or, in advanced cases, push higher up to the model's 128K max).
-    # Honors any positive integer; values lower than the requested ctx
-    # still load — the user is explicitly taking the trade-off.
-    _ctx_override = os.environ.get("GAIA_CTX_SIZE", "").strip()
-    if _ctx_override:
-        try:
-            _ctx_int = int(_ctx_override)
-            if _ctx_int > 0:
-                log.info(
-                    "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
-                    _ctx_int,
-                    agent,
-                    required_ctx,
-                )
-                required_ctx = _ctx_int
-        except ValueError:
-            log.warning(
-                "GAIA_CTX_SIZE=%r is not a positive integer; ignoring",
-                _ctx_override,
-            )
-
-    # LemonadeManager handles all validation and error printing
-    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
+    # Resolve inside the error boundary so invalid overrides exit cleanly.
     try:
+        required_ctx = resolve_ctx_size(device=_configured_device())
         if base_url:
             success = LemonadeManager.ensure_ready(
                 min_context_size=required_ctx,
@@ -759,8 +727,10 @@ async def async_main(action, **kwargs):
             try:
                 if "agent" in locals():
                     agent.stop_watching()
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as exc:
+                get_logger(__name__).warning(
+                    "Could not stop agent file watcher: %s", exc
+                )
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -5194,8 +5164,8 @@ def _handle_memory_status():
         by_source = {}
         try:
             by_source = store.get_source_counts()
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not read memory source counts: %s", exc)
 
         # --- Format output ---
         print("\n=== GAIA Agent Memory ===\n")
@@ -5764,8 +5734,10 @@ def _bootstrap_infer():
                 if not inferred_deleted:
                     try:
                         store.delete_by_source("inferred")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        get_logger(__name__).warning(
+                            "Could not clear previously inferred facts: %s", exc
+                        )
                     inferred_deleted = True
 
                 try:
