@@ -58,6 +58,36 @@ class TestAgentShim:
             )
 
 
+class TestPosixExecutability:
+    """Mode is checked in git, not on disk — Windows checkouts report 0666.
+
+    Go's exec.LookPath, which is how the TUI finds the shim, requires the
+    executable bit on POSIX. Committed non-executable, the shim is invisible
+    there and the TUI falls back to the installed agent with no error.
+    """
+
+    @pytest.mark.parametrize(
+        "relative", ["scripts/dev/bin/gaia-agent", "scripts/dev/run-tui.sh"]
+    )
+    def test_committed_mode_is_executable(self, relative):
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "ls-files", "-s", "--", relative],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            pytest.skip(f"{relative} is not tracked by git here")
+        mode = result.stdout.split()[0]
+        assert mode == "100755", (
+            f"{relative} is committed as {mode}; it must be 100755. "
+            "Fix with: git update-index --chmod=+x " + relative
+        )
+
+
 class TestLaunchScripts:
     @pytest.mark.parametrize("name", sorted(LAUNCHERS))
     def test_launcher_prepends_the_shim_directory(self, name):
