@@ -1427,6 +1427,14 @@ For the new scenario-based eval framework that tests the live Agent UI end-to-en
 - [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
 - [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
 
+### Require a complete comparison
+
+Use `gaia eval agent --compare BASELINE CURRENT --require-complete` for a local
+pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
+measurement, as well as for measured regressions. Without this opt-in, incomplete
+measurements remain visible as warnings and the comparison judges measured results.
+
+
 ---
 
 <small style="color: #666;">

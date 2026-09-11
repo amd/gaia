@@ -591,7 +591,8 @@ _SCORE_REGRESSION_THRESHOLD = 2.0
 # "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
 # death scores 0.0 (or null), which is indistinguishable from a model that
 # answered badly, so comparing the two reports infrastructure as a regression.
-# Kept in sync with the buckets in scorecard.py::build_scorecard.
+# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
+# integrity gate also counts blocked/skipped outcomes as incomplete.
 _NO_MEASUREMENT_STATUSES = frozenset(
     {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
 )
