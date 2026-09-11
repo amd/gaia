@@ -3277,7 +3277,11 @@ async def list_calendar_events(
         )
         for e in data.get("events", [])
     ]
-    return CalendarEventsResponse(events=events)
+    return CalendarEventsResponse(
+        events=events,
+        count=len(events),
+        truncated=bool(data.get("truncated", False)),
+    )
 
 
 @router.post("/calendar/events/preview", response_model=CalendarEventPreviewResponse)

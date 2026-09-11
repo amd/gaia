@@ -1173,8 +1173,11 @@ class CalendarToolsMixin:
             omitted, the tool may use the provider's explicit
             ``attendees[].self`` flag to identify the user. When Google omits the
             default-false ``attendees[].organizer`` flag for that attendee, the
-            event is externally organized. Never infer this field from an
-            email address."""
+            event is externally organized. The result includes ``count`` and a
+            ``truncated`` flag; when ``truncated`` is true, report that only
+            the first page was returned and never present it as the complete
+            calendar window. Never infer ``organizer_self`` from an email
+            address."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
