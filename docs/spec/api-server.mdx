@@ -206,16 +206,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS: loopback origins only, plus GAIA_API_CORS_ORIGINS (gaia/api/local_http.py)
+app.add_middleware(CORSMiddleware, **cors_config())
+
+# Foreign browser origins -> 403; GAIA_API_KEY enforced when set
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
 )
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
@@ -696,8 +695,8 @@ gaia api start
 # Background
 gaia api start --background
 
-# Custom host/port
-gaia api start --host 0.0.0.0 --port 9090
+# Custom host/port (binding beyond loopback requires GAIA_API_KEY)
+GAIA_API_KEY=$(openssl rand -hex 32) gaia api start --host 0.0.0.0 --port 9090
 
 # With debug
 gaia api start --debug --show-prompts

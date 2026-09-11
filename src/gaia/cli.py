@@ -4858,6 +4858,19 @@ def handle_api_command(args):
             if getattr(args, "step_through", False):
                 os.environ["GAIA_API_STEP_THROUGH"] = "1"
 
+            from gaia.api.local_http import (
+                UnauthenticatedBindError,
+                assert_bind_is_authenticated,
+            )
+
+            # A LAN-reachable bind with no API key puts the agent loop on the
+            # network; refuse it before the app (and its agents) load.
+            try:
+                assert_bind_is_authenticated(args.host, "the GAIA API server")
+            except UnauthenticatedBindError as e:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
+
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
             from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
