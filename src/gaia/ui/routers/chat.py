@@ -129,27 +129,34 @@ async def send_message(
 
     try:
         if request.stream:
-            # Use BackgroundTask to ensure locks are released even if the client
-            # disconnects mid-stream (async generator finally block is unreliable
-            # when FastAPI/Starlette drops the connection before first yield).
+            stream_resources_released = False
+
+            def _release_stream_locks(_task=None):
+                nonlocal stream_resources_released
+                if stream_resources_released:
+                    return
+                stream_resources_released = True
+                session_lock.release()
+                chat_semaphore.release()
+
             async def _release_stream_resources():
-                try:
-                    session_lock.release()
-                except RuntimeError:
-                    pass
-                try:
-                    chat_semaphore.release()
-                except ValueError:
-                    pass
+                # A disconnected subscriber must not admit a second producer.
+                run = run_manager.get(sid)
+                if run is not None and run.task is not None and not run.done.is_set():
+                    run.task.add_done_callback(_release_stream_locks)
+                else:
+                    # Includes disconnect/failure before the producer started.
+                    _release_stream_locks()
 
             async def _stream():
-                db.add_message(request.session_id, "user", request.message)
-                # The run's detached lifecycle owns producer + persistence and
-                # fires the AgentLoop notify on real completion; this subscriber
-                # just relays buffered + live events to the browser. Detaching
-                # (client disconnect) no longer cancels the run (#1580).
-                async for chunk in srv._stream_chat_response(db, session, request):
-                    yield chunk
+                try:
+                    db.add_message(request.session_id, "user", request.message)
+                    # The detached lifecycle owns producer + persistence;
+                    # this subscriber only relays buffered and live events.
+                    async for chunk in srv._stream_chat_response(db, session, request):
+                        yield chunk
+                finally:
+                    await _release_stream_resources()
 
             sem_released = True
             return StreamingResponse(
