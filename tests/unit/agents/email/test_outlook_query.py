@@ -143,16 +143,19 @@ def test_is_unsupported_value_raises_before_the_mixed_family_check():
 
 
 @pytest.mark.parametrize(
-    "query",
+    ("query", "expected_search"),
     [
-        'subject:"check in: monday"',
-        'subject:"Q3 has: numbers"',
+        ('subject:"check in: monday"', '"subject:\\"check in: monday\\""'),
+        ('subject:"Q3 has: numbers"', '"subject:\\"Q3 has: numbers\\""'),
     ],
 )
-def test_colon_word_inside_quoted_phrase_is_not_an_operator(query):
+def test_colon_word_inside_quoted_phrase_is_not_an_operator(query, expected_search):
     # #3592: the colon word is part of the quoted phrase's text, not an
-    # operator, so the guard above must not fire on it.
+    # operator, so the guard above must not fire on it. Asserting the
+    # $search value too, so masking the guard's copy can never start
+    # mangling the phrase the user actually typed.
     result = translate_query(query, now=_NOW)
+    assert result.search == expected_search
     assert result.filter is None
 
 
