@@ -68,3 +68,27 @@ def test_equal_timestamps_keep_database_insertion_order(history_db):
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "answer"},
     ]
+
+
+@pytest.mark.parametrize("window", [16384, 131072])
+def test_history_budget_obeys_context_override(history_db, monkeypatch, window):
+    import json
+
+    from gaia.agents.base.turn_metrics import count_tokens
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", str(window))
+    session = history_db.create_session()["id"]
+    for index in range(12):
+        history_db.add_message(session, "user", f"request {index}")
+        history_db.add_message(session, "assistant", "evidence " * 1000)
+    agent = _agent()
+    agent.model_id = "Gemma-4-E4B-it-GGUF"
+    _restore_model_history(agent, history_db, session, "followup")
+    restored = agent.conversation_history
+    assert restored
+    assert count_tokens(json.dumps(restored)) < window // 2
+    if window == 131072:
+        assert len(restored) == 24
+    else:
+        assert len(restored) < 24
+    assert len(history_db.get_context_messages(session)) == 24

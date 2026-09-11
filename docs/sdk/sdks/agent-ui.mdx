@@ -181,9 +181,9 @@ assistant tool calls, tool results and final answer, without duplicating prior
 history or the system prompt. The nullable JSON column is added automatically to
 existing databases; legacy rows retain their original text-only context.
 
-Restoration budgets complete turns against the device profile (32K NPU, 64K
-GPU/CPU), reserving the current prompt, native tool schemas, output allowance and
-2K estimated tokens of headroom. History uses at most half the profile window.
+Restoration budgets complete turns against the resolved model/device window
+(including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
+2K estimated tokens of headroom. History uses at most half the resolved window.
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace

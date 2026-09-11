@@ -1035,9 +1035,11 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
     """Reserve the current prompt and output before admitting completed turns."""
     from gaia.agents.base.history import select_history, transcript_turns
     from gaia.agents.base.turn_metrics import count_tokens
-    from gaia.llm.lemonade_client import profile_ctx_size
+    from gaia.llm.lemonade_client import resolve_ctx_size
 
-    ctx = profile_ctx_size(getattr(agent, "device", None))
+    ctx = resolve_ctx_size(
+        model=getattr(agent, "model_id", None), device=getattr(agent, "device", None)
+    )
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
