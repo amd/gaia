@@ -177,19 +177,81 @@ func TestSummaryNamesTheWorkspaceWhenKnown(t *testing.T) {
 	}
 }
 
-func TestSetupCommandAsksForSetup(t *testing.T) {
+func TestConnectSendsTheTokensOnStdinNotArgv(t *testing.T) {
+	// A token in argv is visible to every other process through `ps` and lands
+	// in shell history. This is the test that keeps it out.
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	stdinFile := filepath.Join(dir, "stdin")
+	path := filepath.Join(dir, "gaia")
+	script := "#!/bin/sh\n" +
+		"echo \"$@\" > " + argsFile + "\n" +
+		"cat > " + stdinFile + "\n" +
+		"echo '{\"connected\": true, \"team\": \"Acme\"}'\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("stub: %v", err)
+	}
 	original := Binary
-	Binary = func() (string, error) { return "/usr/bin/gaia", nil }
+	Binary = func() (string, error) { return path, nil }
 	t.Cleanup(func() { Binary = original })
 
-	bin, args, err := SetupCommand()
+	team, err := Connect(context.Background(), "xapp-secret", "xoxb-secret")
 	if err != nil {
-		t.Fatalf("SetupCommand: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
-	if bin != "/usr/bin/gaia" {
-		t.Errorf("bin = %q", bin)
+	if team != "Acme" {
+		t.Errorf("team = %q, want Acme", team)
 	}
-	if strings.Join(args, " ") != "slack setup" {
-		t.Errorf("args = %v", args)
+
+	argv, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(argv), "secret") {
+		t.Errorf("a token reached argv: %q", argv)
+	}
+	stdin, _ := os.ReadFile(stdinFile)
+	if string(stdin) != "xapp-secret\nxoxb-secret\n" {
+		t.Errorf("stdin = %q, want both tokens one per line", stdin)
+	}
+}
+
+func TestConnectSurfacesTheCLIsOwnRefusal(t *testing.T) {
+	// The CLI explains a swapped pair far better than an exit code does.
+	stubGaia(t, "\xe2\x9d\x8c The bot token must start with 'xoxb-'.", 2)
+
+	_, err := Connect(context.Background(), "xoxb-swapped", "xapp-swapped")
+	if err == nil {
+		t.Fatal("a refused pair must not look like success")
+	}
+	if !strings.Contains(err.Error(), "xoxb-") {
+		t.Errorf("the CLI's own words must reach the user, got: %v", err)
+	}
+}
+
+func TestConnectRejectsOutputThatIsNotAConfirmation(t *testing.T) {
+	stubGaia(t, "something else entirely", 0)
+
+	if _, err := Connect(context.Background(), "xapp-a", "xoxb-b"); err == nil {
+		t.Error("exit 0 alone must not be read as connected")
+	}
+}
+
+func TestCreateAppURLComesFromTheCLINotFromGo(t *testing.T) {
+	// The manifest is a security surface — scopes, Socket Mode, which events
+	// are subscribed. Two copies would drift.
+	stubGaia(t, "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D", 0)
+
+	url, err := CreateAppURL(context.Background())
+	if err != nil {
+		t.Fatalf("CreateAppURL: %v", err)
+	}
+	if !strings.HasPrefix(url, "https://api.slack.com/apps") {
+		t.Errorf("url = %q", url)
+	}
+}
+
+func TestANonURLFromTheCLIIsRefused(t *testing.T) {
+	stubGaia(t, "Traceback (most recent call last):", 0)
+
+	if _, err := CreateAppURL(context.Background()); err == nil {
+		t.Error("a traceback must not be handed to the user as a URL")
 	}
 }

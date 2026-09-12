@@ -54,6 +54,7 @@ def run_setup(
     emit: Callable[[str], None] = print,
     open_browser: bool = True,
     app_name: str = manifest.DEFAULT_APP_NAME,
+    print_url_only: bool = False,
 ) -> int:
     """Walk the user through creating the Slack app and store its tokens.
 
@@ -61,6 +62,15 @@ def run_setup(
     the CLI does, rather than a second copy of it that can disagree.
     """
     url = manifest.create_app_url(app_name)
+    if print_url_only:
+        # For a caller that runs its own prompts — the TUI's setup panel — so
+        # the manifest stays defined in exactly one place. The browser is opened
+        # here too: that caller wants both, and a second flag for one intent is
+        # a worse API than one that does the obvious thing.
+        if open_browser:
+            _open_browser(emit)
+        emit(url)
+        return 0
     emit("")
     emit("Connecting GAIA to Slack.")
     emit("")
@@ -77,11 +87,7 @@ def run_setup(
     emit("")
 
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception as e:  # noqa: BLE001 - a headless box has no browser
-            log.debug("Could not open a browser: %s", e)
-            emit("(Could not open a browser — copy the URL above.)")
+        _open_browser(emit, url)
 
     app_token = prompt("App-level token (xapp-…): ").strip()
     bot_token = prompt("Bot user OAuth token (xoxb-…): ").strip()
@@ -277,6 +283,81 @@ def run_stop(*, emit: Callable[[str], None] = print) -> int:
     return 0
 
 
+def _open_browser(emit: Callable[[str], None], url: Optional[str] = None) -> None:
+    """Best-effort browser open. Never the only route to the URL.
+
+    A headless box, a container, or an SSH session has no browser, and
+    ``webbrowser.open`` reports success on some of them regardless — so every
+    caller prints the URL too.
+    """
+    if url is None:
+        url = manifest.create_app_url()
+    try:
+        webbrowser.open(url)
+    except Exception as e:  # noqa: BLE001 - absence of a browser is not an error
+        log.debug("Could not open a browser: %s", e)
+        emit("(Could not open a browser — use the URL below.)")
+
+
+def run_connect(
+    *,
+    stdin=None,
+    emit: Callable[[str], None] = print,
+) -> int:
+    """Validate and store a pair of tokens read from stdin. No prompting.
+
+    The non-interactive half of :func:`run_setup`, for a caller that collected
+    the tokens itself — the TUI's own setup panel does, so it never has to hand
+    the terminal over to this process.
+
+    **stdin, not argv.** A token passed as an argument is visible to every
+    other process on the machine through ``ps``, and lands in shell history.
+    Two lines: the app-level token, then the bot token.
+    """
+    stream = stdin if stdin is not None else sys.stdin
+    app_token = (stream.readline() or "").strip()
+    bot_token = (stream.readline() or "").strip()
+
+    if not app_token or not bot_token:
+        emit(
+            "❌ Expected two lines on stdin: the app-level token, then the bot "
+            "token. Got "
+            f"{sum(1 for t in (app_token, bot_token) if t)}."
+        )
+        return 2
+
+    try:
+        manifest.validate_tokens(bot_token, app_token)
+    except manifest.TokenFormatError as e:
+        emit(f"❌ {e}")
+        return 2
+
+    # Proven against Slack before anything is stored, so a typo fails here
+    # rather than at the next start as an opaque WebSocket handshake failure.
+    from gaia.messaging.slack.adapter import SlackAdapter
+
+    probe = SlackAdapter(
+        bot_token=bot_token,
+        app_token=app_token,
+        allowed_users={"__setup_probe__"},
+    )
+    try:
+        identity = probe.verify()
+    except Exception as e:  # noqa: BLE001 - surfaced verbatim
+        emit(f"❌ Slack rejected the tokens: {e}")
+        return 1
+
+    credentials.save(bot_token=bot_token, app_token=app_token)
+    team = str(identity.get("team") or identity.get("team_id") or "your workspace")
+    onboarding.record_decision(
+        onboarding.STATE_CONNECTED, detected=True, team_name=team
+    )
+    # One machine-readable line, so a caller that drove this does not have to
+    # parse prose to learn which workspace it landed in.
+    emit(json.dumps({"connected": True, "team": team}))
+    return 0
+
+
 def run_decline(*, never: bool = False, emit: Callable[[str], None] = print) -> int:
     """Record that the user does not want Slack set up.
 
@@ -357,6 +438,8 @@ def main(args) -> int:
     """Dispatch one ``gaia slack <action>`` invocation."""
     action = getattr(args, "slack_action", None)
     if action == "setup":
+        if getattr(args, "print_url", False):
+            return run_setup(print_url_only=True)
         return run_setup(open_browser=not getattr(args, "no_browser", False))
     if action == "start":
         return run_start(
@@ -370,10 +453,12 @@ def main(args) -> int:
         return run_stop()
     if action == "decline":
         return run_decline(never=getattr(args, "never", False))
+    if action == "connect":
+        return run_connect()
     if action == "status":
         return run_status(as_json=getattr(args, "json", False))
     print(
-        "No slack action specified. Use: gaia slack setup|start|stop|status|decline",
+        "No slack action specified. Use: gaia slack setup|start|stop|status|connect|decline",
         file=sys.stderr,
     )
     return 2

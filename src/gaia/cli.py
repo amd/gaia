@@ -1709,6 +1709,14 @@ def build_parser():
         action="store_true",
         help="Print the create-app URL instead of opening a browser",
     )
+    s_setup.add_argument(
+        "--print-url",
+        action="store_true",
+        help=(
+            "Print only the pre-filled create-app URL and exit, for a caller "
+            "running its own prompts (the TUI's setup panel)."
+        ),
+    )
 
     s_start = slack_subparsers.add_parser("start", help="Start the Slack bridge")
     # Not argparse-required: the adapter's own refusal explains *why* an
@@ -1753,6 +1761,16 @@ def build_parser():
     )
 
     slack_subparsers.add_parser("stop", help="Stop a backgrounded Slack bridge")
+
+    slack_subparsers.add_parser(
+        "connect",
+        help=(
+            "Store a pair of Slack tokens read from stdin (app-level token on "
+            "the first line, bot token on the second). For a caller that "
+            "collected them itself, such as the TUI's setup panel; use `setup` "
+            "to be walked through it."
+        ),
+    )
 
     s_decline = slack_subparsers.add_parser(
         "decline", help="Record that you do not want Slack set up"

@@ -35,11 +35,17 @@ run on a laptop behind a home router.
 Slack apps can only be created from api.slack.com, so this is not fully automatic. GAIA
 fills in the manifest; you paste two tokens back.
 
+**From the TUI**, type `/slack setup`. The whole flow runs inside the terminal UI — the URL
+is shown, your browser opens on it, and both tokens are collected in masked prompts. Nothing
+is echoed into the transcript.
+
+**From a shell**, the same flow:
+
 ```bash
 gaia slack setup
 ```
 
-That opens Slack's create-app page with the scopes, Socket Mode, and the DM event
+Either way, Slack's create-app page opens with the scopes, Socket Mode, and the DM event
 subscription already filled in. Then:
 
 1. Pick your workspace and click **Create**.
@@ -112,7 +118,9 @@ read-only window onto your documents.
 
 | Command | What it does |
 |---|---|
+| `/slack` (in the TUI) | Show the connection's status, or run setup with `/slack setup` |
 | `gaia slack setup` | Create the Slack app and store its tokens |
+| `gaia slack connect` | Store a pair of tokens read from stdin — for a caller that collected them itself, such as the TUI |
 | `gaia slack start --allowed-users <ids>` | Run the bridge (blocks until Ctrl-C) |
 | `gaia slack stop` | Stop a bridge started with `--background` |
 | `gaia slack status` | Show detection, configuration, and liveness |

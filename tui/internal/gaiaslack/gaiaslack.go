@@ -148,15 +148,74 @@ func Decline(ctx context.Context, never bool) error {
 	return nil
 }
 
-// SetupCommand is the command that runs setup, for a caller that suspends the
-// TUI and hands the terminal over. Setup is interactive — it opens a browser
-// and reads two pasted tokens — so it cannot run as a captured child.
-func SetupCommand() (string, []string, error) {
+// Connect stores a pair of tokens the caller already collected, returning the
+// workspace name.
+//
+// The tokens go on the child's STDIN, never in argv: an argument is visible to
+// every other process on the machine through ``ps`` and lands in shell history.
+// That is also what lets the TUI collect them in its own panel rather than
+// suspending itself and handing the terminal to `gaia slack setup` — a
+// suspended TUI cannot be drawn, driven by the control API, or tested.
+func Connect(ctx context.Context, appToken, botToken string) (string, error) {
 	bin, err := Binary()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	return bin, []string{"slack", "setup"}, nil
+	ctx, cancel := context.WithTimeout(ctx, StatusTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "slack", "connect")
+	cmd.Stdin = strings.NewReader(appToken + "\n" + botToken + "\n")
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if runErr := cmd.Run(); runErr != nil {
+		// The CLI prints its own actionable refusal (a swapped pair, a token
+		// Slack rejected); quoting it beats an exit code.
+		return "", fmt.Errorf("%s", lastMeaningfulLine(out.String()+errBuf.String()))
+	}
+
+	var result struct {
+		Connected bool   `json:"connected"`
+		Team      string `json:"team"`
+	}
+	raw := out.Bytes()
+	if i := bytes.IndexByte(raw, '{'); i > 0 {
+		raw = raw[i:]
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || !result.Connected {
+		return "", fmt.Errorf(
+			"Slack setup finished but said something unexpected: %s",
+			lastMeaningfulLine(out.String()))
+	}
+	return result.Team, nil
+}
+
+// CreateAppURL is the pre-filled create-an-app page. Asked of the CLI rather
+// than rebuilt in Go: the manifest — scopes, Socket Mode, the DM event
+// subscription — is a security surface, and two copies of it would drift.
+func CreateAppURL(ctx context.Context) (string, error) {
+	bin, err := Binary()
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, StatusTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "slack", "setup", "--print-url")
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if runErr := cmd.Run(); runErr != nil {
+		return "", fmt.Errorf("could not build the Slack create-app URL (%w). "+
+			"GAIA said: %s", runErr, lastMeaningfulLine(errBuf.String()+out.String()))
+	}
+	url := strings.TrimSpace(lastMeaningfulLine(out.String()))
+	if !strings.HasPrefix(url, "https://") {
+		return "", fmt.Errorf(
+			"expected a create-app URL from `gaia slack setup --print-url`, got: %s", url)
+	}
+	return url, nil
 }
 
 // TypedCommand is what a user should type to do this themselves.
