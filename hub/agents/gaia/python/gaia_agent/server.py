@@ -32,7 +32,6 @@ import contextlib
 import json
 import os
 import queue
-import sys
 import threading
 import time
 import uuid
@@ -46,7 +45,7 @@ from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from gaia.logger import get_logger, route_console_logging_to_stderr
+from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
