@@ -69,7 +69,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			}
 			// Keep the legacy flag in sync — renderClaudeChip is still the
 			// pre-first-event fallback (see renderModelChip).
-			m.claudeMode = e.ModelRemote
+			m.claudeMode = e.ModelBackend == "claude"
 			break
 		}
 
@@ -185,16 +185,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
-		m.updateViewport()
+		// resize() reserves the modal's rows out of the transcript, so the
+		// pinned block displaces neither the composer nor the status bar. It
+		// has to run BEFORE updateViewport, which lays the transcript out to
+		// the height resize just set.
+		m.resize()
 
-		cmds := []tea.Cmd{waitForEvent(m.events)}
-		// The auto-deny is armed only where the answer has nowhere to go. On a
-		// live channel the agent is genuinely parked waiting, so expiring would
-		// deny work the user is in the middle of approving — which is the
-		// defect this modal used to produce. See components.ConfirmationTimeout.
-		if cm.ExpiresUnanswered() {
-			cmds = append(cmds, components.StartConfirmationTimeout(e.RunID))
-		}
+		// Every confirmation is armed, on its own clock — a long one where the
+		// answer can be delivered, a short one where it cannot. Unbounded was
+		// the old behaviour and it turned a prompt the user never saw into a
+		// turn that could not end. See components.DeliverableConfirmationTimeout.
+		cmds := []tea.Cmd{waitForEvent(m.events), cm.TimeoutCmd()}
 		return m, tea.Batch(cmds...), true
 
 	case event.CanonicalFinalEvent:
@@ -214,17 +215,21 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			content = m.buffer
 		}
 		m.buffer = ""
-		m.messages = append(m.messages, Message{
-			Role:      RoleAssistant,
-			Content:   content,
-			Rendered:  components.RenderMarkdown(content),
-			Duration:  time.Since(m.queryStart),
-			TTFT:      m.ttft,
-			Steps:     usage.Steps,
-			ToolsUsed: usage.ToolsUsed,
-			Tokens:    usage.Tokens,
-			Metrics:   usage.Metrics,
-		})
+		// A turn stopped before it said anything ends with an empty final; the
+		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
+		if content != "" || !m.cancelPending {
+			m.messages = append(m.messages, Message{
+				Role:      RoleAssistant,
+				Content:   content,
+				Rendered:  components.RenderMarkdown(content),
+				Duration:  time.Since(m.queryStart),
+				TTFT:      m.ttft,
+				Steps:     usage.Steps,
+				ToolsUsed: usage.ToolsUsed,
+				Tokens:    usage.Tokens,
+				Metrics:   usage.Metrics,
+			})
+		}
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
 		m.streaming = false
@@ -434,7 +439,8 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string, success bool) {
 	switch {
 	case msg.TimedOut:
-		return "denied (30s timeout — no response)", false
+		return "denied (" + components.HumanTimeout(msg.Timeout) +
+			" timeout — no response)", false
 	case msg.Always:
 		return "approved — and '" + msg.AlwaysScope + "' will not ask again this session", true
 	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):

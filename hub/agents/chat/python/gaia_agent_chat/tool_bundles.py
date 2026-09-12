@@ -406,6 +406,36 @@ FULL_BUNDLES = [
         members=frozenset({"set_loop_state", "request_user_input"}),
         description="Control the autonomous loop and ask the user questions.",
     ),
+    # The description carries the file extensions deliberately: a real turn
+    # says "summarize this meeting: <path>.mp4" and never says "transcribe",
+    # so an extension-shaped query needs something to score against. Without
+    # this bundle ``transcribe_media`` was orphaned — in no bundle and not in
+    # CORE — so the loader could never surface it and the model fell back to
+    # summarize_document on the raw .mp4, which fails.
+    # index_document and summarize_document ride along on purpose. They live in
+    # the rag bundles too, but a recording turn does not reliably select those,
+    # and without them in reach the model pulled chunks with query_documents and
+    # asked the user what to dig into instead of summarizing. The four tools are
+    # one pipeline; they have to arrive together.
+    ToolBundle(
+        name="media_transcription",
+        members=frozenset(
+            {
+                "transcribe_media",
+                "refine_transcript",
+                "index_document",
+                "summarize_document",
+            }
+        ),
+        description=(
+            "Transcribe speech from an audio or video recording (mp4, mkv, "
+            "mov, m4a, mp3, wav) into a text transcript, then correct "
+            "mis-hearings and label the speakers — meetings, calls, "
+            "interviews, voice memos. Use for any request to transcribe, "
+            "summarize, take notes on, or pull action items out of a "
+            "recording."
+        ),
+    ),
 ]
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to

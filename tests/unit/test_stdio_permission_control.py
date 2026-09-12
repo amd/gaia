@@ -317,20 +317,34 @@ class TestGrantsSurviveTheTurnBoundary:
         # And it is still only that call.
         assert not nxt.call_is_granted("write_file", {"file_path": "/tmp/other"})
 
-    def test_attach_hands_over_an_unbounded_wait(self):
-        """A modal on screen must not expire under the person reading it."""
+    def test_attach_hands_over_a_long_wait_the_client_wins(self):
+        """A modal on screen must not expire under the person reading it — but
+        it must expire eventually.
+
+        This used to hand over ``None`` (wait forever), which is right up until
+        the client cannot answer: an agent parked on a question nobody can see
+        never ends its turn. The backstop must sit clear of the TUI's own
+        10-minute bound so a real answer is never pre-empted by it.
+        """
+        from gaia_agent.stdio import ORPHANED_CONFIRM_TIMEOUT_SECONDS
+
         from gaia.ui.sse_handler import SSEOutputHandler
 
         handler = SSEOutputHandler()
-        assert handler.confirm_timeout_seconds is not None
         PermissionState().attach(handler)
-        assert handler.confirm_timeout_seconds is None
+
+        assert handler.confirm_timeout_seconds == ORPHANED_CONFIRM_TIMEOUT_SECONDS
+        assert ORPHANED_CONFIRM_TIMEOUT_SECONDS > 10 * 60, (
+            "the backstop must outlast the TUI's own bound, or it steals the "
+            "decision the user was making"
+        )
 
 
 class TestStdinClosingEndsAParkedTurn:
-    """A confirmation waits for a person, so nothing else bounds it.
+    """A confirmation waits for a person, so only the orphan backstop bounds it.
 
-    That makes stdin closing the only other way the wait can end. The sentinel
+    Fifteen minutes of a held model slot is far too long to make a host that has
+    already exited pay, so stdin closing must end the wait too. The sentinel
     the pump queues on EOF sits BEHIND the running turn, so on its own it never
     reaches a turn parked on a prompt: the child outlived its parent, kept the
     model slot, and only a kill ended it.
@@ -390,6 +404,59 @@ class TestStdinClosingEndsAParkedTurn:
         state.attach(handler)
         assert state.cancel_active() is True
         assert handler.cancelled.is_set()
+
+    def test_the_cancel_verb_ends_the_turn_and_keeps_session_state(self):
+        """The host's Esc stops the turn in-process instead of killing the agent.
+
+        Killing it lost the loaded skills, "always" grants, history and the
+        bypass mode; a cooperative cancel has to end the turn through its one
+        terminal event and leave all of that where it was.
+        """
+
+        class SlowAgent:
+            def __init__(self):
+                self.console = None
+                self.started = threading.Event()
+                self.stopped_early = False
+
+            def process_query(self, query):
+                self.started.set()
+                deadline = time.monotonic() + 10.0
+                while time.monotonic() < deadline:
+                    if self.console.cancelled.is_set():
+                        self.stopped_early = True
+                        return {"status": "cancelled", "result": ""}
+                    time.sleep(0.02)
+                return {"status": "success", "result": "finished"}
+
+        state = PermissionState(bypass=True)
+        agent = SlowAgent()
+        out = io.StringIO()
+
+        def cancel_once_running():
+            assert agent.started.wait(5.0), "the turn never started"
+            apply_control({"gaia_control": "cancel"}, state)
+
+        canceller = threading.Thread(target=cancel_once_running, daemon=True)
+        canceller.start()
+        began = time.monotonic()
+        run_turn(agent, "clean up the build dir", out, state=state)
+        canceller.join(timeout=5.0)
+
+        events = [
+            json.loads(line) for line in out.getvalue().splitlines() if line.strip()
+        ]
+        terminals = [e for e in events if e.get("type") in ("final", "error")]
+        assert agent.stopped_early, "the agent never saw the cancel"
+        assert time.monotonic() - began < 5.0, "the turn ran on after the cancel"
+        assert (
+            len(terminals) == 1
+        ), "a cancelled turn still ends with ONE terminal event"
+        assert state.bypass is True, "cancelling must not touch the permission mode"
+
+    def test_cancel_with_no_turn_running_is_ignored(self):
+        # A cancel that loses the race with the turn's own end is ordinary.
+        apply_control({"gaia_control": "cancel"}, PermissionState())
 
 
 class TestTheHandoffIsAtomic:
