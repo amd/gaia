@@ -371,6 +371,16 @@ The agent supports the **Model Context Protocol** in both directions — connect
     The containment check still applies — declaring a root widens access to
     that root only, never to its parent, and a symlink escaping it is still
     rejected.
+
+    Two limits worth knowing before you set this:
+
+    - A declared root is **browsable and previewable, but not searchable**.
+      File search and "open in file manager" still only look at your home
+      directory, so files under a declared root are reachable by path but will
+      not turn up by name.
+    - The roots apply to **every client of the backend**, including one
+      reaching it over the tunnel feature. Declare only what you would be
+      comfortable serving remotely.
   </Accordion>
 
   <Accordion title="First-run network egress to huggingface.co">

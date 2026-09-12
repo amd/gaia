@@ -416,6 +416,12 @@ class TestDocToResponse:
 # ── ensure_within_home ────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_document_roots(monkeypatch):
+    """A developer with GAIA_DOCUMENT_ROOTS exported must not change results."""
+    monkeypatch.delenv(DOCUMENT_ROOTS_ENV, raising=False)
+
+
 class TestEnsureWithinHome:
     """Tests for ensure_within_home()."""
 

@@ -444,8 +444,16 @@ def document_roots() -> List[Path]:
 
 
 def _describe_roots(roots: Sequence[Path]) -> str:
-    """Render allowed roots for an error message."""
-    return ", ".join(str(r) for r in roots)
+    """Render allowed roots for an error message, one entry per directory.
+
+    ``document_roots`` carries each root in both lexical and realpath form so
+    the two containment steps can share one list; rendering that verbatim
+    would show ``/tmp/x, /private/tmp/x`` as two separate grants.
+    """
+    by_real = {}
+    for root in roots:
+        by_real.setdefault(os.path.realpath(str(root)), str(root))
+    return ", ".join(by_real.values())
 
 
 def ensure_within_home(resolved: Path) -> None:
