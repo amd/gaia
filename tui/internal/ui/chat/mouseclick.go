@@ -33,7 +33,11 @@ const doubleClickWindow = 500 * time.Millisecond
 // Deliberately not a full URI grammar: everything here was printed for a human
 // to read, so a run of non-space characters after the scheme is the URL, and
 // trimURLTail deals with the sentence punctuation that run swallows.
-var urlPattern = regexp.MustCompile("https?://[^\\s<>\"'`]+")
+//
+// ESC is excluded because this also runs over STYLED text (see hyperlink.go).
+// Glamour closes a link's colour immediately after the last URL character, so
+// without this the match swallows the trailing SGR codes into the URI.
+var urlPattern = regexp.MustCompile("https?://[^\\s<>\"'`\x1b]+")
 
 // trimURLTail drops trailing characters that belong to the sentence rather
 // than the link — the period ending "see https://example.com/x." and the

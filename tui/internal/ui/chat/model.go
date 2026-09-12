@@ -1984,7 +1984,7 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	m.viewport.SetContent(sb.String())
+	m.viewport.SetContent(linkify(sb.String(), m.viewport.Width))
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}

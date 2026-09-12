@@ -207,7 +207,8 @@ const chatHelpText = `  GAIA Chat
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
   Mouse wheel   Scrolls (Ctrl+T for drag-select)
-  Click         Opens a printed link · picks a
+  Click         Opens a printed link (your terminal
+                may underline it on hover) · picks a
                 palette row or question option
   Double-click  Copies that message
 

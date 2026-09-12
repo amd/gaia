@@ -258,7 +258,7 @@ outright.
 | Mouse | What it does |
 |---|---|
 | Wheel | Scrolls the conversation |
-| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler |
+| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
 | Double-click, on a message | Copies that message |
 | `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
 | Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
