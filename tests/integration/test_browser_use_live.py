@@ -14,11 +14,12 @@ Skipped when the ``[browser]`` extra is not installed.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
 from gaia.browser import driver as browser_driver
-from gaia.browser.errors import ElementNotFound
+from gaia.browser.errors import ElementNotFound, LoginTimedOut
 from gaia.browser.snapshot import render
 
 pytestmark = pytest.mark.skipif(
@@ -177,3 +178,86 @@ def test_storage_state_is_retrievable(driver, page_url):
 def test_current_url_reports_the_open_page(driver, page_url):
     driver.goto(page_url)
     assert driver.current_url().startswith("file://")
+
+
+# ------------------------------------------------------- login inference
+
+# Served over real HTTP, not file:// — browsers refuse cookies on a file
+# origin, so a file-served fixture cannot reproduce the false positive at all
+# and the test would pass against the very bug it is meant to catch.
+EMAIL_FIRST = """<!doctype html><title>Sign in</title><body>
+<h1>Sign in</h1>
+<input id="email" type="email" placeholder="Email">
+<button id="next">Next</button>
+<script>
+  // What every real email-first page does: no password field until step two,
+  // and cookies that keep arriving after the page has settled (analytics
+  // beacons, a lazily-issued session id). The delayed one is the important
+  // half — a cookie already present when the wait begins is in the baseline
+  // and can never look "new", so an immediate-only fixture cannot reproduce
+  // the false positive.
+  document.cookie = "csrf=abc123; path=/";
+  setTimeout(() => { document.cookie = "analytics=xyz789; path=/"; }, 1500);
+  document.getElementById('next').onclick = () => {
+    document.body.innerHTML =
+      '<input id="pw" type="password" placeholder="Password">' +
+      '<button id="go">Sign in</button>';
+  };
+</script>
+</body>"""
+
+
+@pytest.fixture(scope="module")
+def http_login_url(tmp_path_factory):
+    """Serve the email-first fixture on loopback so cookies actually apply."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("loginsrv")
+    (root / "signin.html").write_text(EMAIL_FIRST, encoding="utf-8")
+
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(root)
+    )
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/signin.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_cookie_really_is_set_on_the_fixture(driver, http_login_url):
+    """Guards the guard.
+
+    If the fixture stopped setting a cookie, the regression test below would
+    pass against the old buggy heuristic too — which is exactly how the first
+    version of it was worthless.
+    """
+    driver.goto(http_login_url)
+    names = {c.get("name") for c in driver.cookies()}
+    assert "csrf" in names
+
+
+def test_step_one_of_an_email_first_flow_is_not_mistaken_for_success(
+    driver, http_login_url
+):
+    """The regression this heuristic exists for.
+
+    Google and Microsoft show no password field on step one and set cookies
+    immediately. "No password visible + a new cookie" called that a completed
+    sign-in about a second in, and saved a logged-out session.
+    """
+    with pytest.raises(LoginTimedOut):
+        driver.wait_for_login(http_login_url, timeout_s=8, poll_s=0.5)
+
+
+def test_nothing_is_concluded_inside_the_minimum_dwell(driver, page_url):
+    """A page with no password field at all must still wait out the dwell."""
+    t0 = time.monotonic()
+    with pytest.raises(LoginTimedOut):
+        driver.wait_for_login(page_url, timeout_s=2, poll_s=0.25)
+    assert time.monotonic() - t0 >= 1.5

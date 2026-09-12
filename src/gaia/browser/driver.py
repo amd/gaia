@@ -49,6 +49,14 @@ DEFAULT_NAV_TIMEOUT_MS = 30_000
 #: How long a user gets to finish signing in before browser_login gives up.
 DEFAULT_LOGIN_TIMEOUT_S = 300.0
 
+#: Never call a sign-in complete before this. Analytics and CSRF cookies land
+#: in the first second on almost every login page.
+MIN_DWELL_S = 3.0
+
+#: Extra patience when no password field was ever shown (passkey, live SSO, or
+#: an email-first page still on step one).
+NO_PASSWORD_DWELL_S = 10.0
+
 _SHUTDOWN = object()
 
 
@@ -296,6 +304,10 @@ class PlaywrightDriver:
     def current_url(self) -> str:
         return self._submit(lambda: self._page.url)
 
+    def cookies(self) -> List[Dict[str, Any]]:
+        """Cookies held by the live context."""
+        return self._submit(self._read_cookies)
+
     def storage_state(self) -> Dict[str, Any]:
         """Cookies + localStorage for the live context."""
         return self._submit(self._read_storage_state)
@@ -309,11 +321,21 @@ class PlaywrightDriver:
     ) -> Dict[str, Any]:
         """Open ``url`` and block until the user has signed in.
 
-        "Signed in" is inferred from the page no longer offering a password
-        field, having left the login URL, or having acquired a session cookie.
-        Deliberately heuristic and deliberately conservative: the cost of a
-        false negative is the user waiting, the cost of a false positive is
-        persisting a session that is not one.
+        Sign-in is inferred, and the inference has to survive **email-first**
+        flows (Google, Microsoft): step one asks for an address and shows no
+        password field at all, while analytics and CSRF cookies land in the
+        first second. "No password visible plus a new cookie" would call that
+        a success about a second in and persist a logged-out session.
+
+        So the signal is a *transition*, not a state: a password field has to
+        have been seen and then gone, together with a navigation or a new
+        cookie. Flows that never show one (passkey, an already-open SSO
+        session) fall back to requiring both signals plus a longer dwell.
+        Nothing is concluded inside ``MIN_DWELL_S`` either way.
+
+        Conservative on purpose: a false negative costs the user a retry, a
+        false positive saves a session that is not one and then fails
+        confusingly on the next run.
         """
 
         def _login() -> Dict[str, Any]:
@@ -328,7 +350,9 @@ class PlaywrightDriver:
             cookies_before = {
                 (c.get("name"), c.get("domain")) for c in self._context.cookies()
             }
-            deadline = _time.monotonic() + timeout_s
+            started = _time.monotonic()
+            deadline = started + timeout_s
+            saw_password = False
 
             while _time.monotonic() < deadline:
                 _time.sleep(poll_s)
@@ -344,9 +368,26 @@ class PlaywrightDriver:
                 except Exception:  # noqa: BLE001 — mid-navigation; try next poll
                     continue
 
+                if has_password:
+                    saw_password = True
+                    continue
+
+                elapsed = _time.monotonic() - started
+                if elapsed < MIN_DWELL_S:
+                    continue
+
                 moved = now_url != start_url
                 new_cookies = bool(cookies_now - cookies_before)
-                if not has_password and (moved or new_cookies):
+                if saw_password:
+                    done = moved or new_cookies
+                else:
+                    # Never saw a password field: could be a passkey or an
+                    # already-live SSO session, or could be an email-first
+                    # page still on step one. Demand both signals and more
+                    # time before believing it.
+                    done = moved and new_cookies and elapsed >= NO_PASSWORD_DWELL_S
+
+                if done:
                     self._settle()
                     snap = self._snapshot()
                     snap["signed_in"] = True
@@ -358,6 +399,9 @@ class PlaywrightDriver:
         return self._submit(_login, timeout=timeout_s + 30)
 
     # ------------------------------------------------------------------ internals
+
+    def _read_cookies(self) -> List[Dict[str, Any]]:
+        return self._context.cookies()
 
     def _read_storage_state(self) -> Dict[str, Any]:
         # Named apart from ``self._storage_state`` (the seed state passed
