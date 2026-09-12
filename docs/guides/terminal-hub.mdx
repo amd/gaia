@@ -238,7 +238,7 @@ Type /help for available commands.
 
 | Key | What it does |
 |---|---|
-| `Enter` | Send message (queues it if the agent is still working) |
+| `Enter` | Send message. Mid-answer it goes to the turn already running — see below |
 | `Alt+Enter`, `Ctrl+J` | New line in the composer |
 | `Esc` | Idle: clear the composer. Streaming: cancel the turn (press again to force it if the agent doesn't notice right away) |
 | `Ctrl+C` | Quit |
@@ -248,6 +248,30 @@ Type /help for available commands.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+
+### Saying something while the agent is still working
+
+You can keep typing through an answer — the composer stays live while text
+streams and while tools run. Press `Enter` and the message goes to the turn
+*already running*: the agent picks it up at its next step and answers it
+alongside what it was doing, instead of you waiting out a five-minute task to
+ask a one-line follow-up. Nothing is interrupted and no second turn starts.
+
+The row under the composer says which of two things `Enter` will do, because
+they are not the same:
+
+| Row | Meaning |
+|---|---|
+| `⏎ sends to the running turn` | The agent takes it now |
+| `⏎ queues` | It goes out when this turn ends — a slash command, or an agent too old for mid-turn input |
+| `⏎ sending · …` | In flight; it appears in the conversation once the agent has it |
+
+Your message only enters the transcript once the agent actually received it. If
+delivery fails you are told why, and the text goes back to the queue (or to the
+composer, if the turn has already ended) rather than disappearing.
+
+Mid-turn messages need agent contract 2.13 or newer. On an older one `Enter`
+queues as before, and the TUI says so with the command to update.
 
 By default your terminal owns the mouse, so drag-to-select and its own copy/paste
 (right-click, `Ctrl+Shift+C`, `Cmd+C`) work everywhere with nothing to learn. Two

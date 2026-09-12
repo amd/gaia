@@ -392,6 +392,45 @@ whose options are Approve and Deny — so receivers should implement one questio
 UI, not two. That migration is a separate change: it alters the security
 behaviour above and must be made deliberately.
 
+### 5.2 Adding to a run already in flight (schema 2.13)
+
+**`POST /v1/<agent>/query/{run_id}/followup`**
+
+```json
+{ "text": "actually, only the unread ones" }
+```
+
+The third thing a host can send against a live `run_id`, and the only one that
+neither stops it nor waits on it. `cancel` ends the run; `respond` answers a
+question the run is parked on; this one adds to a run that is busy working, and
+the run never notices a pause: the agent folds the text into the turn's context
+at its next agent-loop step boundary (the same boundary the cooperative cancel
+is checked at) and answers it alongside the work already in progress.
+
+Framing is part of the contract, not a detail of one agent: the text enters as a
+**user** message labelled as arriving mid-task. Unlabelled, a user message
+appearing in the middle of a tool sequence is indistinguishable from a new
+request, and the model abandons the work it was doing.
+
+| Status | Meaning |
+|---|---|
+| `200` | `{run_id, delivered: true}` — the run has it and keeps going on its ORIGINAL stream |
+| `404` | no run with that `run_id` is in flight (it finished or was cancelled) |
+| `409` | the run is live but its agent does not accept mid-turn input |
+
+Both refusals are loud for the same reason `respond`'s are: the host has already
+taken the message from the user, so a silent accept leaves them watching a
+conversation their words never entered.
+
+**The host still owns the transcript.** `/query` is stateless (§2.4) — the
+agent's copy of the conversation is overwritten by the `context` pushed on the
+next turn. A delivered follow-up therefore has to be recorded host-side, between
+that turn's question and its answer, or it vanishes from the conversation the
+moment the next turn starts.
+
+**Send only to a peer at contract ≥ 2.13**; an older sidecar 404s the path
+itself, which a client must not misread as "the run ended" (see §7).
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract
@@ -471,6 +510,11 @@ The seven types are the frozen v1 vocabulary. Evolution rules:
   often `true`. Not claiming an absent capability is **negotiation**, not a
   silent fallback; when the missing capability changes what the user can do, say
   so where they can act on it.
+- **A new ROUTE is negotiated like a new field.** A path the peer does not have
+  answers `404` — which is also what a live route says about a run that already
+  ended, so a client that has not probed cannot tell "this sidecar is old" from
+  "your run finished". Probe the version first and say which one it is; both
+  have a different thing for the user to do about them.
 - **Additive is MINOR; removal needs a sunset window.** Adding an event type,
   a `render` type, or a request field is a backward-compatible **MINOR**.
   Removing one requires a stated **deprecation/sunset window**, not a silent

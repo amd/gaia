@@ -54,7 +54,7 @@ AGENT_ID = "gaia"
 
 #: Bumped when the wire surface changes. The TUI's ``negotiate.go`` gates
 #: optional request fields on this, so it must reflect real capability.
-API_VERSION = "2.12"
+API_VERSION = "2.13"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -150,6 +150,24 @@ class QueryRespondResponse(_Strict):
     delivered: bool
 
 
+class QueryFollowUpRequest(_Strict):
+    """Body of ``POST /v1/gaia/query/{run_id}/followup`` (contract >= 2.13)."""
+
+    text: str = Field(
+        min_length=1,
+        description=(
+            "What the user typed while this run was still working. The agent "
+            "folds it into the running turn at its next step boundary; it does "
+            "not start a new turn and does not interrupt the current one."
+        ),
+    )
+
+
+class QueryFollowUpResponse(_Strict):
+    run_id: str
+    delivered: bool
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -158,6 +176,9 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        #: Mid-turn follow-ups (contract >= 2.13). The agent drains this at its
+        #: step boundary; see Agent._drain_followups.
+        self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
 
 
@@ -616,6 +637,7 @@ async def query(request: QueryRequest):
         precancelled = _registry.add(run)
         registered = True
         agent._cancel_event = run.cancel_event
+        agent._followup_queue = run.followups
         if precancelled:
             # A /cancel for this run_id landed before it registered. The loop
             # checks the flag at its first step boundary, so it stops without
@@ -654,6 +676,19 @@ async def query(request: QueryRequest):
             handler.print_error(_terminal_error_detail(exc))
         finally:
             handler.signal_done()
+            # Unwire the follow-up queue the moment the loop stops draining it.
+            # Left wired, a follow-up arriving in the window before the run
+            # leaves the run table would be accepted with a 200 and then never
+            # read by anything — the exact silent drop this route exists to
+            # rule out. Guarded on identity: a retained session's NEXT turn may
+            # already own the attribute, and clearing that one would disarm a
+            # live run. (A narrower race survives: a POST that wins the lookup
+            # microseconds before this line. The caller records a delivered
+            # follow-up in its own transcript and pushes it as context on the
+            # next turn, so the words stay in the conversation — they are
+            # answered a turn later than asked, not lost.)
+            if getattr(agent, "_followup_queue", None) is run.followups:
+                agent._followup_queue = None
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
             if session is not None:
@@ -792,6 +827,43 @@ async def respond_to_query(
     return QueryRespondResponse(
         run_id=run_id, request_id=body.request_id, delivered=True
     )
+
+
+@router.post("/query/{run_id}/followup", response_model=QueryFollowUpResponse)
+async def followup_to_query(
+    run_id: str, body: QueryFollowUpRequest
+) -> QueryFollowUpResponse:
+    """Hand a live run something the user typed after it started.
+
+    The run keeps going on its existing SSE stream — this neither interrupts it
+    nor starts a second turn. The agent folds the text in at its next agent-loop
+    step boundary, so a follow-up sent during a five-minute turn is answered in
+    that turn instead of waiting it out.
+
+    An unknown run is a loud 404, not a quiet accept: the caller has to know the
+    message did not land so it can hold it for the next turn instead of showing
+    the user a message that went nowhere.
+    """
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No run {run_id!r} is in flight, so the follow-up was not "
+                "delivered. It may have already finished or been cancelled — "
+                "send it as a new query instead."
+            ),
+        )
+    enqueue = getattr(run.agent, "queue_followup", None)
+    if not callable(enqueue) or not enqueue(body.text):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id!r} cannot take a follow-up — its agent is not "
+                "accepting mid-turn input. Send it as a new query instead."
+            ),
+        )
+    return QueryFollowUpResponse(run_id=run_id, delivered=True)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

@@ -190,7 +190,8 @@ func helpScrollIndicator(scroll, maxScroll int) string {
 // count the box was told to draw.
 const chatHelpText = `  GAIA Chat
   ──────────────────
-  Enter       Send (queues if the agent is busy)
+  Enter       Send — mid-answer it reaches the turn
+              already running, else queues for next
   Alt+Enter   New line in the composer (Ctrl+J too)
   Esc         Cancel the turn (clears the composer
               when there is nothing running)
