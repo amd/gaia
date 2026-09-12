@@ -5,6 +5,12 @@
 from .base_client import LLMClient
 from .exceptions import NotSupportedError
 from .factory import create_client
-from .vlm_client import VLMClient
+from .vlm_client import VLMClient, VLMExtractionError
 
-__all__ = ["create_client", "LLMClient", "VLMClient", "NotSupportedError"]
+__all__ = [
+    "create_client",
+    "LLMClient",
+    "VLMClient",
+    "VLMExtractionError",
+    "NotSupportedError",
+]

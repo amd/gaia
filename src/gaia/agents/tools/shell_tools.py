@@ -17,6 +17,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -355,6 +356,18 @@ class ShellToolsMixin:
         self.max_commands_per_10_seconds = 3
 
     def _validate_shell_command(self, command: str) -> tuple:
+        """Every refusal ``command`` earns on its text alone, plus its segments.
+
+        Each refusal is stamped ``executed: False`` — nothing here has launched
+        anything, and downstream cannot tell a refused command from a failed one
+        by the shape of the error alone (#3677).
+        """
+        error, segments = self._shell_command_refusal(command)
+        if error is not None:
+            error = {**error, **NOT_EXECUTED}
+        return error, segments
+
+    def _shell_command_refusal(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its segments.
 
         Pure and side-effect free, so it can run twice: once as a pre-flight
@@ -912,6 +925,7 @@ class ShellToolsMixin:
                 allowed, reason, wait_time = self._check_rate_limit()
                 if not allowed:
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
                         "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
                         "has_errors": True,
@@ -924,6 +938,7 @@ class ShellToolsMixin:
                 if working_directory:
                     if not os.path.exists(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Working directory not found: {working_directory}",
                             "has_errors": True,
@@ -931,6 +946,7 @@ class ShellToolsMixin:
 
                     if not os.path.isdir(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Path is not a directory: {working_directory}",
                             "has_errors": True,
@@ -940,6 +956,7 @@ class ShellToolsMixin:
                     if hasattr(self, "path_validator"):
                         if not self.path_validator.is_path_allowed(working_directory):
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
@@ -947,6 +964,7 @@ class ShellToolsMixin:
                     elif hasattr(self, "_is_path_allowed"):
                         if not self._is_path_allowed(working_directory):
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
@@ -1014,6 +1032,7 @@ class ShellToolsMixin:
                                     resolved_path
                                 ):
                                     return {
+                                        **NOT_EXECUTED,
                                         "status": "error",
                                         "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
                                         "has_errors": True,
@@ -1226,6 +1245,16 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                 }
 
+            except FileNotFoundError as exc:
+                # The executable is not there, so nothing started. Said out loud
+                # or the footer reports a missing pytest as a failing one.
+                logger.error(f"Command executable not found: {exc}")
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(exc),
+                    "has_errors": True,
+                }
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
