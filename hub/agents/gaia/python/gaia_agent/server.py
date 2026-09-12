@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
+from gaia_agent.entry import main as _entry_main
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -935,36 +936,7 @@ def _warmup_blocking() -> None:
 app = build_app()
 
 
-#: argv spellings that select the HTTP sidecar. ``--serve`` is the explicit
-#: selector; the bind flags imply it because the daemon spawns the installed
-#: binary as ``<binary> --host H --port P`` with no ``--serve``
-#: (``gaia.daemon.sidecars.manager``). Neither spelling exists in the stdio
-#: parser and none of its flags exist here, so the split is unambiguous.
-_HTTP_SELECTORS = ("--serve", "--host", "--port")
-
-_TRANSPORT_HELP = """\
-gaia-agent serves two transports from one binary, chosen by argv:
-
-  gaia-agent --serve [--host HOST] [--port PORT]
-      The HTTP sidecar: the /v1/gaia/* contract the daemon and the Agent UI
-      speak. Bound to 127.0.0.1:8141 unless told otherwise.
-
-  gaia-agent [OPTIONS]
-      Newline-delimited JSON over stdin/stdout -- one query per line in, one
-      turn's canonical events out. This is what the TUI spawns. Its options:
-"""
-
-
-def _selects_http(argv: List[str]) -> bool:
-    """Whether *argv* asks for the HTTP sidecar rather than the stdio wire."""
-    return any(
-        arg == flag or arg.startswith(f"{flag}=")
-        for arg in argv
-        for flag in _HTTP_SELECTORS
-    )
-
-
-def _serve_http(argv: List[str]) -> int:
+def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
     import argparse
@@ -987,31 +959,12 @@ def _serve_http(argv: List[str]) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    """Dispatch this process onto one of the agent's two transports.
-
-    ``--serve`` (or a bind flag) runs the HTTP sidecar. Everything else,
-    including no arguments at all, is the stdio JSONL transport the TUI spawns
-    as a child — its parser owns ``--model`` / ``--use-claude`` /
-    ``--claude-model`` / ``--json-events`` / ``--dev``, so argv is forwarded
-    verbatim. A flag from the wrong transport is an argparse error, never a
-    quiet switch to the other one.
-    """
-    args = list(sys.argv[1:] if argv is None else argv)
-    if _selects_http(args):
-        return _serve_http(args)
-
-    # The stdio parser cannot mention a mode it does not own.
-    if any(arg in ("-h", "--help") for arg in args):
-        print(_TRANSPORT_HELP)
-
-    # stdout is about to become the event wire, so nothing imported below may
-    # log to it — a stray line reaches the reader as a malformed event.
-    route_console_logging_to_stderr()
-
-    from gaia_agent.stdio import main as stdio_main
-
-    return stdio_main(args)
+# The transport split lives in ``gaia_agent.entry`` so the stdio wire never has
+# to import FastAPI to find out it was not selected. Re-exported here because
+# the frozen binary's entry point (packaging/server.py) reaches ``main`` through
+# this module — one implementation, two names, rather than two dispatchers that
+# can disagree.
+main = _entry_main
 
 
 if __name__ == "__main__":  # pragma: no cover

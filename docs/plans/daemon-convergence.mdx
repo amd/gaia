@@ -1,0 +1,215 @@
+---
+title: "One Daemon, One Agent"
+description: "Collapse the flagship agent's two transports into one daemon-supervised path that the TUI and Slack both call"
+icon: "arrows-to-circle"
+---
+
+# One daemon, one agent, two thin clients
+
+> **Status:** Planned — implementation in progress
+>
+> **Priority:** P1
+>
+> **Related:** #2142 (daemon agent control plane), #2829 (session retention),
+> [Slack via the TUI](/plans/slack-tui-integration)
+
+---
+
+## 1. The finding
+
+**GAIA already has two ways to run the flagship agent, and is about to grow a third.**
+The TUI spawns it as a stdio child. The daemon knows how to supervise it as an HTTP
+sidecar — the spec, the packaging entry, and the routes all exist and are unused. The Slack
+bridge, as merged, spawns a *second* stdio child of its own.
+
+Every one of those is a separate place for the agent to be started, configured, supervised,
+and to go wrong. This plan collapses them to one: **the daemon supervises exactly one
+flagship agent, and every client is a thin caller of it.**
+
+The payoff is subtraction. Convergence does not add a layer — it deletes the reasons three
+other things had to exist.
+
+---
+
+## 2. What already exists
+
+The daemon path is far closer to done than its disuse suggests. Nothing in this table is
+new work:
+
+| Piece | Where | State |
+|---|---|---|
+| Daemon sidecar spec for the flagship | `daemon/sidecars/spec.py:342` | Complete — service id, token file contract, cache dir, dev src dir |
+| ASGI app for frozen-binary and dev launch | `hub/agents/gaia/python/packaging/server.py` | Complete — re-exports `app`, both launchers resolve it |
+| HTTP query surface | `gaia_agent/server.py` | `/query`, `/query/{id}/respond`, `/query/{id}/cancel`, `/init` |
+| Per-session agent retention | `gaia_agent/session_registry.py` | Idle TTL, LRU, capacity, `close()` |
+| Daemon relay with crash semantics | `daemon/relay.py` | Unbuffered SSE, synthetic terminal event, cancel on disconnect |
+| TUI daemon transport | `client/sse.go`, `client/factory.go` | Used today by the email agent |
+| Model-slot broker | `daemon/broker.py` | Leases, so two callers cannot race-evict a model |
+
+**What is missing is one line of catalog and three defects.** The flagship declares
+`TransportSubprocess` at `catalog.go:570`; the rest of this document is the three things
+that have to be true before flipping it is honest.
+
+---
+
+## 3. The three defects
+
+These are not "nice to have first". Each one is a feature the stdio path has and the HTTP
+path silently lacks, and shipping the flip without them is a regression dressed as
+architecture.
+
+### 3.1 `gaia-agent --serve` does not work
+
+`gaia_agent/server.py:main()` is a dual-transport dispatcher — `--serve`/`--host`/`--port`
+runs HTTP, anything else runs stdio. But the console script points straight past it:
+
+```toml
+gaia-agent = "gaia_agent.stdio:main"   # hub/agents/gaia/python/pyproject.toml:38
+```
+
+So a pip-installed `gaia-agent --serve` exits with `unrecognized arguments: --serve`. The
+frozen binary and the daemon's dev mode both reach the dispatcher by module path, which is
+why nobody has hit this — but it means the documented transport is unreachable from the
+package that documents it.
+
+**Fix:** point the script at `gaia_agent.server:main`. One line, plus a test that runs the
+real entry point with `--serve` rather than importing `main` directly — importing is what
+would have kept passing through this bug.
+
+### 3.2 Claude is refused by the HTTP surface
+
+```python
+_ALLOWED_PROVIDERS = frozenset({"lemonade"})   # gaia_agent/server.py:64
+```
+
+`/query` already accepts `model` and `provider`, and rejects anything but Lemonade with a
+clear 400. The stdio path meanwhile takes `--use-claude` / `--claude-model`, and the TUI's
+factory refuses the daemon transport for exactly this reason:
+
+> agent %q runs over the daemon transport, which cannot switch inference backends
+
+**Fix:** allow `claude`, thread `provider` and the Claude model id into agent construction,
+and keep the refusal for anything genuinely unsupported. The error that exists today is
+good — it should become narrower, not disappear.
+
+### 3.3 A retained session silently ignores a model change
+
+This is the one that matters most, because it is a silent wrong answer rather than an error:
+
+```python
+existing = self._sessions.get(session_id)
+if existing is not None:
+    self._last_used[session_id] = time.monotonic()
+    return existing          # config_kwargs — including model_id — dropped
+```
+
+`session_registry.get_or_create` takes `**config_kwargs` and, for an existing session,
+returns the retained agent without looking at them. So `/model gemma` on a live conversation
+is accepted, reports success, and changes nothing. The stdio path does this correctly — it
+swaps the client in place on the same agent, which is what keeps `conversation_history` and
+`loaded_skills` alive across a switch.
+
+**Fix:** give the session an explicit `switch_model(...)` that swaps the client in place,
+mirroring what `stdio.run_model_command` already does, and make `get_or_create` **fail
+loudly** when handed config that conflicts with a retained session rather than dropping it.
+A silently ignored parameter is precisely the failure mode CLAUDE.md's no-silent-fallbacks
+rule exists to prevent.
+
+---
+
+## 4. The convergence
+
+Once §3 is true, the flip is small and mostly deletion.
+
+```
+                    BEFORE                                  AFTER
+
+  TUI ──spawns──> gaia-agent (stdio)            TUI ─────┐
+                                                          ├──> daemon ──> gaia-agent (HTTP)
+  Slack ──spawns──> gaia-agent (stdio)          Slack ───┘                  one process
+                                                                            one model slot
+  daemon ──> (the flagship spec, unused)                                     one ~/.gaia writer
+```
+
+### 4.1 The TUI
+
+Flip `catalog.go`'s flagship entry to `TransportDaemon` and drop `BinaryPath`. The factory
+already builds an `SSEClient` for that case, and the readiness ladder in
+`ui/preflight/` already diagnoses daemon failures — it was written for the email agent and
+is deliberately generic.
+
+### 4.2 Slack becomes a thin client
+
+`messaging/bridge.py`'s `AgentChannel` stops owning a child process and becomes a caller of
+the same relay the TUI uses. This is where convergence pays for itself — it **removes**
+three things the merged Slack bridge had to carry:
+
+| Deleted | Why it existed |
+|---|---|
+| The bridge's own `gaia-agent` child and its reaper | Nothing else to talk to |
+| The `~/.gaia` concurrent-write analysis (that plan's §3.1) | Two agent processes. One writer makes the question moot |
+| "One conversation at a time" | stdio is single-turn; `session_registry` gives thread-per-session for free |
+
+A Slack thread becomes a `session_id`, so two people — or one person in two threads — hold
+separate conversations against one warm agent. That was listed as a limitation of the Slack
+work; it falls out of convergence rather than being built.
+
+### 4.3 What is NOT deleted
+
+`gaia_agent/stdio.py` stays. It is the agent package's own supported transport, the frozen
+binary dispatches to it, and an integrator embedding the agent without a daemon needs it.
+What goes away is **GAIA's** use of it as a second way to run the flagship — not the
+module.
+
+---
+
+## 5. Scope discipline
+
+The instruction behind this plan was *one flow, minimal scope, minimal bugs*. So, explicitly
+out of scope:
+
+- **No new transports, flags, or fallback paths.** If the daemon is not running, the TUI
+  says so and offers to start it — it does not quietly spawn a child instead. A fallback
+  here would recreate the second path this plan exists to delete.
+- **No behaviour changes to the agent loop, prompts, or tools.** Nothing here should move an
+  eval score; if it does, something was changed that should not have been.
+- **No Slack feature work.** The bridge's surface stays exactly as merged; only what is
+  behind it changes.
+- **No daemon feature work.** The broker, custody, and scheduler are used as they are.
+
+---
+
+## 6. Order of work
+
+Strictly sequential — each step is independently verifiable, and none of them leaves the
+tree in a state where two paths are both live.
+
+| Step | Change | Proves |
+|---|---|---|
+| 1 | Console script → `server:main` | `gaia-agent --serve` binds a port |
+| 2 | Allow the Claude provider over HTTP | `--use-claude` reaches parity |
+| 3 | `switch_model` on a retained session; loud refusal on conflicting config | `/model` switches and keeps history |
+| 4 | Flagship catalog entry → `TransportDaemon` | The TUI runs through the daemon |
+| 5 | `AgentChannel` → daemon client; delete child ownership | Slack runs through the same agent |
+| 6 | Latency measurement, first turn and steady state | The flip did not cost what it was meant to save |
+
+Step 6 is a gate, not a formality. Agent construction is ~42s: today the TUI pays it at
+launch, and after this the first turn after daemon start pays it. That is probably a wash
+and may be better, since the daemon outlives any one terminal — but it must be measured
+rather than assumed, and the number belongs in the PR.
+
+---
+
+## 7. Testing
+
+- **Contract, not invocation.** Step 1's test runs the real console script; steps 2-3 assert
+  against the agent's own request model and registry rather than a mock that would accept
+  any keyword.
+- **The regression each defect names.** A test that `/model` on a live session actually
+  changes the model, and that conflicting config raises instead of being dropped.
+- **Both clients against one agent.** An integration test that drives a TUI-shaped session
+  and a Slack-shaped session concurrently through the relay and asserts they do not see each
+  other's history.
+- **Evals unchanged.** This plan touches transport, not prompts or tools, so
+  `gaia eval agent` should be flat. Running it is how that claim gets checked rather than
+  asserted.
