@@ -1,0 +1,277 @@
+---
+title: "Email Inbox Cleanup"
+description: "Bulk inbox cleanup for the GAIA email agent — sender-level bulk actions, unsubscribe, batch trash + undo, and a cleanup orchestration flow, split into skill-deliverable vs. prerequisite core work"
+icon: "broom"
+---
+
+# Email Inbox Cleanup
+
+> **Date:** 2026-07-29
+>
+> **Status:** Planning (0% implemented)
+>
+> **Agent:** `gaia-agent-email` ([`hub/agents/email/python/`](https://github.com/amd/gaia/tree/main/hub/agents/email/python))
+>
+> **Related plans:** [Email Triage Agent](/plans/email-triage-agent) (parent), [Skill Format](/plans/skill-format), [Skill Synthesis](/plans/skill-synthesis)
+
+---
+
+## Relationship to the parent plan (read first)
+
+The [Email Triage Agent](/plans/email-triage-agent) plan already scopes two items
+this document covers, and this plan **re-scopes them against the shipped code**
+rather than duplicating them:
+
+- **Bulk unsubscribe.** The parent puts it in the MVT tier at **~20 LOC**, RFC
+  8058, T0-deterministic (§1.3, §5). That estimate assumes the `List-Unsubscribe`
+  header is available — but it **never shipped**, and the code that did ship
+  (`_format_message_for_llm`, `read_tools.py`) strips messages to a fixed field
+  set that excludes it. The realistic cost is higher than ~20 LOC once you add
+  header exposure, the mailto fallback, per-sender grouping, the frozen-contract
+  bump, an eval, and docs. This plan owns the **grounded** re-estimate (#3).
+- **Inbox-Zero mode.** The parent's §12.7 guided-cleanup UX is the front-end for
+  the cleanup flow (#1) here. This plan owns the **agent/backend capability**;
+  the parent owns the **UX**. Neither supersedes the other.
+
+Everything else here is net-new against both the parent plan and the code.
+
+---
+
+## TL;DR
+
+The email agent already ships ~70% of the primitives inbox cleanup needs — batch
+archive/label/move/star, soft-delete (trash) + undo, permanent-delete with
+confirmation, an action-log undo ledger, triage/pre-scan classification,
+per-sender profiles, and Gmail-operator search. "Inbox cleanup" is mostly an
+**orchestration layer plus a few missing primitives** on top of that — not a
+from-scratch build.
+
+The work splits cleanly along a **skill vs. core** line:
+
+- **Core (must ship first):** batch-trash + bulk-undo, backend bulk APIs, a
+  confirmed-cleanup threshold path, and raw-header exposure for unsubscribe.
+  These touch the mailbox mutation path, the undo ledger, and the safety
+  guardrails — they belong in the trusted agent/backend, not a dropped-in skill.
+- **Skill (portable, on top):** the cleanup *policy* — what to clean, in what
+  order, per-sender rules. Once the [skill runtime](/plans/skill-format) lands,
+  this is a recipe skill composing the core tools, tunable without a fork.
+
+**Design defaults to decide up front:** cleanup defaults to **archive**
+(reversible), with **trash** as an explicit opt-in; large batches surface a
+**single** batch-confirm prompt rather than per-op prompts.
+
+---
+
+## Why this exists
+
+Users mean several distinct things by "clean up my inbox": archive or delete old
+promotional/newsletter mail, unsubscribe from senders, and bulk-act on everything
+from one sender. (Note: archive and trash do **not** reclaim mailbox quota —
+trashed mail counts against storage for 30 days, and only `permanent_delete`
+frees it; genuine storage reclamation is a separate, permanent-delete path, not
+the default cleanup action.) The agent can do
+the individual mutations today, but there is **no cleanup flow** that finds
+candidates, groups them, proposes bulk actions with counts, and executes them
+with a single undo handle. Worse, the batch-threshold guardrail — correct for
+preventing accidental blasts — is the *default failure mode* of an intentional
+cleanup, because it refuses large multi-sender batches without confirmation and
+there is no confirmed-cleanup path to satisfy it.
+
+---
+
+## Current state — what already exists (reuse, don't rebuild)
+
+Grounded on the code on `main`. These are the primitives a cleanup layer composes.
+
+| Capability | Symbol / tool | `file` | State |
+|---|---|---|---|
+| Bulk archive | `archive_message_batch` (shared `batch_id`, partial-failure collection) | [`tools/organize_tools.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/organize_tools.py) | **Exists** |
+| Bulk move / label / read / star | `move_to_label_batch`, `label_message_batch`, `mark_read_batch`, `mark_unread_batch`, `add_star_batch`, `remove_star_batch` | `tools/organize_tools.py` | **Exists** |
+| Bulk-archive undo | `undo_archive_batch` | `tools/organize_tools.py`, `action_store.py` | **Exists** |
+| Soft delete + undo | `trash_message` → `restore_message` (undo window) | [`tools/delete_tools.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/delete_tools.py) | **Exists** |
+| Permanent delete (guarded) | `permanent_delete` (in `CONFIRMATION_REQUIRED_TOOLS`) | `tools/delete_tools.py` | **Exists** |
+| Undo ledger | `record_action`, `batch_id`, `fetch_batch_undoable` | `action_store.py` | **Exists** |
+| Classification | `triage_inbox`, `pre_scan_inbox` (URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL + `is_spam` / `is_phishing`) | [`tools/read_tools.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/read_tools.py) | **Exists** |
+| Candidate search | `search_messages` (Gmail operators incl. `older_than:`, `larger:`) | `tools/read_tools.py` | **Exists** |
+| Per-sender profile | frequency + dominant category, sorted by volume | [`tools/profile_tools.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/profile_tools.py) | **Exists** |
+| Session prefs | low-priority senders, `category_defaults → archive` | `tools/preference_tools.py`, `tools/read_tools.py` | **Exists** |
+
+---
+
+## The gaps
+
+Seven gaps stand between today's primitives and a coherent cleanup feature. The
+final column marks whether each is **skill-deliverable** or **prerequisite core
+work** (see [Skill vs. core](#skill-vs-core-what-can-live-where)). Effort is a
+rough S/M/L T-shirt size for relative sequencing, not a costed estimate.
+
+| # | Gap | Impact | Effort | Home |
+|---|-----|--------|--------|------|
+| 1 | **No cleanup orchestration flow** | The LLM must hand-chain search→batch. Nothing finds bulk/promo/old mail, groups by sender, proposes N actions with counts, and executes-with-undo. `pre_scan.suggested_archives` is capped at 10 and inbox-front only (`PRE_SCAN_ARCHIVE_CAP`, `read_tools.py`). | L | **Skill** (recipe) |
+| 2 | **Batch threshold blocks big cleanups** | `_organize_batch_threshold_exceeded` refuses >5 ops across >3 senders per turn (`agent.py`). Correct for accidents, but it is the default failure mode of an intentional cleanup — no confirmed-cleanup bypass exists. | S–M | **Core** |
+| 3 | **No unsubscribe** | No `List-Unsubscribe` handling anywhere. `_format_message_for_llm` strips messages to a fixed field set (`read_tools.py`), so the header is not even exposed. Needs header parsing (mailto + RFC 8058 one-click POST), a tool, and confirmation. | M–L | **Core** (header exposure) + **Skill/core** (the tool) |
+| 4 | **No trash-batch / bulk trash-undo** | Only single `trash_message` / `restore_message`. Bulk delete needs `trash_message_batch` + `undo_trash_batch` (the `batch_id` schema already supports it; mirror `undo_archive_batch`). | S–M | **Core** |
+| 5 | **Backends loop one-at-a-time** | `gmail_backend` / `outlook_backend` have no `batchModify` / `batchDelete` — every mutation is a per-message API call. Fine for 10 messages, painful for "archive 800 promos." | M | **Core** (backend) |
+| 6 | **No sender-level bulk verb** | Profile data exists but nothing ties profile → search → bulk action ("archive everything from X / all newsletters"). | M (mostly #1) | **Skill** (recipe) |
+| 7 | **REST/MCP + eval + docs surface** | No `cleanup`/`unsubscribe` REST verb or MCP tool; frozen-contract update; no eval suite for cleanup precision (false-archive is the risky failure); README/SPEC/SKILL/CHANGELOG/CAPABILITY_MATRIX must update together (repo rule). | M | **Core** + docs |
+
+---
+
+## Skill vs. core — what can live where
+
+Per the [Skill Format](/plans/skill-format) contract, a GAIA skill is one of:
+an **instruction-only** procedure, a **recipe** that composes existing registry
+tools (`metadata.gaia.tools_required`), or a skill that ships its **own `@tool`
+code** (`metadata.gaia.tools`).
+
+**The rule of thumb:** a skill can *orchestrate* mailbox mutations, but the
+mutation primitives, the undo ledger, and the safety thresholds must live in the
+trusted core. A sandboxed skill tool does not get handles to the agent's private
+`_backends` / `_backend_for_message` routing or the `action_store` ledger.
+
+- **Skill-deliverable (composition only):** the cleanup flow (#1) and
+  sender-level cleanup (#6) are textbook recipe skills — pure composition of
+  `triage_inbox` → `search_messages` → `archive_message_batch` / `trash_message_batch`.
+- **Core, non-negotiable:** batch-trash + bulk-undo (#4), backend bulk APIs
+  (#5), and the threshold/confirmation policy (#2) require privileged agent
+  internals or backend code. Unsubscribe (#3) needs raw-header exposure in core
+  before any skill tool can read `List-Unsubscribe`.
+
+### Two caveats that gate the skill path
+
+1. **The skill runtime does not exist yet — and it targets the core framework,
+   not the sidecar.** The `gaia.skills` loader, `gaia skill` CLI, and
+   `_TOOL_REGISTRY` skill registration are all **PROPOSED / greenfield** in the
+   [Skill Format](/plans/skill-format) plan. That runtime is designed against the
+   in-core agent framework, but the email agent ships as a **frozen-binary
+   sidecar** (PyInstaller wheel + npm). Dynamically loading a skill's `tools.py`
+   into a frozen binary is unsolved — recipe / instruction-only skills (no code)
+   are far more plausible in the sidecar than code-carrying skills.
+2. **Trust tier gates destructive email ops.** Trash, permanent-delete, and
+   unsubscribe-POST are exactly the actions the tier system flags as dangerous —
+   they would require `verified` (AMD-signed) tier, never the default
+   `experimental`. "Define it in a skill" must not mean "any community skill can
+   nuke an inbox."
+
+---
+
+## Phased build
+
+Each phase holds the prior floor. Core primitives land first so the skill layer
+has something to compose.
+
+### Phase 1 — Core primitives (unlocks "trash all these" today)
+
+**Ships:**
+- `trash_message_batch` + `undo_trash_batch`, mirroring the archive-batch pattern
+  and reusing the `batch_id` ledger (#4).
+- A **confirmed-cleanup path** through the batch threshold: one batch-confirm
+  prompt that, once satisfied, lets a large multi-sender cleanup proceed without
+  per-op re-prompts (#2). The flow already emits a batch-confirm sentinel; this
+  makes it satisfiable.
+
+**Success criteria:**
+- A 50-message, 10-sender trash executes after a single confirmation and is
+  fully reversible via `undo_trash_batch` inside the undo window.
+- The threshold still blocks an *unconfirmed* multi-sender blast.
+
+### Phase 2 — Cleanup flow + backend bulk (the core feature)
+
+**Ships:**
+- Backend bulk mutation for Gmail (`batchModify` / `batchDelete`) so bulk ops are
+  O(1) API calls, not O(N) (#5). **Outlook is separate work, not a drop-in
+  equivalent** — it is folder-based, not label-based, and its batch API differs;
+  scope it as its own investigation rather than assuming parity.
+- The cleanup orchestration: find candidates (promotional / old / large / by
+  low-priority sender), **group by sender**, propose bulk actions with counts,
+  execute with a single undo handle (#1, #6). Authored as a **recipe skill** if
+  the skill runtime is available in the sidecar by then; otherwise as an
+  agent-loop flow that the skill later wraps.
+
+**Success criteria:**
+- "Clean up my promotions" returns a grouped, counted proposal and executes as
+  one reversible batch.
+- Bulk archive of 500 messages completes without per-message API fan-out.
+
+### Phase 3 — Unsubscribe (candidate to pull forward; see design decision 3)
+
+**Ships:**
+- Raw-header exposure in core (`List-Unsubscribe`, `List-Unsubscribe-Post`)
+  without widening the untrusted-body surface (#3).
+- An `unsubscribe` tool: mailto and RFC 8058 one-click POST (`network:write`),
+  gated by confirmation.
+
+**Success criteria:**
+- Unsubscribe succeeds via one-click POST where offered, falls back to mailto,
+  and **fails loudly** (never silently no-ops) when neither is available.
+
+### Cross-cutting — surface, eval, docs
+
+- REST `cleanup` / `unsubscribe` verb + frozen-contract bump; MCP tool only if a
+  host LLM needs it as a verb (per the CAPABILITY_MATRIX MCP-scope rule).
+- **Eval suite** for cleanup precision — false-archive / false-trash is the
+  dangerous error; measure precision on the suggested-cleanup set, not just recall.
+- Docs sync **together**: README, SPEC, SKILL, CHANGELOG, CAPABILITY_MATRIX
+  (regenerate via `packaging/capability_matrix.py`).
+
+---
+
+## Non-negotiable safety invariant
+
+**Cleanup must never make spam or phishing disappear before the user sees it.**
+The shipped code enforces this deliberately: `pre_scan_inbox_impl` forces
+`is_spam` / `is_phishing` mail into the `actionable` bucket (never
+`suggested_archives`), and `_apply_session_preferences` refuses to let a
+low-priority-sender preference silently archive a flagged message
+([`read_tools.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/read_tools.py)).
+The cleanup flow (#1, #6) **inherits this invariant** — a bulk-archive/trash of
+the promotional bucket must exclude anything flagged, or cleanup becomes a
+phishing-hiding vector. This is a hard constraint on the flow, not a preference.
+
+## Design decisions to pin down first
+
+1. **Default cleanup action** — **archive** (reversible, keeps mail) as the
+   default; **trash** as explicit opt-in. Aligns with the repo's no-silent-
+   destructive-fallback posture.
+2. **Confirmation model at scale** — a **single** "confirm N messages from M
+   senders" prompt, not per-op prompts. The batch-confirm sentinel already
+   exists; Phase 1 makes it satisfiable.
+3. **Phase ordering of unsubscribe** — unsubscribe is arguably the
+   highest-value cleanup action (see the gap table), yet the phasing below puts
+   it last. Decide whether to pull it forward: its only hard prerequisite is
+   raw-header exposure (a small core change), so it *could* land in Phase 1–2
+   ahead of the full flow. Left as an explicit decision rather than silently
+   fixed.
+
+**Undo horizon is a Phase 1 requirement, not an open question.** The current
+undo window is **30 seconds** (`undo_window_seconds: int = 30`,
+[`config.py`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/config.py)).
+A 30-second window makes a *reviewed* bulk cleanup effectively unusable — the
+user cannot inspect 200 archived messages and undo within 30s. Phase 1 must
+either give cleanup batches an extended, explicit undo handle or rely on the
+provider Trash's native 30-day recovery as the documented undo path. Shipping
+cleanup on the 30s window would be a false-safety claim.
+
+---
+
+## KPIs
+
+| KPI | Type | Target |
+|---|---|---|
+| Cleanup precision | Headline (safety) | False-archive / false-trash rate on the suggested-cleanup set below an agreed bar before enforce. |
+| Reversibility | Correctness | Every non-permanent cleanup batch is fully reversible via one undo handle inside the window. |
+| Bulk efficiency | Perf | Bulk ops use backend batch APIs — no O(N) per-message fan-out for N > threshold. |
+| Fail-loudly | Correctness | Unsubscribe and bulk ops raise actionable errors on partial/total failure; never silent no-op. |
+| Docs coherence | Grounding | README / SPEC / SKILL / CHANGELOG / CAPABILITY_MATRIX updated in the same change; matrix regenerated. |
+
+---
+
+## Dependencies
+
+- **Blocking for the skill layer:** the [Skill Format](/plans/skill-format)
+  runtime (loader, CLI, `_TOOL_REGISTRY` registration) — **PROPOSED**, and its
+  loadability into the frozen email sidecar is an open integration question.
+- **Non-blocking for core:** Phases 1–3 core work depends only on existing
+  email-agent internals and the Gmail/Outlook backends.
+- **Connector scope:** unsubscribe one-click POST needs `network:write`; the
+  Google/Microsoft connector grant model already gates mailbox access.

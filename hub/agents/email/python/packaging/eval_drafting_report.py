@@ -11,16 +11,19 @@ scores each draft with a Claude judge against the case rubric. The aggregate
 ``gaia.eval.draft_quality`` — same single-source rule as the other gates: no
 thresholds inlined here. The manifest owns the enforce switch (data, not code).
 
-``ANTHROPIC_API_KEY`` is REQUIRED — the Claude judge cannot score drafts without
-it, and per CLAUDE.md's fail-loudly rule there is NO silent skip: its absence is
-a HARD FAILURE (exit 1), never a skip report and never an invented pass. The
+A judge credential is REQUIRED — the Claude judge cannot score drafts without
+one, and per CLAUDE.md's fail-loudly rule there is NO silent skip: its absence is
+a HARD FAILURE (exit 1), never a skip report and never an invented pass. Either
+``CLAUDE_CODE_OAUTH_TOKEN`` (preferred; driven through the ``claude`` CLI) or
+``ANTHROPIC_API_KEY`` will do — ``gaia.eval.judge_client`` owns the choice. The
 workflows that run this (release_agent_email.yml, test_email_agent_eval.yml,
-email_scorecard_refresh.yml) inject the key from ``secrets.ANTHROPIC_API_KEY``
-and never run on fork PRs, so the key is always present in a legitimate run.
+email_scorecard_refresh.yml) inject them from the matching secrets and never run
+on fork PRs, so a credential is always present in a legitimate run.
 
 Config comes from the environment (shell-agnostic):
-  EMAIL_EVAL_MODEL   Lemonade model id (required)
-  ANTHROPIC_API_KEY  Claude judge credential (REQUIRED; absence -> exit 1)
+  EMAIL_EVAL_MODEL         Lemonade model id (required)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, preferred
+  ANTHROPIC_API_KEY        Judge credential, fallback (neither set -> exit 1)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -40,6 +43,10 @@ from gaia.eval.draft_quality import (
     make_claude_judge,
     summarize_drafting,
 )
+from gaia.eval.judge_client import (
+    MISSING_CREDENTIAL_ERROR,
+    judge_credential_present,
+)
 
 CORPUS_PATH = "tests/fixtures/email/drafting_ground_truth.json"
 
@@ -56,18 +63,16 @@ def main() -> int:
         f"approval_min={thresholds.approval_min} (#1269 target, REPORTED)"
     )
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not judge_credential_present():
         # Fail loudly (CLAUDE.md: No Silent Fallbacks — Fail Loudly). The judge
         # credential is REQUIRED to score drafts; its absence is a hard failure,
         # never a skip — regardless of the manifest's enforce flag. No skip report
         # is written and no pass is invented, so the release / nightly cannot ship
         # a silently un-judged drafting gate.
         print(
-            "[DRAFT-EVAL] ERROR: ANTHROPIC_API_KEY is not set — the Claude judge "
-            "cannot score the voice-drafting eval.\n"
-            "  What to do: set ANTHROPIC_API_KEY on this runner. The workflow step "
-            "injects it from secrets.ANTHROPIC_API_KEY; add/repair that repo (or "
-            "org) secret.\n"
+            "[DRAFT-EVAL] ERROR: no Claude judge credential — the voice-drafting "
+            "eval cannot be scored.\n"
+            f"{MISSING_CREDENTIAL_ERROR}"
             "  Where: the 'Voice-drafting quality eval' step in "
             ".github/workflows/{release_agent_email,test_email_agent_eval,"
             "email_scorecard_refresh}.yml.",

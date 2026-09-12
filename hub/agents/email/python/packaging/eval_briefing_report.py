@@ -19,8 +19,9 @@ NO report-mode fallback and NO silent skip — if the eval cannot prove the
 briefing is good, the pipeline goes red (CLAUDE.md: No Silent Fallbacks).
 
 Config comes from the environment (shell-agnostic):
-  EMAIL_EVAL_MODEL   Lemonade model id (required)
-  ANTHROPIC_API_KEY  Claude judge credential (REQUIRED; absence -> loud failure)
+  EMAIL_EVAL_MODEL         Lemonade model id (required)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, preferred (driven via the `claude` CLI)
+  ANTHROPIC_API_KEY        Judge credential, fallback (neither set -> loud failure)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -39,6 +40,10 @@ from gaia.eval.briefing_quality import (
     load_default_briefing_thresholds,
     make_claude_judge,
     summarize_briefings,
+)
+from gaia.eval.judge_client import (
+    MISSING_CREDENTIAL_ERROR,
+    judge_credential_present,
 )
 
 CORPUS_PATH = "tests/fixtures/email/briefing_ground_truth.json"
@@ -59,15 +64,15 @@ def main() -> int:
         f"(#1951 ENFORCED gate)"
     )
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not judge_credential_present():
         # No fallback, no skip: the judge credential is required to prove the
         # briefing is good. Its absence FAILS the build (actionable error), it
         # does not quietly pass.
         print(
-            "[BRIEF-EVAL] ERROR: ANTHROPIC_API_KEY is not set on this runner — "
-            "the Claude judge cannot score briefings. Configure the "
-            "ANTHROPIC_API_KEY secret for this workflow. Failing the build "
-            "(this gate has no report-mode fallback).",
+            "[BRIEF-EVAL] ERROR: no Claude judge credential on this runner — the "
+            "Claude judge cannot score briefings. Failing the build (this gate "
+            "has no report-mode fallback).\n"
+            f"{MISSING_CREDENTIAL_ERROR}",
             file=sys.stderr,
         )
         return 1
