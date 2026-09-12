@@ -265,3 +265,22 @@ def test_every_http_selector_is_recognised_by_the_installed_script(argv):
     assert (
         "gaia-agent --serve" in result.stdout
     ), f"the HTTP parser's help was expected, got:\n{result.stdout}\n{result.stderr}"
+
+
+def test_the_dispatcher_runs_as_a_module_too():
+    """`python -m gaia_agent.entry` must behave like the installed script.
+
+    That is how the CLI smoke test exercises an entry point without depending
+    on PATH — and a module with no __main__ guard runs nothing under -m, which
+    looks exactly like a binary that produces no output.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-m", "gaia_agent.entry", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert "usage:" in result.stdout.lower(), result.stdout + result.stderr
+    assert "two transports" in result.stdout, "the transport help must lead"

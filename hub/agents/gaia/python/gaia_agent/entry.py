@@ -86,3 +86,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     from gaia_agent.stdio import main as stdio_main
 
     return stdio_main(args)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # `python -m gaia_agent.entry` must behave exactly like the installed
+    # console script — that is how the CLI smoke test exercises an entry point
+    # without depending on PATH, and a module that runs nothing under -m looks
+    # like a binary that produces no output.
+    sys.exit(main())
