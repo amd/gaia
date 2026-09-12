@@ -37,7 +37,7 @@ def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str
     try:
         show(console)
         return None
-    except Exception as e:  # noqa: BLE001 - the write already succeeded
+    except Exception as e:
         logger.warning("Could not display the change (the write succeeded): %s", e)
         return f"the file was written; displaying the change failed: {e}"
 
