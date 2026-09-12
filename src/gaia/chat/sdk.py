@@ -906,7 +906,7 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return self.rag.index_document(document_path)
+        return bool(self.rag.index_document(document_path).get("success"))
 
     def _estimate_tokens(self, text: str) -> int:
         """

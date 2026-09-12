@@ -54,7 +54,7 @@ class FileToolsMixin:
 
                     for pdf_file in pdf_files:
                         try:
-                            if self.rag.index_document(str(pdf_file)):
+                            if self.rag.index_document(str(pdf_file)).get("success"):
                                 self.indexed_files.add(str(pdf_file))
                                 indexed_count += 1
                                 if hasattr(self, "debug") and self.debug:
