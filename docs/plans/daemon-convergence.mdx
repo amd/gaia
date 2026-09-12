@@ -118,6 +118,36 @@ stops covering the one case the user actually asks for.
 Reusing that machinery rather than writing a second switch is the point. Two implementations
 of "move an agent onto a new client" is exactly the duplication this plan exists to remove.
 
+### 3.4 The daemon transport cannot carry a tool approval at all
+
+**This is the largest gap and the plan originally missed it.** It is also the one that
+matters most, because it is the safety path: the flagship gates shell, file writes and code
+execution behind a confirmation, and over the daemon that confirmation currently has nowhere
+to go.
+
+Three things have to be true for a gated tool to work, and none of them is:
+
+| Needed | State |
+|---|---|
+| An HTTP endpoint that delivers a tool decision | **Missing.** `/query/{run_id}/respond` resolves `needs_input` *questions* (`resolve_user_input`) — it has no notion of a tool confirmation |
+| `SSEClient` implementing `ToolPermissionResponder` | **Missing.** It has only the older `Confirm(runID, approved)` — no `confirm_id`, so a late click can resolve whichever prompt replaced the one it was typed for, and no `always` |
+| `SSEClient` implementing `PermissionBypasser` | **Missing.** `/bypass` is subprocess-only |
+
+The TUI degrades honestly rather than dangerously — `respondToolPermission` returns *"this
+agent connection cannot deliver a permission decision"* — but the practical result of
+flipping the transport today is that **every gated tool on the flagship would hang until it
+timed out and auto-denied**. Shell and file writes would simply stop working.
+
+**Fix:** a tool-decision endpoint alongside `/respond`, carrying `confirm_id` and the three
+decisions the stdio control channel already accepts (`allow` / `deny` / `always`), plus a
+bypass endpoint; then `SSEClient` implements both interfaces. The agent side already has the
+receiving machinery — `PermissionState.resolve` and `set_bypass` in `stdio.py` — so this is
+plumbing an existing capability onto a second transport, not inventing one.
+
+This is also the piece the Slack bridge needs. Its Block Kit buttons currently reach the
+stdio control channel directly; once it becomes a daemon client they go through the same
+endpoint the TUI uses, which is the point of converging.
+
 ## 4. The convergence
 
 Once §3 is true, the flip is small and mostly deletion.
@@ -190,7 +220,8 @@ tree in a state where two paths are both live.
 | 1 | Console script → `server:main` | `gaia-agent --serve` binds a port |
 | 2 | Allow the Claude provider over HTTP | `--use-claude` reaches parity |
 | 3 | `switch_model` on a retained session; loud refusal on conflicting config | `/model` switches and keeps history |
-| 4 | Flagship catalog entry → `TransportDaemon` | The TUI runs through the daemon |
+| 4a | Tool-decision + bypass endpoints; `SSEClient` implements both permission interfaces | A gated tool can be approved over the daemon at all (§3.4) |
+| 4b | Flagship catalog entry → `TransportDaemon` | The TUI runs through the daemon |
 | 5 | `AgentChannel` → daemon client; delete child ownership | Slack runs through the same agent |
 | 6 | Latency measurement, first turn and steady state | The flip did not cost what it was meant to save |
 
