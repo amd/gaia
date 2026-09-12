@@ -1083,8 +1083,11 @@ curl http://localhost:8080/health
     gaia api start --debug
     ```
 
-    Custom host/port:
+    Custom host/port. Binding beyond loopback is refused unless
+    `GAIA_API_KEY` is set, since the agent loop would otherwise be open to the
+    network ([Authentication](/sdk/infrastructure/api-server#authentication)):
     ```bash
+    export GAIA_API_KEY=$(openssl rand -hex 32)
     gaia api start --host 0.0.0.0 --port 8888
     ```
 
@@ -1251,6 +1254,15 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--log-file` | stdout | Write logs to this path (useful with `--background`) |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+##### Browser origins
+
+A web page can reach `http://localhost:8765` from the user's own browser, so
+the bridge refuses any request whose `Origin` is not loopback (`localhost`,
+`127.0.0.1`, `[::1]`) with **403**, and never answers
+`Access-Control-Allow-Origin: *`. Clients that send no `Origin` — curl, MCP
+clients, n8n — are unaffected. To allow a browser app on another origin, list
+it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
 ##### Authentication
 

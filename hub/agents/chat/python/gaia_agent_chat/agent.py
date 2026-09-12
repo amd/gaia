@@ -370,6 +370,9 @@ class ChatAgent(
 
         # Initialize web client for browser tools (optional)
         self._web_client = None
+        # Guarded client for the inline open_url/fetch_webpage tools; built on
+        # first use (see _inline_web_client).
+        self._inline_web = None
         if config.enable_browser:
             try:
                 from gaia.web.client import WebClient
@@ -565,6 +568,24 @@ class ChatAgent(
     @session_manager.setter
     def session_manager(self, value: SessionManager) -> None:
         self._session_manager = value
+
+    def _inline_web_client(self):
+        """The SSRF-guarded ``WebClient`` behind ``open_url``/``fetch_webpage``.
+
+        Built on first use so profiles without web tools never pay for it.
+        Kept apart from ``self._web_client`` (the opt-in browser mixin's
+        client) so using these tools does not also switch ``fetch_page`` on.
+        """
+        # getattr: tests build agents via __new__ and skip __init__.
+        if getattr(self, "_inline_web", None) is None:
+            from gaia.web.client import WebClient
+
+            self._inline_web = WebClient(
+                timeout=self.config.browser_timeout,
+                max_download_size=self.config.browser_max_download_size,
+                rate_limit=self.config.browser_rate_limit,
+            )
+        return self._inline_web
 
     def _ensure_tool_loader_reset(self) -> None:
         """Bootstrap a session for a just-created agent, if none exists yet.
@@ -1514,21 +1535,25 @@ No documents are currently indexed.
 
             @tool
             def open_url(url: str) -> dict:
-                """Open a URL in the system's default web browser.
+                """Open a public URL in the system's default web browser.
+
+                Refuses private, loopback, and link-local addresses.
 
                 Args:
-                    url: The URL to open (must start with http:// or https://)
+                    url: Public http:// or https:// URL to open
 
                 Returns:
                     Dictionary with status and confirmation message
                 """
                 import webbrowser
 
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
+                try:
+                    # Same SSRF screen as fetch_webpage: an injected link to a
+                    # loopback admin page would open with the user's cookies.
+                    self._inline_web_client().validate_url(url)
+                except (ValueError, OSError, ImportError) as e:
+                    logger.warning("open_url refused %s: %s", url, e)
+                    return {"status": "error", "url": url, "error": str(e)}
                 try:
                     webbrowser.open(url)
                     return {
@@ -1549,15 +1574,10 @@ No documents are currently indexed.
                 Returns:
                     Dictionary with status, content (or html), and url
                 """
-                import httpx
-
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
                 try:
-                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    # WebClient refuses private/loopback/link-local targets,
+                    # re-checks after DNS and on every redirect hop.
+                    resp = self._inline_web_client().get(url)
                     resp.raise_for_status()
                     if extract_text:
                         try:
@@ -1583,7 +1603,8 @@ No documents are currently indexed.
                         "html": resp.text[:8000],
                         "truncated": len(resp.text) > 8000,
                     }
-                except Exception as e:
+                except Exception as e:  # tool boundary -> structured error
+                    logger.warning("fetch_webpage failed for %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
 
         @tool
@@ -2385,6 +2406,11 @@ No documents are currently indexed.
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if getattr(self, "_inline_web", None):
+                self._inline_web.close()
+        except Exception as e:
+            logger.error(f"Error closing inline web client during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()
