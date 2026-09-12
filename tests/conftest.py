@@ -176,7 +176,7 @@ def lemonade_available():
     Check if Lemonade server is available and healthy.
 
     This is a session-scoped fixture that checks once at the start of the
-    test session whether Lemonade server is running on localhost:13305.
+    test session whether the configured Lemonade server is responding.
 
     Returns:
         bool: True if Lemonade server is available and responding to health checks
@@ -184,16 +184,22 @@ def lemonade_available():
     # Authenticated servers 401 an unauthenticated probe, which reads as "not
     # running" and silently skips every integration test that asks for one.
     from gaia.llm.lemonade_client import (
+        _get_lemonade_config,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
 
     try:
         response = requests.get(
-            "http://localhost:13305/api/v1/health",
+            f"{_get_lemonade_config()[2].rstrip('/')}/health",
             timeout=5,
             headers=lemonade_auth_headers(resolve_lemonade_api_key()),
         )
+        if response.status_code in (401, 403):
+            pytest.fail(
+                "Lemonade is reachable but rejected authentication. Configure "
+                "LEMONADE_API_KEY for the server selected by LEMONADE_BASE_URL."
+            )
         return response.status_code == 200
     except (requests.RequestException, requests.ConnectionError):
         return False
