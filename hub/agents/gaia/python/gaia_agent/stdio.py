@@ -77,6 +77,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
     LemonadeClient,
     LemonadeClientError,
+    cloud_model_provider,
 )
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -331,13 +332,14 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
+    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else "lemonade",
-        "model_remote": is_claude,
+        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
+        "model_remote": is_claude or bool(cloud_provider),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
@@ -381,7 +383,7 @@ _NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
 
 
 def _lemonade_models(base_url: Optional[str]) -> List[str]:
-    """Downloaded, chat-capable local model ids Lemonade currently serves.
+    """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -407,7 +409,8 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             m["id"]
             for m in catalog.get("data", [])
             if m.get("id")
-            and m.get("downloaded")
+            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
             and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
         }
     )
@@ -533,12 +536,12 @@ def _apply_claude_switch(agent: Any, target: str) -> str:
 
 
 def _apply_local_switch(agent: Any, target: str) -> str:
-    """Swap the live client to local Lemonade model *target*; raise on failure."""
+    """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
     available = _lemonade_models(chat.config.base_url)  # raises if unreachable
     if target not in available:
         raise RuntimeError(
-            f"Unknown local model '{target}'. Downloaded, chat-capable "
+            f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
             "Lemonade models: "
             + (
                 ", ".join(available)
@@ -594,17 +597,29 @@ def _format_model_list(agent: Any) -> str:
         lines.append(f"- `{model_id}` — {label}{marker}")
 
     lines.append("")
-    lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
     try:
-        local_models = _lemonade_models(chat.config.base_url)
+        models = _lemonade_models(chat.config.base_url)
     except RuntimeError as exc:
+        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
-        if not local_models:
-            lines.append("- (none downloaded — run `lemonade-server pull <model>`)")
-        for model_id in local_models:
-            marker = " ← current" if model_id == current else ""
-            lines.append(f"- `{model_id}`{marker}")
+        for provider, heading in (
+            (None, "Local (Lemonade — downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
+            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+        ):
+            lines.append(f"**{heading}:**")
+            group = [m for m in models if cloud_model_provider(m) == provider]
+            if not group:
+                lines.append(
+                    "- (none downloaded — run `gaia init`)"
+                    if provider is None
+                    else "- (connect this provider in the TUI provider settings)"
+                )
+            for model_id in group:
+                marker = " ← current" if model_id == current else ""
+                lines.append(f"- `{model_id}`{marker}")
+            lines.append("")
 
     lines.append("")
     lines.append(
@@ -639,6 +654,16 @@ def run_model_command(agent: Any, query: str, out) -> None:
         if agent._use_claude
         else "the local Lemonade backend"
     )
+    cloud_provider = cloud_model_provider(agent.chat.effective_model)
+    if cloud_provider and not agent._use_claude:
+        provider_name = {
+            "fireworks": "Fireworks AI",
+            "amd": "AMD LLM Gateway",
+        }.get(cloud_provider, cloud_provider)
+        where = (
+            f"{provider_name} via Lemonade — this conversation is sent to "
+            f"{provider_name}; embeddings stay on Lemonade"
+        )
     _write(
         {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
         out,

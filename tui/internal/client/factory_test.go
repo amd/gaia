@@ -8,6 +8,48 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 )
 
+func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"fireworks.gemma-4-31b-it", "amd.gpt-4.1", "Gemma-4-E4B-it-GGUF"} {
+		t.Run(model, func(t *testing.T) {
+			args := make([]string, 1, 8)
+			args[0] = "--json-events"
+			agent := catalog.Agent{ID: catalog.FlagshipID, BinaryPath: self, BinaryArgs: args, DevArgs: []string{"--dev"}, CanonicalEvents: true}
+			c, err := ForAgent(agent, ForAgentOptions{Model: model, Dev: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			sub := c.(*SubprocessClient)
+			if got := strings.Join(sub.args, " "); got != "--json-events --dev --model "+model {
+				t.Fatalf("model did not reach the canonical subprocess: %q", got)
+			}
+			plain, err := ForAgent(agent, ForAgentOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer plain.Close()
+			if got := strings.Join(plain.(*SubprocessClient).args, " "); got != "--json-events" {
+				t.Fatalf("model override leaked into later launch: %q", got)
+			}
+		})
+	}
+}
+
+func TestModelOverrideRejectsUnsupportedSubprocessAgent(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ForAgent(catalog.Agent{ID: "custom", BinaryPath: self}, ForAgentOptions{Model: "fireworks.gemma-4-31b-it"})
+	if err == nil || !strings.Contains(err.Error(), "model override is unsupported") {
+		t.Fatalf("unsupported override was silently dropped: %v", err)
+	}
+}
+
 func TestForAgentBuildsTheDeclaredTransport(t *testing.T) {
 	daemonAgent := catalog.Agent{ID: "email", Transport: catalog.TransportDaemon}
 	c, err := ForAgent(daemonAgent, ForAgentOptions{})

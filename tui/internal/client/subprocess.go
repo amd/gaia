@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 var (
@@ -25,19 +26,20 @@ var (
 // finish before giving up on a clean reap.
 const closeGrace = 2 * time.Second
 
-// detectLemonadeURL probes common Lemonade Server ports and returns the first reachable URL.
-func detectLemonadeURL() string {
-	ports := []string{"13305", "8000"}
-	client := &http.Client{Timeout: 2 * time.Second}
+var subprocessLemonadePorts = []string{"13305", "8000"}
 
-	for _, port := range ports {
+// detectLemonadeURL resolves configured and embedded endpoints before probing
+// legacy ports. An unrelated local server cannot override the private runtime.
+func detectLemonadeURL() string {
+	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+		return lemonade.ResolveBaseURL("")
+	}
+	for _, port := range subprocessLemonadePorts {
 		url := "http://localhost:" + port + "/api/v1"
-		resp, err := client.Get(url + "/models")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return url
-			}
+		client := lemonade.New(url)
+		client.HTTP.Timeout = 2 * time.Second
+		if _, err := client.Models(context.Background(), "local"); err == nil {
+			return url
 		}
 	}
 	return ""
@@ -81,6 +83,9 @@ type SubprocessClient struct {
 	// canonical selects the event dialect read off the pipe: the frozen legacy
 	// vocabulary (false) or the canonical one (true).
 	canonical bool
+	// trace records every event line this client reads, verbatim. Nil means
+	// tracing is off (--trace not passed).
+	trace *event.TraceWriter
 
 	mu      sync.Mutex
 	proc    *procHandle
@@ -120,6 +125,13 @@ func NewCanonicalSubprocessClient(path string, args []string, debug bool) *Subpr
 	return c
 }
 
+// WithTrace records every event line this client reads to w, verbatim. A nil w
+// leaves tracing off. Returns the client so it can be chained onto a constructor.
+func (s *SubprocessClient) WithTrace(w *event.TraceWriter) *SubprocessClient {
+	s.trace = w
+	return s
+}
+
 // turnState is everything one turn needs, captured under a single lock so it can
 // never be read while a concurrent cancel is clearing the client's fields.
 type turnState struct {
@@ -146,13 +158,12 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 
-	// Auto-detect Lemonade URL if not set in environment
-	if os.Getenv("LEMONADE_BASE_URL") == "" {
-		if url := detectLemonadeURL(); url != "" {
-			cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
-			if s.debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Auto-detected Lemonade at %s\n", url)
-			}
+	// Resolve once for the child so provider setup and Python use the same
+	// endpoint, even when a second server answers on a legacy port.
+	if url := detectLemonadeURL(); url != "" {
+		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
+		if s.debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
 		}
 	}
 
@@ -264,6 +275,17 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			line := st.scanner.Bytes()
 			if len(line) == 0 {
 				continue
+			}
+
+			// Traced BEFORE parsing, so the file keeps the bytes that actually
+			// arrived and an unreadable line is recorded rather than lost.
+			//
+			// A failure is not printed HERE: the alt screen owns the terminal
+			// mid-turn, so a raw stderr write would land on top of the UI. The
+			// writer keeps the first failure and Close() reports it once the
+			// event loop has stopped.
+			if terr := s.trace.Write(line); terr != nil && debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] trace: %v\n", terr)
 			}
 
 			var evt interface{}
@@ -459,6 +481,8 @@ func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.
 func (s *SubprocessClient) BypassAtLaunch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, a := range s.args {
 		if a == "--bypass-permissions" {
 			return true
@@ -471,6 +495,8 @@ func (s *SubprocessClient) BypassAtLaunch() bool {
 // the UI's "claude" chip is driven by what actually reached the child's argv
 // rather than by a second bool that could disagree with it.
 func (s *SubprocessClient) ClaudeAtLaunch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, a := range s.args {
 		if a == UseClaudeFlag {
 			return true
@@ -489,6 +515,8 @@ func (s *SubprocessClient) ClaudeAtLaunch() bool {
 // is authoritative, but it is not read until the first turn (see
 // gaia_agent.stdio.main), which on a session that opens and waits is never.
 func (s *SubprocessClient) ClaudeModelAtLaunch() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, a := range s.args {
 		if a == ClaudeModelFlag && i+1 < len(s.args) {
 			return s.args[i+1]
@@ -577,4 +605,46 @@ func truncateLine(s string) string {
 		return s
 	}
 	return s[:limit] + "…"
+}
+
+// ModelAtLaunch reports the Lemonade model in the child's launch arguments.
+func (s *SubprocessClient) ModelAtLaunch() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, a := range s.args {
+		if a == "--model" && i+1 < len(s.args) {
+			return s.args[i+1]
+		}
+	}
+	return ""
+}
+
+// SetModelBeforeStart changes a canonical agent's pending launch after an
+// explicit catalog selection. Once a child is running, /model must perform the
+// switch inside that conversation instead. Credentials never enter argv.
+func (s *SubprocessClient) SetModelBeforeStart(model string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.canonical || s.started || strings.TrimSpace(model) == "" {
+		return false
+	}
+	args := make([]string, 0, len(s.args)+2)
+	for i := 0; i < len(s.args); i++ {
+		arg := s.args[i]
+		switch {
+		case arg == UseClaudeFlag, strings.HasPrefix(arg, UseClaudeFlag+"="):
+			continue
+		case arg == "--model", arg == ClaudeModelFlag:
+			if i+1 < len(s.args) && !strings.HasPrefix(s.args[i+1], "--") {
+				i++
+			}
+			continue
+		case strings.HasPrefix(arg, "--model="), strings.HasPrefix(arg, ClaudeModelFlag+"="):
+			continue
+		default:
+			args = append(args, arg)
+		}
+	}
+	s.args = append(args, "--model", model)
+	return true
 }

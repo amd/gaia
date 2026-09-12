@@ -29,6 +29,12 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+from gaia.mcp.ports import (
+    AGENT_UI_MCP_PORT,
+    MCP_BRIDGE_PORT,
+    TELEGRAM_HEALTH_PORT,
+    TUI_MCP_PORT,
+)
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
@@ -1650,6 +1656,12 @@ def build_parser():
         action="store_true",
         help="Run adapter in background/daemon mode (writes PID and health endpoint)",
     )
+    t_start.add_argument(
+        "--health-port",
+        type=int,
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
+    )
 
     # Stop subcommand
     t_stop = telegram_subparsers.add_parser(
@@ -1673,8 +1685,8 @@ def build_parser():
     t_status.add_argument(
         "--health-port",
         type=int,
-        default=8765,
-        help="Health server port (default: 8765)",
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
     )
 
     telegram_parser.set_defaults(action="telegram")
@@ -1874,7 +1886,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
             "tts-preprocessing",
             "tts-streaming",
             "tts-audio-file",
-            "asr-file-transcription",
             "asr-microphone",
             "asr-list-audio-devices",
         ],
@@ -1883,10 +1894,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     test_parser.add_argument(
         "--test-text",
         help="Text to use for TTS tests",
-    )
-    test_parser.add_argument(
-        "--input-audio-file",
-        help="Input audio file path for ASR file transcription test",
     )
     test_parser.add_argument(
         "--output-audio-file",
@@ -2400,7 +2407,10 @@ Examples:
         help="Host to bind the server to (default: localhost)",
     )
     mcp_start_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to listen on (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to listen on (default: {MCP_BRIDGE_PORT})",
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
@@ -2442,7 +2452,10 @@ Examples:
         "--host", default="localhost", help="Host to check (default: localhost)"
     )
     mcp_status_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to check (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to check (default: {MCP_BRIDGE_PORT})",
     )
     mcp_status_parser.add_argument(
         "--auth-token",
@@ -2460,7 +2473,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_test_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_test_parser.add_argument(
         "--query", default="Hello, GAIA!", help="Test query to send"
@@ -2481,7 +2497,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_agent_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_agent_parser.add_argument(
         "request", help="Natural language request for the orchestrator agent"
@@ -2507,7 +2526,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_serve_parser.add_argument(
-        "--port", type=int, default=8766, help="Port to listen on (default: 8766)"
+        "--port",
+        type=int,
+        default=AGENT_UI_MCP_PORT,
+        help=f"Port to listen on (default: {AGENT_UI_MCP_PORT})",
     )
     mcp_serve_parser.add_argument(
         "--backend",
@@ -2528,7 +2550,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_tui_parser.add_argument(
-        "--port", type=int, default=8767, help="Port to listen on (default: 8767)"
+        "--port",
+        type=int,
+        default=TUI_MCP_PORT,
+        help=f"Port to listen on (default: {TUI_MCP_PORT})",
     )
     mcp_tui_parser.add_argument(
         "--stdio",
@@ -2599,6 +2624,9 @@ Examples:
     embedded_subparsers.add_parser("stop", help="Stop the private Lemonade instance")
     embedded_subparsers.add_parser(
         "status", help="Show whether the private instance is installed and running"
+    )
+    embedded_subparsers.add_parser(
+        "uninstall", help="Remove the private instance and downloaded backends"
     )
     embedded_install_parser = embedded_subparsers.add_parser(
         "install", help="Download and unpack the embeddable artifact"
@@ -3299,6 +3327,7 @@ def main():
                     token=args.token,
                     allowed_users=allowed,
                     background=getattr(args, "background", False),
+                    health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
             except TelegramAllowlistError as e:
                 # Show the remedy rather than a traceback.
@@ -3345,7 +3374,7 @@ def main():
             import urllib.request
 
             host = getattr(args, "health_host", "127.0.0.1")
-            port = getattr(args, "health_port", 8765)
+            port = getattr(args, "health_port", TELEGRAM_HEALTH_PORT)
             url = f"http://{host}:{port}/healthz"
             try:
                 with urllib.request.urlopen(url, timeout=1) as resp:
@@ -3451,22 +3480,7 @@ Let me know your answer!
                 print(f"❌ Error: Failed to initialize ASR: {e}")
                 return
 
-            if args.test_type == "asr-file-transcription":
-                if not args.input_audio_file:
-                    print(
-                        "❌ Error: --input-audio-file is required for asr-file-transcription test"
-                    )
-                    return
-                try:
-                    text = asr.transcribe_file(args.input_audio_file)
-                    print("\nTranscription result:")
-                    print("-" * 40)
-                    print(text)
-                    print("-" * 40)
-                except Exception as e:
-                    print(f"❌ Error transcribing file: {e}")
-
-            elif args.test_type == "asr-microphone":
+            if args.test_type == "asr-microphone":
                 print(f"\nRecording for {args.recording_duration} seconds...")
                 print("Speak into your microphone...")
 
@@ -3906,10 +3920,22 @@ Let me know your answer!
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero
+                    # If compare detected regressions or significant score drops, fail non-zero.
+                    # Scenarios with no measurement are deliberately NOT counted:
+                    # an infra failure is not a quality regression. Completeness
+                    # is the integrity gate's verdict (gaia.eval.integrity_gate),
+                    # so it is surfaced here and blocks there.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
+                    unmeasured = result.get("unmeasured", [])
+                    if unmeasured:
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from this verdict: {ids}. Run "
+                            "`python -m gaia.eval.integrity_gate --help` for the completeness check."
+                        )
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
@@ -5750,12 +5776,21 @@ def _bootstrap_infer():
                 if not inferred_deleted:
                     try:
                         store.delete_by_source("inferred")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Could not clear the previous inferred profile ({e}); "
+                            "nothing was stored. Check that the memory database "
+                            "is writable and not held by another GAIA process "
+                            "(`gaia kill` clears stale ones), then re-run "
+                            "`gaia memory bootstrap`."
+                        ) from e
                     inferred_deleted = True
 
                 try:
                     store.store(
+                        # `gaia memory` is an admin path and every row here was
+                        # just approved at the prompt.
+                        allow_privileged=True,
                         category="profile",
                         content=content,
                         source="inferred",
@@ -5780,7 +5815,10 @@ def _bootstrap_infer():
 def _bootstrap_discover():
     """Phase 2: System discovery — scan local system, present findings for review."""
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.agents.base.memory_store import (
+        USER_REVIEWED_CATEGORIES,
+        MemoryStore,
+    )
 
     print("\n=== GAIA Memory Bootstrap — System Discovery ===")
     print("Scanning your system for projects, apps, and more...")
@@ -5838,8 +5876,15 @@ def _bootstrap_discover():
             else:
                 # Default = approve (empty string or 'y')
                 try:
+                    category = item.get("category", "fact")
+                    if category not in USER_REVIEWED_CATEGORIES:
+                        raise ValueError(
+                            f"category {category!r} cannot be approved here; "
+                            f"expected one of {sorted(USER_REVIEWED_CATEGORIES)}"
+                        )
                     store.store(
-                        category=item.get("category", "fact"),
+                        allow_privileged=True,  # approved at the prompt
+                        category=category,
                         content=item["content"],
                         source="discovery",
                         context=item.get("context", "global"),
@@ -5973,6 +6018,7 @@ def _bootstrap_system(force: bool = True):
         for fact in facts:
             try:
                 store.store(
+                    allow_privileged=True,  # system-context collection
                     category="system",
                     content=fact["content"],
                     domain=fact.get("domain"),
@@ -7176,7 +7222,7 @@ def handle_lemonade_command(args):
 
 
 def handle_lemonade_embedded_command(args):
-    """Handle ``gaia lemonade embedded {start,stop,status,install,install-backend}``.
+    """Handle ``gaia lemonade embedded`` lifecycle actions.
 
     Args:
         args: Parsed arguments for the embedded subcommand.
@@ -7211,6 +7257,11 @@ def handle_lemonade_embedded_command(args):
                 print("Embedded Lemonade is not running")
         elif action == "status":
             _print_embedded_status(manager)
+        elif action == "uninstall":
+            if manager.uninstall():
+                print("✅ Embedded Lemonade uninstalled")
+            else:
+                print("Embedded Lemonade is not installed")
         elif action == "install":
             path = manager.install(force=getattr(args, "force", False))
             print(f"✅ Embedded Lemonade {manager.version} installed at {path}")

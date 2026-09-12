@@ -252,6 +252,168 @@ def test_empty_messages_after_hoist_fail_loudly(fake_anthropic):
         provider.chat([{"role": "system", "content": "only a system prompt"}])
 
 
+def test_tool_history_translated_to_anthropic_blocks(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "compare these files"},
+            {
+                "role": "assistant",
+                "content": "I'll inspect both.",
+                "tool_calls": [
+                    {
+                        "id": "toolu_a",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "a.txt"}',
+                        },
+                    },
+                    {
+                        "id": "toolu_b",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "b.txt"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_a", "content": "alpha"},
+            {"role": "tool", "tool_call_id": "toolu_b", "content": "beta"},
+        ],
+        tools=OPENAI_TOOLS,
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"] == [
+        {"role": "user", "content": "compare these files"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll inspect both."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_a",
+                    "name": "read_file",
+                    "input": {"path": "a.txt"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_b",
+                    "name": "read_file",
+                    "input": {"path": "b.txt"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_a",
+                    "content": "alpha",
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_b",
+                    "content": "beta",
+                },
+            ],
+        },
+    ]
+
+
+def test_tool_call_only_assistant_turn_is_not_dropped(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "list files"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "a.txt"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "alpha"},
+        ],
+        tools=OPENAI_TOOLS,
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"][1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "read_file",
+            "input": {"path": "a.txt"},
+        }
+    ]
+
+
+def test_unmatched_tool_result_remains_plain_user_text(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    provider.chat(
+        [
+            {"role": "user", "content": "follow the plan"},
+            {"role": "assistant", "content": "Running the planned step."},
+            {
+                "role": "tool",
+                "name": "plan_step",
+                "tool_call_id": "synthetic-id",
+                "content": "complete",
+            },
+        ]
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["messages"][-1] == {
+        "role": "user",
+        "content": "[Tool result: plan_step] complete",
+    }
+
+
+def test_interrupted_native_tool_history_fails_loudly(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("done")])
+    with pytest.raises(ValueError, match="immediately adjacent.*toolu_1"):
+        provider.chat(
+            [
+                {"role": "user", "content": "read it"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Actually use b.txt."},
+                {
+                    "role": "tool",
+                    "name": "read_file",
+                    "tool_call_id": "toolu_1",
+                    "content": "alpha",
+                },
+            ],
+            tools=OPENAI_TOOLS,
+        )
+
+
 # ── response → sentinel envelope ────────────────────────────────────────
 
 
@@ -443,7 +605,11 @@ def _stream_events():
                 type="content_block_start",
                 index=2,
                 content_block=SimpleNamespace(
-                    type="tool_use", id="toolu_s1", name="list_directory"
+                    # Must be a tool this request actually declared
+                    # (OPENAI_TOOLS) — the API only returns declared names.
+                    type="tool_use",
+                    id="toolu_s1",
+                    name="read_file",
                 ),
             ),
             SimpleNamespace(
@@ -481,7 +647,7 @@ def test_stream_assembles_input_json_deltas_into_sentinel(fake_anthropic):
     assert sentinel.startswith(NATIVE_TOOL_CALLS_PREFIX)
     envelope = json.loads(sentinel)
     (call,) = envelope[_NATIVE_TC_KEY]
-    assert call["function"]["name"] == "list_directory"
+    assert call["function"]["name"] == "read_file"
     assert json.loads(call["function"]["arguments"]) == {"path": "C:/"}
     assert envelope["finish_reason"] == "tool_calls"
     assert envelope["content"] == "Checking."
@@ -598,38 +764,52 @@ def test_sdk_no_chatml_stop_tokens_for_claude(monkeypatch):
     assert "stop" not in fake.calls[-1]["kwargs"]
 
 
-def test_sdk_flattens_assistant_tool_call_turn(claude_sdk):
+@pytest.mark.parametrize("stream", [False, True])
+def test_sdk_preserves_claude_tool_history(claude_sdk, stream):
     sdk, fake = claude_sdk
-    sdk.send_messages(
-        [
-            {"role": "user", "content": "list my files"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "toolu_1",
-                        "type": "function",
-                        "function": {
-                            "name": "list_directory",
-                            "arguments": '{"path": "C:/"}',
-                        },
-                    }
-                ],
-            },
-            {"role": "tool", "name": "list_directory", "content": "a.txt"},
-        ]
-    )
-    sent = fake.calls[-1]["messages"]
-    assistant_turns = [m for m in sent if m["role"] == "assistant"]
-    assert assistant_turns == [
+    messages = [
+        {"role": "user", "content": "list my files"},
         {
             "role": "assistant",
-            "content": '[Called tools: list_directory({"path": "C:/"})]',
-        }
+            "content": "Checking now.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "arguments": '{"path": "C:/"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "list_directory",
+            "tool_call_id": "toolu_1",
+            "content": "a.txt",
+        },
     ]
-    # The flattened history never shows the "None" placeholder.
-    assert all(m["content"] != "None" for m in sent)
+    if stream:
+        list(sdk.send_messages_stream(messages))
+    else:
+        sdk.send_messages(messages)
+    sent = fake.calls[-1]["messages"]
+    assert sent[1:] == [
+        {
+            "role": "assistant",
+            "content": "Checking now.",
+            "tool_calls": messages[1]["tool_calls"],
+        },
+        {
+            "role": "tool",
+            "content": "a.txt",
+            "name": "list_directory",
+            "tool_call_id": "toolu_1",
+        },
+    ]
+    assert "[Called tools:" not in str(sent)
+    assert "[Tool result:" not in str(sent)
 
 
 # ── stdio transport flag contract ───────────────────────────────────────
@@ -677,3 +857,132 @@ def test_openai_tools_gate_counts_claude_as_tool_calling():
 
     agent._use_claude = False
     assert agent._openai_tools is None
+
+
+class TestToolNameSanitization:
+    """Skill tools are namespaced ``<skill>/<tool>`` — the ``/`` 400s the
+    Anthropic API (pattern ``^[a-zA-Z0-9_-]{1,128}$``), so names must be
+    sanitized outbound and restored on returned tool_use blocks."""
+
+    def _tools(self, *names):
+        return [
+            {
+                "type": "function",
+                "function": {"name": n, "description": "", "parameters": {}},
+            }
+            for n in names
+        ]
+
+    def test_slash_name_is_sanitized_and_mapped(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        converted = p._to_anthropic_tools(self._tools("rss-digest/fetch_rss"))
+        assert converted[0]["name"] == "rss-digest_fetch_rss"
+        assert p._restore_tool_name("rss-digest_fetch_rss") == "rss-digest/fetch_rss"
+
+    def test_valid_names_pass_through_untouched(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        converted = p._to_anthropic_tools(self._tools("read_file", "query-docs"))
+        assert [t["name"] for t in converted] == ["read_file", "query-docs"]
+        assert p._restore_tool_name("read_file") == "read_file"
+
+    def test_unmapped_returned_name_fails_loudly(self, fake_anthropic, caplog):
+        """A miss means request and response were shaped against different
+        tool sets. Returning the name unmapped surfaces later as "unknown
+        tool", blaming the model for a bug that is here."""
+        p = _provider(fake_anthropic)
+        p._to_anthropic_tools(self._tools("read_file"))
+        with pytest.raises(RuntimeError, match="not in the tool set sent"):
+            p._restore_tool_name("some_other_tool")
+        # The user-facing message stays short; the diagnostic goes to the log.
+        assert "read_file" in caplog.text
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"type": "function", "function": {"parameters": {}}},  # OpenAI shape
+            {"input_schema": {}},  # already-Anthropic shape
+        ],
+        ids=["openai_shape", "anthropic_shape"],
+    )
+    def test_nameless_tool_entry_fails_loudly(self, fake_anthropic, entry):
+        """Anthropic requires a name on every tool entry, so a nameless one is
+        malformed input — not something to pass through. Without the guard two
+        of them both sanitize to '' and trip the collision error, which names
+        the wrong problem."""
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="has no name"):
+            p._to_anthropic_tools([entry])
+
+    def test_sanitization_collision_fails_loudly(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("a/b", "a.b"))
+
+    def test_sanitized_name_shadowing_a_builtin_is_refused(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        # `write/file` -> `write_file`, which is already a real builtin.
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write_file", "write/file"))
+
+    def test_order_does_not_hide_the_collision(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write/file", "write_file"))
+
+    def test_chat_round_trips_the_skill_name_end_to_end(self, fake_anthropic):
+        """The map is written while shaping the request and read while parsing
+        the response — the coupling a refactor would silently break."""
+        p = _provider(fake_anthropic)
+        p._client.messages.create.return_value = _response(
+            [_tool_use_block("toolu_5", "rss-digest_fetch_rss", {"url": "http://x"})],
+            stop_reason="tool_use",
+        )
+        envelope = json.loads(
+            p.chat(
+                [{"role": "user", "content": "digest it"}],
+                tools=self._tools("rss-digest/fetch_rss"),
+            )
+        )
+        # Anthropic saw the sanitized name; the agent gets the registered one.
+        sent = p._client.messages.create.call_args.kwargs["tools"]
+        assert [t["name"] for t in sent] == ["rss-digest_fetch_rss"]
+        (call,) = envelope[_NATIVE_TC_KEY]
+        assert call["function"]["name"] == "rss-digest/fetch_rss"
+
+    def test_stream_round_trips_the_skill_name_end_to_end(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        p._client.messages.create.return_value = iter(
+            [
+                SimpleNamespace(
+                    type="content_block_start",
+                    index=0,
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="toolu_6",
+                        name="rss-digest_fetch_rss",
+                        input={},
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(
+                        type="input_json_delta", partial_json='{"url": "http://x"}'
+                    ),
+                ),
+                SimpleNamespace(
+                    type="message_delta",
+                    delta=SimpleNamespace(stop_reason="tool_use"),
+                    usage=SimpleNamespace(output_tokens=3),
+                ),
+            ]
+        )
+        chunks = list(
+            p.chat(
+                [{"role": "user", "content": "digest it"}],
+                stream=True,
+                tools=self._tools("rss-digest/fetch_rss"),
+            )
+        )
+        (call,) = json.loads(chunks[-1])[_NATIVE_TC_KEY]
+        assert call["function"]["name"] == "rss-digest/fetch_rss"

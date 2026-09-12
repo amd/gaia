@@ -22,7 +22,6 @@ from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
-
 from gaia_agent_email import export_openapi
 from gaia_agent_email.briefing import (
     BriefingConfigError,
@@ -318,8 +317,21 @@ def test_get_briefing_returns_latest_persisted_run(client):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["generated_at"] == record["generated_at"]
+    assert body["cache_age_seconds"] >= 0
+    assert body["stale"] is False
     assert body["briefing"]["kind"] == "email_pre_scan"
     assert body["briefing"]["totals"]["suggested_archives"] >= 1
+
+
+def test_get_briefing_marks_old_persisted_run_stale(client):
+    record = run_briefing_job(_fake_backend(), max_messages=10)
+    record["generated_at"] = "2020-01-01T00:00:00+00:00"
+    persist_briefing(record)
+
+    body = client.get("/v1/email/briefing").json()
+
+    assert body["stale"] is True
+    assert body["cache_age_seconds"] > 24 * 60 * 60
 
 
 def test_get_briefing_corrupt_file_fails_loud(client, tmp_path):
@@ -330,6 +342,19 @@ def test_get_briefing_corrupt_file_fails_loud(client, tmp_path):
     resp = client.get("/v1/email/briefing")
     assert resp.status_code == 500
     assert "unreadable" in resp.json()["detail"]
+
+
+def test_get_briefing_invalid_timestamp_fails_loud(client, tmp_path):
+    path = tmp_path / ".gaia" / "email" / "briefing_latest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"generated_at": "not-a-timestamp", "briefing": {"kind": "x"}}),
+        encoding="utf-8",
+    )
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 500
+    assert "invalid generated_at" in resp.json()["detail"]
 
 
 def test_persist_briefing_is_atomic_and_loadable(tmp_path):

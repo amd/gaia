@@ -289,6 +289,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
 persists past that single turn, and the agent is not told otherwise.
 
+A retained session also carries a **project map** — up to 600 prompt tokens of
+directory shape, entry points, installed commands and platform quirks, present
+whenever the agent's working directory resolves to a code repository (a VCS
+directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
+picks the project when the working directory is not it. If that repository has
+no code index, the first turn starts one in a background thread;
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. Neither affects the wire
+contract — they change what the agent knows and what the first turn costs.
+
 A second `/query` for a `session_id` that already has a turn in flight gets
 `409 Conflict` — cancel the running turn or wait for it, then retry. A
 `/query` that needs a **new** session while every retained slot is busy and
@@ -376,12 +385,15 @@ in flight. It also takes `--bypass-permissions` (start with gating off) and
 local Lemonade; embeddings stay on Lemonade either way). None of that is
 reachable over `/v1/gaia/query`.
 
-`--use-claude` is the one with a reach beyond the machine, and it cannot be
-turned on for what this package delivers: the terminal UI **refuses** it for a
-daemon-transport agent, with an error saying so, because the daemon relay has no
-way to switch inference backends. So the local-only claim in the README holds
-for every path this package installs — it is a property of the transport, not a
-default someone can flip.
+The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
+Lemonade. `/model` lists downloaded local and discovered cloud chat models;
+`/model <id>` switches the live client while preserving conversation and skills.
+Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
+loading. Model-state status events identify the provider and remote inference.
+The TUI's `/provider` panel configures credentials directly with local Lemonade;
+keys never travel through stdio queries. These controls are not exposed over
+`/v1/gaia/query`. Lemonade may independently be configured to route a model
+remotely, so a local server URL alone does not establish local inference.
 
 ---
 

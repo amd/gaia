@@ -653,6 +653,22 @@ class FileSystemToolsMixin:
                     else:
                         effective_type = "name"
 
+                # Validate a caller supplied scope before any search path can
+                # answer; named scopes fan out over folders that need not exist.
+                if scope not in ("smart", "home", "cwd", "everywhere"):
+                    scope_root = Path(scope).expanduser().resolve()
+                    if not scope_root.exists():
+                        return (
+                            f"Error: '{scope_root}' does not exist. Pass an existing "
+                            "folder as scope, or use 'smart', 'home', 'cwd', "
+                            "or 'everywhere'."
+                        )
+                    if not scope_root.is_dir():
+                        return (
+                            f"Error: '{scope_root}' is not a directory. Pass the "
+                            "folder to search as scope, not a file."
+                        )
+
                 # Try index first if available
                 if mixin._fs_index and effective_type in (
                     "name",

@@ -150,6 +150,20 @@ In the pre-run checks, a condition that cannot be determined renders `[?]`
 rather than a checkmark and never counts as ready — unknown is never treated as
 fine.
 
+## Choosing an AI provider
+
+Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+**Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
+the masked field; it stays in Lemonade memory until the server restarts. Provider
+settings are shared with other clients of that server. Fireworks suggests
+`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
+organization's HTTPS endpoint and authentication header.
+
+Type to search discovered models, then press Enter to select. The header shows
+the active provider; remote chat sends conversation history to that provider.
+Embeddings remain on Lemonade. Cloud setup skips downloading a local chat model.
+See [AI providers](../docs/guides/ai-providers.mdx) for key handling and recovery.
+
 ## Testing the harness against Claude
 
 `--use-claude` runs an agent on Anthropic's Claude API instead of the local
@@ -186,7 +200,7 @@ and `chat --subprocess` tells you to put the flag in the command line you own.
 
 **Switching models mid-session:** the gaia agent also takes `/model` in the
 chat composer — `/model` alone lists every switchable id (the curated Claude
-5 family, plus whatever Lemonade currently has downloaded), and `/model <id>`
+5 family, downloaded local models, and discovered Fireworks/AMD models), and `/model <id>`
 swaps the live client without losing conversation history or loaded skills.
 Typing the space in `/model ` turns the slash palette into a model picker, so
 the Claude ids are pickable rather than remembered; local ids stay behind bare
@@ -218,19 +232,20 @@ The footgun: a per-user daemon keeps serving the checkout that launched it no
 matter which directory you run the CLI from. If your edits do not seem to take,
 that is almost always why.
 
-**An agent from source** — `--mode user` (the default) runs the published frozen
-binary; `--mode dev` runs it from a checkout:
+**An agent from source** — `user` (the default) runs the published frozen
+binary; set the agent's mode environment variable to `dev` on the TUI launch so
+the TUI and daemon request the same checkout:
 
 ```bash
-gaia daemon start-agent email --mode dev [--dev-src-dir <path>]
+GAIA_EMAIL_AGENT_MODE=dev gaia-tui run email
 ```
 
-Dev mode resolves your shell's own checkout (`git rev-parse --show-toplevel`)
-and compares it — never executes it — against the checkout the daemon is
-anchored to; a mismatch is refused loudly, naming both checkouts and the fix.
-`--dev-src-dir` is the explicit escape hatch, and wants the agent's package
-directory (`<clone>/hub/agents/email/python`), not the repo root.
-
+Dev mode resolves the TUI caller's checkout (`git rev-parse --show-toplevel`)
+and sends the agent package directory (`<clone>/hub/agents/email/python`) to
+the daemon. It compares that path — never executes it — against the checkout
+the daemon is anchored to; a mismatch is refused loudly, naming both
+checkouts and the fix. If you start the sidecar manually instead, use the same
+mode with `gaia daemon start-agent email --mode dev`.
 ## An agent that only exists in your clone
 
 **It shows up in `status`.** The catalog reads `~/.gaia/agents/<id>/.installed`

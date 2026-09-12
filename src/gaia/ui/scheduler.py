@@ -931,7 +931,11 @@ class Scheduler:
                 if task.schedule_config
                 else None
             )
-            if config and (config.time_of_day or config.start_hour is not None):
+            if config and (
+                config.time_of_day
+                or config.start_hour is not None
+                or config.days_of_week
+            ):
                 next_run = compute_next_run(config)
             else:
                 next_run = datetime.now(timezone.utc) + timedelta(
@@ -1027,7 +1031,11 @@ class Scheduler:
                     if task.schedule_config
                     else None
                 )
-                if config and (config.time_of_day or config.start_hour is not None):
+                if config and (
+                    config.time_of_day
+                    or config.start_hour is not None
+                    or config.days_of_week
+                ):
                     next_dt = compute_next_run(config)
                     sleep_secs = max(
                         0, (next_dt - datetime.now(timezone.utc)).total_seconds()

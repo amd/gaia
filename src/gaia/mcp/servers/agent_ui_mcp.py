@@ -9,7 +9,7 @@ activity are visible in the browser UI in real time.
 
 Usage:
     uv run python -m gaia.mcp.servers.agent_ui_mcp
-    uv run python -m gaia.mcp.servers.agent_ui_mcp --port 8765
+    uv run python -m gaia.mcp.servers.agent_ui_mcp --port 8766
 """
 
 import argparse
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import requests
 
 from gaia.logger import route_console_logging_to_stderr
+from gaia.mcp.ports import AGENT_UI_MCP_PORT
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -45,7 +46,7 @@ DEFAULT_BACKEND = "http://localhost:4200"
 # Agent UI (see gaia/ui/security.py). Sent on reads too so no call site
 # has to decide.
 UI_HEADER = {"X-Gaia-UI": "1"}
-MCP_DEFAULT_PORT = 8765
+MCP_DEFAULT_PORT = AGENT_UI_MCP_PORT
 MCP_DEFAULT_HOST = "localhost"
 
 

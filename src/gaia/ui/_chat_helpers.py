@@ -385,7 +385,9 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -1199,7 +1201,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
@@ -2603,7 +2605,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 base_url = (
                     LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
-                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+                _auth = lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(
                         f"{base_url}/stats", headers=_auth

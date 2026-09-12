@@ -9,9 +9,11 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -33,9 +35,10 @@ const (
 // agent. GAIA ships one, so there is nothing to browse and nothing to pick —
 // the launch goes straight at it.
 type FlagshipModel struct {
-	activeView view
-	agent      catalog.Agent
-	chat       *chat.ChatModel
+	providerPanel *providers.Model
+	activeView    view
+	agent         catalog.Agent
+	chat          *chat.ChatModel
 	// chatClient is held behind a pointer shared by every copy Bubble Tea
 	// makes, so whoever tears the program down can close the child this model
 	// opened. Stored by value it would live on a copy that dies with the
@@ -60,6 +63,9 @@ type FlagshipModel struct {
 	// model overrides the agent's own default (--model). Only a daemon-backed
 	// agent can honour it; cli.checkModelSupported refuses it for the rest.
 	model string
+	// trace records every agent event to a JSONL file (--trace). Nil when off.
+	// Owned by the caller of RunFlagship, which closes it after the event loop.
+	trace *event.TraceWriter
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -188,6 +194,14 @@ func (m FlagshipModel) WithModel(model string) FlagshipModel {
 	return m
 }
 
+// WithTrace records every agent event to w (--trace). The caller keeps
+// ownership and closes w once the event loop has stopped, so a copy of this
+// model made by Bubble Tea can never close the file out from under a live turn.
+func (m FlagshipModel) WithTrace(w *event.TraceWriter) FlagshipModel {
+	m.trace = w
+	return m
+}
+
 // Init opens the gate immediately. The splash is what is on screen while the
 // first probe runs, not a screen the user has to dismiss.
 func (m FlagshipModel) Init() tea.Cmd { return beginCmd() }
@@ -208,6 +222,35 @@ func beginCmd() tea.Cmd { return func() tea.Msg { return beginMsg{} } }
 type beginMsg struct{}
 
 func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.providerPanel != nil {
+		switch v := msg.(type) {
+		case providers.ClosedMsg:
+			m.providerPanel = nil
+			return m, m.preflight.Init()
+		case providers.SelectedMsg:
+			m.providerPanel = nil
+			m.model = v.ID
+			m.useClaude = false
+			m.claudeModel = ""
+			return m.beginPreflight(m.agent)
+		default:
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = size.Width
+				m.height = size.Height
+			}
+			updated, cmd := m.providerPanel.Update(msg)
+			panel := updated.(providers.Model)
+			m.providerPanel = &panel
+			return m, cmd
+		}
+	}
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.agent.ID == catalog.FlagshipID {
+		m.preflight.Cancel()
+		panel := providers.New("", m.width, m.height)
+		m.providerPanel = &panel
+		return m, panel.Init()
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -309,6 +352,9 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m FlagshipModel) View() string {
+	if m.providerPanel != nil {
+		return m.providerPanel.View()
+	}
 	var base string
 	switch m.activeView {
 	case viewSplash:
@@ -358,6 +404,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
 		Model:             m.model,
+		Trace:             m.trace,
 		BypassPermissions: m.bypassPermissions,
 		UseClaude:         m.useClaude,
 		ClaudeModel:       m.claudeModel,

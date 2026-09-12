@@ -35,6 +35,7 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 		if m.chat != nil {
 			snap.Agent = m.chat.AgentID()
 			snap.Streaming = m.chat.IsStreaming()
+			snap.Overlay = m.chat.ControlSnapshot().Overlay
 		}
 	}
 
@@ -48,6 +49,9 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 	// /status never blinds to "unknown" while held.
 	if m.Halted() {
 		snap.Overlay = "halt"
+	}
+	if m.providerPanel != nil {
+		snap.Overlay = "provider"
 	}
 	return snap
 }

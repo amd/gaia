@@ -686,6 +686,23 @@ class TestFindFiles:
         assert "index" in result.lower()
         mock_index.query_files.assert_called_once()
 
+    def test_find_missing_scope_errors_before_index(self, tmp_path):
+        """A missing caller scope errors even when the index could answer."""
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="indexed", scope=str(tmp_path / "does_not_exist"))
+        assert "does not exist" in result
+        assert "indexed.txt" not in result
+        mock_index.query_files.assert_not_called()
+
     def test_find_index_fallback(self, tmp_path):
         """Falls back to filesystem search when index query fails."""
         _populate_directory(tmp_path)
@@ -1539,12 +1556,27 @@ class TestEdgeCases:
         assert str(tmp_path.resolve()) in result
 
     def test_find_files_with_invalid_scope(self, tmp_path):
-        """find_files with a nonexistent scope path returns no results."""
+        """find_files with a nonexistent scope path returns an error."""
+        missing = tmp_path / "does_not_exist"
         result = self.tools["find_files"](
             query="anything",
-            scope=str(tmp_path / "does_not_exist"),
+            scope=str(missing),
         )
-        assert "No files found" in result
+        assert "does not exist" in result
+        assert "is not a directory" not in result
+        assert "No files found" not in result
+
+    def test_find_files_with_file_as_scope(self, tmp_path):
+        """find_files with a file as scope says it is not a directory."""
+        report = tmp_path / "report.pdf"
+        report.write_text("data")
+        result = self.tools["find_files"](
+            query="anything",
+            scope=str(report),
+        )
+        assert "is not a directory" in result
+        assert "does not exist" not in result
+        assert "No files found" not in result
 
     def test_read_file_with_encoding_fallback(self, tmp_path):
         """read_file falls back to utf-8 with error replacement on decode failure."""

@@ -343,9 +343,9 @@ def test_muted_sender_genuinely_promotional_message_still_auto_archives(tmp_path
     that IS genuinely promotional by content — #2666 removes the forced
     override, not the legitimate explicit-preference fast path.
     ``TrustPolicy._explicitly_preferred`` reads ``low_priority_senders``
-    directly (never the inert ``preference_applied`` tag, see #2777), so
-    this is unaffected by #2666 and must still auto-archive on a cold
-    ledger at ``earn_trust``.
+    directly rather than the per-message ``preference_applied`` tag (which
+    now only drives pre-scan section ordering), so this is unaffected by
+    #2666 and must still auto-archive on a cold ledger at ``earn_trust``.
     """
     sender = "deals@shop.com"
     agent = _build_agent(
