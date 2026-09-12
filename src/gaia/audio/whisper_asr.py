@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 # Standard library imports
-import os
 import queue
 import threading
 import time
@@ -262,30 +261,16 @@ class WhisperAsr(AudioRecorder):
 
         self.log.debug("Audio processing stopped")
 
-    def transcribe_file(self, file_path):
-        """Transcribe an existing audio file."""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Audio file not found: {file_path}")
-
-        result = self.model.transcribe(file_path)
-        return result["text"]
-
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Whisper ASR Demo")
     parser.add_argument(
-        "--mode",
-        choices=["file", "mic", "both"],
-        default="file",
-        help="Test mode: file, mic, or both",
-    )
-    parser.add_argument(
         "--duration",
         type=int,
         default=5,
-        help="Recording duration in seconds for mic mode",
+        help="Recording duration in seconds",
     )
     parser.add_argument(
         "--model",
@@ -305,123 +290,108 @@ if __name__ == "__main__":
     print("=== Whisper ASR Demo ===")
     print(f"Model: {args.model}, CUDA: {args.cuda}")
 
-    # Test file transcription
-    if args.mode in ["file", "both"]:
-        print("\n--- File Transcription Test ---")
-        asr = WhisperAsr(model_size=args.model, enable_cuda=args.cuda)
+    # Microphone transcription
+    print("\n--- Microphone Transcription Test ---")
+    print(f"Recording for {args.duration} seconds...")
+    print(f"Mode: {'Streaming' if args.stream else 'Batch'}")
+
+    # Create a queue to collect transcriptions
+    transcription_queue = queue.Queue()
+    asr = WhisperAsr(
+        model_size=args.model,
+        transcription_queue=transcription_queue,
+        enable_cuda=args.cuda,
+    )
+
+    start_time = time.time()
+    transcriptions = []
+
+    if args.stream:
+        # Streaming mode - show text as it arrives
+        print("Starting recording threads...")
+        asr.start_recording_streaming()  # Use streaming-specific method
+
+        print("\n[STREAMING] Transcriptions as they arrive:")
+        print("-" * 50)
+
+        # Give recording a moment to start properly
+        time.sleep(0.5)
+
+        print(f"Recording status: {asr.is_recording}")
+        print(f"Listening for {args.duration} seconds...")
+
+        end_time = start_time + args.duration
+        checks = 0
+
         try:
-            test_file = "./data/audio/test.m4a"
-            start_time = time.time()
-            text = asr.transcribe_file(test_file)
-            elapsed = time.time() - start_time
-            print(f"Transcription: {text}")
-            print(f"Time taken: {elapsed:.2f} seconds")
-        except FileNotFoundError:
-            print(f"No audio file found at {test_file}")
-
-    # Test microphone transcription
-    if args.mode in ["mic", "both"]:
-        print("\n--- Microphone Transcription Test ---")
-        print(f"Recording for {args.duration} seconds...")
-        print(f"Mode: {'Streaming' if args.stream else 'Batch'}")
-
-        # Create a queue to collect transcriptions
-        transcription_queue = queue.Queue()
-        asr = WhisperAsr(
-            model_size=args.model,
-            transcription_queue=transcription_queue,
-            enable_cuda=args.cuda,
-        )
-
-        start_time = time.time()
-        transcriptions = []
-
-        if args.stream:
-            # Streaming mode - show text as it arrives
-            print("Starting recording threads...")
-            asr.start_recording_streaming()  # Use streaming-specific method
-
-            print("\n[STREAMING] Transcriptions as they arrive:")
-            print("-" * 50)
-
-            # Give recording a moment to start properly
-            time.sleep(0.5)
-
-            print(f"Recording status: {asr.is_recording}")
-            print(f"Listening for {args.duration} seconds...")
-
-            end_time = start_time + args.duration
-            checks = 0
-
-            try:
-                while time.time() < end_time:
-                    checks += 1
-                    # Check for new transcriptions
-                    while not transcription_queue.empty():
-                        try:
-                            text = transcription_queue.get_nowait()
-                            if text:
-                                transcriptions.append(text)
-                                # Stream the text immediately with timestamp
-                                time_offset = time.time() - start_time
-                                print(f"[{time_offset:5.1f}s] {text}")
-                        except queue.Empty:
-                            break
-
-                    # Debug: Show we're still checking
-                    if checks % 20 == 0:  # Every second (20 * 0.05)
-                        print(
-                            f"  ... still listening (audio_queue size: ~{asr.audio_queue.qsize()})"
-                        )
-
-                    # Small sleep to prevent CPU spinning
-                    time.sleep(0.05)
-
-            finally:
-                # Stop recording
-                asr.stop_recording()
-
-                # Collect any remaining transcriptions
-                time.sleep(0.5)  # Give a moment for final processing
+            while time.time() < end_time:
+                checks += 1
+                # Check for new transcriptions
                 while not transcription_queue.empty():
                     try:
                         text = transcription_queue.get_nowait()
                         if text:
                             transcriptions.append(text)
+                            # Stream the text immediately with timestamp
                             time_offset = time.time() - start_time
                             print(f"[{time_offset:5.1f}s] {text}")
                     except queue.Empty:
                         break
 
-            print("-" * 50)
+                # Debug: Show we're still checking
+                if checks % 20 == 0:  # Every second (20 * 0.05)
+                    print(
+                        f"  ... still listening (audio_queue size: ~{asr.audio_queue.qsize()})"
+                    )
 
-        else:
-            # Batch mode - collect all text then display
-            asr.start_recording(duration=args.duration)  # Blocking
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.05)
 
-            # Collect all transcriptions after recording
+        finally:
+            # Stop recording
+            asr.stop_recording()
+
+            # Collect any remaining transcriptions
+            time.sleep(0.5)  # Give a moment for final processing
             while not transcription_queue.empty():
                 try:
                     text = transcription_queue.get_nowait()
                     if text:
                         transcriptions.append(text)
+                        time_offset = time.time() - start_time
+                        print(f"[{time_offset:5.1f}s] {text}")
                 except queue.Empty:
                     break
 
-        elapsed = time.time() - start_time
+        print("-" * 50)
 
-        # Display results
-        print("\nResults:")
-        if transcriptions:
-            print(f"  Transcription segments: {len(transcriptions)}")
-            if not args.stream:  # Show individual segments in batch mode
-                for i, text in enumerate(transcriptions, 1):
-                    print(f"    {i}. {text}")
-            print(f"  Full transcript: {' '.join(transcriptions)}")
-        else:
-            print("  No transcriptions received (possibly no speech detected)")
+    else:
+        # Batch mode - collect all text then display
+        asr.start_recording(duration=args.duration)  # Blocking
 
-        print(f"  Total time: {elapsed:.2f} seconds")
-        print(f"  Processing efficiency: {args.duration/elapsed:.2f}x realtime")
+        # Collect all transcriptions after recording
+        while not transcription_queue.empty():
+            try:
+                text = transcription_queue.get_nowait()
+                if text:
+                    transcriptions.append(text)
+            except queue.Empty:
+                break
+
+    elapsed = time.time() - start_time
+
+    # Display results
+    print("\nResults:")
+    if transcriptions:
+        print(f"  Transcription segments: {len(transcriptions)}")
+        if not args.stream:  # Show individual segments in batch mode
+            for i, text in enumerate(transcriptions, 1):
+                print(f"    {i}. {text}")
+        print(f"  Full transcript: {' '.join(transcriptions)}")
+    else:
+        print("  No transcriptions received (possibly no speech detected)")
+
+    print(f"  Total time: {elapsed:.2f} seconds")
+    print(f"  Processing efficiency: {args.duration/elapsed:.2f}x realtime")
 
     print("\nDemo completed!")

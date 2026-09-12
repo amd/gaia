@@ -40,6 +40,25 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showInformationMessage("GAIA server URL saved.");
 		})
 	);
+	context.subscriptions.push(
+		vscode.commands.registerCommand("gaia.setApiKey", async () => {
+			const apiKey = await vscode.window.showInputBox({
+				title: "GAIA API Key",
+				prompt: "Enter the server's GAIA_API_KEY. Leave blank to clear the saved key.",
+				password: true,
+				ignoreFocusOut: true,
+			});
+			if (apiKey === undefined) {
+				return;
+			}
+			if (apiKey.trim()) {
+				await context.secrets.store("gaia.apiKey", apiKey.trim());
+			} else {
+				await context.secrets.delete("gaia.apiKey");
+			}
+			vscode.window.showInformationMessage("GAIA API key updated.");
+		})
+	);
 }
 
 export function deactivate() {}

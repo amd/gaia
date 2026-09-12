@@ -151,6 +151,32 @@ class FileIOToolsMixin:
     for _validate_python_syntax() and _parse_python_code() methods.
     """
 
+    def get_file_editing_system_prompt(self) -> str:
+        """Tell the agent the edit tools exist and when to reach for them.
+
+        Auto-discovered by ``Agent._get_mixin_prompts``. Static text, so it lands
+        in the cacheable head of the prompt rather than the volatile tail.
+
+        Measured on 30 corpus moments whose correct next action was an edit, with
+        the target file already held: the shipped prompt named the shell seven
+        times with worked recipes and ``edit_file`` not once, and the agent
+        shelled out or re-read instead of editing on 23 of them. Adding this took
+        working edits from 1 to 6. It does not close the gap — shell is still
+        preferred about half the time (#3600) — but the omission was not
+        deliberate and this is the largest single lever measured.
+        """
+        return (
+            "==== CHANGING A FILE ====\n"
+            "To change a file, call edit_file with the exact existing text as "
+            "old_content, or edit_python_file for .py when you want the edit "
+            "syntax-checked. Both work on any text file — source, documentation, "
+            "configuration.\n"
+            "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
+            "the edit tools validate the path, keep a backup and report what "
+            "changed, and a shell rewrite does none of that.\n"
+            "Do not re-read a file whose content you already hold — edit it directly."
+        )
+
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
 

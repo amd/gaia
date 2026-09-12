@@ -48,6 +48,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
   nothing.** Microsoft Graph has no equivalent for these, so they used to be
   sent as plain search text and return zero results with no indication why
   (#2996).
+- **An ordinary Outlook search like `search({ query: 'subject:"check in:
+  monday"' })` no longer fails with the error above.** The colon word was
+  inside the quoted phrase, not an operator, and is now recognized as such
+  (#3592).
 
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the

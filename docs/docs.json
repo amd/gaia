@@ -86,8 +86,10 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/ai-providers",
                       "guides/chat",
-                      "guides/talk"
+                      "guides/talk",
+                      "guides/transcription"
                     ]
                   },
                   {
@@ -373,6 +375,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"

@@ -78,6 +78,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
     LemonadeClient,
     LemonadeClientError,
+    cloud_model_provider,
 )
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -97,6 +98,16 @@ AUDIT_LEVEL = logging.INFO
 #: reach stdout, which is the wire.
 AUDIT_LOGGER_NAME = "gaia_agent.stdio.audit"
 audit = get_logger(AUDIT_LOGGER_NAME)
+
+#: Backstop for a confirmation whose client can no longer answer it.
+#:
+#: Deliberately longer than the TUI's own 10-minute bound
+#: (``components.DeliverableConfirmationTimeout``) so the client always wins the
+#: race and the user's real answer is never pre-empted by this. It only fires
+#: when nothing is coming: the TUI exited, or the control channel broke while
+#: the agent was parked. Without it that agent waits forever on a question no
+#: one can see.
+ORPHANED_CONFIRM_TIMEOUT_SECONDS = 15 * 60
 
 AGENT_ID = "gaia"
 
@@ -177,8 +188,12 @@ class PermissionState:
             handler.auto_approve_gated_tools = self._bypass
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
-            # so the wait is theirs to end — see confirm_tool_execution.
-            handler.confirm_timeout_seconds = None
+            # so the wait is theirs to end — see confirm_tool_execution. The
+            # TUI answers its own prompt long before this fires (its bound is
+            # 10 minutes); this is the backstop for the case where it cannot,
+            # because the client died or the control channel broke. Unbounded
+            # there leaves an agent parked on a question nobody can answer.
+            handler.confirm_timeout_seconds = ORPHANED_CONFIRM_TIMEOUT_SECONDS
             self._handler = handler
 
     def detach(self, handler: Any) -> None:
@@ -215,8 +230,9 @@ class PermissionState:
         Two callers. The host's ``cancel`` verb stops a turn while keeping the
         process. stdin closing means the host is gone, but the sentinel that
         ends the run loop sits BEHIND the running turn in the query queue — so a
-        turn parked on a confirmation nobody can answer would keep the process
-        alive forever, holding the model slot.
+        turn parked on a confirmation nobody can answer would hold the model
+        slot until ``ORPHANED_CONFIRM_TIMEOUT_SECONDS``, far too long to make an
+        already-exited host pay.
 
         Either way, cancelling unblocks the wait, which lets the turn finish
         through its normal path and emit its one terminal event.
@@ -342,13 +358,14 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
+    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else "lemonade",
-        "model_remote": is_claude,
+        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
+        "model_remote": is_claude or bool(cloud_provider),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
@@ -392,7 +409,7 @@ _NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
 
 
 def _lemonade_models(base_url: Optional[str]) -> List[str]:
-    """Downloaded, chat-capable local model ids Lemonade currently serves.
+    """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -418,7 +435,8 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             m["id"]
             for m in catalog.get("data", [])
             if m.get("id")
-            and m.get("downloaded")
+            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
             and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
         }
     )
@@ -544,12 +562,12 @@ def _apply_claude_switch(agent: Any, target: str) -> str:
 
 
 def _apply_local_switch(agent: Any, target: str) -> str:
-    """Swap the live client to local Lemonade model *target*; raise on failure."""
+    """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
     available = _lemonade_models(chat.config.base_url)  # raises if unreachable
     if target not in available:
         raise RuntimeError(
-            f"Unknown local model '{target}'. Downloaded, chat-capable "
+            f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
             "Lemonade models: "
             + (
                 ", ".join(available)
@@ -605,17 +623,29 @@ def _format_model_list(agent: Any) -> str:
         lines.append(f"- `{model_id}` — {label}{marker}")
 
     lines.append("")
-    lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
     try:
-        local_models = _lemonade_models(chat.config.base_url)
+        models = _lemonade_models(chat.config.base_url)
     except RuntimeError as exc:
+        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
-        if not local_models:
-            lines.append("- (none downloaded — run `lemonade-server pull <model>`)")
-        for model_id in local_models:
-            marker = " ← current" if model_id == current else ""
-            lines.append(f"- `{model_id}`{marker}")
+        for provider, heading in (
+            (None, "Local (Lemonade — downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
+            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+        ):
+            lines.append(f"**{heading}:**")
+            group = [m for m in models if cloud_model_provider(m) == provider]
+            if not group:
+                lines.append(
+                    "- (none downloaded — run `gaia init`)"
+                    if provider is None
+                    else "- (connect this provider in the TUI provider settings)"
+                )
+            for model_id in group:
+                marker = " ← current" if model_id == current else ""
+                lines.append(f"- `{model_id}`{marker}")
+            lines.append("")
 
     lines.append("")
     lines.append(
@@ -650,6 +680,16 @@ def run_model_command(agent: Any, query: str, out) -> None:
         if agent._use_claude
         else "the local Lemonade backend"
     )
+    cloud_provider = cloud_model_provider(agent.chat.effective_model)
+    if cloud_provider and not agent._use_claude:
+        provider_name = {
+            "fireworks": "Fireworks AI",
+            "amd": "AMD LLM Gateway",
+        }.get(cloud_provider, cloud_provider)
+        where = (
+            f"{provider_name} via Lemonade — this conversation is sent to "
+            f"{provider_name}; embeddings stay on Lemonade"
+        )
     _write(
         {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
         out,

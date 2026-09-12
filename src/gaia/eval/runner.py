@@ -587,6 +587,15 @@ _SCORE_WEIGHTS = {
 # Significant score drop within the same pass/fail status warrants a warning
 _SCORE_REGRESSION_THRESHOLD = 2.0
 
+# Statuses meaning the scenario produced NO measurement, as distinct from
+# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
+# death scores 0.0 (or null), which is indistinguishable from a model that
+# answered badly, so comparing the two reports infrastructure as a regression.
+# Kept in sync with the buckets in scorecard.py::build_scorecard.
+_NO_MEASUREMENT_STATUSES = frozenset(
+    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
+)
+
 
 @functools.lru_cache(maxsize=1)
 def _load_simulator_content() -> str:
@@ -1488,6 +1497,11 @@ def compare_scorecards(baseline_path, current_path):
     # corpus_changed: one side is SKIPPED_NO_DOCUMENT — corpus availability changed,
     # not a quality regression or improvement.  Reported separately to avoid noise.
     corpus_changed = []
+    # unmeasured: the CURRENT run has a _NO_MEASUREMENT_STATUSES status — the
+    # harness never produced a score, so there is nothing to compare.  Excluded
+    # from the verdict and reported separately; the CI integrity gate
+    # (gaia.eval.integrity_gate) is what blocks on a run that measured nothing.
+    unmeasured = []
 
     for sid in all_ids:
         if sid in base_map and sid not in curr_map:
@@ -1501,6 +1515,12 @@ def compare_scorecards(baseline_path, current_path):
         c = curr_map[sid]
         b_skipped = b.get("status") == "SKIPPED_NO_DOCUMENT"
         c_skipped = c.get("status") == "SKIPPED_NO_DOCUMENT"
+        # Current side only. A baseline that never measured and a current run
+        # that did is strictly more information than before, and cannot produce a
+        # false regression: an unmeasured scenario scores 0, so every delta out of
+        # it is non-negative. Treating it as unmeasured would only discard the
+        # improvement.
+        c_unmeasured = c.get("status") in _NO_MEASUREMENT_STATUSES
         b_pass = b.get("status") == "PASS"
         c_pass = c.get("status") == "PASS"
         b_score = (
@@ -1539,6 +1559,10 @@ def compare_scorecards(baseline_path, current_path):
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+        # This run produced no measurement — nothing to compare, including the
+        # wall clock, so this is checked ahead of the time-regression branch.
+        elif c_unmeasured:
+            unmeasured.append(entry)
         elif entry.get("time_regressed"):
             # Time regressions reported separately from score regressions
             time_regressed.append(entry)
@@ -1660,7 +1684,25 @@ def compare_scorecards(baseline_path, current_path):
                 f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}"
             )
 
+    if unmeasured:
+        print(
+            f"\n[?] NOT MEASURED ({len(unmeasured)} scenario(s)) — the harness produced "
+            "no score in this run; EXCLUDED from the verdict below:"
+        )
+        for e in unmeasured:
+            print(
+                f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}"
+            )
+
     print(f"\n{'='*70}")
+    if unmeasured:
+        # Loud on purpose: this verdict is silent about these scenarios, and a
+        # clean verdict over an incomplete run is the one way this comparison can
+        # mislead. Blocking on it belongs to the integrity gate, not here.
+        print(
+            f"[WARN] {len(unmeasured)} scenario(s) produced NO measurement and are "
+            "excluded below — a clean verdict does NOT mean they passed."
+        )
     if regressed:
         print(f"[WARN] {len(regressed)} regression(s) detected!")
     if score_regressed:
@@ -1671,12 +1713,15 @@ def compare_scorecards(baseline_path, current_path):
         print(
             f"[WARN] {len(time_regressed)} time regression(s) detected (elapsed time > 2x baseline)!"
         )
-    if not regressed and not score_regressed and improved:
-        print(
-            f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
-        )
-    elif not regressed and not score_regressed and not improved:
-        print("[OK]   No status changes between runs.")
+    # An [OK] over an incomplete run is the misleading line; the WARN above says
+    # what is missing, so do not follow it with a clean bill of health.
+    if not regressed and not score_regressed and not unmeasured:
+        if improved:
+            print(
+                f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
+            )
+        else:
+            print("[OK]   No status changes between runs.")
     print(f"{'='*70}\n")
 
     return {
@@ -1688,6 +1733,7 @@ def compare_scorecards(baseline_path, current_path):
         "only_in_baseline": only_in_baseline,
         "only_in_current": only_in_current,
         "corpus_changed": corpus_changed,
+        "unmeasured": unmeasured,
     }
 
 

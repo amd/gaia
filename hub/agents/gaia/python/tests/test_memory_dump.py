@@ -77,6 +77,7 @@ def test_one_row_per_category_round_trips(store):
             context="global",
             confidence=0.6,
             source="user",
+            allow_privileged=True,
         )
 
     dump = build_memory_dump(_FakeAgent(memory_store=store))

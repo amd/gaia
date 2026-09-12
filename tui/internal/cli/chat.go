@@ -39,6 +39,11 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("--agent and --subprocess are mutually exclusive: pick one")
 		}
 		if subprocess != "" {
+			if cmd.Flags().Changed("bypass-permissions") {
+				return fmt.Errorf("--bypass-permissions is not supported with --subprocess: " +
+					"pass permission options inside the subprocess command if it supports them, " +
+					"or drop --bypass-permissions")
+			}
 			// Both were accepted and then silently dropped here — RunChat is
 			// given neither. (--query IS honoured: it opens the chat and sends
 			// that first message.)

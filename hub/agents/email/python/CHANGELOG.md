@@ -9,6 +9,13 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Asking to put a message back in your inbox now actually works (#2626).**
+  `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
+  add the inbox label and then archive the message in the same call, undoing
+  themselves while reporting success. Both now skip the archive when the
+  target resolves to `INBOX`; every other target keeps the existing
+  move-out-of-inbox behavior. Gmail only — a folder-based mailbox (Outlook)
+  has no `INBOX` label and rejects it with an actionable error.
 - **A calendar listing no longer looks complete when it isn't (#2664).**
   `list_calendar_events` returned the provider's first page as if it were the
   whole window, so a busy week silently lost everything past the 25th event.
@@ -104,6 +111,12 @@ contract version is tracked separately as
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
   this. `translate_query` now raises an actionable error naming the
   unsupported operator instead of degrading to a phrase match.
+- **An Outlook search on an ordinary quoted phrase containing a colon word
+  (`subject:"check in: monday"`) no longer raises the unsupported-operator
+  error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.
+  anywhere in the query with no notion of quoting, so a colon word inside a
+  quoted value was mistaken for an operator. It now only matches outside a
+  quoted span; a real unsupported operator that follows one still raises.
 
 ### Changed
 

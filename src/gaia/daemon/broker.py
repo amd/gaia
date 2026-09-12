@@ -34,6 +34,7 @@ its queue logic is deterministic under test.
 
 from __future__ import annotations
 
+import math
 import secrets
 import threading
 import time
@@ -193,22 +194,29 @@ class ModelSlotBroker:
                 if not notified_wait and on_wait is not None:
                     on_wait(self._wait_reason_locked(waiter))
                 notified_wait = True
-                if deadline is None:
-                    self._cv.wait()
-                else:
-                    remaining = deadline - self._now()
-                    if remaining <= 0:
-                        self._waiters.remove(waiter)
-                        self._cv.notify_all()
-                        raise LeaseTimeoutError(
-                            f"model-slot lease for '{model}' (holder '{holder}', "
-                            f"priority {priority.name.lower()}) was not granted "
-                            f"within {timeout}s. The slot is held by "
-                            f"'{self._active.model if self._active else '?'}'. "
-                            "Another load is taking longer than expected — check "
-                            "the Lemonade server log, then retry."
+                remaining = None if deadline is None else deadline - self._now()
+                if remaining is not None and remaining <= 0:
+                    self._waiters.remove(waiter)
+                    self._cv.notify_all()
+                    raise LeaseTimeoutError(
+                        f"model-slot lease for '{model}' (holder '{holder}', "
+                        f"priority {priority.name.lower()}) was not granted "
+                        f"within {timeout}s. The slot is held by "
+                        f"'{self._active.model if self._active else '?'}'. "
+                        "Another load is taking longer than expected — check "
+                        "the Lemonade server log, then retry."
+                    )
+                if self._active is not None:
+                    expires_in = max(
+                        0.0, self._active.granted_at + self._ttl - self._now()
+                    )
+                    if math.isfinite(expires_in):
+                        remaining = (
+                            expires_in
+                            if remaining is None
+                            else min(remaining, expires_in)
                         )
-                    self._cv.wait(remaining)
+                self._cv.wait(remaining)
 
     def release(self, lease_id: str) -> None:
         """Release the slot held by *lease_id* and wake the next waiter.
@@ -320,10 +328,10 @@ class ModelSlotBroker:
         if self._active is None:
             return
         held_for = self._now() - self._active.granted_at
-        if held_for > self._ttl:
+        if held_for >= self._ttl:
             logger.warning(
                 "broker: reclaiming lease %s (model '%s', holder '%s') held "
-                "for %.0fs > TTL %.0fs — the holder likely crashed without "
+                "for %.0fs >= TTL %.0fs — the holder likely crashed without "
                 "releasing. This is a leaked lease; investigate the holder.",
                 self._active.lease_id,
                 self._active.model,

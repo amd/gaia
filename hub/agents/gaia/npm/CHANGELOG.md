@@ -12,7 +12,15 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Fixed
+
+- Windows npm launchers now find the Python daemon CLI even when npm passes the
+  package script as argv[1], preserving unrelated tools in shared PATH directories.
+
 ### Added
+
+- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
+  runtime API keys, discovered models, and remote-inference status.
 
 - **A project map at task start.** In a code repository the agent now opens
   every task knowing the directory shape, the likely entry points, which
@@ -109,6 +117,16 @@ the terminal UI meant building it from source.
   different machine and records nothing. See SPEC §4.1.
 - **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
   trusted local mirror.
+
+### Changed
+
+- **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
+  written.** Previously any URL not ending in `/api/v1` had that suffix appended,
+  so a reverse proxy configured as `https://proxy.example/lemonade` was silently
+  rewritten to `https://proxy.example/lemonade/api/v1`. It now resolves to
+  `https://proxy.example/lemonade` unchanged, and only a bare origin with no path
+  at all gains `/api/v1`. If a proxied install starts returning `404` after
+  upgrading, append the API path to the variable yourself.
 
 ### Fixed
 

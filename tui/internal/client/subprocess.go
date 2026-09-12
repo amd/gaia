@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 var (
@@ -30,19 +30,20 @@ var (
 // finish before giving up on a clean reap.
 const closeGrace = 2 * time.Second
 
-// detectLemonadeURL probes common Lemonade Server ports and returns the first reachable URL.
-func detectLemonadeURL() string {
-	ports := []string{"13305", "8000"}
-	client := &http.Client{Timeout: 2 * time.Second}
+var subprocessLemonadePorts = []string{"13305", "8000"}
 
-	for _, port := range ports {
+// detectLemonadeURL resolves configured and embedded endpoints before probing
+// legacy ports. An unrelated local server cannot override the private runtime.
+func detectLemonadeURL() string {
+	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+		return lemonade.ResolveBaseURL("")
+	}
+	for _, port := range subprocessLemonadePorts {
 		url := "http://localhost:" + port + "/api/v1"
-		resp, err := client.Get(url + "/models")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return url
-			}
+		client := lemonade.New(url)
+		client.HTTP.Timeout = 2 * time.Second
+		if _, err := client.Models(context.Background(), "local"); err == nil {
+			return url
 		}
 	}
 	return ""
@@ -297,13 +298,12 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 	group.prepare(cmd)
 
-	// Auto-detect Lemonade URL if not set in environment
-	if os.Getenv("LEMONADE_BASE_URL") == "" {
-		if url := detectLemonadeURL(); url != "" {
-			cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
-			if s.debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Auto-detected Lemonade at %s\n", url)
-			}
+	// Resolve once for the child so provider setup and Python use the same
+	// endpoint, even when a second server answers on a legacy port.
+	if url := detectLemonadeURL(); url != "" {
+		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
+		if s.debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
 		}
 	}
 
@@ -727,6 +727,8 @@ func (s *SubprocessClient) AbortStopsAgent() bool { return true }
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.
 func (s *SubprocessClient) BypassAtLaunch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, a := range s.args {
 		if a == "--bypass-permissions" {
 			return true
@@ -739,6 +741,8 @@ func (s *SubprocessClient) BypassAtLaunch() bool {
 // the UI's "claude" chip is driven by what actually reached the child's argv
 // rather than by a second bool that could disagree with it.
 func (s *SubprocessClient) ClaudeAtLaunch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, a := range s.args {
 		if a == UseClaudeFlag {
 			return true
@@ -757,6 +761,8 @@ func (s *SubprocessClient) ClaudeAtLaunch() bool {
 // is authoritative, but it is not read until the first turn (see
 // gaia_agent.stdio.main), which on a session that opens and waits is never.
 func (s *SubprocessClient) ClaudeModelAtLaunch() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, a := range s.args {
 		if a == ClaudeModelFlag && i+1 < len(s.args) {
 			return s.args[i+1]
@@ -871,4 +877,46 @@ func truncateLine(s string) string {
 		return s
 	}
 	return s[:limit] + "…"
+}
+
+// ModelAtLaunch reports the Lemonade model in the child's launch arguments.
+func (s *SubprocessClient) ModelAtLaunch() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, a := range s.args {
+		if a == "--model" && i+1 < len(s.args) {
+			return s.args[i+1]
+		}
+	}
+	return ""
+}
+
+// SetModelBeforeStart changes a canonical agent's pending launch after an
+// explicit catalog selection. Once a child is running, /model must perform the
+// switch inside that conversation instead. Credentials never enter argv.
+func (s *SubprocessClient) SetModelBeforeStart(model string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.canonical || s.started || strings.TrimSpace(model) == "" {
+		return false
+	}
+	args := make([]string, 0, len(s.args)+2)
+	for i := 0; i < len(s.args); i++ {
+		arg := s.args[i]
+		switch {
+		case arg == UseClaudeFlag, strings.HasPrefix(arg, UseClaudeFlag+"="):
+			continue
+		case arg == "--model", arg == ClaudeModelFlag:
+			if i+1 < len(s.args) && !strings.HasPrefix(s.args[i+1], "--") {
+				i++
+			}
+			continue
+		case strings.HasPrefix(arg, "--model="), strings.HasPrefix(arg, ClaudeModelFlag+"="):
+			continue
+		default:
+			args = append(args, arg)
+		}
+	}
+	s.args = append(args, "--model", model)
+	return true
 }

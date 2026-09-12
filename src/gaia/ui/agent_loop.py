@@ -416,7 +416,7 @@ class AgentLoop:
                     agent.console = sse_handler
 
                 # Inject conversation history (capped for autonomous ticks)
-                messages = db.get_messages(session_id, limit=10)
+                messages = db.get_recent_messages(session_id, limit=10)
                 history_pairs = _helpers._build_history_pairs(messages)
                 agent.conversation_history = []
                 for u, a in history_pairs[-3:]:  # 3-pair rolling window for ticks
