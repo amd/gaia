@@ -4,8 +4,23 @@
 import logging
 import subprocess
 import sys
+import tempfile
 import warnings
 from pathlib import Path
+
+
+def _home_log_file():
+    """Return ``~/.gaia/gaia.log``, or ``None`` when the home dir is unresolvable.
+
+    ``Path.home()`` raises ``RuntimeError`` on Windows when neither ``USERPROFILE``
+    nor ``HOMEDRIVE``+``HOMEPATH`` is set -- common for services, scheduled tasks
+    and curated ``subprocess`` environments, which would otherwise fail to
+    ``import gaia`` at all.
+    """
+    try:
+        return Path.home() / ".gaia" / "gaia.log"
+    except RuntimeError:
+        return None
 
 
 def configure_console_encoding():
@@ -47,7 +62,16 @@ class GaiaLogger:
         # current working directory with gaia.log files and don't crash
         # when CWD is not writable (e.g. /, system dirs, read-only mounts).
         if log_file is None:
-            log_file = Path.home() / ".gaia" / "gaia.log"
+            log_file = _home_log_file()
+            if log_file is None:
+                # No resolvable home dir -- use the tempdir the handler
+                # fallback below would have picked anyway.
+                log_file = Path(tempfile.gettempdir()) / "gaia.log"
+                print(
+                    "[gaia] Home directory is not resolvable; "
+                    f"writing logs to: {log_file}",
+                    file=sys.stderr,
+                )
             try:
                 log_file.parent.mkdir(parents=True, exist_ok=True)
             except (PermissionError, OSError):
@@ -104,16 +128,14 @@ class GaiaLogger:
         except (PermissionError, OSError) as primary_err:
             fallback_candidates = []
 
-            home_fallback = Path.home() / ".gaia" / "gaia.log"
-            if Path(self.log_file).resolve() != home_fallback.resolve():
+            home_fallback = _home_log_file()
+            if (
+                home_fallback is not None
+                and Path(self.log_file).resolve() != home_fallback.resolve()
+            ):
                 fallback_candidates.append(home_fallback)
 
-            try:
-                import tempfile
-
-                fallback_candidates.append(Path(tempfile.gettempdir()) / "gaia.log")
-            except Exception:
-                pass
+            fallback_candidates.append(Path(tempfile.gettempdir()) / "gaia.log")
 
             print(
                 f"[gaia] Cannot write to {self.log_file} ({primary_err}).",

@@ -44,7 +44,7 @@ class AudioRecorder:
         self.device_index = (
             self._get_default_input_device() if device_index is None else device_index
         )
-        self.is_recording = False
+        self._is_recording = False
         self.audio_queue = queue.Queue()
         self.stream = None  # Add stream as class attribute
 
@@ -56,6 +56,31 @@ class AudioRecorder:
         # New attributes for pause functionality
         self.is_paused = False
         self.pause_lock = threading.Lock()
+
+    @property
+    def is_recording(self) -> bool:
+        """True only while the capture thread is actually alive.
+
+        A device error breaks out of ``_record_audio`` without unsetting the
+        flag, so callers polling a plain attribute wait on "Listening..."
+        forever after the microphone dies.
+        """
+        if not self._is_recording:
+            return False
+        return self.record_thread is None or self.record_thread.is_alive()
+
+    @is_recording.setter
+    def is_recording(self, value: bool) -> None:
+        self._is_recording = bool(value)
+
+    @property
+    def capture_failed(self) -> bool:
+        """True when capture was never asked to stop but its thread has died."""
+        return (
+            self._is_recording
+            and self.record_thread is not None
+            and not self.record_thread.is_alive()
+        )
 
     def _get_default_input_device(self):
         """Get the default input device index."""
@@ -100,11 +125,17 @@ class AudioRecorder:
 
             while self.is_recording:
                 try:
-                    # Skip recording if paused
                     with self.pause_lock:
-                        if self.is_paused:
-                            time.sleep(0.1)
-                            continue
+                        paused = self.is_paused
+                    if paused:
+                        # Keep draining the device and throw the frames away.
+                        # Not reading lets the input ring buffer hand us the
+                        # assistant's own speech the moment we resume.
+                        self.stream.read(self.CHUNK)
+                        speech_buffer = np.array([], dtype=np.float32)
+                        self.is_speaking = False
+                        silence_counter = 0
+                        continue
 
                     frames, _ = self.stream.read(self.CHUNK)
                     data = frames[:, 0].copy()  # Extract mono channel
@@ -207,6 +238,9 @@ class AudioRecorder:
             self.log.warning("Recording is already in progress")
             return
 
+        # Drop the previous session's dead thread before arming the flag --
+        # ``is_recording`` reads thread liveness.
+        self.record_thread = None
         # Set recording flag before starting threads
         self.is_recording = True
 

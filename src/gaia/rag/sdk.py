@@ -634,6 +634,18 @@ class RAGSDK:
                     except Exception as e:
                         self.log.warning(f"   ⚠️  Single embedding failed: {e}")
 
+            # Callers pair chunk i with vector i; a short batch returns wrong text.
+            usable = sum(1 for emb in batch_embeddings if emb)
+            if len(batch_embeddings) != len(batch_texts) or usable != len(batch_texts):
+                raise RuntimeError(
+                    f"Embedding backend returned {usable}/{len(batch_texts)} usable "
+                    f"vectors for batch {batch_num} against "
+                    f"{self.config.embedding_model!r}; refusing to index chunks "
+                    "against misaligned vectors. Verify Lemonade Server is "
+                    "reachable and the embedding model is fully loaded, then "
+                    "re-index."
+                )
+
             all_embeddings.extend(batch_embeddings)
 
             if show_progress or self.config.show_stats:

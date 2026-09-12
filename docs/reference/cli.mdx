@@ -974,15 +974,21 @@ gaia talk [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | auto | Model ID to use (default: auto-selected by each agent) |
-| `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--model` | string | `Gemma-4-E4B-it-GGUF` | Model for the conversation (also what the Lemonade pre-flight loads). Required with `--use-chatgpt` |
+| `--max-tokens` | integer | 512 | Maximum tokens per reply |
+| `--use-claude` | flag | false | Use the Claude API instead of local Lemonade (needs `ANTHROPIC_API_KEY`) |
+| `--use-chatgpt` | flag | false | Use the OpenAI API instead of local Lemonade (needs `OPENAI_API_KEY` and `--model`) |
+| `--claude-model` | string | claude-sonnet-4-20250514 | Claude model, used with `--use-claude` |
+| `--base-url` | string | `LEMONADE_BASE_URL` or `http://localhost:13305/api/v1` | Lemonade server URL |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |
 | `--whisper-model-size` | string | base | Whisper model [tiny, base, small, medium, large] |
-| `--silence-threshold` | float | 0.5 | Silence threshold in seconds |
+| `--silence-threshold` | float | 0.5 | Seconds of silence that end your turn |
 | `--mic-threshold` | float | 0.003 | Microphone amplitude threshold for voice detection (lower = more sensitive) |
-| `--stats` | flag | false | Show performance statistics |
+| `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
+
+The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop or microphone fails.
 
 **Examples:**
 
@@ -997,6 +1003,10 @@ gaia talk --index manual.pdf
 
 ```bash No TTS
 gaia talk -i guide.pdf --no-tts
+```
+
+```bash Model
+gaia talk --model Qwen3-Coder-30B-A3B-Instruct-GGUF --max-tokens 1024
 ```
 </CodeGroup>
 

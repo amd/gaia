@@ -253,6 +253,7 @@ class ChatAgent(
             config.allowed_paths,
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+            interactive_check=self._console_accepts_stdin_prompts,
         )
 
         # Store config for access in other methods

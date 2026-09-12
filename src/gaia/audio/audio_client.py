@@ -3,6 +3,7 @@
 
 import asyncio
 import queue
+import sys
 import threading
 import time
 
@@ -49,6 +50,9 @@ class AudioClient:
         use_claude=False,
         use_chatgpt=False,
         system_prompt=None,
+        model=None,
+        claude_model="claude-sonnet-5",
+        base_url=None,
     ):
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(__import__("logging"), logging_level))
@@ -66,11 +70,17 @@ class AudioClient:
         self.whisper_asr = None
         self.transcription_queue = queue.Queue()
         self.tts = None
+        # One Enter-to-interrupt listener per process, shared by every reply.
+        self._playback_interrupt = threading.Event()
+        self._stdin_listener = None
+        self._voice_loop_error = None
 
         # Initialize LLM client - factory auto-detects provider from flags
         self.llm_client = create_client(
             use_claude=use_claude,
             use_openai=use_chatgpt,
+            model=claude_model if use_claude else model,
+            base_url=base_url,
             system_prompt=system_prompt,
         )
 
@@ -80,12 +90,15 @@ class AudioClient:
         """Start a voice-based chat session."""
         try:
             self.log.debug("Initializing voice chat...")
-            print(
+            self._voice_loop_error = None
+            banner = (
                 "Starting voice chat.\n"
                 "Say 'stop' to quit application "
-                "or 'restart' to clear the chat history.\n"
-                "Press Enter key to stop during audio playback."
+                "or 'restart' to clear the chat history."
             )
+            if self.enable_tts and self._start_stdin_listener():
+                banner += "\nPress Enter to stop audio playback."
+            print(banner)
 
             # Initialize TTS before starting voice chat
             self.initialize_tts()
@@ -141,6 +154,17 @@ class AudioClient:
                         break
                     await asyncio.sleep(0.1)
 
+                if (
+                    self._voice_loop_error is None
+                    and self.whisper_asr
+                    and self.whisper_asr.capture_failed is True
+                ):
+                    self._voice_loop_error = RuntimeError(
+                        "Microphone capture stopped unexpectedly. List devices with "
+                        "`gaia test --test-type asr-list-audio-devices`, then pick one "
+                        "with `gaia talk --audio-device-index <N>`."
+                    )
+
             except KeyboardInterrupt:
                 self.log.info("Received keyboard interrupt")
                 print("\nStopping voice chat...")
@@ -167,13 +191,18 @@ class AudioClient:
                 self.whisper_asr.stop_recording()
                 self.log.info("Voice recording stopped")
 
+        if self._voice_loop_error is not None:
+            raise self._voice_loop_error
+
     async def process_voice_input(self, text, get_stats_callback=None):
         """Process transcribed voice input and get AI response"""
 
         # Initialize TTS streaming
         text_queue = None
-        tts_finished = threading.Event()  # Add event to track TTS completion
-        interrupt_event = threading.Event()  # Add event for keyboard interrupts
+        tts_thread = None
+        tts_errors = []
+        interrupt_event = self._playback_interrupt
+        interrupt_event.clear()
 
         try:
             # Check if we're currently generating and halt if needed
@@ -191,50 +220,30 @@ class AudioClient:
             self.log.debug(f"Sending message to LLM: {text[:50]}...")
             print("\nGaia: ", end="", flush=True)
 
-            # Keyboard listener thread for both generation and playback
-            def keyboard_listener():
-                input()  # Wait for any input
-
-                # Use LLMClient to halt generation
-                if self.llm_client.halt_generation():
-                    print("\nGeneration interrupted.")
-                else:
-                    print("\nInterrupt requested.")
-
-                interrupt_event.set()
-                if text_queue:
-                    text_queue.put("__HALT__")  # Signal TTS to stop immediately
-
-            # Start keyboard listener thread
-            keyboard_thread = threading.Thread(target=keyboard_listener)
-            keyboard_thread.daemon = True
-            keyboard_thread.start()
+            # Enter interrupts generation and playback (one listener per session).
+            self._start_stdin_listener()
 
             if self.enable_tts:
-                text_queue = queue.Queue(maxsize=100)
+                text_queue = queue.Queue()
 
                 # Define status callback to update speaking state
                 def tts_status_callback(is_speaking):
                     self.is_speaking = is_speaking
-                    if not is_speaking:  # When TTS finishes speaking
-                        tts_finished.set()
-                        if self.whisper_asr:
-                            self.whisper_asr.resume_recording()
-                    else:  # When TTS starts speaking
-                        if self.whisper_asr:
-                            self.whisper_asr.pause_recording()
                     self.log.debug(f"TTS speaking state: {is_speaking}")
 
-                self.tts_thread = threading.Thread(
-                    target=self.tts.generate_speech_streaming,
-                    args=(text_queue,),
-                    kwargs={
-                        "status_callback": tts_status_callback,
-                        "interrupt_event": interrupt_event,
-                    },
-                    daemon=True,
-                )
-                self.tts_thread.start()
+                def run_tts():
+                    try:
+                        self.tts.generate_speech_streaming(
+                            text_queue,
+                            status_callback=tts_status_callback,
+                            interrupt_event=interrupt_event,
+                        )
+                    except Exception as error:
+                        tts_errors.append(error)
+
+                tts_thread = threading.Thread(target=run_tts, daemon=True)
+                self.tts_thread = tts_thread
+                tts_thread.start()
 
             # Use LLMClient streaming instead of WebSocket
             accumulated_response = ""
@@ -292,10 +301,6 @@ class AudioClient:
                 if text_queue:
                     text_queue.put("__END__")
                 raise e
-            finally:
-                if self.tts_thread and self.tts_thread.is_alive():
-                    self.tts_thread.join(timeout=1.0)  # Add timeout to thread join
-                keyboard_thread.join(timeout=1.0)  # Add timeout to keyboard thread join
 
             print("\n")
             # Get performance stats from LLMClient
@@ -320,14 +325,22 @@ class AudioClient:
                 text_queue.put("__END__")
             raise e
         finally:
-            if self.tts_thread and self.tts_thread.is_alive():
-                # Wait for TTS to finish before resuming recording
-                tts_finished.wait(timeout=2.0)  # Add reasonable timeout
-                self.tts_thread.join(timeout=1.0)
-
-            # Only resume recording after TTS is completely finished
-            if self.whisper_asr:
+            if tts_thread and tts_thread.is_alive():
+                text_queue.put("__END__")
+                tts_thread.join()
+            self.is_speaking = False
+            self._drain_transcription_queue()
+            # A timed-out device may still be playing; keep capture muted.
+            if self.whisper_asr and not any(
+                isinstance(error, TimeoutError) for error in tts_errors
+            ):
                 self.whisper_asr.resume_recording()
+            if tts_errors:
+                raise RuntimeError(
+                    f"Text-to-speech failed: {tts_errors[0]}. "
+                    "Run `gaia test --test-type tts-streaming` to check audio "
+                    "output, or use `gaia talk --no-tts`."
+                ) from tts_errors[0]
 
     def initialize_tts(self):
         """Initialize TTS if enabled."""
@@ -342,27 +355,113 @@ class AudioClient:
                     f'Failed to initialize TTS:\n{e}\nInstall talk dependencies with: uv pip install ".[talk]"\nYou can also use --no-tts option to disable TTS'
                 )
 
+    def _start_stdin_listener(self) -> bool:
+        """Start the session's single Enter-to-interrupt listener (terminal only)."""
+        if self._stdin_listener is not None:
+            return True
+        try:
+            interactive = sys.stdin is not None and sys.stdin.isatty()
+        except (AttributeError, ValueError):
+            interactive = False
+        if not interactive:
+            return False
+
+        def listen():
+            while True:
+                try:
+                    input()
+                except (EOFError, OSError):
+                    self.log.debug("stdin closed; Enter-to-interrupt disabled")
+                    return
+                self._playback_interrupt.set()
+                if (
+                    self.llm_client.is_generating()
+                    and self.llm_client.halt_generation()
+                ):
+                    print("\nGeneration interrupted.")
+
+        self._stdin_listener = threading.Thread(
+            target=listen, name="gaia-talk-stdin", daemon=True
+        )
+        self._stdin_listener.start()
+        return True
+
+    def _drain_transcription_queue(self) -> None:
+        """Discard whatever was transcribed while the assistant was speaking."""
+        dropped = 0
+        while True:
+            try:
+                self.transcription_queue.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                break
+        if dropped:
+            self.log.debug(
+                "Dropped %d transcription(s) captured during playback", dropped
+            )
+
     async def speak_text(self, text: str) -> None:
-        """Speak text using initialized TTS, if available."""
+        """Speak text using initialized TTS, if available.
+
+        Returns only once playback has finished. The microphone stays paused
+        for the whole utterance and anything transcribed meanwhile is dropped
+        -- otherwise the assistant hears itself and answers its own reply.
+        """
         if not self.enable_tts:
             return
         if not getattr(self, "tts", None):
             self.log.debug("TTS is not initialized; skipping speak_text")
             return
+
         # Reuse the streaming path used in process_voice_input
         text_queue = queue.Queue(maxsize=100)
-        interrupt_event = threading.Event()
-        tts_thread = threading.Thread(
-            target=self.tts.generate_speech_streaming,
-            args=(text_queue,),
-            kwargs={"interrupt_event": interrupt_event},
-            daemon=True,
-        )
-        tts_thread.start()
-        # Send the whole text and end
-        text_queue.put(text)
-        text_queue.put("__END__")
-        tts_thread.join(timeout=5.0)
+        interrupt_event = self._playback_interrupt
+        interrupt_event.clear()  # drop an Enter pressed between replies
+
+        def tts_status_callback(is_speaking: bool) -> None:
+            # Resuming is left to the finally below, after the queue is drained.
+            self.is_speaking = is_speaking
+
+        tts_errors = []
+
+        def run_tts() -> None:
+            try:
+                self.tts.generate_speech_streaming(
+                    text_queue,
+                    status_callback=tts_status_callback,
+                    interrupt_event=interrupt_event,
+                )
+            except Exception as e:  # re-raised on the caller's thread below
+                tts_errors.append(e)
+
+        # Pause before the thread starts: synthesis latency would otherwise
+        # leave the mic live with the reply already queued.
+        if self.whisper_asr:
+            self.whisper_asr.pause_recording()
+        self.is_speaking = True
+        try:
+            tts_thread = threading.Thread(target=run_tts, daemon=True)
+            self.tts_thread = tts_thread
+            tts_thread.start()
+            # Send the whole text and end
+            text_queue.put(text)
+            text_queue.put("__END__")
+            # Full join. A timeout here resumes the mic mid-sentence, which is
+            # exactly the self-transcription this method exists to prevent.
+            tts_thread.join()
+            if tts_errors:
+                raise RuntimeError(
+                    f"Text-to-speech failed while speaking: {tts_errors[0]}. "
+                    "Run `gaia test --test-type tts-streaming` to check audio "
+                    "output, or use `gaia talk --no-tts`."
+                ) from tts_errors[0]
+        finally:
+            self.is_speaking = False
+            self._drain_transcription_queue()
+            if self.whisper_asr and not any(
+                isinstance(error, TimeoutError) for error in tts_errors
+            ):
+                self.whisper_asr.resume_recording()
 
     def _check_mic_levels(self):
         """Brief microphone level check at startup to verify audio capture."""
@@ -514,7 +613,13 @@ class AudioClient:
                         )
 
         except Exception as e:
-            self.log.error(f"Error in process_audio_wrapper: {str(e)}")
+            self.log.error(f"Error in process_audio_wrapper: {e}", exc_info=True)
+            error = RuntimeError(
+                f"Voice chat stopped: the voice loop crashed ({type(e).__name__}: {e}). "
+                "See the log above for the full traceback."
+            )
+            error.__cause__ = e
+            self._voice_loop_error = error
         finally:
             if self.whisper_asr:
                 self.whisper_asr.stop_recording()

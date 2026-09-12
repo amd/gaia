@@ -199,6 +199,14 @@ class OutputHandler(ABC):
     blocking_confirmation: bool = False
     """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
 
+    supports_stdin_prompts: bool = False
+    """Whether the person driving this handler is on the *process's* stdin.
+
+    A server-side handler shares the process stdin with the operator but not
+    with the requester, so a blocking ``input()`` there hangs the request
+    forever while stealing the operator's keystrokes.
+    """
+
     auto_approve_gated_tools: bool = False
     """Explicit opt-in: approve confirmation-gated tools with no human present.
 
@@ -684,6 +692,8 @@ class TerminalConfirmationMixin:
     Mix in alongside ``OutputHandler``, whose ``deny_tool_execution`` /
     ``auto_approve_confirmations_enabled`` / progress hooks this relies on.
     """
+
+    supports_stdin_prompts: bool = True
 
     CONFIRMATION_PROMPT = "Allow this? [y]es / [N]o / [a]lways for this tool: "
     CONFIRMATION_PROMPT_NO_ALWAYS = "Allow this? [y]es / [N]o: "

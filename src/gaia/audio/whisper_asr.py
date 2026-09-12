@@ -133,6 +133,10 @@ class WhisperAsr(AudioRecorder):
             while self.is_recording:
                 try:
                     frames, _ = self.stream.read(self.CHUNK)
+                    with self.pause_lock:
+                        if self.is_paused:
+                            audio_buffer = np.array([], dtype=np.float32)
+                            continue
                     data = frames[:, 0].copy()  # Extract mono channel
                     audio_buffer = np.concatenate((audio_buffer, data))
 
@@ -162,7 +166,7 @@ class WhisperAsr(AudioRecorder):
                     break
 
             # Process any remaining audio
-            if len(audio_buffer) > self.RATE * 0.5:  # At least 0.5 seconds
+            if not self.is_paused and len(audio_buffer) > self.RATE * 0.5:
                 self.audio_queue.put(audio_buffer.copy())
 
         finally:
@@ -172,6 +176,7 @@ class WhisperAsr(AudioRecorder):
 
     def start_recording_streaming(self):
         """Start recording in streaming mode."""
+        self.record_thread = None
         self.is_recording = True
         self.record_thread = threading.Thread(target=self._record_audio_streaming)
         self.record_thread.start()
