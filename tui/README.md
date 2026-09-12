@@ -124,6 +124,10 @@ gaia-tui status             # is the background service running, and what do I h
 gaia-tui version
 ```
 
+`--bypass-permissions` is available only for agents launched as subprocesses.
+Daemon-backed agents, including a Hub-installed flagship, reject it before
+readiness checks; omit the flag to run with confirmation prompts enabled.
+
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
 ---

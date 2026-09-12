@@ -60,6 +60,9 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, bypassPermis
 		return fmt.Errorf("the catalog has no %q entry, so there is nothing to launch. "+
 			"Report this with GAIA diagnostics", catalog.FlagshipID)
 	}
+	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+		return err
+	}
 	m := root.NewFlagshipModel(*agent, dev).
 		WithBypassPermissions(bypassPermissions).
 		WithClaude(useClaude, claudeModel).
@@ -221,6 +224,10 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	agent := cat.Get(agentID)
 	if agent == nil {
 		return 1, fmt.Errorf("no agent %q in the catalog. %s", agentID, knownIDs(cat))
+	}
+
+	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+		return 1, err
 	}
 
 	// A one-shot is always bounded — that is the whole point — so an unbounded
