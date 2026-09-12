@@ -3,8 +3,13 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import pytest
+
 from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
+    TIER_CONFIRM,
+    TIER_REFUSE,
+    TIER_UNSUPPORTED,
     ShellToolsMixin,
 )
 
@@ -83,17 +88,19 @@ class TestBlockedCommands:
 
 
 class TestGitSubcommands:
-    def test_git_push_blocked(self):
+    def test_git_push_needs_confirmation(self):
         result = validate("git push origin main")
         assert result is not None
+        assert result["tier"] == TIER_CONFIRM
         assert (
             "push" in result["error"].lower()
             or "not allowed" in result["error"].lower()
         )
 
-    def test_git_commit_blocked(self):
+    def test_git_commit_needs_confirmation(self):
         result = validate("git commit -m 'msg'")
         assert result is not None
+        assert result["tier"] == TIER_CONFIRM
 
     def test_git_diff_allowed(self):
         assert validate("git diff HEAD") is None
@@ -367,3 +374,108 @@ class TestPowerShellFiltering:
             validate("powershell -Command Get-Process | Where-Object Name -eq svchost")
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Which tier a block lands in, and what full access lifts
+# ---------------------------------------------------------------------------
+
+
+class _Host(ShellToolsMixin):
+    """A host whose console decides whether full access is on."""
+
+    debug = False
+
+    def __init__(self, full_access=False):
+        super().__init__()
+
+        class _Console:
+            def auto_approve_confirmations_enabled(self):
+                return full_access
+
+        self.console = _Console()
+
+
+def refusal(command, full_access=False):
+    """What the pre-prompt gate returns — None means the user gets asked."""
+    return _Host(full_access).policy_refusal_for_call(
+        "run_shell_command", {"command": command}
+    )
+
+
+class TestTiers:
+    """A block is refused only when a yes/no prompt cannot honestly describe it."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m wip",
+            "git push origin main",
+            "npm test",
+            "rm notes.txt",
+            "find . -delete",
+            "sort -o out.txt in.txt",
+        ],
+    )
+    def test_a_describable_write_is_confirmable(self, command):
+        assert validate(command)["tier"] == TIER_CONFIRM
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            # Runs a script behind a status-looking subcommand.
+            "git -c core.pager=evil.sh status",
+            "git --exec-path=/tmp/evil status",
+            # A prompt cannot show what base64 will execute.
+            "powershell -EncodedCommand aQBlAHgA",
+        ],
+    )
+    def test_an_undescribable_escalation_is_refused(self, command):
+        assert validate(command)["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize(
+        "command", ["cat a && rm b", "echo hi > f", "cat 'unterminated"]
+    )
+    def test_what_the_runner_cannot_execute_is_unsupported(self, command):
+        error, _ = _Host()._validate_shell_command(command)
+        assert error["tier"] == TIER_UNSUPPORTED
+
+
+class TestConfirmableCommandsReachThePrompt:
+    """The regression this tier exists to prevent: refusing an approvable call."""
+
+    @pytest.mark.parametrize(
+        "command",
+        ["git commit -m wip", "git push origin main", "npm test", "rm notes.txt"],
+    )
+    def test_not_refused_before_the_prompt(self, command):
+        assert refusal(command) is None
+
+
+class TestFullAccess:
+    """Full access means full access — every policy refusal lifts."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m wip",
+            "rm -rf /tmp/x",
+            "git -c core.pager=evil.sh status",
+            "powershell -EncodedCommand aQBlAHgA",
+        ],
+    )
+    def test_policy_refusals_lift(self, command):
+        assert refusal(command, full_access=True) is None
+
+    @pytest.mark.parametrize("command", ["cat a && rm b", "cat 'unterminated"])
+    def test_runner_limits_do_not_lift(self, command):
+        """Not a permission: the runner has no shell, so this cannot run at all.
+
+        Letting it through would execute ``cat a '&&' rm b`` and report success.
+        """
+        assert refusal(command, full_access=True) is not None
+
+    def test_default_is_not_full_access(self):
+        """Off unless asked for, and the REFUSE tier still bites in default mode."""
+        assert _Host().full_access_enabled() is False
+        assert refusal("git -c core.pager=evil.sh status") is not None

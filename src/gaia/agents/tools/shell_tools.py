@@ -20,8 +20,16 @@ from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
 
-# Security: WHITELIST approach - only allow explicitly safe commands
-# This is much safer than a blacklist which always misses dangerous commands
+# Commands that run WITHOUT ASKING — not the set of commands that exist.
+#
+# Membership here buys one thing: no confirmation prompt. A command that is not
+# on this list is not refused; it is shown to the user, who approves it or does
+# not (``TIER_CONFIRM``). That distinction is the whole permission model — an
+# allowlist used as a refusal list makes the agent unable to do ordinary work
+# its user is sitting right there to approve.
+#
+# So the bar for adding an entry is "safe to run unattended, every time, with
+# arguments nobody reviewed", which in practice still means read-only.
 ALLOWED_COMMANDS = {
     # File listing and navigation (READ-ONLY)
     "ls",
@@ -108,6 +116,42 @@ DANGEROUS_FIND_ACTIONS = {
     "-fprintf",
     "-fls",
 }
+
+# How a blocked command is blocked. Mirrors the three tiers in
+# ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
+# module keeps its light import.
+#
+# REFUSE is for escalations a single yes/no prompt cannot honestly describe:
+# base64-encoded PowerShell, a git option that runs a script behind a
+# ``status``-looking subcommand, a granted CLI's credential-printing action.
+# Asking about those trains a user to click yes on something the prompt text
+# misrepresents.
+#
+# CONFIRM is everything else that is not a read: `git commit`, `npm test`,
+# `rm file`. The user is shown the exact command and answers y / n / always.
+# These MUST NOT be refused here — refusing a command that would run on
+# approval is the dead end this tier exists to remove.
+TIER_CONFIRM = "confirm"
+TIER_REFUSE = "refuse"
+
+# Not a permission at all: the runner executes an argv list, never a shell, so
+# operators (``&&``, ``>``, ``;``) and unparseable quoting cannot run no matter
+# who approves them. Full access does NOT lift this — passing ``cat x && rm y``
+# through would execute ``cat x '&&' rm y`` and report success, which is a
+# silent wrong answer rather than a permitted one.
+TIER_UNSUPPORTED = "unsupported"
+
+
+def _blocked(tier: str, error: str, **extra) -> dict:
+    """One blocked-command result, tagged with the tier that decided it."""
+    return {
+        "status": "error",
+        "error": error,
+        "has_errors": True,
+        "tier": tier,
+        **extra,
+    }
+
 
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
@@ -431,6 +475,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
+                    "tier": TIER_UNSUPPORTED,
                     "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
                     "has_errors": True,
                     "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
@@ -444,6 +489,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
+                    "tier": TIER_UNSUPPORTED,
                     "error": f"Invalid command syntax: {exc}",
                     "has_errors": True,
                 },
@@ -453,7 +499,12 @@ class ShellToolsMixin:
         segments = _split_pipeline(cmd_parts)
         if not segments:
             return (
-                {"status": "error", "error": "Empty command", "has_errors": True},
+                {
+                    "status": "error",
+                    "tier": TIER_UNSUPPORTED,
+                    "error": "Empty command",
+                    "has_errors": True,
+                },
                 [],
             )
 
@@ -475,16 +526,24 @@ class ShellToolsMixin:
     ) -> Optional[Dict[str, Any]]:
         """The refusal this call has already earned, before anyone is asked.
 
-        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
-        must never raise a confirmation prompt: asking someone to approve
-        ``gh auth token`` when the answer is already no trains them to click
-        through, and frames a blocked action as merely risky. Refuse it first
-        and say why.
+        Read by ``Agent._policy_refusal``, which runs *before* the confirmation
+        prompt. Only two things may stop a command here:
 
-        The mirror of that rule is what makes writes work: a command that WOULD
-        run on approval must not be refused here. ``_validate_shell_command``
-        returns None for a granted binary's confirmable write, so it falls
-        through to the prompt instead of dying in front of it.
+        ``TIER_REFUSE``
+            An escalation a yes/no cannot honestly describe — ``gh auth token``,
+            base64 PowerShell, ``git -c`` running a script behind ``status``.
+            Prompting for these trains the user to approve text that
+            misrepresents what will happen. Full access lifts them.
+        ``TIER_UNSUPPORTED``
+            Not a permission: the runner has no shell, so an operator or
+            unparseable quoting cannot execute whoever approves it. Full access
+            does NOT lift these — running them garbled and reporting success
+            would be a silent wrong answer.
+
+        Everything else — ``git commit``, ``npm test``, ``rm notes.txt`` — must
+        fall through to the prompt. Refusing a command that would run on
+        approval is the dead end this tier exists to remove, and is what left
+        the agent unable to do ordinary work with its user sitting right there.
 
         Duck-typed rather than an override — ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -495,13 +554,35 @@ class ShellToolsMixin:
         if not isinstance(command, str):
             return None
         error, _ = self._validate_shell_command(command)
-        if error is not None:
-            logger.info(
-                "Refusing %r before the confirmation prompt: %s",
-                command,
-                error.get("error"),
-            )
+        if error is None:
+            return None
+        tier = error.get("tier")
+        if tier == TIER_UNSUPPORTED:
+            pass  # never lifted, in either mode
+        elif tier != TIER_REFUSE or self.full_access_enabled():
+            return None
+        logger.info(
+            "Refusing %r before the confirmation prompt: %s",
+            command,
+            error.get("error"),
+        )
         return error
+
+    def full_access_enabled(self) -> bool:
+        """True when the user put this session in full-access mode.
+
+        Full access is the one place blanket trust lives: opted into
+        deliberately (``--bypass-permissions`` / ``/bypass confirm``) and shown
+        on every frame while it is on. It means what it says — nothing is
+        refused, because a refusal list that blocks ``git -c`` while permitting
+        ``rm -rf ~`` protects nobody and only makes the mode dishonest.
+
+        Duck-typed on the console, which owns the answer for every host (CLI
+        prompt, Agent UI modal, unattended runner).
+        """
+        console = getattr(self, "console", None)
+        enabled = getattr(console, "auto_approve_confirmations_enabled", None)
+        return bool(enabled()) if callable(enabled) else False
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -673,6 +754,7 @@ class ShellToolsMixin:
             if binary not in granted_binaries:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": (
                         f"Command '{binary}' is not available to this agent. It is "
                         "granted only to a skill that declares "
@@ -686,6 +768,7 @@ class ShellToolsMixin:
             if decision.outcome == REFUSE:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": decision.message,
                     "has_errors": True,
                     "hint": (
@@ -704,6 +787,7 @@ class ShellToolsMixin:
                 if resolve_error is not None:
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": resolve_error,
                         "has_errors": True,
                         "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
@@ -714,6 +798,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
                         "has_errors": True,
                         "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
@@ -726,6 +811,7 @@ class ShellToolsMixin:
             if cmd_words & dangerous_wmic_ops:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
                     "has_errors": True,
                     "hint": "Use 'wmic <alias> get <properties>' for safe queries",
@@ -752,6 +838,7 @@ class ShellToolsMixin:
             if any(part.lower() in _BLOCKED_PS_FLAGS for part in cmd_parts[1:]):
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
@@ -770,6 +857,7 @@ class ShellToolsMixin:
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
                     "has_errors": True,
                     "hint": "Use Get-* cmdlets for safe queries",
@@ -787,6 +875,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
@@ -799,6 +888,7 @@ class ShellToolsMixin:
                 if part.lower() in DANGEROUS_FIND_ACTIONS:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": (
                             f"find action '{part}' is not allowed: it can run "
                             "arbitrary commands, delete, or write files, "
@@ -831,6 +921,7 @@ class ShellToolsMixin:
                 if is_output:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
@@ -863,6 +954,7 @@ class ShellToolsMixin:
             if len(operands) >= 2:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
@@ -894,9 +986,13 @@ class ShellToolsMixin:
                 }
             return {
                 "status": "error",
+                "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
+                "hint": (
+                    "Commands outside the no-prompt list run once the user "
+                    "approves them; they are not refused."
+                ),
                 "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
@@ -937,6 +1033,8 @@ class ShellToolsMixin:
                         "hint": "Rate limiting prevents excessive command execution",
                     }
 
+                full_access = self.full_access_enabled()
+
                 # Validate working directory if specified
                 if working_directory:
                     if not os.path.exists(working_directory):
@@ -956,7 +1054,7 @@ class ShellToolsMixin:
                         }
 
                     # Validate path is allowed
-                    if hasattr(self, "path_validator"):
+                    if hasattr(self, "path_validator") and not full_access:
                         if not self.path_validator.is_path_allowed(working_directory):
                             return {
                                 **NOT_EXECUTED,
@@ -964,7 +1062,7 @@ class ShellToolsMixin:
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
                             }
-                    elif hasattr(self, "_is_path_allowed"):
+                    elif hasattr(self, "_is_path_allowed") and not full_access:
                         if not self._is_path_allowed(working_directory):
                             return {
                                 **NOT_EXECUTED,
@@ -977,11 +1075,19 @@ class ShellToolsMixin:
                 else:
                     cwd = str(Path.cwd())
 
-                # Operators, syntax, and the per-command whitelist. Shared with
-                # the pre-flight that runs before the confirmation prompt, so a
-                # command refused there is refused here for the same reason.
+                # Operators, syntax, and the per-command whitelist. Shares one
+                # implementation with the pre-flight that runs before the
+                # confirmation prompt, so the two can never disagree.
+                #
+                # Only the REFUSE tier stops a command here. A CONFIRM-tier
+                # command has already been through ``Agent._execute_tool``'s
+                # gate — the same single funnel that has always gated
+                # ``write_file`` — so re-refusing it would undo the approval the
+                # user just gave. Full access skips the check outright.
                 error, segments = self._validate_shell_command(command)
-                if error:
+                if error and error.get("tier") == TIER_UNSUPPORTED:
+                    return error
+                if error and not full_access and error.get("tier") == TIER_REFUSE:
                     return error
 
                 granted = skill_granted_binaries(self)
@@ -994,7 +1100,7 @@ class ShellToolsMixin:
                 scanned = [
                     seg for seg in segments if not _is_granted_binary(seg[0], granted)
                 ]
-                if hasattr(self, "path_validator"):
+                if hasattr(self, "path_validator") and not full_access:
                     for arg in [a for seg in scanned for a in seg[1:]]:
                         candidate_path = arg
                         if arg.startswith("-"):
@@ -1060,7 +1166,7 @@ class ShellToolsMixin:
                         command if len(segments) == 1 else " ".join(seg),
                         granted_binaries=granted,
                     )
-                    if error:
+                    if error and error.get("tier") == TIER_REFUSE and not full_access:
                         return error
 
                 # Log command execution (debug mode)
