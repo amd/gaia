@@ -573,3 +573,13 @@ finish (or close an idle session) and retry the same `/query`.
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.
+
+## TUI inference providers
+
+The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
+Keys are entered in a masked field and sent directly to local Lemonade's runtime
+auth API, never as agent queries. `/model` lists supported discovered cloud and
+downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+when available. Cloud chat sends conversation history to the selected provider;
+embeddings remain on Lemonade. The status event names the actual provider and
+marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

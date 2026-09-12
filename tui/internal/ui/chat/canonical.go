@@ -69,7 +69,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			}
 			// Keep the legacy flag in sync — renderClaudeChip is still the
 			// pre-first-event fallback (see renderModelChip).
-			m.claudeMode = e.ModelRemote
+			m.claudeMode = e.ModelBackend == "claude"
 			break
 		}
 

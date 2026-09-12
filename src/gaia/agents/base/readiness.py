@@ -296,7 +296,7 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
 
     resp = requests.get(
         f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
     )
     resp.raise_for_status()
@@ -377,7 +377,7 @@ def pull_model(probe_base: str, model_id: str) -> None:
     resp = requests.post(
         f"{probe_base}/pull",
         json={"model_name": model_id},
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=PULL_TIMEOUT,
     )
     resp.raise_for_status()

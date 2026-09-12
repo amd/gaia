@@ -74,7 +74,7 @@ async def _lemonade_post(
         import httpx  # pylint: disable=import-outside-toplevel
 
         base_url = _get_lemonade_base_url()
-        headers = lemonade_auth_headers(resolve_lemonade_api_key())
+        headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 f"{base_url}/{path}", json=payload, headers=headers
@@ -253,7 +253,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # download itself can take many minutes between progress events on a slow
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-    headers = lemonade_auth_headers(resolve_lemonade_api_key())
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
     try:
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             async with client.stream(
@@ -464,7 +464,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = _get_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
             try:
@@ -804,7 +804,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
         import httpx
 
         base_url = _get_lemonade_base_url()
-        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?
             models_resp = await client.get(
