@@ -314,6 +314,21 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Toggle(msg)
 		return m, nil
 
+	case tea.MouseMsg:
+		// The help panel is drawn over the whole window, and on THIS path the
+		// root model owns it — the chat model's own gate never sees it. A
+		// click here must not reach the transcript behind the panel, where it
+		// would open a link or copy a message the reader cannot see. The wheel
+		// scrolls the panel, the same as the arrow keys below.
+		if m.help.Open {
+			if tea.MouseEvent(msg).IsWheel() {
+				m.help.HandleWheel(
+					tea.MouseEvent(msg).Button == tea.MouseButtonWheelUp,
+					m.width, m.height)
+			}
+			return m, nil
+		}
+
 	case tea.KeyMsg:
 		if m.help.Open {
 			// Navigation keys scroll the open panel; anything else dismisses

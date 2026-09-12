@@ -33,6 +33,13 @@ const (
 // The sequences are zero-width — ansi.StringWidth ignores them and ansi.Strip
 // removes them — so the transcript's own column arithmetic, the click
 // hit-testing (urlAt) and the row spans are all untouched.
+//
+// Known edge, shared with the click path and older than this: prose wraps
+// before it gets here, and a single URL longer than the measure has to break
+// across two lines. Each half is then its own match, so the first is marked up
+// as a link to a truncated URI. Marking only what is on the line is the honest
+// reading — the alternative is guessing that two lines are one link — and a
+// URL that long is already unreadable on the row it is printed on.
 func linkify(content string, width int) string {
 	if width <= 0 || !strings.Contains(content, "http") {
 		return content
