@@ -1,0 +1,178 @@
+---
+title: "Terminal UI"
+description: "The GAIA terminal app — install it, get past setup, pick where inference runs, and use it day to day"
+icon: "terminal"
+---
+
+# GAIA Terminal UI — User Manual
+
+`gaia-tui` is GAIA in your terminal. It opens straight into the flagship `gaia`
+agent — conversation, documents, data, web research, memory, skills. There is
+nothing to browse and nothing to pick.
+
+<Info>
+Building it, driving it from a script, or debugging it? That is the
+[developer manual](/reference/tui-dev). This page is about using it.
+</Info>
+
+## Install
+
+```bash
+curl -fsSL https://amd-gaia.ai/install.sh | sh    # macOS, Linux
+```
+
+```powershell
+irm https://amd-gaia.ai/install.ps1 | iex        # Windows
+```
+
+Then:
+
+```bash
+gaia init      # downloads the local models — several GB, give it a while
+gaia-tui
+```
+
+The binary installs as `gaia-tui`, never as `gaia` — the two have different
+subcommands and would collide on your `PATH`. Direct downloads per platform are
+listed in [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md);
+they still need the `gaia` CLI on your `PATH`, so the installer is the shorter
+route.
+
+## First run: the setup gate
+
+You get a splash frame, then a readiness gate, then chat. The gate checks the
+things that would otherwise make the agent fail at its first question:
+
+| Row | What it means | If it blocks |
+|---|---|---|
+| **GAIA agent** | the `gaia-agent` binary is on this machine | Re-run the installer. There is no in-TUI download for it. |
+| **Lemonade** | the model server is running | `gaia lemonade embedded start`, or start your own install |
+| **Language model** | the models are downloaded | press **f**, or run `gaia init` |
+
+Keys on this screen: **f** runs the fix that can be automated, **p** chooses an
+AI provider, **r** re-checks, **d** shows detail, **esc** quits.
+
+<Warning>
+The **Language model** row covers the embedding model as well as the chat model,
+and it is the embedder that most often blocks a machine that already has a chat
+model working. Its message says "Several GB" because that is the usual case;
+if chat already works for you, the missing piece is the ~300 MB
+`user.embeddinggemma-300m-GGUF`, and **f** will fetch just that.
+</Warning>
+
+Embeddings are always computed locally, even when chat runs in the cloud — they
+are what document search, memory and the code index are built on. That is why
+picking a remote provider does not remove this row.
+
+## Choosing where inference runs
+
+Press **p** at setup, or type `/provider` in chat. Three destinations (the
+picker ships with Lemonade cloud-provider support; on a build without it,
+inference is local and the key is unused):
+
+- **Local** — on this machine, using a downloaded model. Nothing leaves.
+- **Fireworks AI** — via Lemonade. Needs an API key.
+- **AMD LLM Gateway** — via Lemonade, against your organisation's
+  OpenAI-compatible endpoint.
+
+Cloud chat is routed *through* your Lemonade server, not direct from the agent.
+It needs **Lemonade 11.8.1 or later**, and your conversation is sent to that
+provider and may incur charges. The header names the active model so remote
+inference is never silent.
+
+For Fireworks: select it, paste your key into the masked field, press Enter,
+then choose from the discovered models. Keys go from the TUI straight to your
+local Lemonade and never pass through the conversation or the agent.
+
+<Note>
+Pasted keys live in **Lemonade's process memory** and are gone when it restarts —
+including when you start a fresh embedded instance. `LEMONADE_FIREWORKS_API_KEY`
+set in the Lemonade *server* process outlives a restart and takes precedence.
+"No chat models discovered" after connecting means the key, the account's model
+access, or the URL — not a network fault.
+</Note>
+
+Switching providers mid-session keeps your conversation and loaded skills. A
+failed switch keeps the previous model.
+
+## Using it
+
+Type and press Enter. **Alt+Enter** for a new line, **↑/↓** to scroll,
+**Ctrl+C** to quit, **Esc** to cancel a running turn.
+
+`/help` lists the commands. The ones worth knowing early:
+
+| Command | Does |
+|---|---|
+| `/provider` | switch where inference runs |
+| `/model <id>` | switch to an already-discovered model |
+| `/new` | start a fresh conversation |
+| `/bypass off` | turn off permission bypass if it was enabled |
+
+The status line shows the agent state, the current step, and — in developer
+mode — per-turn timings.
+
+## When GAIA asks permission
+
+Some tools do things that are hard to undo. Those stop and ask:
+
+```
+DESTRUCTIVE  Confirm: browser_login
+
+ Run 'browser_login' with url="https://github.com/login"?
+
+ This is a destructive action and may not be reversible.
+
+ y run once · n/esc deny · waits for you
+```
+
+**y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
+error — the agent is told and carries on.
+
+The prompt always names the tool *and its arguments*, because the argument is
+usually the part that matters. An "always allow" answer, where offered, is
+scoped to that specific call — approving `gh issue list` once does not hand over
+your shell for the session.
+
+`--bypass-permissions` runs every tool without asking. The TUI shows a
+persistent warning the whole time it is on.
+
+## Running another agent
+
+```bash
+gaia-tui run email                             # chat with it
+gaia-tui run email --query "triage my inbox"   # one-shot, answer on stdout
+```
+
+Installing and removing hub agents is the Python CLI's job:
+
+```bash
+gaia hub list
+gaia hub install email --trust
+```
+
+## Troubleshooting
+
+**Colours look wrong or absent.** Some terminals never answer the colour query
+(SSH, tmux, a CI log). Force it: `GAIA_TUI_THEME=light gaia-tui`, or `dark`.
+
+**"not downloaded yet" after you already downloaded a model.** It is almost
+always the embedder. Press **f**, or `gaia init --check` to see exactly which
+model id is missing.
+
+**The gate says Lemonade is fine but chat fails.** The gate checks that the
+server answers; it does not load a model. Check the server's own log —
+`~/.gaia/lemonade/lemond.log` for the embedded instance.
+
+**A turn is taking minutes.** On a local model most of that is prompt
+processing, not generation — the status line's `ttft` is the honest number.
+Cloud providers trade that for network latency and privacy.
+
+**It quit with no message.** `gaia-tui status` shows the background service and
+what is installed.
+
+## Related
+
+- [Developer manual](/reference/tui-dev) — build it, drive it, debug it
+- [Browser use](/guides/browser-use) — signing in to sites and acting on pages
+- [CLI reference](/reference/cli) — the `gaia` command
