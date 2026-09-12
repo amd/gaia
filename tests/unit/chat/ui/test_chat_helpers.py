@@ -24,6 +24,7 @@ from gaia.ui._chat_helpers import (
     _compute_allowed_paths,
     _empty_answer_outcome,
     _find_last_tool_step,
+    _managed_documents_dir,
     _resolve_rag_paths,
     set_agent_registry,
 )
@@ -227,27 +228,47 @@ class TestResolveRagPaths:
 
 
 class TestComputeAllowedPaths:
-    """Tests for _compute_allowed_paths()."""
+    """Tests for _compute_allowed_paths().
+
+    The scope is the attached documents themselves. These tests used to assert
+    the opposite — that each document's *parent directory* was granted — which
+    pinned the bug: attaching one file from ``$HOME`` allowlisted the whole home
+    tree for a session that also holds ``write_file`` and shell tools.
+    """
 
     def test_empty_paths_returns_cwd(self):
         result = _compute_allowed_paths([])
-        assert len(result) == 1
-        assert result[0] == str(Path.cwd())
+        assert set(result) == {str(Path.cwd().resolve()), str(_managed_documents_dir())}
 
-    def test_single_file_returns_parent_dir(self):
-        result = _compute_allowed_paths(["/docs/project/report.pdf"])
-        assert len(result) == 1
-        assert Path(result[0]) == Path("/docs/project")
+    def test_single_file_grants_the_file_not_its_directory(self):
+        result = {Path(p) for p in _compute_allowed_paths(["/docs/project/report.pdf"])}
+        assert result == {
+            Path("/docs/project/report.pdf").resolve(),
+            _managed_documents_dir(),
+        }
 
-    def test_multiple_files_same_dir_deduped(self):
+    def test_siblings_of_an_attached_file_are_not_granted(self):
+        result = _compute_allowed_paths(["/docs/project/a.pdf"])
+        assert Path("/docs/project") not in {Path(p) for p in result}
+
+    def test_multiple_files_same_dir_each_granted(self):
         result = _compute_allowed_paths(
             [
                 "/docs/project/a.pdf",
                 "/docs/project/b.pdf",
             ]
         )
-        assert len(result) == 1
-        assert Path(result[0]) == Path("/docs/project")
+        assert {Path(p) for p in result} == {
+            Path("/docs/project/a.pdf").resolve(),
+            Path("/docs/project/b.pdf").resolve(),
+            _managed_documents_dir(),
+        }
+
+    def test_the_agent_keeps_a_place_to_write(self):
+        """Grant the files, not their folders — but not nowhere to save output."""
+        result = {Path(p) for p in _compute_allowed_paths(["/docs/project/a.pdf"])}
+
+        assert _managed_documents_dir() in result
 
     def test_multiple_files_different_dirs(self):
         result = _compute_allowed_paths(
@@ -257,8 +278,35 @@ class TestComputeAllowedPaths:
             ]
         )
         result_set = {Path(p) for p in result}
-        assert Path("/docs/project") in result_set
-        assert Path("/home/user/data") in result_set
+        assert Path("/docs/project/a.pdf").resolve() in result_set
+        assert Path("/home/user/data/b.csv").resolve() in result_set
+
+    def test_a_document_saved_in_home_does_not_allowlist_home(self):
+        """The exact shape of the bug: one attachment, whole home tree granted."""
+        attached = Path.home() / "notes.txt"
+
+        result = {Path(p) for p in _compute_allowed_paths([str(attached)])}
+
+        assert Path.home().resolve() not in result
+        assert attached.resolve() in result
+
+    def test_no_documents_and_an_unsafe_cwd_keeps_managed_documents(self, monkeypatch):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: Path.home()))
+
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
+
+    def test_cwd_inside_a_protected_directory_is_not_granted(
+        self, tmp_path, monkeypatch
+    ):
+        protected = tmp_path / "protected"
+        child = protected / "service"
+        child.mkdir(parents=True)
+        monkeypatch.setattr(
+            "gaia.ui._chat_helpers.BLOCKED_DIRECTORIES", {str(protected)}
+        )
+        monkeypatch.chdir(child)
+
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
 
     def test_returns_list_type(self):
         result = _compute_allowed_paths(["/some/path/file.txt"])

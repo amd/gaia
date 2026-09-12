@@ -33,7 +33,7 @@ def _make_messages(n_pairs: int, msg_len: int = 10) -> list:
 
 def _make_mock_db(messages: list, session_id: str = "sess-1") -> MagicMock:
     db = MagicMock()
-    db.get_messages.return_value = messages
+    db.get_recent_messages.return_value = messages
     db.get_session.return_value = {"session_id": session_id, "document_ids": []}
     db.list_documents.return_value = []
     return db

@@ -1612,3 +1612,238 @@ def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
 
     with pytest.raises(InstallError, match="every pip frontend failed"):
         installer._default_run_pip(["--target", "/nonexistent", "some-package"])
+
+
+# ---------------------------------------------------------------------------
+# A failed FIRST install must not be recorded as installed (#3549)
+# ---------------------------------------------------------------------------
+#
+# `_write_sentinel` ran before `_add_wheel_agent_to_active_env_path`, which
+# raises when the active environment's site-packages is not writable. The
+# failure handler only restores a *backup*, and a first install has none — so
+# the command exited non-zero while the agent read as installed and was
+# importable in no new process. Re-running did not clear it: the record looked
+# valid.
+
+
+def _fail_env_priming(monkeypatch, exc=None):
+    """Make the last step of a wheel install fail, as a read-only env would."""
+
+    def boom(*_args, **_kwargs):
+        raise exc or InstallError("site-packages is not writable")
+
+    monkeypatch.setattr(installer, "_add_wheel_agent_to_active_env_path", boom)
+
+
+def test_a_failed_first_install_is_not_recorded_as_installed(tmp_path, monkeypatch):
+    manifest = _manifest()
+    _fail_env_priming(monkeypatch)
+
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    assert read_sentinel("demo", tmp_path) is None
+    assert "demo" not in list_installed(tmp_path)
+
+
+def test_a_failed_first_install_leaves_nothing_behind(tmp_path, monkeypatch):
+    manifest = _manifest()
+    _fail_env_priming(monkeypatch)
+
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    assert not (tmp_path / "demo").exists()
+
+
+def test_retrying_after_a_failed_first_install_succeeds(tmp_path, monkeypatch):
+    """The state a stale sentinel used to make unrecoverable."""
+    manifest = _manifest()
+    _fail_env_priming(monkeypatch)
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    monkeypatch.undo()
+    result = install(
+        "demo",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_make_fetcher(manifest),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+    )
+
+    assert result.version == "1.0.0"
+    assert read_sentinel("demo", tmp_path).version == "1.0.0"
+
+
+def test_a_failed_UPDATE_still_rolls_back_to_the_previous_version(
+    tmp_path, monkeypatch
+):
+    """The existing behaviour must not regress: a backup wins over deletion."""
+    v1 = _manifest(version="1.0.0")
+    install(
+        "demo",
+        manifest=v1,
+        base_url=BASE,
+        fetcher=_make_fetcher(v1),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+    )
+
+    v2 = _manifest(version="2.0.0", artifact_bytes=b"wheel-v2")
+    _fail_env_priming(monkeypatch)
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=v2,
+            base_url=BASE,
+            fetcher=_make_fetcher(v2, artifact_bytes=b"wheel-v2"),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    assert read_sentinel("demo", tmp_path).version == "1.0.0"
+
+
+def test_the_sentinel_is_written_after_every_step_that_can_fail(tmp_path):
+    """Ordering is the fix; pin it so a future edit cannot undo it."""
+    import inspect
+
+    source = inspect.getsource(installer.install)
+    prime = source.index("_add_wheel_agent_to_active_env_path(")
+    sentinel = source.index("_write_sentinel(")
+    assert prime < sentinel
+
+
+def _sidecar_manifest(agent_id="demo", version="1.0.0", artifact_bytes=b"bin-bytes"):
+    """A sidecar (binary) manifest — the kind that skips the backup snapshot."""
+    sha = hashlib.sha256(artifact_bytes).hexdigest()
+    filename = f"{agent_id}-{version}-{installer.current_platform_key()}"
+    return {
+        "id": agent_id,
+        "language": "python",
+        "security_tier": "verified",
+        "latest_version": version,
+        "requirements": {"platforms": []},
+        "versions": {
+            version: {
+                "version": version,
+                "artifacts": [
+                    {
+                        "filename": filename,
+                        "path": f"agents/{agent_id}/{version}/{filename}",
+                        "size_bytes": len(artifact_bytes),
+                        "sha256": sha,
+                        "content_type": "application/octet-stream",
+                        "platform": installer.current_platform_key(),
+                    }
+                ],
+            }
+        },
+    }
+
+
+def _sidecar_fetcher(manifest, artifact_bytes=b"bin-bytes"):
+    version = manifest["latest_version"]
+    path = manifest["versions"][version]["artifacts"][0]["path"]
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: demo\nname: Demo\n"
+        if url == f"{BASE}/{path}":
+            return artifact_bytes
+        raise AssertionError(f"unexpected fetch url: {url}")
+
+    return fetcher
+
+
+def test_a_failed_binary_UPDATE_does_not_delete_the_working_install(
+    tmp_path, monkeypatch
+):
+    """Binary agents skip the backup, so "no backup" is not "first install".
+
+    Treating the two as the same wipes the previous working binary and any
+    sidecar state beside it — most likely when the agent is running and its
+    executable cannot be replaced, which the installer already tells the user
+    to retry after closing (#3549 review).
+    """
+    v1 = _sidecar_manifest(version="1.0.0")
+    install(
+        "demo",
+        manifest=v1,
+        base_url=BASE,
+        fetcher=_sidecar_fetcher(v1),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+    )
+    assert read_sentinel("demo", tmp_path).version == "1.0.0"
+
+    # Sidecar state living alongside the binary.
+    state = tmp_path / "demo" / "sidecar-state.json"
+    state.write_text('{"kept": true}')
+
+    v2 = _sidecar_manifest(version="2.0.0", artifact_bytes=b"bin-v2")
+
+    def running_sidecar(*_args, **_kwargs):
+        raise InstallError("The agent appears to be running — close it and retry")
+
+    monkeypatch.setattr(installer, "_install_binary_artifact", running_sidecar)
+
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=v2,
+            base_url=BASE,
+            fetcher=_sidecar_fetcher(v2, artifact_bytes=b"bin-v2"),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    assert (tmp_path / "demo").exists()
+    assert read_sentinel("demo", tmp_path).version == "1.0.0"
+    assert state.exists(), "sidecar state was deleted by the failure handler"
+
+
+def test_a_failed_binary_FIRST_install_is_still_cleared(tmp_path, monkeypatch):
+    """The fix must still hold for the case it was written for."""
+    manifest = _sidecar_manifest()
+
+    def boom(*_args, **_kwargs):
+        raise InstallError("no space left on device")
+
+    monkeypatch.setattr(installer, "_install_binary_artifact", boom)
+
+    with pytest.raises(InstallError):
+        install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_sidecar_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+
+    assert read_sentinel("demo", tmp_path) is None
+    assert not (tmp_path / "demo").exists()

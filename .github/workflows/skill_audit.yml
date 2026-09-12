@@ -47,7 +47,7 @@ name: Skill Audit
 
 on:
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     # `labeled`/`unlabeled` are here so applying the sign-off label re-runs the
     # gate instead of needing a manual re-run.
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]

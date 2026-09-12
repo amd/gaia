@@ -210,7 +210,7 @@ struct HttpClient::Impl {
         if (t.host.empty()) {
             throw HttpError(
                 "No host in URL: '" + source +
-                    "'. Set a base URL such as \"http://localhost:8000\" "
+                    "'. Set a base URL such as \"http://localhost:13305\" "
                     "(HttpClientConfig::baseUrl, or LEMONADE_BASE_URL / "
                     "LemonadeClientConfig::baseUrl for LemonadeClient), or pass an "
                     "absolute URL as the request path.",

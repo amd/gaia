@@ -30,7 +30,7 @@ Example:
 import logging
 from typing import Any, Dict, List, Optional
 
-from gaia.llm import VLMClient
+from gaia.llm import VLMClient, VLMExtractionError
 from gaia.utils import extract_json_from_text
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,7 @@ class StructuredVLMExtractor:
 
         # Process pages
         pages_data = []
+        failed_pages = []
         aggregated_timeline = {} if extract_timelines else None
 
         for i, page_num in enumerate(pages_to_process, 1):
@@ -177,43 +178,56 @@ class StructuredVLMExtractor:
             if not image_bytes:
                 continue
 
-            # Extract data from page
+            # Extract data from page. One page that cannot be read is a failed
+            # PAGE, not a failed document — aborting here would throw away every
+            # page already processed, and a model answering a table prompt in
+            # prose is ordinary.
             page_data = {"page": page_num}
+            try:
+                # Tables
+                if extract_tables:
+                    page_data["tables"] = self.extract_table(
+                        image_bytes, page_num=page_num
+                    )
 
-            # Tables
-            if extract_tables:
-                page_data["tables"] = self.extract_table(image_bytes, page_num=page_num)
+                # Timelines
+                if extract_timelines:
+                    timeline_data = self.extract_timeline(
+                        image_bytes,
+                        status_types=timeline_status_types
+                        or ["Category1", "Category2"],
+                        page_num=page_num,
+                    )
+                    page_data["timeline"] = timeline_data
 
-            # Timelines
-            if extract_timelines:
-                timeline_data = self.extract_timeline(
-                    image_bytes,
-                    status_types=timeline_status_types or ["Category1", "Category2"],
-                    page_num=page_num,
+                    # Aggregate
+                    if aggregated_timeline is not None:
+                        for status, hours in timeline_data.items():
+                            aggregated_timeline[status] = (
+                                aggregated_timeline.get(status, 0.0) + hours
+                            )
+
+                # Fields or schema
+                if extract_fields:
+                    page_data["fields"] = self.extract_key_values(
+                        image_bytes, extract_fields, page_num=page_num
+                    )
+                elif schema:
+                    page_data["fields"] = self.extract_structured(
+                        image_bytes, schema, page_num=page_num
+                    )
+
+                # Raw text (always included)
+                page_data["raw_text"] = self.vlm.extract_from_image(
+                    image_bytes, page_num=page_num
                 )
-                page_data["timeline"] = timeline_data
-
-                # Aggregate
-                if aggregated_timeline is not None:
-                    for status, hours in timeline_data.items():
-                        aggregated_timeline[status] = (
-                            aggregated_timeline.get(status, 0.0) + hours
-                        )
-
-            # Fields or schema
-            if extract_fields:
-                page_data["fields"] = self.extract_key_values(
-                    image_bytes, extract_fields, page_num=page_num
-                )
-            elif schema:
-                page_data["fields"] = self.extract_structured(
-                    image_bytes, schema, page_num=page_num
-                )
-
-            # Raw text (always included)
-            page_data["raw_text"] = self.vlm.extract_from_image(
-                image_bytes, page_num=page_num
-            )
+            except VLMExtractionError as e:
+                # Named, so a caller can say WHICH pages are incomplete. The
+                # keys that did populate stay; the ones that did not are absent
+                # rather than zero-filled.
+                page_data["error"] = str(e)
+                failed_pages.append(page_num)
+                logger.warning("Page %s could not be read: %s", page_num, e)
 
             pages_data.append(page_data)
 
@@ -223,6 +237,7 @@ class StructuredVLMExtractor:
                 "source": doc_path.name,
                 "total_pages": total_pages,
                 "pages_processed": len(pages_data),
+                "pages_failed": failed_pages,
             },
             "pages": pages_data,
         }
@@ -299,11 +314,12 @@ IMPORTANT:
         if isinstance(data, list):
             logger.info(f"Extracted table with {len(data)} rows")
             return data
-        else:
-            logger.warning(
-                f"Table extraction failed or returned non-list: {type(data)}"
-            )
-            return []
+        raise VLMExtractionError(
+            f"the model's table output did not parse as a list (got "
+            f"{type(data).__name__}); returning an empty table would read as "
+            "a table with no rows",
+            page_num,
+        )
 
     def extract_key_values(
         self,
@@ -362,9 +378,12 @@ IMPORTANT:
         if isinstance(data, dict):
             logger.info(f"Extracted {len(data)} fields")
             return data
-        else:
-            logger.warning("Key-value extraction failed")
-            return {key: None for key in keys}
+        raise VLMExtractionError(
+            f"the model's key/value output did not parse as an object (got "
+            f"{type(data).__name__}); a null for every key is indistinguishable "
+            "from fields that are genuinely absent",
+            page_num,
+        )
 
     def extract_structured(
         self,
@@ -440,9 +459,12 @@ IMPORTANT:
         if isinstance(data, dict):
             logger.info(f"Extracted {len(data)} fields from schema")
             return data
-        else:
-            logger.warning("Structured extraction failed")
-            return {}
+        raise VLMExtractionError(
+            f"the model's output did not parse against the schema (got "
+            f"{type(data).__name__}); returning no fields would read as a page "
+            "with none of them",
+            page_num,
+        )
 
     def _parse_time_to_hours(self, time_str: str) -> float:
         """
@@ -464,9 +486,13 @@ IMPORTANT:
             else:
                 # Already a number
                 return float(time_str)
-        except (ValueError, IndexError):
-            logger.warning(f"Failed to parse time: {time_str}")
-            return 0.0
+        except (ValueError, IndexError) as e:
+            # 0.0 here was added into ``timeline_totals`` and reported as a
+            # measured number.
+            raise VLMExtractionError(
+                f"could not read {time_str!r} as a duration; counting it as "
+                "zero would be reported as a measured total"
+            ) from e
 
     def extract_chart_data(
         self,
@@ -609,20 +635,24 @@ ALL {len(categories)} fields REQUIRED."""
                     elif isinstance(value, (int, float)):
                         converted[cat] = float(value)
                     else:
-                        converted[cat] = 0.0
+                        raise VLMExtractionError(
+                            f"category {cat!r} came back as "
+                            f"{type(value).__name__}, not a duration; counting "
+                            "it as zero would be summed into the reported total",
+                            page_num,
+                        )
                 logger.info(f"Extracted chart data with {len(converted)} categories")
                 return converted
             else:
                 # Return as-is (strings, numbers, whatever VLM returned)
                 logger.info(f"Extracted chart data with {len(data)} categories")
                 return data
-        else:
-            logger.warning("Chart data extraction failed")
-            # Return appropriate defaults based on format
-            if value_format == "time_hms":
-                return {cat: "00:00:00" for cat in categories}
-            else:
-                return {cat: 0.0 for cat in categories}
+        raise VLMExtractionError(
+            f"the model's chart output did not parse as an object (got "
+            f"{type(data).__name__}); zero-filling every category would be "
+            "summed into the reported total and read as measured",
+            page_num,
+        )
 
     def extract_timeline(
         self,

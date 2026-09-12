@@ -28,7 +28,7 @@ Included demos:
 
 The agent connects to an OpenAI-compatible LLM server at `http://localhost:13305/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
 
-Download and install Lemonade Server v11.9.0, then start it:
+Install Lemonade Server v11.9.0:
 
 **Windows:**
 ```powershell
@@ -46,9 +46,14 @@ sudo apt install lemonade-server
 
 Or browse all platform options on the [Lemonade v11.9.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v11.9.0).
 
-After installation, start the server:
-```bash
-lemonade-server serve
+How the server starts depends on the install, and there is no cross-platform
+`serve` command — Lemonade removed the `lemonade-server` CLI in 10.7. Windows
+starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
+`lemond` systemd unit; macOS installs a LaunchDaemon. On Windows you can also
+start one from the repo:
+
+```powershell
+.\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)

@@ -55,6 +55,7 @@ from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
 
@@ -612,13 +613,21 @@ def _looks_like_wheel(filename: str) -> bool:
 
 
 def _sanitize_artifact_filename(filename: str, agent_id: Optional[str]) -> None:
-    """Refuse a filename that could escape the install dir on path-join."""
-    if not filename or "/" in filename or "\\" in filename or ".." in filename:
-        raise InstallError(
-            f"Artifact filename {filename!r} for '{agent_id}' is unsafe (nested "
-            f"path or path traversal). Refusing to install; report this hub "
-            f"manifest as corrupt."
+    """Refuse a filename that could escape the install dir on path-join.
+
+    Shares :func:`gaia.utils.paths.safe_path_segment` with the skills installer:
+    a separator scan alone lets ``C:evil.whl`` and ``NUL`` through, and both
+    re-root or redirect the join this function exists to protect.
+
+    Raises:
+        InstallError: the manifest's filename is not a single safe path segment.
+    """
+    try:
+        safe_path_segment(
+            filename, what="artifact filename", origin=f"hub manifest for '{agent_id}'"
         )
+    except UnsafePathSegment as exc:
+        raise InstallError(str(exc)) from exc
 
 
 def _select_platform_artifact(
@@ -1150,15 +1159,6 @@ def install(
                 _write_agent_yaml(
                     agent_id, resolved_version, install_dir, base_url, fetcher
                 )
-                _write_sentinel(
-                    agent_id,
-                    resolved_version,
-                    language,
-                    artifact["sha256"],
-                    install_dir,
-                    artifact_kind=artifact_kind,
-                    executable=generic_name,
-                )
                 # Prime the ACTIVE environment (not just this process) so a
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
@@ -1169,10 +1169,33 @@ def install(
                         install_dir / SITE_PACKAGES_DIRNAME,
                         active_env_site_packages,
                     )
+                # LAST, after everything that can fail. The sentinel is what
+                # every later command reads as "this agent is installed", so
+                # writing it earlier left a first install that died on an
+                # unwritable site-packages looking installed and importable
+                # nowhere (#3549).
+                _write_sentinel(
+                    agent_id,
+                    resolved_version,
+                    language,
+                    artifact["sha256"],
+                    install_dir,
+                    artifact_kind=artifact_kind,
+                    executable=generic_name,
+                )
             except Exception:
                 # Install failed mid-write — restore the backup if we made one so
                 # the user is left with a working previous version, not a stub.
                 _restore_backup_if_present(agent_id, root)
+                # Only a FIRST install is cleared. "No backup" is not the same
+                # question: binary agents deliberately skip the snapshot (they
+                # are replaced in place so a running sidecar's data directory
+                # is not moved out from under it), so treating a missing backup
+                # as a first install would delete a working binary agent and
+                # its sidecar state on a failed UPDATE — most likely when the
+                # agent is running and its executable cannot be replaced.
+                if not updated:
+                    _clear_failed_install(agent_id, root)
                 raise
 
             # --- hot-register ---
@@ -1382,15 +1405,40 @@ def _discard_backup(agent_id: str, install_root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def _restore_backup_if_present(agent_id: str, install_root: Path) -> None:
+def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
+    """Roll back to the previous version. True when a backup was restored.
+
+    A binary agent has no backup even on an update — it is replaced in place —
+    so ``False`` here does NOT mean "there was nothing installed before".
+    """
     backup = _backup_dir(agent_id, install_root)
     if not backup.exists():
-        return
+        return False
     install_dir = agent_install_dir(agent_id, install_root)
     if install_dir.exists():
         shutil.rmtree(install_dir, ignore_errors=True)
     shutil.move(str(backup), str(install_dir))
     logger.info("installer: restored %s from backup after failed install", agent_id)
+    return True
+
+
+def _clear_failed_install(agent_id: str, install_root: Path) -> None:
+    """Remove a first install that failed, so nothing reads it as present.
+
+    There is no previous version to fall back to, and a sentinel left behind
+    makes every later command believe the agent is installed while nothing can
+    import it (#3549). Re-running the install would not clear it either — the
+    record looks valid.
+    """
+    install_dir = agent_install_dir(agent_id, install_root)
+    if not install_dir.exists():
+        return
+    shutil.rmtree(install_dir, ignore_errors=True)
+    logger.info(
+        "installer: removed the failed first install of %s so it is not "
+        "reported as installed",
+        agent_id,
+    )
 
 
 def _deregister(agent_id: str, registry: Any) -> None:

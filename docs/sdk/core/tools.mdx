@@ -71,8 +71,10 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "name": "get_weather",
     "description": "Get current weather for a city.\n\nUse this tool when ...",  # whole docstring
     "parameters": {
-        "city":  {"type": "string", "required": True},
-        "units": {"type": "string", "required": False},
+        "city":  {"type": "string", "required": True,
+                  "description": "City name, e.g. \"Austin\"."},
+        "units": {"type": "string", "required": False,
+                  "description": "Either \"metric\" or \"imperial\"."},
     },
     "function": <the callable>,
     "atomic": False,
@@ -83,12 +85,14 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
 
 <Note>
 **What's actually captured:** The function name, the full docstring (as
-`description`), and a `{type, required}` entry per parameter inferred from type
-hints (only `str`, `int`, `float`, `bool`, `tuple`, `dict` are recognised —
-other annotations fall back to `"unknown"`). Per-argument descriptions from the
-`Args:` docstring block and parameter default values are **not** parsed into the
-registry today, so write concise, self-contained docstrings to give the LLM all
-the context it needs.
+`description`), and a `{type, required, description}` entry per parameter. The
+type comes from the annotation (`str`, `int`, `float`, `bool`, `tuple`, `set`,
+`dict`, plus generics like `List[str]` and `Optional[...]`); an unannotated or
+unrecognised parameter falls back to `"unknown"`. The per-parameter
+`description` is parsed from the docstring's Google-style `Args:` block, so the
+model reads the constraint at the slot it is filling — write one line per
+argument. Parameter **default values** are still not stored; `required` is
+derived from whether a default exists.
 </Note>
 
 ---
@@ -450,7 +454,7 @@ def tool_name(param: type) -> return_type:
     Longer description with more details if needed.  ← Optional
     Can span multiple lines.
 
-    Args:                                            ← Highly recommended
+    Args:                                            ← Reaches the model per-arg
         param: Description of what this parameter    ← Include examples!
                expects (e.g., "file path like /src/main.py")
 
@@ -873,8 +877,8 @@ def query_users(
 
 <Accordion title="How @tool Generates the Tool Entry">
 
-When you decorate a function with `@tool`, Python introspection extracts a
-minimal schema (see `src/gaia/agents/base/tools.py:19-98` for the authoritative
+When you decorate a function with `@tool`, Python introspection extracts the
+schema (see `src/gaia/agents/base/tools.py` for the authoritative
 implementation):
 
 ```python
@@ -883,31 +887,28 @@ import inspect
 _TOOL_REGISTRY = {}
 
 def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
-         timeout: float | None = None, **kwargs):
+         timeout: float | None = None):
     """Decorator that registers a function in the global tool registry."""
 
     def decorator(f):
         sig = inspect.signature(f)
+        # Google-style "Args:" block -> {arg_name: description}
+        arg_descriptions = _parse_arg_descriptions(f.__doc__)
         params = {}
 
         for name, param in sig.parameters.items():
             info = {
-                "type": "unknown",
+                # Unwraps Optional[X] / X | None and generics (List[str] -> array)
+                "type": _infer_param_type(param.annotation),
                 "required": param.default is inspect.Parameter.empty,
             }
-            # A small annotation → JSON-type map; unmapped types stay "unknown"
-            ann = param.annotation
-            if ann is str:   info["type"] = "string"
-            elif ann is int: info["type"] = "integer"
-            elif ann is float: info["type"] = "number"
-            elif ann is bool:  info["type"] = "boolean"
-            elif ann is tuple: info["type"] = "array"
-            elif ann is dict:  info["type"] = "object"
+            if arg_descriptions.get(name):
+                info["description"] = arg_descriptions[name]
             params[name] = info
 
         _TOOL_REGISTRY[f.__name__] = {
             "name": f.__name__,
-            "description": f.__doc__ or "",  # whole docstring, not per-arg
+            "description": f.__doc__ or "",  # whole docstring
             "parameters": params,
             "function": f,
             "atomic": atomic,
@@ -921,19 +922,23 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
 
 Notable implementation details:
 
-- The full docstring is stored once as `description`. There's no per-argument
-  docstring parsing today — the LLM sees the whole docstring together with a
-  `{type, required}` map.
+- The full docstring is stored once as `description`, **and** each argument's
+  line from the `Args:` block is stored on that argument's entry. Wrapped
+  continuation lines are joined into one string. An argument with no `Args:`
+  entry simply has no `description` key.
 - Default values are **not** stored on the parameter entries. `required` is a
   boolean derived from whether the parameter has a default.
-- Generic annotations like `list[str]` or `Optional[int]` are not specialised —
-  only the bare primitives (`str`, `int`, `float`, `bool`, `tuple`, `dict`) map
-  to a known JSON type; anything else is reported as `"unknown"`.
+- Generic annotations are specialised: `list[str]` / `List[str]` → `array`,
+  `Dict[str, Any]` → `object`, and `Optional[X]` / `X | None` resolves to `X`'s
+  type. An unannotated parameter (or a union of two real types) stays
+  `"unknown"`.
 - `@tool(atomic=True)` marks a tool as non-decomposable so the planner will not
   try to split it further.
 - `@tool(display_label=...)` sets a user-facing label for UI progress strips, and
   `@tool(timeout=...)` overrides the global per-tool execution limit (seconds).
   Both default to `None` and are stored on the registry entry.
+- Unsupported decorator keywords raise `TypeError` at decoration time and
+  identify the invalid argument, tool name, and accepted keyword set.
 
 </Accordion>
 

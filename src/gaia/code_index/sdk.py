@@ -499,6 +499,18 @@ class CodeIndexSDK:
 
         return results
 
+    def is_indexed(self) -> bool:
+        """Is a usable index on disk for this repository?
+
+        Presence only — it does not read the metadata, and so does not detect a
+        cache written by an older ``_CACHE_VERSION`` (which ``index_repository``
+        rebuilds anyway). Callers that need the version or the chunk counts want
+        :meth:`get_status`, which parses the whole metadata file: on a large
+        repo that is tens of megabytes of JSON, far too much to spend on
+        "is there an index?".
+        """
+        return self._meta_path.exists() and self._index_path.exists()
+
     def get_status(self) -> Dict[str, Any]:
         """Return index statistics."""
         meta = self._load_metadata()

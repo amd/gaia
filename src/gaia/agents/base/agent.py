@@ -41,7 +41,9 @@ from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
+    NOT_EXECUTED,
     build_verification_scope,
+    check_was_executed,
     verification_check_label,
 )
 
@@ -460,7 +462,14 @@ def _sum_conversation_tokens(
 ) -> Tuple[int, int]:
     """Sum input/output tokens from per-step 'stats' entries already appended
     to conversation, plus any tool-reported usage folded in separately (see
-    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    ``_extract_tool_usage``). Returns (total_input, total_output).
+
+    Both spellings are accepted, the same way the tool-usage loop below already
+    does: a local llama.cpp step reports ``input_tokens``/``output_tokens``,
+    while a cloud-routed one comes back in OpenAI's
+    ``prompt_tokens``/``completion_tokens``. Reading only the first pair threw
+    away a count the backend really had measured, and the turn then reported no
+    token total at all."""
     total_input = 0
     total_output = 0
     for entry in conversation:
@@ -468,8 +477,14 @@ def _sum_conversation_tokens(
             content = entry["content"]
             if content.get("type") == "stats" and "performance_stats" in content:
                 stats = content["performance_stats"]
-                total_input += _safe_number(stats.get("input_tokens"))
-                total_output += _safe_number(stats.get("output_tokens"))
+                if not isinstance(stats, dict):
+                    continue
+                total_input += _safe_number(
+                    stats.get("input_tokens") or stats.get("prompt_tokens")
+                )
+                total_output += _safe_number(
+                    stats.get("output_tokens") or stats.get("completion_tokens")
+                )
     for usage in tool_usage_entries or []:
         total_input += _safe_number(
             usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -478,6 +493,51 @@ def _sum_conversation_tokens(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
     return total_input, total_output
+
+
+def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's generation rate, from the backend's OWN per-call measurement.
+
+    Averaged over the turn's LLM calls weighted by the tokens each generated —
+    ``sum(tokens) / sum(tokens / rate)`` — so a turn whose steps ran at
+    different rates reports the rate a user actually experienced rather than
+    the arithmetic mean of the steps.
+
+    ``None`` when no call reported one. It is never derived from wall time
+    here: a turn's wall clock includes tool execution and agent overhead, and
+    dividing generated tokens by it invents a number roughly an order of
+    magnitude below the hardware's real rate. A backend that does not report
+    a rate (an OpenAI-compatible remote endpoint, say) has not measured one,
+    and nothing downstream should print a figure nobody measured.
+    """
+    tokens_total = 0.0
+    seconds_total = 0.0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if not isinstance(stats, dict):
+            continue
+        rate = stats.get("tokens_per_second")
+        tokens = stats.get("completion_tokens") or stats.get("output_tokens")
+        if (
+            not isinstance(rate, (int, float))
+            or isinstance(rate, bool)
+            or not math.isfinite(rate)
+            or rate <= 0
+        ):
+            continue
+        tokens = _safe_number(tokens)
+        if tokens <= 0:
+            continue
+        tokens_total += tokens
+        seconds_total += tokens / rate
+    if tokens_total <= 0 or seconds_total <= 0:
+        return None
+    return tokens_total / seconds_total
 
 
 def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
@@ -739,6 +799,9 @@ class Agent(abc.ABC):
             "get_memory_system_prompt",  # changes on any remember()/forget()
             "get_skills_system_prompt",  # per-turn body selection (#2848)
             "get_recalled_skills_system_prompt",  # per-turn procedural recall
+            # Mostly static, but the index line flips as a background index
+            # lands and the shape line changes if the project does (#3379).
+            "get_project_map_system_prompt",
         }
     )
 
@@ -903,26 +966,33 @@ Do NOT wrap conversational replies in JSON.
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
 
-        # Read base_url from environment if not provided
+        # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+            base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            LemonadeManager.ensure_ready(
-                min_context_size=min_context_size,
-                quiet=silent_mode,
-                base_url=base_url,
-                required_min_device=required_min_device,
-                device=device,
-            )
+            if cloud_model_provider(model_id):
+                # The local manager preloads a chat model even on an idle server.
+                LemonadeClient(base_url=base_url, verbose=False).health_check()
+            else:
+                LemonadeManager.ensure_ready(
+                    min_context_size=min_context_size,
+                    quiet=silent_mode,
+                    base_url=base_url,
+                    required_min_device=required_min_device,
+                    device=device,
+                )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -1383,6 +1453,17 @@ Do NOT wrap conversational replies in JSON.
         with a dynamic tool loader override this to return a selection.
         """
         return None
+
+    def _on_task_start(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run at the top of every turn, before the prompt is composed.
+
+        Default: no-op. Mixins that orient the agent in its environment — the
+        project map (#3379) is the first — override this and must call
+        ``super()._on_task_start(user_input)``. Anything expensive belongs
+        behind a once-per-session guard inside the override, not here.
+        """
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Hook called when a tool is about to execute (after registry lookup).
@@ -2355,6 +2436,22 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
+    def _tool_call_retry_prompt(self, reason: Exception) -> str:
+        """Build the recovery turn sent after a tool-call parse failure.
+
+        ``reason`` is the parser's own message — it names the specific defect
+        (ambiguous fenced blocks, malformed arguments, unparseable envelope),
+        which is what lets the model correct the real problem instead of
+        guessing from generic advice.
+        """
+        return (
+            f"Your last tool call could not be used: {reason}\n"
+            "Please try again. Emit exactly ONE tool call as raw JSON — no code "
+            "fences, no repeated blocks — and use ONLY the documented enum values "
+            "for each argument (e.g. 'brief', 'detailed', 'bullets' — never a long "
+            "sentence). If you don't need a tool, answer in plain text."
+        )
+
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
         Detect and extract a tool call JSON embedded in a text response.
@@ -2367,7 +2464,10 @@ Do NOT wrap conversational replies in JSON.
         each tagged fenced/unfenced:
           1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
           2. else exactly one fenced candidate → return it (the fix for #1428).
-          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          3. else >1 fenced, 0 unfenced → ambiguous: with prose around the
+             fences it looks like docs → None + warning; with no prose at all
+             it is a fumbled tool call → return it if every block is identical,
+             else ValueError (#3596).
           4. else → fall back to Python-call syntax detection (#2521), e.g.
              ``remember(fact="...", category="preference")``.
 
@@ -2380,7 +2480,9 @@ Do NOT wrap conversational replies in JSON.
             ValueError: propagated from the Python-call-syntax fallback (#2521)
                 when a *registered* tool's name is followed by an argument list
                 that can't be parsed — a loud failure rather than echoing the
-                raw syntax to the user as an answer.
+                raw syntax to the user as an answer.  Also raised for rule 3
+                above when the response is nothing but differing fenced tool
+                calls.
         """
         # Quick check: must contain "tool" to be worth scanning for the JSON
         # shape. Responses without it may still carry the #2521 Python-call
@@ -2492,7 +2594,30 @@ Do NOT wrap conversational replies in JSON.
             return fenced[0]
 
         if len(fenced) > 1:
-            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation
+            # examples. Prose outside the fences is what makes it readable as an
+            # answer; with none, returning it would hand the user raw JSON.
+            prose = response
+            for fence_start, fence_end in reversed(_code_ranges):
+                prose = prose[:fence_start] + prose[fence_end:]
+            if not prose.strip():
+                distinct = {
+                    json.dumps(c, sort_keys=True, default=str, ensure_ascii=False)
+                    for c in fenced
+                }
+                if len(distinct) == 1:
+                    logger.debug(
+                        "[PARSE] %d identical fenced tool calls — running one: %s",
+                        len(fenced),
+                        fenced[0].get("tool"),
+                    )
+                    return fenced[0]
+                raise ValueError(
+                    f"Ambiguous tool call: {len(fenced)} different fenced "
+                    "tool-call blocks and no other text, so the intended call is "
+                    f"undecidable (candidates: {[c.get('tool') for c in fenced]}). "
+                    "Emit exactly one tool call, unfenced."
+                )
             logger.warning(
                 "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
                 "unfenced call; cannot determine which is real — returning None",
@@ -2839,6 +2964,9 @@ Do NOT wrap conversational replies in JSON.
         """
 
         def _python_to_json_type(py_type: str) -> str:
+            # Accepts both the registry's JSON names (what @tool emits) and raw
+            # Python names (programmatically registered schemas). Without the
+            # former, "integer"/"array" fell through to the "string" default.
             return {
                 "str": "string",
                 "int": "integer",
@@ -2846,6 +2974,12 @@ Do NOT wrap conversational replies in JSON.
                 "bool": "boolean",
                 "list": "array",
                 "dict": "object",
+                "string": "string",
+                "integer": "integer",
+                "number": "number",
+                "boolean": "boolean",
+                "array": "array",
+                "object": "object",
             }.get(py_type.lower().strip(), "string")
 
         if filter_to is None:
@@ -3406,18 +3540,26 @@ Do NOT wrap conversational replies in JSON.
         timeout. On success the worker's return value is returned and any
         exception it raised is re-raised in the caller (so the existing
         ``_execute_tool`` error handling applies unchanged). On timeout a
-        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
-        cannot kill a thread) but it is a daemon, so it cannot block process
-        exit and the agent loop is freed immediately.
+        ``ToolExecutionTimeout`` is raised and the worker's cancellation flag is
+        set. Python cannot kill a thread, so a tool that runs for minutes opts
+        out by polling ``tools.tool_cancelled()``; without that the abandoned
+        worker runs to completion and a retry puts a second copy of the same
+        expensive job on the same hardware (#2600).
         """
+        from gaia.agents.base.tools import set_tool_cancel_event
+
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
+        cancel = threading.Event()
 
         def _target():
+            set_tool_cancel_event(cancel)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
+            finally:
+                set_tool_cancel_event(None)
 
         # A new thread starts with an EMPTY context, so the agent-identity
         # contextvar bound by process_query would be None inside every tool
@@ -3431,6 +3573,7 @@ Do NOT wrap conversational replies in JSON.
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
+            cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
         if "exc" in holder:
             raise holder["exc"]
@@ -3614,6 +3757,12 @@ Do NOT wrap conversational replies in JSON.
         """
         Execute a tool by name with the provided arguments.
 
+        Every exit that returns BEFORE the tool body runs carries
+        ``NOT_EXECUTED``. ``_execute_tool_timed`` records each return for the
+        verification footer, which otherwise reads a call rejected at dispatch
+        — unknown name, missing/unexpected/uncoercible argument, guardrail
+        refusal — as a check that ran and failed (#3677).
+
         Args:
             tool_name: Name of the tool to execute
             tool_args: Arguments to pass to the tool
@@ -3629,10 +3778,11 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Normalize common model name-construction errors before registry lookup:
-        # strip trailing "()" some models append, and convert hyphens to underscores
-        # (tool names are always snake_case; hyphens are never valid).
-        tool_name = tool_name.removesuffix("()").replace("-", "_")
+        # Exact name first — skill tools register with a literal hyphen
+        # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
+        tool_name = tool_name.removesuffix("()")
+        if tool_name not in self._tools_registry:
+            tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
@@ -3677,13 +3827,13 @@ Do NOT wrap conversational replies in JSON.
                     # here would point them at something that isn't there.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
-                return {"status": "error", "error": err}
+                return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
         if refusal is not None:
-            return refusal
+            return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them
@@ -3736,7 +3886,14 @@ Do NOT wrap conversational replies in JSON.
                 f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
             )
             logger.error(error_msg)
-            return {"status": "error", "error": error_msg}
+            # Tagged so callers can tell a malformed call (retryable — the model
+            # can re-emit it) from a tool that ran and failed (#3581).
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": error_msg,
+            }
 
         # Reject arguments the tool does not accept before dispatch. A model that
         # hallucinates a kwarg (e.g. mailbox= on archive_message_batch) would
@@ -3766,7 +3923,12 @@ Do NOT wrap conversational replies in JSON.
                     f"Accepted argument(s): {', '.join(sorted(accepted_args)) or 'none'}."
                 )
                 logger.error(error_msg)
-                return {"status": "error", "error": error_msg}
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error_type": "invalid_arguments",
+                    "error": error_msg,
+                }
 
         # Models routinely send numbers as JSON strings ("120" for timeout: int).
         # Every tool body would otherwise have to defend itself, and the ones
@@ -3774,7 +3936,12 @@ Do NOT wrap conversational replies in JSON.
         tool_args, coercion_error = self._coerce_tool_args(tool_name, sig, tool_args)
         if coercion_error is not None:
             logger.error(coercion_error)
-            return {"status": "error", "error": coercion_error}
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": coercion_error,
+            }
 
         # Before dispatch, not after: a tool that times out or raises may still
         # have pulled content into the turn, and its error string can carry it.
@@ -4122,10 +4289,14 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
+
+            if cloud_model_provider(getattr(self, "model_id", None)):
+                return False
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
@@ -4135,7 +4306,9 @@ Do NOT wrap conversational replies in JSON.
             resp = httpx.get(
                 health_url,
                 timeout=3.0,
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 return False
@@ -4254,13 +4427,12 @@ Do NOT wrap conversational replies in JSON.
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought too.
-                shrunk_rest.append(
-                    {
-                        "role": "assistant",
-                        "content": m["content"][:800] + "... (truncated)",
-                    }
-                )
+                # Truncate verbose assistant chain-of-thought, but keep the
+                # rest of the turn — dropping ``tool_calls`` here orphans the
+                # tool results that follow it.
+                shrunk = dict(m)
+                shrunk["content"] = m["content"][:800] + "... (truncated)"
+                shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
         return [first] + shrunk_rest
@@ -4706,10 +4878,13 @@ Do NOT wrap conversational replies in JSON.
     def _note_verification_signal(
         self, tool_name: str, tool_args: Dict[str, Any], result: Any
     ) -> None:
-        """Record one executed tool call for this turn's verification scope.
+        """Record one dispatched tool call for this turn's verification scope.
 
         Called from the single execution seam so every loop path — legacy,
-        native tool-calling, and the forced-call branch — is covered.
+        native tool-calling, and the forced-call branch — is covered. That seam
+        also returns for calls that never ran (allowlist refusal, declined
+        confirmation), so ``ran`` says which this was: without it a refused
+        ``pytest`` was reported as a test that ran and failed (#3677).
         """
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
@@ -4719,6 +4894,7 @@ Do NOT wrap conversational replies in JSON.
                 "tool": tool_name,
                 "check_label": verification_check_label(tool_name, tool_args),
                 "failed": self._is_error_result(result),
+                "ran": check_was_executed(result),
             }
         )
 
@@ -4782,6 +4958,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._begin_turn_provenance()
+
+        # Orientation. Runs before the prompt is composed so anything it
+        # establishes is in the prompt on the turn that established it.
+        self._on_task_start(user_input)
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool
@@ -5644,16 +5824,8 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
-                assistant_msg = (
-                    "[I tried to call a tool but my arguments were malformed.]"
-                )
-                user_msg = (
-                    "Your last tool call had malformed arguments. "
-                    "Please try again. Use ONLY the documented enum "
-                    "values for each argument (e.g. 'brief', "
-                    "'detailed', 'bullets' — never a long sentence). "
-                    "If you don't need a tool, answer in plain text."
-                )
+                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+                user_msg = self._tool_call_retry_prompt(parse_exc)
                 if _last_image_path:
                     user_msg += (
                         f"\n\nYour previous step generated an image at "
@@ -5799,7 +5971,42 @@ Do NOT wrap conversational replies in JSON.
                 ).strip()
 
                 # Parse the plan response
-                parsed_plan = self._parse_llm_response(plan_response)
+                try:
+                    parsed_plan = self._parse_llm_response(plan_response)
+                except ValueError as plan_parse_exc:
+                    logger.warning(
+                        "Plan parse failed (step %d): %s — recovering with retry prompt",
+                        steps_taken,
+                        plan_parse_exc,
+                    )
+                    self.error_history.append(
+                        {
+                            "step": steps_taken,
+                            "error": str(plan_parse_exc),
+                            "type": "tool_call_parse_error",
+                        }
+                    )
+                    error_count += 1
+                    if error_count >= 3:
+                        final_answer = (
+                            "I had trouble formatting my plan. Could you "
+                            "rephrase or break the request into smaller pieces?"
+                        )
+                        break
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": "[I tried to send a plan but it could not be parsed.]",
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._tool_call_retry_prompt(plan_parse_exc),
+                        }
+                    )
+                    steps_taken += 1
+                    continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
@@ -5938,6 +6145,7 @@ Do NOT wrap conversational replies in JSON.
                 any_error = False
                 last_error = None
                 fanout_repeat_break = False
+                post_tool_messages = []
 
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
@@ -6016,7 +6224,9 @@ Do NOT wrap conversational replies in JSON.
                                 "relevant data, OR state that the "
                                 "information was not found in the document."
                             )
-                            messages.append({"role": "user", "content": dedup_msg})
+                            post_tool_messages.append(
+                                {"role": "user", "content": dedup_msg}
+                            )
 
                     # Input-based dedup for mutation tools (#1317): catch an
                     # identical mutation re-issue at the first repeat. Errored
@@ -6026,7 +6236,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_name,
                         tool_args,
                         mutation_call_cache,
-                        messages,
+                        post_tool_messages,
                         tool_result,
                     )
 
@@ -6105,6 +6315,11 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+
+                # Anthropic and other spec-strict providers require all native
+                # tool results to immediately follow the assistant tool-call
+                # turn. Dedup guidance belongs after the complete result group.
+                messages.extend(post_tool_messages)
 
                 if fanout_repeat_break:
                     break  # break outer while
@@ -6756,6 +6971,7 @@ Do NOT wrap conversational replies in JSON.
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
                     ttft_seconds=_query_ttft_seconds(conversation),
+                    tok_per_s=_query_tok_per_s(conversation),
                 )
                 break
 
