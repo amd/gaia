@@ -11,6 +11,7 @@ the token-discard custody invariant is asserted without a live daemon.
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
 
@@ -191,10 +192,12 @@ def _stub_ensure(monkeypatch, base_url="http://127.0.0.1:9999"):
     return inst
 
 
-def _stub_stream_post(monkeypatch, captured):
-    """Stub requests.post to capture the JSON payload and return one 'final'
-    SSE frame, without opening a real connection."""
+def _stub_stream_post(monkeypatch, captured, frames=None):
+    """Stub requests.post to capture the JSON payload and return the given SSE
+    frames (one 'final' by default), without opening a real connection."""
     import requests
+
+    payloads = frames or ['{"type": "final", "answer": "ok"}']
 
     class _Resp:
         status_code = 200
@@ -206,8 +209,9 @@ def _stub_stream_post(monkeypatch, captured):
             return False
 
         def iter_lines(self, decode_unicode=True):
-            yield 'data: {"type": "final", "answer": "ok"}'
-            yield ""
+            for frame in payloads:
+                yield f"data: {frame}"
+                yield ""
 
     def _fake_post(url, headers=None, json=None, stream=None, timeout=None):
         captured["json"] = json
@@ -238,3 +242,80 @@ def test_run_query_sends_session_id_when_given(monkeypatch):
     run_query("email", "hi", session_id="conv-123")
 
     assert captured["json"]["session_id"] == "conv-123"
+
+
+def test_run_query_without_trace_writes_no_file(monkeypatch, tmp_path):
+    """No --trace -> nothing on disk, and no trace_path on the outcome."""
+    from gaia.daemon.agent_query import run_query
+
+    monkeypatch.chdir(tmp_path)
+    _stub_ensure(monkeypatch)
+    _stub_stream_post(monkeypatch, {})
+
+    outcome = run_query("email", "hi")
+
+    assert outcome.trace_path is None
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_run_query_trace_writes_full_event_stream(monkeypatch, tmp_path):
+    """--trace lands a JSON file in the CWD holding the request and every
+    canonical event the sidecar emitted (issue #3345)."""
+    import json
+
+    from gaia.daemon.agent_query import run_query
+
+    monkeypatch.chdir(tmp_path)
+    _stub_ensure(monkeypatch)
+    _stub_stream_post(
+        monkeypatch,
+        {},
+        frames=[
+            '{"type": "status", "message": "Processing..."}',
+            '{"type": "tool_call", "tool": "triage_inbox", "args": {"limit": 5}}',
+            '{"type": "tool_result", "tool": "triage_inbox", "data": {"count": 5}}',
+            '{"type": "final", "answer": "Done."}',
+        ],
+    )
+
+    outcome = run_query("email", "triage my inbox", trace=True)
+
+    written = list(tmp_path.glob("email_trace_*.json"))
+    assert len(written) == 1
+    assert outcome.trace_path == str(written[0])
+
+    doc = json.loads(written[0].read_text(encoding="utf-8"))
+    assert doc["agent_id"] == "email"
+    assert doc["request"]["query"] == "triage my inbox"
+    assert doc["terminal_type"] == "final"
+    assert doc["final_answer"] == "Done."
+    assert [e["type"] for e in doc["events"]] == [
+        "status",
+        "tool_call",
+        "tool_result",
+        "final",
+    ]
+
+
+def test_run_query_trace_captures_stream_with_no_terminal_event(monkeypatch, tmp_path):
+    """A sidecar that dies mid-run still leaves the events it did emit on disk —
+    the trace is most useful exactly when the run failed."""
+    import json
+
+    from gaia.daemon.agent_query import run_query
+
+    monkeypatch.chdir(tmp_path)
+    _stub_ensure(monkeypatch)
+    _stub_stream_post(
+        monkeypatch,
+        {},
+        frames=['{"type": "tool_call", "tool": "list_emails"}'],
+    )
+
+    outcome = run_query("email", "hi", trace=True)
+
+    assert outcome.exit_code == 1
+    doc = json.loads(Path(outcome.trace_path).read_text(encoding="utf-8"))
+    assert doc["terminal_type"] is None
+    # The CLI-synthesized terminal error is recorded alongside the real events.
+    assert [e["type"] for e in doc["events"]] == ["tool_call", "error"]
