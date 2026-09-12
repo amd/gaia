@@ -85,10 +85,13 @@ func (m ChatModel) statusHints() []hint {
 	if m.mouseSelectMode {
 		hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
 	} else {
-		hints = append(hints,
-			hint{text: "↑↓/wheel scroll", rank: rankAffordance},
-			hint{text: "Ctrl+T select text", rank: rankSecondary},
-		)
+		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
+		// Not while the agent is parked on a decision: the bar is a sentence,
+		// and "answer above" is the only thing the reader should act on. How
+		// to select text can wait for a frame where nothing is pending.
+		if m.confirmation == nil {
+			hints = append(hints, hint{text: "Ctrl+T select text", rank: rankSecondary})
+		}
 	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
