@@ -320,6 +320,17 @@ class LemonadeProvider(LLMClient):
     def provider_name(self) -> str:
         return "Lemonade"
 
+    def cloud_model_provider(self, model: Optional[str] = None) -> Optional[str]:
+        """Cloud provider serving *model* (default: the live one), or None.
+
+        Goes through the backend, which carries the catalog metadata, so a
+        provider discovered at runtime is recognised as well as the two whose
+        id prefixes are known up front.
+        """
+        return self._backend.cloud_model_provider(
+            model or self._last_model or self._model or DEFAULT_MODEL_NAME
+        )
+
     def generate(
         self,
         prompt: str,
