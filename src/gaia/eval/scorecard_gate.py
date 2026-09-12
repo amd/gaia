@@ -76,8 +76,9 @@ def _within_one_stdev(parsed: dict) -> float | None:
     """Recorded run-to-run stdev of the within-one aggregate (#1894), [0,1] scale.
 
     Lives in ``recipe.config.acceptance_variance.within_one_bucket_accuracy.stdev``.
-    Returns ``None`` when the card carries no variance (single-run / older cards) —
-    the gate then falls back to a strict ``<`` regression check.
+    Returns ``None`` when the card carries no variance block (older cards). A
+    single-run card records ``0.0`` rather than omitting it; either way the caller
+    falls back to ``--regression-floor-pp`` for the band.
     """
     av = parsed.get("recipe", {}).get("config", {}).get("acceptance_variance")
     if not isinstance(av, dict):
@@ -237,8 +238,19 @@ def main(argv=None) -> int:
         help=(
             "Variance-aware regression band (#1894): when the BASELINE card records a "
             "within-one stdev, flag a regression only if the candidate falls below "
-            "baseline − k·stdev (default k=1). With no recorded stdev, a strict '<' "
-            "check is used."
+            "baseline − k·stdev (default k=1). Combined with --regression-floor-pp; "
+            "the wider of the two bands wins."
+        ),
+    )
+    parser.add_argument(
+        "--regression-floor-pp",
+        type=float,
+        default=1.5,
+        help=(
+            "Absolute floor on the regression band, in percentage points of "
+            "aggregate.value (default 1.5). Single-run cards record stdev 0.0, which "
+            "would otherwise collapse the variance band to a strict '<' and trip on "
+            "sub-noise wobble. Pass 0 for the old strict behaviour."
         ),
     )
     parser.add_argument(
@@ -519,20 +531,30 @@ def main(argv=None) -> int:
     candidate_version = candidate_parsed.get("agent", {}).get("version", "?")
     prev_version = prev_parsed.get("agent", {}).get("version", "?")
 
-    # Variance-aware regression band (#1894): if the baseline recorded a within-one
-    # stdev, a single noisy draw shouldn't trip the gate — only flag a regression
-    # when the candidate falls below baseline − k·stdev. stdev is on the [0,1]
-    # scale; aggregate.value is ×100, so scale the band to match. With no recorded
-    # stdev, fall back to a strict '<' (back-compat with older single-run cards).
+    # Regression band (#1894): a single noisy draw shouldn't trip the gate — only
+    # flag a regression when the candidate falls below baseline − band. The band is
+    # the WIDER of k·stdev and the absolute floor, so a single-run card (stdev 0.0)
+    # still gets real tolerance instead of collapsing to a strict '<'.
+    # stdev is on the [0,1] scale; aggregate.value is ×100, so scale to match.
     prev_stdev = _within_one_stdev(prev_parsed)
-    regression_threshold = float(prev_score)
+    variance_band = (
+        args.regression_k * prev_stdev * 100.0
+        if prev_stdev is not None and args.regression_k > 0
+        else 0.0
+    )
+    floor_band = max(args.regression_floor_pp, 0.0)
+    band = max(variance_band, floor_band)
+    regression_threshold = float(prev_score) - band
     band_note = ""
-    if prev_stdev is not None and args.regression_k > 0:
-        band = args.regression_k * prev_stdev * 100.0
-        regression_threshold = float(prev_score) - band
+    if band > 0:
+        source = (
+            f"{args.regression_k}×stdev({round(prev_stdev * 100, 2)})"
+            if variance_band >= floor_band and prev_stdev is not None
+            else f"floor({floor_band})"
+        )
         band_note = (
-            f" [variance-aware: {prev_score} − {args.regression_k}×stdev"
-            f"({round(prev_stdev * 100, 2)}) = {round(regression_threshold, 2)}]"
+            f" [band {round(band, 2)}pp from {source}: "
+            f"{prev_score} − {round(band, 2)} = {round(regression_threshold, 2)}]"
         )
 
     if float(candidate_score) < regression_threshold:

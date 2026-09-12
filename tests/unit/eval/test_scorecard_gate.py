@@ -43,14 +43,14 @@ def _write_card(directory: Path, version: str, accuracy: float) -> Path:
     """Write a valid SCORECARD.md to directory/SCORECARD.md."""
     payload = _make_payload(version=version, accuracy=accuracy)
     path = directory / "SCORECARD.md"
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 
 def _write_card_named(path: Path, version: str, accuracy: float) -> Path:
     """Write a valid SCORECARD.md to an explicit path."""
     payload = _make_payload(version=version, accuracy=accuracy)
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 
@@ -268,7 +268,7 @@ class TestWorkflowYaml:
             / "release_agent_email.yml"
         )
         assert workflow_path.exists(), f"Workflow file not found: {workflow_path}"
-        content = workflow_path.read_text()
+        content = workflow_path.read_text(encoding="utf-8")
         parsed = yaml.safe_load(content)
 
         assert "jobs" in parsed, "Workflow has no 'jobs' key"
@@ -322,20 +322,29 @@ def _make_acceptance_card(
     urgent_recall: float = 0.85,
     stdev: float | None = None,
     environment: dict | None = None,
+    n_runs: int = 3,
 ) -> Path:
     """Write a SCORECARD.md whose gated aggregate is within-one-bucket, with an
     urgent_recall secondary and (optionally) a recorded within-one stdev and/or
-    a run environment (e.g. {"ctx_size": 16384})."""
+    a run environment (e.g. {"ctx_size": 16384}).
+
+    ``n_runs=1`` with ``stdev=0.0`` reproduces a single-run card, which records a
+    zero stdev rather than omitting the variance block.
+    """
     metrics = [
         {"name": "within_one_bucket_accuracy", "value": within_one, "weight": 1.0},
         {"name": "urgent_recall", "value": urgent_recall, "weight": 0.0},
         {"name": "category_accuracy", "value": 0.42, "weight": 0.0},
     ]
-    config = {"model": "test", "n_runs": 3}
+    config = {"model": "test", "n_runs": n_runs}
     if stdev is not None:
         config["acceptance_variance"] = {
-            "n_runs": 3,
-            "within_one_bucket_accuracy": {"n": 3, "mean": within_one, "stdev": stdev},
+            "n_runs": n_runs,
+            "within_one_bucket_accuracy": {
+                "n": n_runs,
+                "mean": within_one,
+                "stdev": stdev,
+            },
         }
     payload = ResultPayload(
         agent_name="test-agent",
@@ -353,7 +362,7 @@ def _make_acceptance_card(
     )
     if environment is not None:
         payload.environment = environment
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 
@@ -450,15 +459,16 @@ class TestVarianceAwareRegression:
         )
         assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
 
-    def test_no_baseline_stdev_uses_strict_check(self, tmp_path):
-        # Baseline without variance → strict '<': 83 < 84 fails.
+    def test_no_baseline_stdev_falls_back_to_floor(self, tmp_path):
+        # Baseline without a variance block → the 1.5pp floor governs:
+        # 83 >= 84 − 1.5 = 82.5 → pass (was a strict '<' fail before the floor).
         base = _make_acceptance_card(
             tmp_path / "base.md", version="0.3.0", within_one=0.84
         )
         cand = _make_acceptance_card(
             tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.83
         )
-        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
 
     def test_equal_score_carry_forward_passes(self, tmp_path):
         base = _make_acceptance_card(
@@ -468,6 +478,110 @@ class TestVarianceAwareRegression:
             tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.84, stdev=0.02
         )
         assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+
+class TestRegressionFloor:
+    """Single-run cards record stdev 0.0, which would collapse the variance band to
+    a strict '<'. --regression-floor-pp keeps a real tolerance for them."""
+
+    def test_single_run_dip_within_floor_passes(self, tmp_path):
+        # 83.5 >= 84.5 − 1.5 = 83.0 → within the floor, pass.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.845,
+            stdev=0.0,
+            n_runs=1,
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.835,
+            stdev=0.0,
+            n_runs=1,
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+    def test_single_run_dip_beyond_floor_fails(self, tmp_path):
+        # 82.0 < 84.5 − 1.5 = 83.0 → a real regression still blocks.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.845,
+            stdev=0.0,
+            n_runs=1,
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.820,
+            stdev=0.0,
+            n_runs=1,
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
+
+    def test_recorded_stdev_wider_than_floor_wins(self, tmp_path):
+        # stdev 0.02 → 2.0pp band beats the 1.5pp floor: threshold 82.5, not 83.0.
+        # 82.8 passes only if the WIDER band is used (max, not floor-always-wins).
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.845, stdev=0.02
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.828, stdev=0.02
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+    def test_floor_zero_restores_strict_check(self, tmp_path):
+        # Escape hatch: --regression-floor-pp 0 with no stdev → strict '<'.
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.83
+        )
+        assert (
+            main(
+                [
+                    "--scorecard",
+                    str(cand),
+                    "--baseline-file",
+                    str(base),
+                    "--regression-floor-pp",
+                    "0",
+                ]
+            )
+            == 1
+        )
+
+    def test_floor_does_not_bypass_absolute_bar(self, tmp_path):
+        # A dip inside the floor still blocks when it lands under --min-aggregate.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.805,
+            stdev=0.0,
+            n_runs=1,
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.795,
+            stdev=0.0,
+            n_runs=1,
+        )
+        assert (
+            main(
+                [
+                    "--scorecard",
+                    str(cand),
+                    "--baseline-file",
+                    str(base),
+                    "--min-aggregate",
+                    "80",
+                ]
+            )
+            == 1
+        )
 
 
 # ---------------------------------------------------------------------------
