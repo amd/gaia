@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Received-invite grounding now recognizes Google events with omitted
+  organizer flags (#2787).** Calendar tools preserve the provider's explicit
+  organizer signal and treat the authenticated attendee as externally invited
+  when Google omits its default-false `organizer.self` and attendee organizer
+  fields. Mixed sent/received claims remain guarded, so self-organized events
+  cannot be mistaken for received invites.
 - **Asking to put a message back in your inbox now actually works (#2626).**
   `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
   add the inbox label and then archive the message in the same call, undoing
