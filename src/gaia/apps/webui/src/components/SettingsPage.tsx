@@ -13,6 +13,7 @@ import type { SystemStatus, MCPServerStatus } from '../types';
 import { CustomAgentsSection } from './CustomAgentsSection';
 import { ConnectorsSection } from './ConnectorsSection';
 import { VersionPicker } from './VersionPicker';
+import { SessionToolGrants } from './SessionToolGrants';
 import './ConnectorsSection.css';
 import './SettingsModal.css';
 import './SettingsPage.css';
@@ -606,6 +607,12 @@ export function SettingsPage() {
                 {showVersionPicker && (
                     <VersionPicker onClose={() => setShowVersionPicker(false)} />
                 )}
+
+                {/* Tools & Permissions */}
+                <section className="settings-section">
+                    <h4>Tools &amp; Permissions</h4>
+                    <SessionToolGrants />
+                </section>
 
                 {/* Privacy & Data */}
                 <section className="settings-section">

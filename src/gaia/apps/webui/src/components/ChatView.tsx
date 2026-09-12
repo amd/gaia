@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -792,51 +792,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
-                // ── Tool confirmation popup ──────────────────────────────
-                if (event.type === 'tool_confirm') {
-                    if (!event.confirm_id) {
-                        console.error('[ChatView] tool_confirm event missing confirm_id, ignoring');
-                        return;
-                    }
-                    const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
-                        // Auto-approve without showing the modal
-                        api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
-                            (err) => console.error('[ChatView] auto-confirm failed:', err)
-                        );
-                        return;
-                    }
-                    // Show the PermissionPrompt modal via notificationStore
-                    const notification: GaiaNotification = {
-                        id: event.confirm_id,
-                        type: 'permission_request',
-                        agentId: 'chat',
-                        agentName: 'GAIA',
-                        title: `Allow ${toolName}?`,
-                        message: `The agent wants to execute: ${toolName}`,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'high',
-                        tool: toolName,
-                        toolArgs: event.args as Record<string, unknown> | undefined,
-                        timeoutSeconds: event.timeout_seconds ?? 60,
-                    };
-                    addNotification(notification);
-                    return;
-                }
-
                 // Permission request — check always-allow list, then push to
                 // notification store for the PermissionPrompt overlay.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
+                    if (useNotificationStore.getState().isAlwaysAllowed(sessionId, toolName)) {
                         api.confirmTool(sessionId, true).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
                         );
@@ -847,6 +807,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         id: event.confirm_id ?? `perm-${Date.now()}`,
                         type: 'permission_request',
                         agentId: sessionId,
+                        sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: `The agent wants to execute: ${toolName}`,
