@@ -194,6 +194,29 @@ module.
 
 ---
 
+### 4.4 What the transport flip actually costs — measured, not guessed
+
+The flip was tried and reverted, because it is not the one-line change §2 implies. Flipping
+`catalog.go`'s flagship entry to `TransportDaemon` compiles and breaks **two packages**:
+
+| Broken | Why |
+|---|---|
+| `internal/catalog` (3 tests) | `SetMockBinary` points "every **subprocess** agent at a mock binary" — a daemon agent has no binary to point |
+| `tui/test` (9 tests) | Every end-to-end test drives the flagship through `--mock <binary>`, including the one asserting a missing binary halts at preflight |
+
+**`--mock` is the blocker, and it is a user-facing flag**, persistent on the TUI root. It is
+also the entire test-double strategy: there is no way to drive a daemon-transport agent in a
+test today without standing up a fake daemon.
+
+The way through is known — `tui/test/fakedaemon_test.go` already serves the daemon's *control*
+plane against an isolated `GAIA_DAEMON_HOME`, so extending it with `/ensure`, `/version` and a
+streaming `/v1/gaia/query` gives the e2e suite a daemon-shaped double. But that is a test-
+infrastructure project plus a change to what `--mock` means, not a catalog edit, and it
+touches the path every user hits on launch.
+
+So it is sequenced last, on its own, where it can be verified against a real daemon and a real
+sidecar. Everything before it stands alone and is what makes it possible.
+
 ## 5. Scope discipline
 
 The instruction behind this plan was *one flow, minimal scope, minimal bugs*. So, explicitly
@@ -221,7 +244,7 @@ tree in a state where two paths are both live.
 | 2 | Allow the Claude provider over HTTP | `--use-claude` reaches parity |
 | 3 | `switch_model` on a retained session; loud refusal on conflicting config | `/model` switches and keeps history |
 | 4a | Tool-decision + bypass endpoints; `SSEClient` implements both permission interfaces | A gated tool can be approved over the daemon at all (§3.4) |
-| 4b | Flagship catalog entry → `TransportDaemon` | The TUI runs through the daemon |
+| 4b | Fake-daemon test double + `--mock` semantics, then the catalog flip | The TUI runs through the daemon (§4.4 — the real cost) |
 | 5 | `AgentChannel` → daemon client; delete child ownership | Slack runs through the same agent |
 | 6 | Latency measurement, first turn and steady state | The flip did not cost what it was meant to save |
 

@@ -47,6 +47,17 @@ def build_session_agent(**config_kwargs: Any):
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
+def _permission_state():
+    """Build the per-session permission state.
+
+    Imported lazily, like :func:`build_session_agent`, so this module stays
+    dependency-light until a session actually exists.
+    """
+    from gaia_agent.stdio import PermissionState
+
+    return PermissionState()
+
+
 class SessionCapacityError(RuntimeError):
     """Every session slot is busy and none is idle enough to evict.
 
@@ -80,6 +91,16 @@ class _AgentSession:
         #: docstring), and an LRU-cap eviction can happen to a conversation
         #: that is still very much in use, just crowded out by others.
         self.reclaimed_after_eviction = False
+        #: Permission state that outlives any single turn: whether bypass is on,
+        #: and which calls the user has granted "always". A fresh
+        #: ``SSEOutputHandler`` is built per turn, so without this both are lost
+        #: at every turn boundary — which re-prompts for a call the user already
+        #: approved, the same defect as never having asked.
+        #:
+        #: Reuses the stdio transport's ``PermissionState`` rather than a second
+        #: copy: the two transports must not disagree about what "always" means
+        #: or when bypass takes effect.
+        self.permissions = _permission_state()
 
     def switch_model(self, target: str) -> str:
         """Move this session's retained agent onto *target*, keeping the chat.

@@ -159,6 +159,62 @@ class QueryRespondResponse(_Strict):
     delivered: bool
 
 
+#: The three answers a tool confirmation accepts, matching the stdio control
+#: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). A fourth
+#: spelling would be refused here rather than guessed at.
+_TOOL_DECISIONS = ("allow", "deny", "always")
+
+
+class ToolDecisionRequest(_Strict):
+    """Body of ``POST /v1/gaia/query/{run_id}/tool_decision``.
+
+    The HTTP twin of the stdio transport's ``tool_decision`` control message —
+    the seam that lets a remote surface answer a confirmation while the agent
+    thread is still parked on it.
+    """
+
+    decision: str = Field(
+        description=(
+            "One of 'allow', 'deny', 'always'. 'always' grants the pending "
+            "call's scope for the rest of the session."
+        )
+    )
+    confirm_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The 'confirm_id' from the needs_confirmation event being answered. "
+            "Without it a late answer resolves whichever confirmation replaced "
+            "the one it was typed against."
+        ),
+    )
+
+    @field_validator("decision")
+    @classmethod
+    def _known_decision(cls, v: str) -> str:
+        if v not in _TOOL_DECISIONS:
+            raise ValueError(
+                f"decision must be one of {', '.join(_TOOL_DECISIONS)}, got {v!r}"
+            )
+        return v
+
+
+class ToolDecisionResponse(_Strict):
+    run_id: str
+    decision: str
+    delivered: bool
+
+
+class BypassRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/bypass``."""
+
+    enabled: bool
+
+
+class BypassResponse(_Strict):
+    session_id: str
+    enabled: bool
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -598,6 +654,11 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            # Hand this turn's handler the session's accumulated permission
+            # state — bypass, and every "always" the user has granted. Built
+            # fresh per turn, so without this both reset at every turn boundary
+            # and the user is re-asked for a call they already approved.
+            session.permissions.attach(handler)
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
                 # a later turn on this same still-live session isn't re-warned.
@@ -683,6 +744,9 @@ async def query(request: QueryRequest):
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
             if session is not None:
+                # Collect this turn's "always" grants into the session before
+                # the handler is dropped, or the next turn re-asks for them.
+                session.permissions.detach(handler)
                 session.run_lock.release()
             # This thread is the last thing to touch a one-shot agent — the
             # stream reads only run.result and the handler — so its RAG index,
@@ -704,6 +768,12 @@ async def query(request: QueryRequest):
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
+
+    # A confirmation can only be carried when somebody is there to answer it AND
+    # there is a session to hold the grant. ``can_answer_questions`` is the
+    # caller's own declaration that a human is watching (spec >= 2.6); a
+    # one-shot sets it False precisely so the agent never parks on a prompt.
+    can_confirm = session is not None and request.can_answer_questions is not False
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
@@ -736,6 +806,16 @@ async def query(request: QueryRequest):
                         # the worker thread blocks waiting for /respond.
                         continue
                     if ctype == "needs_confirmation":
+                        if can_confirm:
+                            # Answerable, so the run stays alive: keep draining
+                            # while the worker thread blocks in
+                            # confirm_tool_execution waiting for
+                            # /query/{run_id}/tool_decision. Same shape as
+                            # needs_input above.
+                            continue
+                        # Nobody can answer — refusing is the honest end, and
+                        # far better than parking a run on a prompt no one will
+                        # ever see.
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -818,6 +898,72 @@ async def respond_to_query(
     return QueryRespondResponse(
         run_id=run_id, request_id=body.request_id, delivered=True
     )
+
+
+@router.post("/query/{run_id}/tool_decision", response_model=ToolDecisionResponse)
+async def tool_decision(run_id: str, body: ToolDecisionRequest):
+    """Answer a ``needs_confirmation`` while the agent is still parked on it.
+
+    The HTTP twin of the stdio transport's ``tool_decision`` control message.
+    Without this the daemon transport could not run a gated tool at all — the
+    stream refused the confirmation and cancelled the run, because there was
+    nowhere for an answer to come from.
+
+    A decision for a prompt that is no longer pending is rejected rather than
+    silently dropped: dropping it would leave the caller believing it approved
+    something that never ran.
+    """
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No run {run_id!r} is in flight. It may have already finished "
+                "or been cancelled; the decision was not delivered."
+            ),
+        )
+    approved = body.decision in ("allow", "always")
+    delivered = run.handler.resolve_tool_confirmation(
+        approved=approved,
+        always=body.decision == "always",
+        confirm_id=body.confirm_id,
+    )
+    if not delivered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No tool confirmation is pending on run {run_id!r}"
+                + (f" for confirm_id {body.confirm_id!r}" if body.confirm_id else "")
+                + " — it was already answered, timed out, or never asked."
+            ),
+        )
+    return ToolDecisionResponse(run_id=run_id, decision=body.decision, delivered=True)
+
+
+@router.post("/sessions/{session_id}/bypass", response_model=BypassResponse)
+async def set_bypass(session_id: str, body: BypassRequest):
+    """Turn unattended tool approval on or off for a session.
+
+    Session-scoped rather than run-scoped because it must outlive any one turn —
+    that is the whole point of bypass — and it takes effect on the very next
+    gated tool, including one in a turn already running.
+
+    Only an EXISTING session is accepted: creating one here would build a whole
+    agent as a side effect of a settings toggle, and would silently succeed
+    against a typo'd session id.
+    """
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; bypass applies to a conversation, not to the "
+                "server."
+            ),
+        )
+    session.permissions.set_bypass(body.enabled)
+    return BypassResponse(session_id=session_id, enabled=body.enabled)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

@@ -863,3 +863,152 @@ var (
 	_ AgentCanceler      = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )
+
+// The live permission seam (docs/plans/daemon-convergence.mdx §3.4).
+//
+// Distinct from Confirm above, and the difference is the whole point. Confirm
+// answers a run that has ALREADY STOPPED under the resume model. These reach an
+// agent thread still parked inside confirm_tool_execution, which is what the
+// flagship's gated tools — shell, file writes, code execution — actually do.
+// Without them the chat view can only record intent: it reports "this agent
+// connection cannot deliver a permission decision" and the tool never runs.
+var (
+	_ ToolPermissionResponder = (*SSEClient)(nil)
+	_ PermissionBypasser      = (*SSEClient)(nil)
+)
+
+type toolDecisionRequest struct {
+	Decision  string `json:"decision"`
+	ConfirmID string `json:"confirm_id,omitempty"`
+}
+
+type bypassRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// decisionWire validates a decision before it goes on the wire.
+//
+// PermissionDecision's values ARE the wire words — a deliberate cross-process
+// contract with gaia_agent.stdio's DECISION_* constants and the server's
+// _TOOL_DECISIONS — so there is nothing to translate, only something to check.
+// The agent fails closed on a value it does not recognise, which would turn the
+// approval the user just gave into a silent denial; catching that here names it
+// instead.
+func decisionWire(d PermissionDecision) (string, error) {
+	switch d {
+	case PermissionAllow, PermissionAlways, PermissionDeny:
+		return string(d), nil
+	default:
+		return "", fmt.Errorf(
+			"unknown permission decision %q — nothing was sent, because the "+
+				"agent would have read it as a denial", string(d))
+	}
+}
+
+// RespondToolPermission delivers one decision for the confirmation the agent is
+// parked on. confirmID names WHICH prompt it answers, so a late click cannot
+// resolve whichever confirmation replaced the one it was typed against.
+func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionDecision) error {
+	wire, err := decisionWire(decision)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to answer — it had already ended. Nothing was sent either way",
+			s.agentID)
+	}
+
+	payload, err := json.Marshal(toolDecisionRequest{Decision: wire, ConfirmID: confirmID})
+	if err != nil {
+		return fmt.Errorf("could not encode the permission decision for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/tool_decision",
+			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
+		Body:       payload,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("deliver the '%s' agent's permission decision", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run had already finished, so the decision arrived too late. "+
+				"Nothing was sent either way", s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' agent is no longer waiting on that confirmation — it was "+
+				"already answered or timed out. Nothing was sent", s.agentID)
+	default:
+		return fmt.Errorf("delivering the '%s' agent's permission decision failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+// SetBypassPermissions turns unattended approval on or off for this
+// conversation. Session-scoped, not run-scoped: bypass outliving a turn is the
+// entire point of it, and it takes effect on the very next gated tool including
+// one in a turn already running.
+func (s *SSEClient) SetBypassPermissions(enabled bool) error {
+	sessionID, err := s.ensureSessionID()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	inst := s.inst
+	s.mu.Unlock()
+	if inst == nil {
+		return fmt.Errorf(
+			"the '%s' agent is not connected yet, so bypass could not be changed. "+
+				"Send a message first", s.agentID)
+	}
+
+	payload, err := json.Marshal(bypassRequest{Enabled: enabled})
+	if err != nil {
+		return fmt.Errorf("could not encode the bypass setting for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/sessions/%s/bypass",
+			url.PathEscape(s.agentID), url.PathEscape(sessionID)),
+		Body:       payload,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("change the '%s' agent's bypass setting", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		// Bypass applies to a conversation, and this one has not started. Said
+		// plainly rather than as a bare 404: the user just pressed a key.
+		return fmt.Errorf(
+			"this '%s' conversation has not started yet, so there is nothing to "+
+				"apply bypass to. Send a message first, then toggle it", s.agentID)
+	default:
+		return fmt.Errorf("changing the '%s' agent's bypass setting failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
