@@ -215,8 +215,32 @@ def test_origin_of_rejects_junk():
 # -------------------------------------------------------------- the gate
 
 
+class _FakeDriver:
+    """Stands in for a live browser context with a given cookie set."""
+
+    started = True
+
+    def __init__(self, hosts=(), raises=False):
+        self._hosts = set(hosts)
+        self._raises = raises
+
+    def origin_has_cookies(self, origin):
+        if self._raises:
+            raise RuntimeError("browser is gone")
+        from urllib.parse import urlparse
+
+        host = (urlparse(origin).hostname or "").lower()
+        return any(host == h or host.endswith("." + h) for h in self._hosts)
+
+
 class _Agent(BrowserUseToolsMixin):
     """Bare mixin host — the gate must not depend on a full agent."""
+
+    def _signed_in(self, origin, hosts=(), raises=False):
+        """Put the agent on ``origin`` with a browser holding ``hosts`` cookies."""
+        self._browser_current_origin = origin
+        self._browser_driver = _FakeDriver(hosts, raises=raises)
+        return self
 
 
 def test_reading_the_open_web_is_not_gated():
@@ -226,26 +250,60 @@ def test_reading_the_open_web_is_not_gated():
 
 
 def test_acting_on_an_unauthenticated_page_is_not_gated():
-    a = _Agent()
-    a._browser_current_origin = "https://example.com"
+    a = _Agent()._signed_in("https://example.com", hosts=())
     assert a.browser_call_needs_confirmation("browser_click") is False
     assert a.browser_call_needs_confirmation("browser_type") is False
 
 
 def test_acting_inside_a_signed_in_session_is_gated():
     """The case that matters: a page could be steering the model."""
-    a = _Agent()
-    a._browser_current_origin = "https://bank.example"
-    a._authenticated_origins().add("https://bank.example")
+    a = _Agent()._signed_in("https://bank.example", hosts={"bank.example"})
     assert a.browser_call_needs_confirmation("browser_click") is True
     assert a.browser_call_needs_confirmation("browser_type") is True
 
 
-def test_a_signed_in_origin_does_not_gate_a_different_site():
-    a = _Agent()
-    a._authenticated_origins().add("https://bank.example")
-    a._browser_current_origin = "https://news.example"
+def test_a_sibling_origin_of_the_login_is_gated_too():
+    """The hole this replaced.
+
+    Cookies belong to the browser context, so signing in at
+    accounts.google.com authenticates mail.google.com. Matching against the
+    login origin left "Delete forever" on the mail domain ungated — and most
+    real sign-ins split identity provider from product.
+    """
+    a = _Agent()._signed_in("https://mail.google.com", hosts={"google.com"})
+    assert a.browser_call_needs_confirmation("browser_click") is True
+
+
+def test_a_signed_in_session_does_not_gate_an_unrelated_site():
+    a = _Agent()._signed_in("https://news.example", hosts={"bank.example"})
     assert a.browser_call_needs_confirmation("browser_click") is False
+
+
+def test_navigating_inside_a_signed_in_session_is_gated():
+    """A GET acts too — unsubscribe, logout and delete links are navigations."""
+    a = _Agent()._signed_in("https://bank.example", hosts={"bank.example"})
+    assert a.browser_call_needs_confirmation("browser_open") is True
+
+
+def test_navigating_with_no_browser_open_is_not_gated():
+    """The ordinary first navigation of a run must not prompt."""
+    assert _Agent().browser_call_needs_confirmation("browser_open") is False
+
+
+def test_the_gate_fails_closed_when_the_browser_cannot_be_asked():
+    """A gate that opens when it is confused is not a gate."""
+    a = _Agent()._signed_in("https://bank.example", raises=True)
+    assert a.browser_call_needs_confirmation("browser_click") is True
+
+
+def test_the_mixin_declares_its_own_confirmation_hook():
+    """Any agent composing the mixin must be gated, not just ChatAgent.
+
+    `gaia agent init --tools browser_use` scaffolds `class Foo(Agent,
+    BrowserUseToolsMixin)`; when the gate lived on ChatAgent, that agent got a
+    live authenticated browser with no prompt at all.
+    """
+    assert "browser_call_needs_confirmation" in BrowserUseToolsMixin.CONFIRMATION_HOOKS
 
 
 def test_signing_in_is_always_gated():

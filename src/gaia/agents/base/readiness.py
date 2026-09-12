@@ -584,7 +584,7 @@ def provision_progress(
 
     try:
         present = probe_model_present(probe_base, model_id)
-    except requests.exceptions.RequestException as exc:
+    except (requests.exceptions.RequestException, ValueError) as exc:
         yield line(
             f"✗ Could not read the backend's model list ({type(exc).__name__}: {exc})."
         )

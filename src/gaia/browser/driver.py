@@ -31,6 +31,7 @@ from gaia.browser.errors import (
     ElementNotFound,
     InteractionFailed,
     LoginTimedOut,
+    NavigationBlocked,
     NavigationFailed,
 )
 from gaia.browser.snapshot import _SNAPSHOT_JS, ref_selector, snapshot_args
@@ -94,12 +95,17 @@ class PlaywrightDriver:
         op_timeout_s: float = DEFAULT_OP_TIMEOUT_S,
         storage_state: Optional[Dict[str, Any]] = None,
         user_agent: Optional[str] = None,
+        allow_navigation: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self._headless = _headless_default() if headless is None else headless
         self._nav_timeout_ms = nav_timeout_ms
         self._op_timeout_s = op_timeout_s
         self._storage_state = storage_state
         self._user_agent = user_agent
+        self._allow_navigation = allow_navigation
+        #: URL the guard most recently refused. Read when a navigation fails so
+        #: the caller is told it was blocked, not that the site was slow.
+        self._last_blocked: Optional[str] = None
 
         self._jobs: "queue.Queue[Any]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -183,6 +189,7 @@ class PlaywrightDriver:
                 ctx_kwargs["user_agent"] = self._user_agent
             self._context = self._browser.new_context(**ctx_kwargs)
             self._context.set_default_timeout(self._nav_timeout_ms)
+            self._install_navigation_guard()
             self._page = self._context.new_page()
 
             logger.info(
@@ -249,10 +256,16 @@ class PlaywrightDriver:
         """Navigate and return a fresh snapshot."""
 
         def _go() -> Dict[str, Any]:
+            self._last_blocked = None
             try:
                 self._page.goto(url, wait_until="domcontentloaded")
             except Exception as e:  # noqa: BLE001 — re-raised with the URL
+                # A blocked hop surfaces as an abort or a timeout, neither of
+                # which says why. Report the refusal instead of the symptom.
+                if self._last_blocked:
+                    raise NavigationBlocked(url, self._last_blocked) from e
                 raise NavigationFailed(url, str(e).split("\n")[0]) from e
+            self._assert_landed_somewhere_allowed(url)
             self._settle()
             return self._snapshot()
 
@@ -276,6 +289,7 @@ class PlaywrightDriver:
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
                 raise InteractionFailed(ref, "click", str(e).split("\n")[0]) from e
             self._settle_after_action(prev_url)
+            self._assert_landed_somewhere_allowed(self._page.url)
             return self._snapshot()
 
         return self._submit(_click)
@@ -317,12 +331,39 @@ class PlaywrightDriver:
                 action = "select an option in" if tag == "select" else "type into"
                 raise InteractionFailed(ref, action, str(e).split("\n")[0]) from e
             self._settle_after_action(prev_url)
+            self._assert_landed_somewhere_allowed(self._page.url)
             return self._snapshot()
 
         return self._submit(_type)
 
     def current_url(self) -> str:
         return self._submit(lambda: self._page.url)
+
+    def origin_has_cookies(self, origin: str) -> bool:
+        """Whether the live context holds a cookie that covers ``origin``.
+
+        Sign-in state belongs to the browser context, not to the URL the user
+        signed in at: after logging in at ``accounts.google.com`` the same
+        context is authenticated for ``mail.google.com``. Asking the context
+        is the only way to see that; comparing against the login origin misses
+        every identity-provider split, which is most real sign-ins.
+        """
+
+        def _check() -> bool:
+            from urllib.parse import urlparse
+
+            host = (urlparse(origin).hostname or "").lower()
+            if not host:
+                return False
+            for c in self._context.cookies():
+                domain = str(c.get("domain") or "").lstrip(".").lower()
+                if not domain:
+                    continue
+                if host == domain or host.endswith("." + domain):
+                    return True
+            return False
+
+        return self._submit(_check)
 
     def cookies(self) -> List[Dict[str, Any]]:
         """Cookies held by the live context."""
@@ -428,6 +469,69 @@ class PlaywrightDriver:
         # to __init__): an instance attribute of the same name would
         # shadow this method and _submit would get a dict, not a callable.
         return self._context.storage_state()
+
+    def _install_navigation_guard(self) -> None:
+        """Screen every document navigation, not just the ones we initiate.
+
+        Checking the URL at ``browser_open`` only covers the first hop. A link
+        the model clicks, a redirect the server sends, and a script-driven
+        navigation all reach the network without passing that check — so a page
+        could walk the browser to a private address and hand its body back as
+        page text. Routing at the context level screens all of them once,
+        instead of bolting a check onto each entry point and missing the next.
+
+        Only top-level document requests are screened: subresources inherit the
+        document's origin, and validating every image would put a DNS lookup in
+        front of every asset on the page.
+        """
+        if self._allow_navigation is None:
+            return
+
+        def _guard(route, request):
+            try:
+                if (
+                    request.resource_type == "document"
+                    and request.is_navigation_request()
+                ):
+                    if not self._allow_navigation(request.url):
+                        logger.warning("Blocked navigation to %s", request.url)
+                        self._last_blocked = request.url
+                        route.abort("blockedbyclient")
+                        return
+            except Exception as e:  # noqa: BLE001 — never wedge the page on a guard bug
+                logger.error("Navigation guard error for %s: %s", request.url, e)
+            route.continue_()
+
+        self._context.route("**/*", _guard)
+
+    def _assert_landed_somewhere_allowed(self, requested: str) -> None:
+        """Refuse to hand back a page that ended up off the public internet.
+
+        The route guard sees the request the browser makes, but a server-side
+        302 is followed inside the network stack without re-entering the
+        handler — so a public URL can still land on a private one. This checks
+        where the page actually ended up and blanks it rather than snapshotting
+        it, so the body never reaches the model.
+
+        It cannot un-send the request: for a redirect chain the private address
+        was already contacted. What it prevents is the response becoming
+        context, which is the part an attacker is after.
+        """
+        if self._allow_navigation is None:
+            return
+        try:
+            landed = self._page.url
+        except Exception:  # noqa: BLE001 — nothing to vouch for
+            return
+        if not landed or landed.startswith(("about:", "chrome-error:")):
+            return
+        if self._allow_navigation(landed):
+            return
+        try:
+            self._page.goto("about:blank")
+        except Exception as e:  # noqa: BLE001 — best-effort scrub
+            logger.debug("Could not blank a blocked page: %s", e)
+        raise NavigationBlocked(requested, landed)
 
     def _settle_after_action(self, prev_url: str) -> None:
         """Settle after a click/keypress that *might* navigate.

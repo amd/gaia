@@ -30,17 +30,27 @@ logger = get_logger(__name__)
 #: with one of these is what flips a click from ungated to confirmed.
 _AUTHENTICATED_MARKER = "_browser_authenticated_origins"
 
-#: Calls that change page state rather than just reading it.
-_STATE_CHANGING = frozenset({"browser_click", "browser_type"})
+#: Calls that act on the page rather than only describing it. ``browser_open``
+#: is here because a GET can act: an unsubscribe, logout or "delete" link is a
+#: plain navigation, and inside a signed-in session that is a real change.
+_ACTING = frozenset({"browser_click", "browser_type", "browser_open"})
 
 
 class BrowserUseToolsMixin:
     """Live-browser tools: open, observe, act, and sign in.
 
+    Declares its own confirmation hook, so ANY agent composing this mixin —
+    including one scaffolded by ``gaia agent init --tools browser_use`` — is
+    gated. It used to rely on ``ChatAgent`` overriding the decision, which left
+    every other composer with an ungated browser and a saved sign-in.
+
     The agent owns one :class:`~gaia.browser.driver.PlaywrightDriver` for its
     lifetime, created on the first call that needs it. Call
     :meth:`cleanup_browser_use` on shutdown to close the browser.
     """
+
+    #: Consulted by ``Agent._tool_requires_confirmation``.
+    CONFIRMATION_HOOKS = ("browser_call_needs_confirmation",)
 
     _browser_driver = None  # PlaywrightDriver, lazily created
     _browser_headless: Optional[bool] = None
@@ -74,20 +84,23 @@ class BrowserUseToolsMixin:
                 logger.debug("Discarding dead browser driver: %s", e)
 
         self._browser_driver = PlaywrightDriver(
-            headless=self._browser_headless if headless is None else headless
+            headless=self._browser_headless if headless is None else headless,
+            allow_navigation=self._navigation_allowed,
         )
         self._browser_driver.start()
         return self._browser_driver
 
     def _restore_session_for(self, url: str) -> bool:
-        """Reopen the browser with a saved session for ``url``, if one exists."""
+        """Reopen the browser with a saved session for ``url``, if one exists.
+
+        Raises ``SessionStoreError`` when a session exists but cannot be read —
+        a corrupt blob or an unreachable keyring used to be logged and swallowed,
+        leaving the agent quietly signed out with the actionable message going
+        nowhere. "No session stored" is the only quiet outcome.
+        """
         from gaia.browser import session as session_store
 
-        try:
-            state = session_store.load(url)
-        except Exception as e:  # noqa: BLE001 — surfaced to the model, not fatal
-            logger.warning("Could not load saved session for %s: %s", url, e)
-            return False
+        state = session_store.load(url)
         if not state:
             return False
 
@@ -104,12 +117,18 @@ class BrowserUseToolsMixin:
                 True if self._browser_headless is None else self._browser_headless
             ),
             storage_state=state,
+            allow_navigation=self._navigation_allowed,
         )
         self._browser_driver.start()
         self._authenticated_origins().add(session_store.origin_of(url))
         self._browser_current_origin = session_store.origin_of(url)
         logger.info("Restored saved browser session for %s", url)
         return True
+
+    @classmethod
+    def _navigation_allowed(cls, url: str) -> bool:
+        """Predicate form of :meth:`_check_navigable`, for the driver's guard."""
+        return cls._check_navigable(url) is None
 
     @staticmethod
     def _check_navigable(url: str) -> Optional[str]:
@@ -126,10 +145,9 @@ class BrowserUseToolsMixin:
         the point is to drive a local dev server. Deliberately explicit: the
         default denies, and the opt-in is visible in the environment.
 
-        Known gap: this screens the URL the agent asks for. A site that
-        *redirects* to a private address is followed by the browser
-        internally, out of reach of this check — closing that needs a
-        request-interception guard in the driver.
+        This screens the URL the agent asks for; the driver additionally
+        routes every top-level navigation through :meth:`_navigation_allowed`,
+        so a redirect or a clicked link is screened too.
         """
         if not url.startswith(("http://", "https://")):
             return (
@@ -196,20 +214,48 @@ class BrowserUseToolsMixin:
 
         Reading the open web is ungated — it is what ``fetch_page`` already
         does. What earns a prompt is acting *inside someone's signed-in
-        account*, where a page that carries a prompt injection could otherwise
-        talk the model into clicking something consequential. Signing in is
-        always confirmed: it opens a window and persists a session.
+        session*, where a page carrying a prompt injection could otherwise talk
+        the model into something consequential. Signing in is always confirmed:
+        it opens a window and persists a session.
 
-        Consulted from ``ChatAgent._tool_requires_confirmation`` rather than
-        overridden here — ``Agent`` precedes this mixin in the MRO, so an
-        override on the mixin would never run.
+        "Signed in" is answered by the **browser context**, not by the URL the
+        user signed in at. Cookies are context-wide, so a login at
+        ``accounts.google.com`` authenticates ``mail.google.com`` too; matching
+        against the login origin missed every identity-provider split, which is
+        most real sign-ins.
+
+        Fails **closed**: if the browser cannot be asked, the call is treated as
+        authenticated and prompts. A gate that opens when it is confused is not
+        a gate.
+
+        Named as a hook rather than an override because ``Agent`` precedes the
+        tool mixins in the MRO — see ``Agent.CONFIRMATION_HOOKS``.
         """
         if tool_name == "browser_login":
             return True
-        if tool_name not in _STATE_CHANGING:
+        if tool_name not in _ACTING:
             return False
+
+        driver = self._browser_driver
+        if driver is None or not driver.started:
+            # No live browser: browser_open is about to start one on a fresh
+            # context, so there is no session to act inside yet.
+            return False
+
         origin = getattr(self, "_browser_current_origin", None)
-        return bool(origin) and origin in self._authenticated_origins()
+        if not origin:
+            return False
+        if origin in self._authenticated_origins():
+            return True
+        try:
+            return driver.origin_has_cookies(origin)
+        except Exception as e:  # noqa: BLE001 — see "fails closed" above
+            logger.warning(
+                "Could not check sign-in state for %s (%s); requiring confirmation.",
+                origin,
+                e,
+            )
+            return True
 
     def cleanup_browser_use(self) -> None:
         """Close the browser. Safe to call when none was ever opened."""
@@ -273,12 +319,14 @@ class BrowserUseToolsMixin:
             if bad:
                 return bad
             try:
-                # A saved session only helps if it is loaded before the first
-                # navigation — cookies set a context, not a page.
-                if (
-                    not mixin.browser_origin_is_authenticated(url)
-                    and mixin._browser_driver is None
-                ):
+                # Restore whenever this origin has a stored session and this run
+                # has not already loaded it — NOT only on the first browser call.
+                # The common trajectory is "read something, then go to the site
+                # that needs the account"; gating on a cold driver meant the
+                # saved sign-in was skipped exactly then, and the agent landed
+                # on a login screen. Rebuilding the context costs one browser
+                # launch on a path that otherwise costs a human sign-in.
+                if not mixin.browser_origin_is_authenticated(url):
                     mixin._restore_session_for(url)
                 driver = mixin._ensure_driver()
                 snap = driver.goto(url)

@@ -16,8 +16,8 @@ So the split is **key in the keyring, ciphertext on disk**:
     disk:     ~/.gaia/browser/sessions/<sha256(origin)>.enc   0600, AES-GCM
               ~/.gaia/browser/sessions/<sha256(origin)>.json  0600, metadata
 
-The metadata file holds no secrets, so ``gaia browser sessions`` can list what
-is stored without decrypting anything.
+The metadata file holds no secrets, so what is stored can be listed without
+decrypting anything (:func:`listing`).
 """
 
 from __future__ import annotations
@@ -106,14 +106,16 @@ def _load_key() -> bytes:
             key = bytes.fromhex(existing)
         except ValueError as e:
             raise SessionStoreError(
-                "The stored browser session key is corrupt. Clear it with "
-                "`gaia browser sessions clear` and sign in again."
+                "The stored browser session key is corrupt. Delete the "
+                f"`{KEYRING_USERNAME}` entry for service `{KEYRING_SERVICE}` "
+                "from your OS credential store and sign in again."
             ) from e
         if len(key) == _KEY_BYTES:
             return key
         raise SessionStoreError(
-            "The stored browser session key is the wrong length. Clear it "
-            "with `gaia browser sessions clear` and sign in again."
+            "The stored browser session key is the wrong length. Delete the "
+            f"`{KEYRING_USERNAME}` entry for service `{KEYRING_SERVICE}` "
+            "from your OS credential store and sign in again."
         )
 
     key = os.urandom(_KEY_BYTES)
@@ -194,8 +196,8 @@ def load(url: str) -> Optional[Dict[str, Any]]:
     blob = path.read_bytes()
     if len(blob) <= _NONCE_BYTES:
         raise SessionStoreError(
-            f"The saved session for {origin} is truncated. Remove it with "
-            f"`gaia browser sessions forget {origin}` and sign in again."
+            f"The saved session for {origin} is truncated. Delete "
+            f"{path} and sign in again."
         )
     try:
         plaintext = AESGCM(key).decrypt(
@@ -204,8 +206,8 @@ def load(url: str) -> Optional[Dict[str, Any]]:
     except Exception as e:  # noqa: BLE001 — re-raised actionably
         raise SessionStoreError(
             f"Could not decrypt the saved session for {origin}: the key "
-            "changed or the file was tampered with. Remove it with "
-            f"`gaia browser sessions forget {origin}` and sign in again."
+            "changed or the file was tampered with. Delete "
+            f"{path} and sign in again."
         ) from e
     return json.loads(plaintext.decode("utf-8"))
 

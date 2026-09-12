@@ -61,6 +61,19 @@ class NavigationFailed(BrowserError):
         )
 
 
+class NavigationBlocked(BrowserError):
+    """A navigation was refused because it left the public internet."""
+
+    def __init__(self, requested: str, blocked: str) -> None:
+        super().__init__(
+            f"Refused to load {requested}: it tried to reach {blocked}, which "
+            "is not on the public internet.\n"
+            "  A page cannot send the browser to a private or link-local "
+            "address. Set GAIA_BROWSER_ALLOW_PRIVATE=1 to allow local "
+            "addresses deliberately."
+        )
+
+
 class ElementNotFound(BrowserError):
     """A ref no longer resolves to an element on the page."""
 

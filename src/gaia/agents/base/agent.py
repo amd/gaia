@@ -789,6 +789,20 @@ class Agent(abc.ABC):
     # generic shell/file-mutation tools. Empty by default.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset()
 
+    #: Method names a composed mixin contributes to the confirmation decision.
+    #: A static name set cannot express "gate this call only in this state" —
+    #: the browser mixin gates a click only when the page is inside a signed-in
+    #: session. Each named method takes the tool name and returns True to
+    #: require confirmation; the results are OR-ed with the static set.
+    #:
+    #: A hook rather than an override because ``Agent`` precedes the tool
+    #: mixins in every agent's MRO, so a mixin-side override of
+    #: ``_tool_requires_confirmation`` would never be reached. Declaring it
+    #: here keeps the gate a property of the mixin that owns the capability —
+    #: a scaffolded agent composing that mixin is gated by construction rather
+    #: than by remembering to copy an override.
+    CONFIRMATION_HOOKS: ClassVar[tuple] = ()
+
     # ``get_*_system_prompt`` fragments whose text changes during a session.
     # ``_compose_system_prompt`` emits these LAST so a mid-session change never
     # invalidates the backend's KV-cache prefix for the static text above them.
@@ -3580,6 +3594,20 @@ Do NOT wrap conversational replies in JSON.
         return holder.get("result")
 
     @classmethod
+    def confirmation_hooks(cls) -> tuple:
+        """Every ``CONFIRMATION_HOOKS`` entry declared across this class's MRO.
+
+        Unioned rather than read off ``cls`` so two mixins can each contribute
+        a hook without one shadowing the other.
+        """
+        seen: list = []
+        for klass in cls.__mro__:
+            for name in getattr(klass, "CONFIRMATION_HOOKS", ()) or ():
+                if name not in seen:
+                    seen.append(name)
+        return tuple(seen)
+
+    @classmethod
     def confirmation_required_tools(cls) -> frozenset:
         """The full set of tool names gated behind explicit user confirmation
         for this agent (#1440): the generic dangerous base set
@@ -3682,6 +3710,25 @@ Do NOT wrap conversational replies in JSON.
             tool_args: Its arguments. Omitting them decides on the name alone —
                 what every caller did before grants existed, and still gets.
         """
+        for hook_name in self.confirmation_hooks():
+            hook = getattr(self, hook_name, None)
+            if hook is None:
+                continue
+            try:
+                if hook(tool_name):
+                    return True
+            except (
+                Exception
+            ) as e:  # noqa: BLE001 — a broken hook must not open the gate
+                logger.error(
+                    "Confirmation hook %s failed for %s (%s); requiring "
+                    "confirmation.",
+                    hook_name,
+                    tool_name,
+                    e,
+                )
+                return True
+
         if tool_name in self.confirmation_required_tools():
             return not self._call_is_pre_authorized(tool_name, tool_args)
         entry = self._tools_registry.get(tool_name) or {}

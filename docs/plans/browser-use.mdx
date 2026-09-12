@@ -6,9 +6,11 @@ description: Scope for giving GAIA a real browser — logging in, acting on page
 # Browser Use — Scope
 
 <Info>
-**Status:** Phases 1–2 shipped (driver, tools, login, sessions). Phase 0's
-measurements are still owed; Phases 3–4 (native CDP driver, record/replay) are
-not started. See [the guide](/guides/browser-use) for how to use what landed.
+**Status:** Phases 1–2 shipped, with deviations — see
+[What actually shipped](#what-actually-shipped) before treating anything below
+as current design. Phase 0's measurements are still owed; Phases 3–4 (native
+CDP driver, record/replay) are not started. See
+[the guide](/guides/browser-use) for how to use what landed.
 **Supersedes:** the "no browser engine" half of [Browser Tools](/spec/browser-tools) (decision D1)
 **Issues:** [#458](https://github.com/amd/gaia/issues/458) (browser tools), [#460](https://github.com/amd/gaia/issues/460) (desktop CUA), [#224](https://github.com/amd/gaia/issues/224) (CUA via MCP)
 </Info>
@@ -40,7 +42,7 @@ The premise behind "Playwright is slow, let's build a fast vision-driven one" do
 | Browser cold launch | 1–3 s | amortizable — keep the browser alive |
 | **LLM decides the next action** | **2–15 s** | **this is the turn** |
 
-The last row dominates by an order of magnitude, and it is measured, not assumed. From [the flagship latency study](/plans/gaia-agent-latency): Gemma-4-E4B on the GPU profile prefills at **387 tok/s** and generates at 34 tok/s, so **every 1,000 prompt tokens costs ~2.6 seconds**. Committed eval baselines put TTFT between 0.31 s and 2.97 s per call. The flagship already carries ~17,000 tokens of fixed prefill — 43.9 s — before the page is even described to it.
+The last row dominates by an order of magnitude, and it is measured, not assumed. From [the flagship latency study](https://github.com/amd/gaia/blob/main/docs/plans/gaia-agent-latency.md): Gemma-4-E4B on the GPU profile prefills at **387 tok/s** and generates at 34 tok/s, so **every 1,000 prompt tokens costs ~2.6 seconds**. Committed eval baselines put TTFT between 0.31 s and 2.97 s per call. The flagship already carries ~17,000 tokens of fixed prefill — 43.9 s — before the page is even described to it.
 
 Two conclusions follow, and they point away from the original instinct.
 
@@ -57,6 +59,22 @@ Not in the driver. In **not calling the model at all**.
 A browser task is overwhelmingly repetitive — the same login, the same three clicks, the same table, every morning. Record a successful trajectory as a deterministic script and replay it; on the second run the LLM is consulted only when replay diverges from what it recorded. `price-watch` goes from ~8 LLM steps (~30 s) to zero (~2 s). That is the 10–100×, and it is a *caching* problem, not a driver problem.
 
 This has a natural home already: skills carry `permissions:` and `tools_required:` metadata, and [`skill_learning_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/skill_learning_tools.py) already lets an agent write back what it learned under provenance constraints.
+
+## What actually shipped
+
+This plan was written before the work; three things landed differently, and the
+sections below still describe the plan rather than the code.
+
+| Planned | Shipped | Why |
+|---|---|---|
+| Nine tools, incl. `browser_select`, `browser_scroll`, `browser_back`, `browser_screenshot` | **Six** — select folded into `browser_type`, scroll dropped (Playwright auto-scrolls on click), back and screenshot deferred | Bundles cap at six members, and each tool schema is a permanent prompt cost |
+| Browser runs as a supervised daemon sidecar (D7) | **In-process**, owned by the agent, torn down on cleanup | The sidecar registry is spec-and-health-endpoint driven for agent packages, not a generic process supervisor; `MAX_LIVE_SIDECARS` is 3 with two already claimed |
+| A `BrowserDriver` protocol behind which Playwright sits | **`PlaywrightDriver` used directly** | No second implementation yet; the protocol buys nothing until Phase 3 |
+
+Phase 2's origin-scoped skill grants (`browser:interact:<domain>`) did not land
+either. What did land is the confirmation gate: acting inside a session the
+browser context holds cookies for prompts every time, and is never offered an
+"always allow".
 
 ## Recommendation
 
@@ -97,11 +115,16 @@ Instead: **key in the keyring, ciphertext on disk.**
 keyring: gaia.connections / browser-session-key   (32 bytes)
 ```
 
-`cryptography` is already a core dependency. Non-secret metadata (origin, captured-at, last-used, expiry) goes in a sibling 0600 JSON file so `gaia browser sessions list` never touches plaintext.
+`cryptography` is already a core dependency. Non-secret metadata (origin, captured-at, last-used, expiry) goes in a sibling 0600 JSON file so listing what is stored never touches plaintext.
 
 There is no prior art for this in connectors — `ConnectorSpec.type` is `Literal["oauth_pkce", "mcp_server"]`, with no cookie/session type. Adding a third type is a possible follow-up; it should not block this.
 
 ## Architecture
+
+<Note>
+Planned, and **not** what shipped — the browser runs in-process. See
+[What actually shipped](#what-actually-shipped).
+</Note>
 
 The browser runs as a **supervised sidecar**, not in-process. It is a long-lived, crash-prone, memory-hungry process — exactly what `src/gaia/daemon/sidecars/` exists to babysit, and `tests/fixtures/toy_sidecar.py` proves a non-agent process satisfies the contract in ~75 lines.
 
@@ -125,6 +148,11 @@ Sidecar specs live in a static `builtin_specs()` table, so registering `browser`
 
 Nine tools, registered as `KNOWN_TOOLS["browser_use"]` alongside the existing lightweight `browser` mixin — which stays. Most web reading should keep going through `fetch_page`, because it is 200 ms and free.
 
+<Note>
+Planned surface. Six shipped — see [What actually shipped](#what-actually-shipped)
+and the [guide](/guides/browser-use) for the real table.
+</Note>
+
 | Tool | Gated |
 |---|---|
 | `browser_open(url)` | no |
@@ -137,7 +165,9 @@ Nine tools, registered as `KNOWN_TOOLS["browser_use"]` alongside the existing li
 | `browser_login(url)` — hand off to the user | **always** |
 | `browser_screenshot()` — VLM fallback only | no |
 
-Observation format is the load-bearing decision. A snapshot returns interactive elements only, each with a stable `ref` the model cites back — never raw HTML, never coordinates. That is what keeps a step at a few hundred tokens instead of several thousand.
+Observation format is the load-bearing decision. A snapshot returns interactive elements only, each with a stable `ref` the model cites back — never raw HTML, never coordinates.
+
+The token saving this assumed turned out to be smaller than planned — measured, a dense page is ~1,040 tokens of elements and ~2,000 with page text, which is a screenshot's ballpark rather than an order below it. The decisive advantage is grounding: a ref resolves to an exact element where a coordinate is a guess.
 
 ## Security
 
@@ -206,14 +236,14 @@ Mitigations, all of which reuse existing machinery rather than inventing a paral
 | D7 | Browser runs as a daemon sidecar; CDP never crosses the relay | The relay is HTTP-only; the supervisor already handles crash, reap and auth |
 | D8 | The model never handles credentials | MFA, passkeys and SSO all work; nothing to leak |
 | D9 | Session blob encrypted on disk, key in keyring | Windows Credential Manager's ~1280-char cap makes the keyring-only path fail |
-| D10 | Gate on state-change × authenticated origin, via `CONFIRMATION_REQUIRED_TOOLS` | `governance/` has no production adopters; this is the gate the TUI and Agent UI actually speak |
+| D10 | Gate on state-change × authenticated origin, via the `CONFIRMATION_HOOKS` union | `governance/` has no production adopters. Shipped as a per-call hook rather than a static name set, so the decision can depend on session state and travels with the mixin |
 | D11 | Replay, not a faster driver, is where the speedup lives | The model is 80–95% of wall clock. The only large win is not calling it |
 | D12 | No CAPTCHA solving, no bot-detection evasion | Hand off to the user; fail loudly |
 
 ## Related
 
 - [Browser Tools spec](/spec/browser-tools) — the lightweight fetcher this extends
-- [Agent latency study](/plans/gaia-agent-latency) — source of the 387 tok/s prefill figure
+- [Agent latency study](https://github.com/amd/gaia/blob/main/docs/plans/gaia-agent-latency.md) — source of the 387 tok/s prefill figure
 - [CUA plan](/plans/cua) — desktop control; adjacent, deliberately separate
 - [Connectors](/plans/connectors) — OAuth, which beats browser login wherever it exists
 - [Security model](/plans/security-model)

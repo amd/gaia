@@ -78,12 +78,16 @@ The model, not the browser, is the slow part of a browser task — GAIA prefills
 at roughly 387 tok/s, so a page description costs about 2.6 seconds per 1,000
 tokens. Three decisions follow from that:
 
-- **The page is described as text, not a screenshot.** A filtered list of
-  interactive elements costs a few hundred tokens where an image costs
-  thousands — and a ref is exact where a predicted click coordinate is a guess.
+- **The page is described as text, not a screenshot.** Measured with
+  `cl100k_base`: 49 tokens for `example.com`, ~1,040 for the interactive
+  elements of a dense article, ~2,000 with 4,000 characters of page text — the
+  same ballpark as a screenshot, not an order below it. The decisive part is
+  not the token count but the grounding: a ref resolves to an exact element,
+  where a predicted click coordinate is a guess a 4B model gets wrong.
 - **The browser stays open.** Launching costs ~1.7 s; reusing it makes the next
-  action ~10–30 ms. Measured on the reference fixture: first `browser_open`
-  0.80 s, the `browser_type` after it 0.03 s.
+  action ~10–30 ms. Measured driving the flagship agent on one machine: first
+  `browser_open` 0.80 s, the `browser_type` after it 0.03 s. Treat these as
+  indicative of the shape, not as a benchmark — they are one box, one run.
 - **No MCP hop.** Tools call Playwright's Python API directly in-process.
 
 ## Security
@@ -93,9 +97,15 @@ and a password field's contents are stripped from every snapshot before the
 model sees them.
 
 **Acting inside a signed-in session asks first.** Reading the open web is
-ungated. But once a session is live, a click or a keystroke is happening inside
-your account — and a web page can contain text aimed at talking the model into
+ungated. But once a session is live, a click, a keystroke — or a plain
+navigation, since an unsubscribe or delete link is a GET — happens inside your
+account, and a web page can contain text aimed at talking the model into
 something. Those calls go through GAIA's normal approval prompt.
+
+Whether a page counts as signed-in is answered by the **browser**, not by the
+address you signed in at: cookies are context-wide, so a login at
+`accounts.google.com` makes `mail.google.com` gated too. If the browser cannot
+be asked, the call is treated as signed-in and prompts.
 
 **Addresses off the public internet are refused.** The browser gets the same
 SSRF screening `fetch_page` has: no private, loopback, link-local, or reserved
@@ -106,11 +116,10 @@ drive a local dev server, opt in explicitly:
 export GAIA_BROWSER_ALLOW_PRIVATE=1
 ```
 
-<Warning>
-The screening applies to the address the agent asks for. A site that *redirects*
-to a private address is followed by the browser internally, where this check
-cannot see it.
-</Warning>
+Every top-level navigation is screened, not just the URL the agent names — so a
+redirect, or a link the model clicks, is checked too. Subresources are not:
+they inherit the document's origin, and validating each image would put a DNS
+lookup in front of every asset on the page.
 
 **Sessions are encrypted at rest.** A cookie jar is far too large for the OS
 credential store (Windows caps entries near 1280 characters), so GAIA keeps the
@@ -131,7 +140,7 @@ automation, the agent says so.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GAIA_BROWSER_HEADLESS` | `1` | Run without a window. `browser_login` always shows one. |
+| `GAIA_BROWSER_HEADLESS` | unset (headless) | Run without a window. `browser_login` always shows one. |
 | `GAIA_BROWSER_ALLOW_PRIVATE` | unset | Allow private/loopback addresses. |
 
 ## When not to use it

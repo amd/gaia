@@ -32,6 +32,10 @@ MAX_ELEMENTS = 120
 #: Max characters of accessible name kept per element.
 MAX_NAME_CHARS = 120
 
+#: Max characters of readable page text returned with a snapshot. Separate from
+#: the name cap on purpose — see the two helpers in the injected script.
+MAX_TEXT_CHARS = 4000
+
 
 # Collects interactive elements, stamps a ref on each, returns compact records.
 #
@@ -40,7 +44,7 @@ MAX_NAME_CHARS = 120
 # way a user's eye would.
 _SNAPSHOT_JS = """
 (args) => {
-  const { attr, maxElements, maxNameChars } = args;
+  const { attr, maxElements, maxNameChars, maxTextChars } = args;
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea',
     '[role=button]', '[role=link]', '[role=checkbox]', '[role=radio]',
@@ -49,7 +53,12 @@ _SNAPSHOT_JS = """
     '[contenteditable=""]', '[contenteditable=true]', '[onclick]',
   ].join(',');
 
-  const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim().slice(0, maxNameChars);
+  // Two caps, deliberately separate. `clean` is for an element's accessible
+  // name; `squash` only normalises whitespace. Sharing one helper capped the
+  // whole page text at the NAME length — 120 chars of a 63,000-char article —
+  // because the later slice(0, maxTextChars) had nothing left to trim.
+  const squash = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const clean = (s) => squash(s).slice(0, maxNameChars);
 
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -153,7 +162,7 @@ _SNAPSHOT_JS = """
     truncated,
     // Readable page text, capped. Gives the model page content without a
     // second round trip, and without the markup a raw DOM dump would carry.
-    text: clean((document.body && document.body.innerText) || '').slice(0, 4000),
+    text: squash((document.body && document.body.innerText) || '').slice(0, maxTextChars),
   };
 }
 """
@@ -165,6 +174,7 @@ def snapshot_args() -> Dict[str, Any]:
         "attr": REF_ATTR,
         "maxElements": MAX_ELEMENTS,
         "maxNameChars": MAX_NAME_CHARS,
+        "maxTextChars": MAX_TEXT_CHARS,
     }
 
 

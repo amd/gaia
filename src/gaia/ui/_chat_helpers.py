@@ -605,10 +605,32 @@ def get_cached_mcp_status() -> list[dict]:
 
 
 def _disconnect_cached_agent(entry) -> None:
-    """Best-effort disconnect of MCP subprocesses held by a cache entry."""
+    """Best-effort release of OS resources held by a cache entry.
+
+    Covers MCP subprocesses and anything the agent's own ``close()`` releases —
+    a browser, in particular. Relying on ``__del__`` is not enough here: an
+    agent whose tool registry holds bound methods sits in a reference cycle, so
+    collection is "eventually", and this cache holds ten entries. Ten evicted
+    agents each still holding a live Chromium is a few gigabytes.
+    """
     if not isinstance(entry, dict):
         return
     agent = entry.get("agent")
+
+    close = getattr(agent, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as exc:  # noqa: BLE001 — eviction must not block
+            logger.warning("Agent close failed during cache eviction: %s", exc)
+
+    cleanup_browser = getattr(agent, "cleanup_browser_use", None)
+    if callable(cleanup_browser):
+        try:
+            cleanup_browser()
+        except Exception as exc:  # noqa: BLE001 — eviction must not block
+            logger.warning("Browser cleanup failed during cache eviction: %s", exc)
+
     mcp_manager = getattr(agent, "_mcp_manager", None)
     if mcp_manager is not None:
         try:

@@ -2412,19 +2412,6 @@ No documents are currently indexed.
             logger.error(f"Error saving session: {e}")
             return False
 
-    def _tool_requires_confirmation(
-        self, tool_name: str, tool_args: Optional[Dict[str, Any]] = None
-    ) -> bool:
-        """Add the browser's context-sensitive gate to the static name set.
-
-        Lives here rather than on ``BrowserUseToolsMixin`` because ``Agent``
-        precedes the tool mixins in this class's MRO, so a mixin override
-        would never be reached.
-        """
-        if self.browser_call_needs_confirmation(tool_name):
-            return True
-        return super()._tool_requires_confirmation(tool_name, tool_args)
-
     def __del__(self):
         """Cleanup when agent is destroyed.
 

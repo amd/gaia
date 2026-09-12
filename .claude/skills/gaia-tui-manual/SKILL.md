@@ -8,7 +8,7 @@ description: The GAIA terminal UI (gaia-tui) — how to build it, launch it with
 Two manuals carry the detail. **Read the matching one before touching the
 TUI** — both are written from verified runs, not from reading the source.
 
-- **[User manual](../../../docs/guides/tui.mdx)** (`docs/guides/tui.mdx`) —
+- **[User manual](../../../docs/guides/terminal-hub.mdx)** (`docs/guides/terminal-hub.mdx`) —
   install, the setup gate and what each row means, choosing where inference
   runs, day-to-day use, the permission prompt, troubleshooting.
 - **[Developer manual](../../../docs/reference/tui-dev.mdx)**

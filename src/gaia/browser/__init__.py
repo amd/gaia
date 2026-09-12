@@ -19,6 +19,7 @@ from gaia.browser.errors import (
     ElementNotFound,
     InteractionFailed,
     LoginTimedOut,
+    NavigationBlocked,
     NavigationFailed,
     SessionStoreError,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "ElementNotFound",
     "InteractionFailed",
     "LoginTimedOut",
+    "NavigationBlocked",
     "NavigationFailed",
     "SessionStoreError",
 ]

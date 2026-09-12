@@ -19,7 +19,7 @@ import time
 import pytest
 
 from gaia.browser import driver as browser_driver
-from gaia.browser.errors import ElementNotFound, LoginTimedOut
+from gaia.browser.errors import BrowserError, ElementNotFound, LoginTimedOut
 from gaia.browser.snapshot import render
 
 pytestmark = pytest.mark.skipif(
@@ -74,6 +74,47 @@ def test_hidden_and_aria_hidden_elements_are_left_out(driver, page_url):
     names = " ".join(e["name"] for e in snap["elements"])
     assert "DISPLAYNONE" not in names
     assert "ARIAHIDDEN" not in names
+
+
+def test_page_text_is_not_capped_at_the_element_name_length(driver, nav_url):
+    """Page text and element names have separate caps.
+
+    Regression: both went through one helper that sliced to MAX_NAME_CHARS, so
+    a snapshot returned 120 characters of page text no matter how long the page
+    was — 120 of 63,000 on a Wikipedia article. Every existing test passed,
+    because they all read the title or a page shorter than the cap.
+    """
+    from gaia.browser.snapshot import MAX_NAME_CHARS
+
+    body = "word " * 400  # ~2000 chars, far past the name cap
+    snap = driver.goto(nav_url)
+    driver._submit(
+        lambda: driver._page.evaluate(
+            "(t) => { document.body.insertAdjacentHTML('beforeend',"
+            "'<p>' + t + '</p>'); }",
+            body,
+        )
+    )
+    snap = driver.snapshot()
+    assert (
+        len(snap["text"]) > MAX_NAME_CHARS * 2
+    ), f"page text is {len(snap['text'])} chars — still capped at the name length"
+
+
+def test_element_names_are_still_capped(driver, nav_url):
+    """The name cap must survive the page-text fix."""
+    from gaia.browser.snapshot import MAX_NAME_CHARS
+
+    driver.goto(nav_url)
+    driver._submit(
+        lambda: driver._page.evaluate(
+            "() => { const a = document.createElement('a');"
+            " a.href = '#x'; a.textContent = 'n'.repeat(500);"
+            " document.body.appendChild(a); }"
+        )
+    )
+    snap = driver.snapshot()
+    assert all(len(e["name"]) <= MAX_NAME_CHARS for e in snap["elements"])
 
 
 def test_label_and_aria_label_become_the_name(driver, page_url):
@@ -322,3 +363,127 @@ def test_an_action_that_navigates_nowhere_stays_fast(driver, nav_url):
     t0 = time.monotonic()
     driver.click(ref)
     assert time.monotonic() - t0 < 8.0
+
+
+# ------------------------------------------------- navigation screening
+
+
+@pytest.fixture(scope="module")
+def internal_url():
+    """Stands in for an internal service that ANSWERS.
+
+    An unroutable address (169.254.x) is blocked by never connecting at all, so
+    it cannot show whether the screening works — the test would pass with no
+    screening in place. The dangerous case is a private host that responds: a
+    metadata endpoint or an admin panel, whose body is what would become model
+    context.
+    """
+    import functools
+    import http.server
+    import socketserver
+    import tempfile
+    import threading as _threading
+
+    root = tempfile.mkdtemp()
+    with open(f"{root}/index.html", "w", encoding="utf-8") as fh:
+        fh.write("<h1>INTERNAL-SECRET-BODY</h1>")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    srv = socketserver.TCPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=root)
+    )
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.fixture(scope="module")
+def ssrf_url(tmp_path_factory, internal_url):
+    """A page that links to, and redirects to, a blocked internal address."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("ssrf")
+    (root / "index.html").write_text(
+        f'<a id="meta" href="{internal_url}/index.html">internal</a>',
+        encoding="utf-8",
+    )
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — stdlib naming
+            if self.path.startswith("/redir"):
+                self.send_response(302)
+                self.send_header("Location", f"{internal_url}/index.html")
+                self.end_headers()
+                return
+            super().do_GET()
+
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    handler = functools.partial(Handler, directory=str(root))
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.fixture(scope="module")
+def guarded_driver(ssrf_url, internal_url):
+    """A driver that allows the fixture host but refuses the internal one."""
+
+    def allow(url):
+        return url.startswith(ssrf_url)
+
+    d = browser_driver.PlaywrightDriver(headless=True, allow_navigation=allow)
+    d.start()
+    yield d
+    d.close()
+
+
+def test_a_clicked_link_to_a_blocked_address_is_refused(guarded_driver, ssrf_url):
+    """Screening browser_open's URL only covers the first hop.
+
+    The agent clicking a link is a navigation the entry-point check never sees,
+    and the page body would come back into the model's context either way.
+    """
+    snap = guarded_driver.goto(f"{ssrf_url}/index.html")
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "internal")
+    try:
+        after = guarded_driver.click(ref)
+    except BrowserError:
+        return  # refused outright is also a pass
+    assert "INTERNAL-SECRET-BODY" not in (
+        after.get("text") or ""
+    ), "the internal page's body reached the model"
+
+
+def test_a_redirect_to_a_blocked_address_never_returns_its_body(
+    guarded_driver, ssrf_url
+):
+    """The server, not the agent, chooses where a 302 goes.
+
+    Playwright follows a server-side redirect inside the network stack without
+    re-entering the route handler, so the request IS made. What must not happen
+    is the response becoming model context.
+    """
+    with pytest.raises(BrowserError) as excinfo:
+        guarded_driver.goto(f"{ssrf_url}/redir")
+    assert "INTERNAL-SECRET-BODY" not in str(excinfo.value)
+
+
+def test_an_allowed_navigation_still_works(guarded_driver, ssrf_url):
+    """The guard must not block the ordinary case."""
+    snap = guarded_driver.goto(f"{ssrf_url}/index.html")
+    assert "index.html" in snap["url"]
