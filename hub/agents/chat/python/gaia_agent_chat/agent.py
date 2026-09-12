@@ -1016,13 +1016,6 @@ No documents are currently indexed.
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
-            # Only describe the live browser when its tools actually exist —
-            # a core install has no Playwright, and prompting for tools the
-            # model cannot call just buys failed calls.
-            if "browser_open" in getattr(self, "_tools_registry", {}):
-                browser_section += """
-**LIVE BROWSER:** fetch_page can't run JavaScript or sign in. When it returns a login screen or an empty shell, use browser_open(url) → read the refs (e1, e2…) → browser_click(ref) / browser_type(ref, text). Refs expire on every page change; browser_snapshot() re-reads them. Never type a password — call browser_login(url) and let the user sign in.
-"""
 
         # Tail of Tier 1: indexing note kept separately so gated sections can
         # be inserted between discovery_rules and this tail.

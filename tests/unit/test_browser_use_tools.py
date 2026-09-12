@@ -119,7 +119,12 @@ def keyring_and_home(tmp_path, monkeypatch):
         lambda s, u, v: vault.__setitem__((s, u), v),
         raising=True,
     )
-    monkeypatch.setattr(session_store.Path, "home", staticmethod(lambda: tmp_path))
+    # Patch the module's own directory resolver, NOT pathlib.Path.home —
+    # that would swap a global for the whole session and leak into any test
+    # that reads a home-relative path.
+    target = tmp_path / ".gaia" / "browser" / "sessions"
+    target.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(session_store, "sessions_dir", lambda: target)
     return vault
 
 

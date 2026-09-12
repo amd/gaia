@@ -168,6 +168,29 @@ class BrowserUseToolsMixin:
         except Exception:  # noqa: BLE001 — a bad URL is not authenticated
             return False
 
+    def _note_location(self, snap: dict) -> None:
+        """Record the origin the browser actually ended up on.
+
+        Called after every navigating action, not just ``browser_open``: a
+        click can leave the site entirely, and a gate reading a stale origin
+        would wave through actions on a signed-in site the agent arrived at by
+        following a link.
+
+        A page can also land somewhere that has no origin worth tracking
+        (``about:blank``, a data URL). That is not a failure of the
+        navigation, so it clears the origin rather than raising — which is
+        also the safe direction, since an unknown origin is never treated as
+        authenticated.
+        """
+        from gaia.browser import session as session_store
+        from gaia.browser.errors import SessionStoreError
+
+        url = (snap or {}).get("url") or ""
+        try:
+            self._browser_current_origin = session_store.origin_of(url)
+        except SessionStoreError:
+            self._browser_current_origin = None
+
     def browser_call_needs_confirmation(self, tool_name: str) -> bool:
         """Whether this browser call must be confirmed by the user.
 
@@ -259,9 +282,7 @@ class BrowserUseToolsMixin:
                     mixin._restore_session_for(url)
                 driver = mixin._ensure_driver()
                 snap = driver.goto(url)
-                mixin._browser_current_origin = session_store.origin_of(
-                    snap.get("url") or url
-                )
+                mixin._note_location(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_open(%s) failed: %s", url, e)
                 return _fail(e)
@@ -278,6 +299,7 @@ class BrowserUseToolsMixin:
             try:
                 driver = mixin._ensure_driver()
                 snap = driver.snapshot()
+                mixin._note_location(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_snapshot failed: %s", e)
                 return _fail(e)
@@ -294,6 +316,7 @@ class BrowserUseToolsMixin:
             try:
                 driver = mixin._ensure_driver()
                 snap = driver.click(ref)
+                mixin._note_location(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_click(%s) failed: %s", ref, e)
                 return _fail(e)
@@ -314,6 +337,7 @@ class BrowserUseToolsMixin:
             try:
                 driver = mixin._ensure_driver()
                 snap = driver.type_text(ref, text, press_enter=press_enter)
+                mixin._note_location(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_type(%s) failed: %s", ref, e)
                 return _fail(e)
@@ -380,18 +404,3 @@ class BrowserUseToolsMixin:
                     f"{r.get('cookies', 0)} cookies"
                 )
             return "\n".join(lines)
-
-    @staticmethod
-    def get_browser_use_guidelines() -> str:
-        """Prompt fragment describing when the live browser is the right tool."""
-        return """A real browser is available for pages that fetch_page cannot read.
-
-- Prefer fetch_page for articles, docs, and any page that reads fine without
-  JavaScript. It is far faster.
-- Use browser_open when a page needs JavaScript, or when fetch_page returns a
-  login screen instead of the content.
-- Work the loop: browser_open -> read the refs -> browser_click / browser_type
-  -> read the new refs. Refs (e1, e2, ...) are only valid until the next
-  snapshot; if one fails, call browser_snapshot and use the new refs.
-- Never type a password. If a site needs sign-in, call browser_login(url) and
-  let the user authenticate themselves."""
