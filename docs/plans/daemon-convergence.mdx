@@ -92,30 +92,31 @@ factory refuses the daemon transport for exactly this reason:
 and keep the refusal for anything genuinely unsupported. The error that exists today is
 good — it should become narrower, not disappear.
 
-### 3.3 A retained session silently ignores a model change
+### 3.3 A live session cannot switch model, it can only be abandoned
 
-This is the one that matters most, because it is a silent wrong answer rather than an error:
+The HTTP path already refuses this **loudly** — `server.py:560` returns a 409 saying a model
+cannot be switched on a live session and to start a new `session_id`. That is honest, and it
+is not the silent-drop bug it first looks like. The gap is narrower and more annoying:
 
-```python
-existing = self._sessions.get(session_id)
-if existing is not None:
-    self._last_used[session_id] = time.monotonic()
-    return existing          # config_kwargs — including model_id — dropped
-```
+| | stdio (`/model gemma`) | HTTP today |
+|---|---|---|
+| Model switches | Yes | No — 409 |
+| Conversation history | Kept | Lost, if you take the advice and start a new session |
+| Loaded skills | Kept | Lost with the session |
 
-`session_registry.get_or_create` takes `**config_kwargs` and, for an existing session,
-returns the retained agent without looking at them. So `/model gemma` on a live conversation
-is accepted, reports success, and changes nothing. The stdio path does this correctly — it
-swaps the client in place on the same agent, which is what keeps `conversation_history` and
-`loaded_skills` alive across a switch.
+`stdio.run_model_command` swaps the LLM client **in place** on the same agent, which is
+precisely what keeps `conversation_history` and `loaded_skills` alive across a switch — the
+module's own docstring calls that out as the reason a child respawn would destroy them. The
+HTTP path has no equivalent, so its only honest answer is "start over".
 
-**Fix:** give the session an explicit `switch_model(...)` that swaps the client in place,
-mirroring what `stdio.run_model_command` already does, and make `get_or_create` **fail
-loudly** when handed config that conflicts with a retained session rather than dropping it.
-A silently ignored parameter is precisely the failure mode CLAUDE.md's no-silent-fallbacks
-rule exists to prevent.
+**Fix:** give the retained session a live switch that reuses `stdio`'s existing machinery
+(`_apply_switch` / `_apply_claude_switch` / `_apply_local_switch` — already written,
+already all-or-nothing with a snapshot/rollback), and replace the 409 with an actual switch.
+The refusal stays for anything that genuinely cannot be applied to a built agent; it just
+stops covering the one case the user actually asks for.
 
----
+Reusing that machinery rather than writing a second switch is the point. Two implementations
+of "move an agent onto a new client" is exactly the duplication this plan exists to remove.
 
 ## 4. The convergence
 

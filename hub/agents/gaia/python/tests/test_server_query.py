@@ -74,6 +74,25 @@ class _ScriptedAgent:
 
 
 @pytest.fixture
+def switched(monkeypatch):
+    """Records every live model switch, in place of a real client swap.
+
+    ``_AgentSession.switch_model`` delegates to the stdio transport's real
+    machinery, which builds an LLM client and talks to Lemonade — neither of
+    which belongs in a route test.
+    """
+    calls: list = []
+
+    def fake_switch(self, target):
+        calls.append((target,))
+        self.model_id = target
+        return target
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", fake_switch)
+    return calls
+
+
+@pytest.fixture
 def built(monkeypatch):
     """The real app, with both agent-construction seams scripted.
 
@@ -272,8 +291,14 @@ def test_a_reused_run_id_is_fine_once_the_first_run_finished(built):
 # ---------------------------------------------------------------------------
 
 
-def test_switching_model_on_a_live_session_is_refused(built):
-    """It used to run the OLD model with no error and no warning."""
+def test_switching_model_on_a_live_session_switches_it(built, switched):
+    """It used to answer 409 and tell the caller to start a new session_id.
+
+    That was honest but lossy: a new session throws away the conversation and
+    every loaded skill, which is exactly what a retained session is for. The
+    stdio transport has always switched in place (``/model``), and the two
+    transports must not disagree about what switching a model costs.
+    """
     client, agents = built
 
     first = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -283,17 +308,50 @@ def test_switching_model_on_a_live_session_is_refused(built):
         "/v1/gaia/query", json=_body(session_id="s-1", model="model-b")
     )
 
-    assert second.status_code == 409, second.text
-    detail = second.json()["detail"]
-    assert "model-a" in detail and "model-b" in detail
-    assert "new session_id" in detail
-    # The refusal must not have built a second agent, nor stranded the session.
+    assert second.status_code == 200, second.text
+    assert switched == [("model-b",)], "the live switch must have been performed"
+    # The whole point: the SAME agent, so history and loaded skills survive.
     assert len(agents) == 1
 
 
-def test_the_refused_switch_leaves_the_session_usable(built):
+def test_a_switched_session_reports_its_new_model(built, switched):
+    """A later turn on the old id must not re-switch, or every turn pays for it."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
+
+    assert switched == [("model-b",)], "the second turn on model-b must be a no-op"
+
+
+def test_a_failed_switch_leaves_the_session_on_its_old_model(built, monkeypatch):
+    """All-or-nothing: a bad credential must not strand the conversation."""
+    client, _ = built
+
+    def explode(self, target):
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", explode)
+
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    failed = client.post(
+        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
+    )
+
+    assert failed.status_code == 409, failed.text
+    detail = failed.json()["detail"]
+    assert "ANTHROPIC_API_KEY" in detail, "the real reason must reach the caller"
+    assert "still running" in detail, "the caller must learn nothing was lost"
+
+
+def test_the_session_survives_a_failed_switch(built, monkeypatch):
     """A 409 must release the run lock, or the session 409s forever after."""
     client, _ = built
+
+    def explode(self, target):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", explode)
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
 
@@ -433,3 +491,105 @@ def test_cancelling_a_live_run_reports_it_stopped(built, monkeypatch):
         worker.join(timeout=10)
 
     assert result["response"].status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Inference backend
+# ---------------------------------------------------------------------------
+#
+# The stdio transport has always taken --use-claude. Refusing it here is what
+# made moving the TUI onto the daemon a downgrade rather than a move
+# (docs/plans/daemon-convergence.mdx §3.2).
+
+
+def test_the_claude_provider_configures_the_backend_not_just_an_id(built):
+    """`model` names a CLAUDE model under this provider.
+
+    Threading it through as ``model_id`` would point the LOCAL client at an id
+    Lemonade cannot serve — a failure that surfaces much later and much less
+    clearly than the 400 this replaced.
+    """
+    client, agents = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(agents) == 1
+    built_with = agents[0].kwargs
+    assert built_with.get("use_claude") is True
+    assert built_with.get("claude_model") == "claude-opus-5"
+    assert "model_id" not in built_with, "a Claude id must not reach the local client"
+
+
+def test_the_local_provider_still_threads_a_model_id(built):
+    client, agents = built
+
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="Gemma-4-E4B-it-GGUF", provider="lemonade"),
+    )
+
+    built_with = agents[0].kwargs
+    assert built_with.get("model_id") == "Gemma-4-E4B-it-GGUF"
+    assert not built_with.get("use_claude")
+
+
+def test_omitting_the_provider_stays_local(built):
+    """The default must not change: this is the overwhelmingly common request."""
+    client, agents = built
+
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    assert agents[0].kwargs.get("model_id") == "model-a"
+    assert not agents[0].kwargs.get("use_claude")
+
+
+def test_an_unknown_provider_is_still_refused_loudly(built):
+    """Widening the set must not turn it into 'anything goes'."""
+    client, _ = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="gpt-4", provider="openai"),
+    )
+
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert "openai" in detail
+    assert "claude" in detail and "lemonade" in detail, "name what IS allowed"
+
+
+def test_a_brand_new_claude_session_is_not_immediately_switched(built, switched):
+    """A session built with exactly what was asked for must not then 'change'.
+
+    The two backends name their model in different kwargs — local passes
+    ``model_id``, Claude passes ``claude_model``. While the registry recorded
+    only the first, a Claude session reported no model at all, so the very
+    request that created it looked like a model change and tried to switch an
+    agent that had just been constructed correctly.
+    """
+    client, agents = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert switched == [], "construction already applied the model; nothing to switch"
+    assert len(agents) == 1
+
+
+def test_a_second_turn_on_the_same_claude_model_does_not_re_switch(built, switched):
+    client, _ = built
+    body = _body(session_id="s-1", model="claude-opus-5", provider="claude")
+    client.post("/v1/gaia/query", json=body)
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert switched == []

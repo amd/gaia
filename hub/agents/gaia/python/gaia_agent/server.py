@@ -62,7 +62,16 @@ API_VERSION = "2.12"
 _HEARTBEAT_SECONDS = 10.0
 
 #: Local inference only — the flagship runs against Lemonade.
-_ALLOWED_PROVIDERS = frozenset({"lemonade"})
+#: Inference backends ``/query`` accepts. ``claude`` sends the conversation to
+#: Anthropic's API instead of the local Lemonade server — the stdio transport
+#: has always allowed that via ``--use-claude``, and refusing it here was what
+#: made the daemon transport a downgrade rather than a move (see
+#: docs/plans/daemon-convergence.mdx §3.2). Anything outside this set is still
+#: refused loudly rather than quietly falling back to the default.
+_ALLOWED_PROVIDERS = frozenset({"lemonade", "claude"})
+
+#: Provider value that means "not local".
+_CLAUDE_PROVIDER = "claude"
 
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 
@@ -536,7 +545,14 @@ async def query(request: QueryRequest):
 
     try:
         kwargs: Dict[str, Any] = {}
-        if request.model:
+        if request.provider == _CLAUDE_PROVIDER:
+            # ``model`` names a CLAUDE model here, not a Lemonade one — putting
+            # it in model_id would point the local client at an id it cannot
+            # serve, which fails much later and much less clearly.
+            kwargs["use_claude"] = True
+            if request.model:
+                kwargs["claude_model"] = request.model
+        elif request.model:
             kwargs["model_id"] = request.model
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
@@ -558,19 +574,29 @@ async def query(request: QueryRequest):
                     ),
                 )
             if request.model and request.model != session.model_id:
-                # Only construction reads a model, and this session's agent is
-                # already built — running the old one silently would answer a
-                # request the caller did not make.
-                current = session.model_id or "the agent's default model"
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"session {request.session_id} is already running "
-                        f"{current}, and a model cannot be switched on a live "
-                        f"session. Start a new session_id to use "
-                        f"{request.model!r}, or omit 'model' to continue on "
-                        "the current one."
-                    ),
+                # Switched in place rather than refused. Rebuilding the agent
+                # (or making the caller start a new session_id, which is what
+                # this used to say) throws away the conversation and every
+                # loaded skill — the two things a retained session exists to
+                # keep. run_lock is held here, so no turn is mid-inference.
+                try:
+                    display = session.switch_model(request.model)
+                except RuntimeError as exc:
+                    # The switch is all-or-nothing: the session is still on its
+                    # previous model, so this is a failed request, not a broken
+                    # session.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"could not switch session {request.session_id} to "
+                            f"{request.model!r}: {exc}. The session is still "
+                            f"running {session.model_id or 'its previous model'}."
+                        ),
+                    ) from exc
+                logger.info(
+                    "session %s switched to %s mid-conversation",
+                    request.session_id,
+                    display,
                 )
             agent = session.agent
             if session.reclaimed_after_eviction:

@@ -570,7 +570,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
     return target
 
 
-def _switch_model(agent: Any, target: str) -> str:
+def switch_model(agent: Any, target: str) -> str:
     """Swap the agent's live LLM client to *target*.
 
     Returns the friendly display name on success; raises RuntimeError with an
@@ -578,10 +578,22 @@ def _switch_model(agent: Any, target: str) -> str:
     both branches build the new client (and, for local, confirm Lemonade is
     reachable) before mutating anything, and the mutation itself is
     snapshotted/rolled-back as a unit (see ``_apply_switch``).
+
+    Public because the HTTP surface reuses it: a session there retains its agent
+    the same way this process does, so "switch the model without losing the
+    conversation" is the same operation and must not be implemented twice. It
+    lives here rather than in a module of its own because this is where the
+    machinery it depends on already is — moving 200 working lines to improve a
+    filename is not worth the risk.
     """
     if target.startswith("claude-"):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target)
+
+
+#: Pre-rename alias. ``run_model_command`` and this module's tests reach it by
+#: the private name.
+_switch_model = switch_model
 
 
 def _format_model_list(agent: Any) -> str:

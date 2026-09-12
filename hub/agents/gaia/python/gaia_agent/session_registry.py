@@ -81,6 +81,27 @@ class _AgentSession:
         #: that is still very much in use, just crowded out by others.
         self.reclaimed_after_eviction = False
 
+    def switch_model(self, target: str) -> str:
+        """Move this session's retained agent onto *target*, keeping the chat.
+
+        Delegates to ``gaia_agent.stdio.switch_model`` — the same in-place client
+        swap the stdio transport's ``/model`` performs, and the reason a switch
+        keeps ``conversation_history`` and ``loaded_skills`` instead of
+        destroying them the way a rebuilt agent would. Two implementations of
+        that would be two things to get wrong.
+
+        Must be called with ``run_lock`` held: swapping the client under a turn
+        that is mid-inference would leave that turn talking to two backends.
+
+        Returns the friendly display name. Raises ``RuntimeError`` with an
+        actionable message on failure, having left the agent untouched.
+        """
+        from gaia_agent.stdio import switch_model as _switch
+
+        display = _switch(self.agent, target)
+        self.model_id = target
+        return display
+
     def is_running(self) -> bool:
         return self.run_lock.locked()
 
@@ -217,7 +238,16 @@ class _SessionRegistry:
             # "your loaded skills were reset" warning would reach no one.
             reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
             session = _AgentSession(
-                session_id, agent, model_id=config_kwargs.get("model_id")
+                session_id,
+                agent,
+                # Either spelling, because the two backends name their model in
+                # different kwargs: local builds pass ``model_id``, Claude
+                # passes ``claude_model``. Recording only the first left a
+                # Claude session reporting no model at all, so the caller's very
+                # next turn saw a "change" and tried to switch a session that
+                # had just been built with exactly what it asked for.
+                model_id=config_kwargs.get("model_id")
+                or config_kwargs.get("claude_model"),
             )
             session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session
