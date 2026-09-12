@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
+    check_file_state,
     record_read,
     record_write,
 )
@@ -954,7 +955,10 @@ class FileSearchToolsMixin:
                             "operation": "write_file",
                         }
 
-                    # Create backup of existing file before overwriting
+                stale_error = check_file_state(str(resolved_path))
+                if stale_error is not None:
+                    return stale_error
+                if path_validator is not None:
                     if resolved_path.exists():
                         backup_path = path_validator.create_backup(str(resolved_path))
                 else:
