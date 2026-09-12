@@ -145,6 +145,45 @@ afterwards to get a clip of just that action.
 
 Send them with `SendUserFile`. A still is ~8KB; a 45-frame clip is ~270KB.
 
+### Sharing a capture
+
+A still goes straight into a conversation. A video usually cannot: connectors
+that reach Drive take file content inlined, so a 600KB clip is ~800KB of base64
+through the model. `tui/scripts/share-capture.sh` uploads with rclone instead
+and prints a link:
+
+```bash
+tui/scripts/share-capture.sh session.mp4 shot.jpg
+```
+
+One-time setup belongs to the person whose Drive it is — it opens a browser for
+them to grant access, and the token lands in their rclone config rather than in
+a transcript:
+
+```bash
+rclone config create gaia-drive drive scope=drive
+```
+
+Override the destination with `GAIA_CAPTURE_REMOTE` / `GAIA_CAPTURE_FOLDER`.
+
+### Turning stills into a video
+
+`format=svg` is exact and needs no font, but not every viewer plays an animated
+SVG, and **macOS `qlmanage` is not a usable rasteriser here** — it stretches the
+document into a square and ignores `preserveAspectRatio`, which silently cuts
+the header and status bar off every frame. Render in a browser, which honours
+the document's own size:
+
+```bash
+curl -sH "Authorization: Bearer $TOK" "$BASE/control/v1/frames?limit=200" \
+  | gaia-tui-capture stills -out ./frames     # one SVG per frame, styling kept
+# rasterise (browser canvas, or rsvg-convert on Linux), then:
+gaia-tui-capture gif -in ./frames -out session.gif
+```
+
+For H.264 rather than GIF, AVFoundation will encode a PNG sequence on macOS and
+`ffmpeg -framerate 3 -i f%04d.png out.mp4` anywhere it is installed.
+
 ## Mouse
 
 ```bash
