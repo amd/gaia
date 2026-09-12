@@ -1,0 +1,164 @@
+---
+title: Browser Use
+description: Let GAIA sign in to sites and act on pages that need a real browser
+icon: "globe"
+---
+
+# Browser Use
+
+GAIA's `fetch_page` is one HTTP request — fast, and blind to anything behind a
+sign-in or drawn by JavaScript. Point it at a logged-out social feed and it
+reads back "Log in / Sign up"; point it at a retailer that renders prices client
+side and it finds none.
+
+Browser use fills that gap with a real Chromium. GAIA opens the page, reads the
+interactive elements, clicks and types — and when a site needs an account, hands
+you the keyboard so **you** sign in. GAIA never sees the password.
+
+<Info>
+Optional. `pip install 'amd-gaia[browser]'` — a ~200 MB browser download. Without
+it the tools are simply not registered, and `fetch_page` keeps working.
+</Info>
+
+## Install
+
+```bash
+pip install 'amd-gaia[browser]'
+python -m playwright install chromium
+```
+
+## Use it
+
+Just ask. The agent reaches for the browser when `fetch_page` cannot do the job:
+
+```
+> The price on this product page isn't showing up — check it for me
+> Log in to my account on example.com and tell me what's in my cart
+```
+
+Signing in is a hand-off, not something GAIA does for you:
+
+1. The agent calls `browser_login(url)` and asks you to approve it.
+2. A **visible** browser window opens on the sign-in page.
+3. You sign in — password manager, passkey, MFA, whatever the site uses.
+4. GAIA detects success and saves the **session** (cookies), encrypted.
+5. Later runs reuse it silently. No second sign-in until it expires.
+
+## Tools
+
+| Tool | What it does | Needs approval |
+|---|---|---|
+| `browser_open(url)` | Open a page, return its elements | no |
+| `browser_snapshot()` | Re-read the current page | no |
+| `browser_click(ref)` | Click an element | only when signed in |
+| `browser_type(ref, text, press_enter)` | Fill a field or pick an option | only when signed in |
+| `browser_login(url)` | Hand over for sign-in, then save the session | always |
+| `browser_sessions()` | List sites with a saved sign-in | no |
+
+Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
+screen coordinates:
+
+```
+Page: Example Store
+URL: https://example.com/cart
+
+Interactive elements (4):
+  e1 link "Home"
+  e2 textbox "Promo code"
+  e3 select "Quantity" (value: 1) (options: 1, 2, 3)
+  e4 button "Checkout"
+```
+
+Refs expire whenever the page changes. If one stops resolving, the agent calls
+`browser_snapshot()` and uses the new ones.
+
+## Why it is fast
+
+The model, not the browser, is the slow part of a browser task — GAIA prefills
+at roughly 387 tok/s, so a page description costs about 2.6 seconds per 1,000
+tokens. Three decisions follow from that:
+
+- **The page is described as text, not a screenshot.** A filtered list of
+  interactive elements costs a few hundred tokens where an image costs
+  thousands — and a ref is exact where a predicted click coordinate is a guess.
+- **The browser stays open.** Launching costs ~1.7 s; reusing it makes the next
+  action ~10–30 ms. Measured on the reference fixture: first `browser_open`
+  0.80 s, the `browser_type` after it 0.03 s.
+- **No MCP hop.** Tools call Playwright's Python API directly in-process.
+
+## Security
+
+**GAIA never types a password.** `browser_login` exists so it does not have to,
+and a password field's contents are stripped from every snapshot before the
+model sees them.
+
+**Acting inside a signed-in session asks first.** Reading the open web is
+ungated. But once a session is live, a click or a keystroke is happening inside
+your account — and a web page can contain text aimed at talking the model into
+something. Those calls go through GAIA's normal approval prompt.
+
+**Addresses off the public internet are refused.** The browser gets the same
+SSRF screening `fetch_page` has: no private, loopback, link-local, or reserved
+addresses, so a page cannot steer the agent at a cloud metadata endpoint. To
+drive a local dev server, opt in explicitly:
+
+```bash
+export GAIA_BROWSER_ALLOW_PRIVATE=1
+```
+
+<Warning>
+The screening applies to the address the agent asks for. A site that *redirects*
+to a private address is followed by the browser internally, where this check
+cannot see it.
+</Warning>
+
+**Sessions are encrypted at rest.** A cookie jar is far too large for the OS
+credential store (Windows caps entries near 1280 characters), so GAIA keeps the
+key in the keyring and the ciphertext in a file:
+
+```
+~/.gaia/browser/sessions/<hash>.enc    AES-GCM, mode 0600
+~/.gaia/browser/sessions/<hash>.json   origin + date only, no secrets
+```
+
+Each blob is bound to its origin, so a session file moved to another site's slot
+fails to decrypt rather than loading the wrong account.
+
+GAIA does not solve CAPTCHAs or evade bot detection. When a site blocks
+automation, the agent says so.
+
+## Settings
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GAIA_BROWSER_HEADLESS` | `1` | Run without a window. `browser_login` always shows one. |
+| `GAIA_BROWSER_ALLOW_PRIVATE` | unset | Allow private/loopback addresses. |
+
+## When not to use it
+
+Prefer `fetch_page` for articles, documentation, and anything that reads fine
+without JavaScript — it is an order of magnitude faster and needs no browser.
+
+For Gmail, Outlook, Google Calendar, and GitHub, use
+[connectors](/connectors/index) instead. OAuth gives real tokens and real scopes;
+driving a browser at a service that offers an API is strictly worse.
+
+## Troubleshooting
+
+**"Browser automation is not installed"** — run the two install commands above.
+The second one is easy to miss; the Python package alone has no browser.
+
+**"Element 'e7' is not on the page any more"** — the page changed. The agent
+should call `browser_snapshot()` for fresh refs. Expected on a busy page.
+
+**Sign-in did not stick** — some sites issue short-lived sessions. Run
+`browser_login(url)` again; the old session is replaced.
+
+**"Could not decrypt the saved session"** — the keyring key changed (a new
+machine, or a reset keychain). The saved session is unrecoverable; sign in again.
+
+## Related
+
+- [Browser Use plan](/plans/browser-use) — why it is built this way, and what comes next
+- [Browser Tools spec](/spec/browser-tools) — the lightweight `fetch_page` fetcher
+- [Connectors](/connectors/index) — OAuth, which beats browser login where it exists

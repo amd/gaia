@@ -88,6 +88,7 @@
                       "guides/gaia",
                       "guides/ai-providers",
                       "guides/chat",
+              "guides/browser-use",
                       "guides/talk",
                       "guides/transcription"
                     ]
@@ -424,6 +425,7 @@
           {
             "group": "Infrastructure",
             "pages": [
+              "plans/browser-use",
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",

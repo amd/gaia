@@ -43,6 +43,7 @@ from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     AudioToolsMixin,
     BrowserToolsMixin,
+    BrowserUseToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -201,6 +202,7 @@ class ChatAgent(
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
+    BrowserUseToolsMixin,
     FileSearchToolsMixin,
     FileIOToolsMixin,
     VLMToolsMixin,
@@ -1013,6 +1015,13 @@ No documents are currently indexed.
         ):
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
+"""
+            # Only describe the live browser when its tools actually exist —
+            # a core install has no Playwright, and prompting for tools the
+            # model cannot call just buys failed calls.
+            if "browser_open" in getattr(self, "_tools_registry", {}):
+                browser_section += """
+**LIVE BROWSER:** fetch_page can't run JavaScript or sign in. When it returns a login screen or an empty shell, use browser_open(url) → read the refs (e1, e2…) → browser_click(ref) / browser_type(ref, text). Refs expire on every page change; browser_snapshot() re-reads them. Never type a password — call browser_login(url) and let the user sign in.
 """
 
         # Tail of Tier 1: indexing note kept separately so gated sections can
@@ -2410,6 +2419,19 @@ No documents are currently indexed.
             logger.error(f"Error saving session: {e}")
             return False
 
+    def _tool_requires_confirmation(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Add the browser's context-sensitive gate to the static name set.
+
+        Lives here rather than on ``BrowserUseToolsMixin`` because ``Agent``
+        precedes the tool mixins in this class's MRO, so a mixin override
+        would never be reached.
+        """
+        if self.browser_call_needs_confirmation(tool_name):
+            return True
+        return super()._tool_requires_confirmation(tool_name, tool_args)
+
     def __del__(self):
         """Cleanup when agent is destroyed.
 
@@ -2434,6 +2456,10 @@ No documents are currently indexed.
                 self._inline_web.close()
         except Exception as e:
             logger.error(f"Error closing inline web client during cleanup: {e}")
+        try:
+            self.cleanup_browser_use()
+        except Exception as e:
+            logger.error(f"Error closing browser during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()
