@@ -28,6 +28,11 @@ import (
 // it wrong and every box-drawing rule shears. Each run is drawn with an
 // explicit textLength, so the glyphs are stretched to the grid rather than
 // trusted to land on it.
+//
+// The document also pins preserveAspectRatio. Without it a renderer asked for a
+// square thumbnail is free to SLICE the frame to fill — macOS qlmanage does
+// exactly that — and the result looks like a TUI that cannot draw its own
+// header and status bar, rather than a converter that cropped them off.
 const (
 	svgCellW    = 8.4
 	svgCellH    = 17.0
@@ -102,7 +107,7 @@ func ScreenSVG(frame string, cols, rows int) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" `+
-		`viewBox="0 0 %.0f %.0f" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
+		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
 		`font-size="%.1f">`, w, h, w, h, svgFontSize)
 	fmt.Fprintf(&b, `<rect width="%.0f" height="%.0f" fill="%s"/>`, w, h, svgDefaultBG)
 	writeFrameBody(&b, frame)

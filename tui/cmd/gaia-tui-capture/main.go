@@ -88,7 +88,13 @@ func stills(args []string) {
 	check(os.MkdirAll(*out, 0o755))
 
 	for i, f := range payload.Frames {
-		doc := control.ScreenSVG(f.Screen, *cols, *rows)
+		// The styled frame where the ring kept one: a still built from the
+		// stripped text is a grey wash that looks nothing like the terminal.
+		body := f.Raw
+		if body == "" {
+			body = f.Screen
+		}
+		doc := control.ScreenSVG(body, *cols, *rows)
 		p := filepath.Join(*out, fmt.Sprintf("f%04d.svg", i))
 		check(os.WriteFile(p, []byte(doc), 0o644))
 	}

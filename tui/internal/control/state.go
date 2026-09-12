@@ -95,6 +95,11 @@ type Frame struct {
 	Seq    int    `json:"seq"`
 	AtMS   int64  `json:"at_ms"`
 	Screen string `json:"screen"`
+	// Raw is the same frame with its styling intact. Screen stays stripped —
+	// it is what a caller greps — but a picture built from stripped text is a
+	// grey wash that looks nothing like the terminal, so the colours have to
+	// survive the ring too.
+	Raw string `json:"raw,omitempty"`
 }
 
 // MarkMsg is a sentinel the control server injects after a batch of keys.
@@ -111,14 +116,15 @@ type MarkMsg struct{ ID int64 }
 // Bubble Tea calls Update and View from its event loop; HTTP handlers read from
 // their own goroutines. Every field is guarded by mu.
 type State struct {
-	mu      sync.RWMutex
-	seq     int
-	lastRaw string
-	frames  []Frame
-	cols    int
-	rows    int
-	snap    Snapshot
-	started time.Time
+	mu        sync.RWMutex
+	seq       int
+	lastRaw   string
+	lastPlain string
+	frames    []Frame
+	cols      int
+	rows      int
+	snap      Snapshot
+	started   time.Time
 
 	// pendingMark is set when Update sees a MarkMsg; renderedMark is promoted
 	// from it by the View that immediately follows.
@@ -173,7 +179,14 @@ func (s *State) recordFrame(raw string) {
 	markAdvanced := s.renderedMark != s.pendingMark
 	s.renderedMark = s.pendingMark
 
-	if raw == s.lastRaw && s.seq > 0 {
+	// Deduped on the VISIBLE screen, not the styled bytes. The composer's
+	// cursor blinks, which changes the bytes a couple of times a second while
+	// the screen says exactly the same thing — and keying the ring on that
+	// filled all 200 slots with one motionless frame, pushing the history
+	// anyone would want to watch out the back.
+	plain := PlainScreen(raw)
+	if plain == s.lastPlain && s.seq > 0 {
+		s.lastRaw = raw
 		if markAdvanced {
 			s.broadcast()
 		}
@@ -181,10 +194,12 @@ func (s *State) recordFrame(raw string) {
 	}
 	s.seq++
 	s.lastRaw = raw
+	s.lastPlain = plain
 	s.frames = append(s.frames, Frame{
 		Seq:    s.seq,
 		AtMS:   time.Since(s.started).Milliseconds(),
-		Screen: PlainScreen(raw),
+		Screen: plain,
+		Raw:    raw,
 	})
 	if len(s.frames) > maxFrames {
 		s.frames = s.frames[len(s.frames)-maxFrames:]

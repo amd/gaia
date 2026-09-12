@@ -34,14 +34,14 @@ func RecordingSVG(frames []Frame, cols, rows int) string {
 		return ScreenSVG("", cols, rows)
 	}
 	if len(frames) == 1 {
-		return ScreenSVG(frames[0].Screen, cols, rows)
+		return ScreenSVG(frameBody(frames[0]), cols, rows)
 	}
 
 	// Geometry comes from the widest and tallest frame, so a mid-recording
 	// resize does not clip the frames on either side of it.
 	maxRows, maxCols := rows, cols
 	for _, f := range frames {
-		lines := strings.Split(strings.TrimRight(f.Screen, "\n"), "\n")
+		lines := strings.Split(strings.TrimRight(frameBody(f), "\n"), "\n")
 		if len(lines) > maxRows {
 			maxRows = len(lines)
 		}
@@ -71,7 +71,7 @@ func RecordingSVG(frames []Frame, cols, rows int) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" `+
-		`viewBox="0 0 %.0f %.0f" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
+		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
 		`font-size="%.1f">`, w, h, w, h, svgFontSize)
 
 	b.WriteString("<style>")
@@ -94,7 +94,7 @@ func RecordingSVG(frames []Frame, cols, rows int) string {
 	fmt.Fprintf(&b, `<rect width="%.0f" height="%.0f" fill="%s"/>`, w, h, svgDefaultBG)
 	for i, f := range frames {
 		fmt.Fprintf(&b, `<g class="f f%d">`, i)
-		writeFrameBody(&b, f.Screen)
+		writeFrameBody(&b, frameBody(f))
 		b.WriteString("</g>")
 	}
 	b.WriteString("</svg>")
@@ -114,4 +114,13 @@ func pct(at, total int64) float64 {
 		return 100
 	}
 	return p
+}
+
+// frameBody is the styled frame when the ring kept one, and the stripped text
+// otherwise — a frame recorded before Raw existed still draws, just in grey.
+func frameBody(f Frame) string {
+	if f.Raw != "" {
+		return f.Raw
+	}
+	return f.Screen
 }

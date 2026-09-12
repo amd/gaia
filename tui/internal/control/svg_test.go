@@ -101,3 +101,47 @@ func TestRecordingSVGWithOneFrameIsAStill(t *testing.T) {
 		t.Error("a single frame was animated")
 	}
 }
+
+// A frame recorded with its styling must be DRAWN with it. Recordings used to
+// keep only the stripped text, so every replay came out a grey wash that looked
+// nothing like the terminal it came from.
+func TestRecordingSVGDrawsTheStyledFrame(t *testing.T) {
+	frames := []Frame{
+		{Seq: 1, AtMS: 0, Screen: "GAIA", Raw: "\x1b[38;2;181;224;141mGAIA\x1b[0m"},
+		{Seq: 2, AtMS: 200, Screen: "done", Raw: "\x1b[31mdone\x1b[0m"},
+	}
+	doc := RecordingSVG(frames, 20, 1)
+	wellFormed(t, doc)
+	if !strings.Contains(doc, "#b5e08d") {
+		t.Errorf("the first frame's colour was dropped:\n%.300s", doc)
+	}
+	if !strings.Contains(doc, "#cd3131") {
+		t.Errorf("the second frame's colour was dropped:\n%.300s", doc)
+	}
+}
+
+// A frame from before Raw existed still has to draw, just without colour.
+func TestRecordingSVGFallsBackToStrippedText(t *testing.T) {
+	doc := RecordingSVG([]Frame{
+		{Seq: 1, Screen: "alpha"}, {Seq: 2, AtMS: 100, Screen: "beta"},
+	}, 20, 1)
+	wellFormed(t, doc)
+	for _, want := range []string{"alpha", "beta"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("frame %q missing", want)
+		}
+	}
+}
+
+// Without this a renderer asked for a square is free to slice the frame to
+// fill it — macOS qlmanage does — and the header and status bar vanish.
+func TestSVGPinsItsAspectRatio(t *testing.T) {
+	for name, doc := range map[string]string{
+		"still":     ScreenSVG("hello", 20, 1),
+		"recording": RecordingSVG([]Frame{{Seq: 1, Screen: "a"}, {Seq: 2, AtMS: 50, Screen: "b"}}, 20, 1),
+	} {
+		if !strings.Contains(doc, `preserveAspectRatio="xMidYMid meet"`) {
+			t.Errorf("%s does not pin its aspect ratio, so a converter may crop it", name)
+		}
+	}
+}
