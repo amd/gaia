@@ -178,10 +178,11 @@ class TestLemonadeClientBackendMethods:
 
         result = client.install_backend("flm:npu")
         assert result == {"status": "success"}
+        # recipe and backend are separate fields; a combined "spec" is a 400.
         client._send_request.assert_called_once_with(
             "post",
             "http://localhost:13305/api/v1/install",
-            {"spec": "flm:npu"},
+            {"recipe": "flm", "backend": "npu"},
             timeout=300,
         )
 
@@ -195,7 +196,11 @@ class TestLemonadeClientBackendMethods:
 
         client.install_backend("llamacpp:rocm", force=True)
         call_args = client._send_request.call_args
-        assert call_args[0][2] == {"spec": "llamacpp:rocm", "force": True}
+        assert call_args[0][2] == {
+            "recipe": "llamacpp",
+            "backend": "rocm",
+            "force": True,
+        }
 
     def test_install_backend_error(self):
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
@@ -221,9 +226,23 @@ class TestLemonadeClientBackendMethods:
         client._send_request.assert_called_once_with(
             "post",
             "http://localhost:13305/api/v1/uninstall",
-            {"spec": "flm:npu"},
+            {"recipe": "flm", "backend": "npu"},
             timeout=120,
         )
+
+    @pytest.mark.parametrize("spec", ["flm", "", ":npu", "flm:"])
+    def test_backend_spec_must_be_recipe_colon_backend(self, spec):
+        """A malformed spec fails here, not as an opaque 400 from the server."""
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        client = LemonadeClient.__new__(LemonadeClient)
+        client.base_url = "http://localhost:13305/api/v1"
+        client.log = MagicMock()
+        client._send_request = MagicMock()
+
+        with pytest.raises(ValueError, match="recipe:backend"):
+            client.install_backend(spec)
+        client._send_request.assert_not_called()
 
     def test_get_recipe_status_found(self):
         from gaia.llm.lemonade_client import LemonadeClient

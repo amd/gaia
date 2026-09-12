@@ -98,6 +98,13 @@ jobs:
                 throw "Embedding model setup/verify via LemonadeClient failed"
             }
 
+            # Request-shape checks against the live server. A mocked unit test
+            # cannot catch a payload the server rejects -- that is how
+            # install_backend shipped sending {"spec": ...} and 400ing.
+            Write-Host "`n=== Verifying Lemonade request contracts ==="
+            pytest tests/integration/test_lemonade_backend_contract.py -v -rs --tb=short
+            if ($LASTEXITCODE -ne 0) { throw "Lemonade contract tests failed" }
+
             Write-Host "`n=== Running Embedding Tests ==="
             # Use --tb=long for full traceback, -rA for all test output summary
             pytest tests/test_lemonade_embeddings.py -v -s --tb=long -rA --log-cli-level=DEBUG
