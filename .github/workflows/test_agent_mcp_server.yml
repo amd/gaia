@@ -14,7 +14,9 @@ on:
       - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
+      - 'src/gaia/ui/**'
       - 'tests/mcp/**'
+      - 'tests/unit/test_agent_ui_mcp*.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   pull_request:
@@ -25,7 +27,9 @@ on:
       - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
+      - 'src/gaia/ui/**'
       - 'tests/mcp/**'
+      - 'tests/unit/test_agent_ui_mcp*.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   merge_group:
@@ -84,7 +88,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e ".[dev,mcp]"
+          uv pip install --system -e ".[dev,mcp,api]"
+
+      - name: Run Agent UI MCP transcript tests
+        run: python -m pytest tests/unit/test_agent_ui_mcp.py tests/unit/test_agent_ui_mcp_messages.py -v
 
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped
