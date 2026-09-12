@@ -802,11 +802,18 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
+            """Create a text file, or replace one wholesale, without validation.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, size limits, backup creation, and audit logging.
+            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
+            .js), configuration (.yml, .json, .toml), plain text.
+
+            Prefer edit_file when changing PART of a file that already exists —
+            this replaces the whole thing. Use write_python_file instead only
+            when you want the write REFUSED if the content is not valid Python.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, size limits, backup
+            creation, and audit logging.
 
             Args:
                 file_path: Path where to write the file
@@ -896,11 +903,19 @@ class FileIOToolsMixin:
             new_content: str,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Edit any file by replacing old content with new content (no syntax validation).
+            """Change part of a text file in place, without rewriting the rest.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, backup creation, and audit logging.
+            The default way to edit anything: documentation (.md, .mdx, .rst),
+            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
+            .toml), plain text. Prefer it over rewriting a file with write_file,
+            and over shelling out to sed or a here-doc.
+
+            Use edit_python_file instead only when you want the edit REFUSED if
+            it would break Python syntax.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, backup creation, and audit
+            logging.
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
