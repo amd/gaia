@@ -49,16 +49,29 @@
 # bars are trustworthy. Same idea, inverted default: report unless asked to
 # enforce.
 #
-# REPORT MODE SOFTENS "WORSE", NEVER "DIDN'T MEASURE". `--compare` scores only
-# scenarios present on BOTH sides: scenarios that vanish from the current run land
-# in an `only_in_baseline` bucket that is NOT part of its exit-2 verdict
-# (runner.py::compare_scorecards). Verified: dropping 6 of 7 rag_quality scenarios
-# still exits 0. So a broken harness would otherwise sail through as "no
-# regression". The integrity gate below therefore runs UNCONDITIONALLY — ignoring
-# `enforce` entirely — and fails the job if a baseline scenario is missing or any
-# scenario failed to produce a measurement (infra_error / errored / timeout /
-# blocked / budget_exceeded). Report mode is for "we measured and it got worse",
-# never for "we did not measure".
+# REPORT MODE COVERS "WORSE" AND "DIDN'T MEASURE" ALIKE — VISIBLY. `--compare`
+# scores only scenarios present on BOTH sides: scenarios that vanish from the
+# current run land in an `only_in_baseline` bucket that is NOT part of its exit-2
+# verdict (runner.py::compare_scorecards). Verified: dropping 6 of 7 rag_quality
+# scenarios still exits 0. So a broken harness would otherwise sail through as "no
+# regression". The integrity gate below is what refuses that: it fails if a
+# baseline scenario is missing or any scenario produced no measurement
+# (infra_error / errored / timeout / blocked / budget_exceeded / skipped).
+#
+# That gate used to ignore `enforce` and fail unconditionally, on the reasoning
+# that report mode may soften "worse" but never "did not measure". The reasoning
+# is sound and the outcome was not: the embedder cannot load on this runner
+# (#3016), which is an environment defect no PR can fix, so the gate was red on
+# every PR touching the path filter — including seven whose diffs never went near
+# the eval — while this same job printed "report mode ... build stays green". A
+# check that is always red gates nothing, and one that advertises non-blocking
+# while blocking is worse than either honest posture.
+#
+# So `enforce` now decides the EXIT CODE for an incomplete run as well as a worse
+# one. It never decides VISIBILITY: in report mode every finding is still a
+# `::warning::` annotation AND a block in the job summary, so an incomplete run
+# cannot be mistaken for a complete one. `enforce: true` restores blocking for
+# both.
 #
 # TIME REGRESSIONS ARE NOT COMPARABLE TO THIS BASELINE. `--compare` folds a >2x
 # per-scenario wall-clock delta into the same exit 2 as a quality regression, but
@@ -706,28 +719,36 @@ jobs:
           # repeat on every PR now that it is known (#3016) - it adds ~7 min and
           # leaves the next job on this shared box paying for a cold reload.
           # Re-dispatch with deep_diagnostics: true to run the full ladder.
-          # ...and do NOT kill the job here. Only rag_quality and context_retention
-          # answer out of embedder-produced chunks; tool_selection's four scenarios
-          # (known_path_read, multi_step_plan, no_tools_needed, smart_discovery)
-          # carry no corpus at all, so a dead embedder costs two categories, not
-          # three. Exiting cost the third for free and left PRs with no regression
-          # signal whatsoever. Record the state, let the run measure what it can,
-          # and let the integrity gate render the honest verdict - the job still
-          # fails, because two of three were not measured.
+          # ...and do NOT kill the job here. Exiting left PRs with no regression
+          # signal whatsoever; record the state, let the run measure what it can,
+          # and let the integrity gate render the honest verdict.
+          #
+          # How much tool_selection survives a dead embedder is LESS than an
+          # earlier revision of this comment claimed. It asserted the category
+          # "carries no corpus at all"; three of its five scenarios
+          # (data_vs_recall_disambiguation, known_path_read, multi_step_plan) index
+          # corpus documents in their `setup:`, so they need the embedder too. Only
+          # no_tools_needed and smart_discovery are genuinely corpus-free. Running
+          # the category anyway is still worth it - two measured scenarios beat
+          # zero - but do not read a green tool_selection here as full coverage;
+          # the integrity gate names exactly what was and was not measured.
           #
           # `exit 0` is what makes both of those true, and it is load-bearing:
           # without it this block only PRINTED the promise. Execution fell through
           # into the rungs below and ended at their terminal `exit 1`, which failed
           # the step, which skipped the eval step entirely - so tool_selection was
           # never measured either and the gate blocked PRs while reporting nothing
-          # (run 33286140041: 12 min of preflight, three categories skipped). It is
-          # not a green light: EMBEDDER_OK=false above routes the integrity gate to
-          # mark rag_quality and context_retention NOT MEASURED and fail the job
-          # there, on its own terms, with tool_selection genuinely compared.
+          # (run 33286140041: 12 min of preflight, three categories skipped).
+          #
+          # The annotation level tracks `enforce` for the same reason the integrity
+          # gate's does: #3016 is an environment defect, so on a report-mode PR run
+          # a red ::error:: on a green job is noise that trains people to ignore the
+          # check. The text is identical either way - only its severity moves.
           if (-not $embedOk -and $env:DEEP_DIAG -ne 'true') {
             Show-LemonadeTaskLog | Out-Null
             "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            Write-Host "::error::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured; tool_selection does not need the embedder and WILL still run, so this job continues and still gates that category. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
+            $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
+            Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
             exit 0
           }
 
@@ -913,7 +934,7 @@ jobs:
             # backend default (their `config` records only backend_url/model/budget),
             # so passing one here would compare against a different agent.
             $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
-            if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below still fails the job for them." }
+            if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)." }
             foreach ($category in $categories) {
               Write-Host "=================================================================="
               Write-Host "  gaia eval agent --category $category"
@@ -968,14 +989,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           $ErrorActionPreference = "Stop"
-          $missing = $false
+          # This step COLLECTS; it does not judge. A category with no scorecard is
+          # reported here and lands in the integrity gate below as "no scorecard
+          # produced", which is where the enforce policy is applied - once, in one
+          # place. Exiting non-zero here as well would re-introduce a second,
+          # enforce-blind blocking decision, which is exactly the bug being fixed.
+          # A genuine harness crash still fails at the eval step itself.
+          $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
 
           $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
           foreach ($category in $categories) {
             $log = "eval-out\$category.log"
             if (-not (Test-Path $log)) {
-              Write-Host "::error::No log for $category - the chain stopped before it ran."
-              $missing = $true
+              Write-Host "::${level}::No log for $category - the chain stopped before it ran."
               continue
             }
             # The runner prints an ABSOLUTE `Output: <run-dir>` line
@@ -987,8 +1013,7 @@ jobs:
             $scorecard = if ($runDir) { Join-Path $runDir "scorecard.json" } else { $null }
             if (-not $runDir -or -not (Test-Path $scorecard)) {
               $shown = if ($runDir) { $runDir } else { "<none>" }
-              Write-Host "::error::Could not resolve a scorecard for $category (parsed run dir: '$shown'). The eval did not print an 'Output:' line, or it did not write scorecard.json - see eval-out\$category.log."
-              $missing = $true
+              Write-Host "::${level}::Could not resolve a scorecard for $category (parsed run dir: '$shown'). The eval did not print an 'Output:' line, or it did not write scorecard.json - see eval-out\$category.log."
               continue
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
@@ -1008,84 +1033,59 @@ jobs:
             Write-Host "${category}: $runDir"
           }
 
-          if ($missing) { exit 1 }
-
-      - name: Integrity gate — did we actually measure? (ignores `enforce`)
+      - name: Integrity gate — did we actually measure?
         if: ${{ !cancelled() }}
         run: |
           $ErrorActionPreference = "Stop"
-          # UNCONDITIONAL. `--compare` only scores scenarios present on both sides,
-          # so a run whose scenarios vanished exits 0 and would pass as "no
-          # regression" (verified: 6 of 7 dropped -> exit 0). `enforce` decides
-          # whether a WORSE result blocks; it must never decide whether a
-          # NON-EXISTENT result blocks.
+          # `--compare` only scores scenarios present on BOTH sides, so a run whose
+          # scenarios vanished exits 0 and reads as "no regression" (verified: 6 of
+          # 7 dropped -> exit 0). This gate asks the other question - is there a
+          # measurement at all - and is the only thing between an empty run and a
+          # green check. The logic lives in gaia.eval.integrity_gate so it is unit
+          # tested (tests/unit/eval/test_integrity_gate.py) rather than being
+          # seventy lines of untestable PowerShell.
           #
-          # Statuses that mean "no measurement was produced", as distinct from
-          # "measured and failed" (FAIL is a legitimate, comparable outcome).
+          # IT HONORS `enforce`, and that is the fix for the state this gate was in.
+          # An earlier revision failed UNCONDITIONALLY on the reasoning that report
+          # mode may soften "worse" but never "did not measure". Sound in principle;
+          # in practice the embedder cannot load on this runner (#3016, an
+          # environment defect no PR can fix), so the gate went red on every PR
+          # touching its path filter while the job's own summary printed "report
+          # mode ... build stays green". A workflow that advertises non-blocking and
+          # blocks anyway is worse than either posture: it blocked 7 PRs whose diffs
+          # had nothing to do with the eval, and people stop reading a check that is
+          # always red. So `enforce` now decides the EXIT CODE for both incomplete
+          # and worse-than-baseline; it never decides VISIBILITY. In report mode
+          # every finding is still a ::warning:: annotation and still lands in the
+          # job summary, so an incomplete run is impossible to mistake for a
+          # complete one - it just does not veto an unrelated PR.
           #
-          # `skipped` (SKIPPED_NO_DOCUMENT, corpus file absent from disk) is the
-          # subtlest of these and the reason this list is not just the obvious
-          # errors: those scenarios KEEP their ids, so the missing-scenario check
-          # below stays clean, and compare_scorecards files them under
-          # `corpus_changed` = "not a quality signal" -> exit 0. A runner whose
-          # corpus never materialised would otherwise go green having measured
-          # nothing. All three committed baselines have skipped=0.
-          $noMeasurement = @("infra_error", "errored", "timeout", "blocked", "budget_exceeded", "skipped")
-          $problems = @()
-
-          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
-          $skipped = if ($env:EMBEDDER_OK -eq 'false') { @("rag_quality", "context_retention") } else { @() }
-          foreach ($category in $categories) {
-            $current = "eval-out\$category\scorecard.json"
-            if (-not (Test-Path $current)) {
-              $problems += "${category}: no scorecard produced"
-              continue
-            }
-
-            $card = Get-Content $current -Raw -Encoding UTF8 | ConvertFrom-Json
-            $baseline = Get-Content (Join-Path $env:BASELINE_DIR "scorecard_$category.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-
-            $got = @(@($card.scenarios) | ForEach-Object { $_.scenario_id })
-            $want = @(@($baseline.scenarios) | ForEach-Object { $_.scenario_id })
-            $absent = @($want | Where-Object { $got -notcontains $_ })
-            if ($absent.Count -gt 0) {
-              $problems += "${category}: $($absent.Count) baseline scenario(s) missing from the run: $(($absent | Sort-Object) -join ', ')"
-            }
-
-            $unmeasured = @()
-            foreach ($status in $noMeasurement) {
-              $count = $card.summary.$status
-              if ($count) { $unmeasured += "${status}=$count" }
-            }
-            if ($unmeasured.Count -gt 0) {
-              $problems += "${category}: scenarios without a measurement: $($unmeasured -join ', ')"
-            }
-
-            $shown = if ($unmeasured.Count -gt 0) { $unmeasured -join ', ' } else { "none" }
-            Write-Host "${category}: $($got.Count) scenario(s) run, $($want.Count) in baseline, unmeasured=$shown"
+          # `skipped` (SKIPPED_NO_DOCUMENT) counts as unmeasured for a subtle reason
+          # documented in the module: those scenarios keep their ids, so the
+          # missing-scenario check stays clean, and compare files them under
+          # "not a quality signal". All three committed baselines have skipped=0.
+          $gateArgs = @(
+            "--baseline-dir", $env:BASELINE_DIR,
+            "--results-dir", "eval-out"
+          )
+          if ($env:EMBEDDER_OK -eq 'false') {
+            $gateArgs += @("--category", "tool_selection")
+            $gateArgs += @("--not-measured", "rag_quality", "--not-measured", "context_retention")
+            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks")
+          } else {
+            $gateArgs += @("--category", "rag_quality", "--category", "context_retention", "--category", "tool_selection")
           }
+          if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
 
-          # A category the embedder made impossible is still an unmeasured
-          # category. It is named with its cause rather than silently dropped,
-          # and it still fails the job: this gate's whole job is refusing to
-          # render a verdict over measurements that do not exist, and "we knew
-          # why" is not the same as "we measured it".
-          foreach ($sk in $skipped) {
-            $problems += "${sk}: NOT MEASURED - the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks"
-          }
-
-          if ($problems.Count -gt 0) {
-            foreach ($p in $problems) { Write-Host "::error::Integrity: $p" }
-            Write-Host ""
-            if ($skipped.Count -gt 0) {
-              Write-Host "NOTE: $($categories -join ', ') still ran and IS compared below - read that verdict, it is a real regression signal. What this job cannot tell you today is anything about $($skipped -join ' or '), and it will keep failing until #3016 is fixed."
-              Write-Host ""
-            }
-            Write-Host "The eval did not produce a complete set of measurements, so the baseline comparison below is not trustworthy. This fails regardless of ``enforce`` - report mode softens a WORSE score, never a MISSING one. Check the backend/Lemonade logs in the artifact, then re-run."
+          # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE at its
+          # previous value, so a stale 0 would read as a complete run.
+          $global:LASTEXITCODE = 0
+          python -m gaia.eval.integrity_gate @gateArgs
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. Check the backend/Lemonade logs in the artifact, then re-run."
             exit 1
           }
-          Write-Host ""
-          Write-Host "Integrity OK - every baseline scenario ran and produced a measurement."
 
       - name: Compare each category against its committed Gemma baseline
         if: ${{ !cancelled() }}
@@ -1102,8 +1102,10 @@ jobs:
             Write-Host "  ${category}: $baseline  ->  $current"
             Write-Host "=================================================================="
             if (-not (Test-Path $current)) {
-              Write-Host "::warning::${category}: no scorecard produced - nothing to compare."
-              $failedCompare = $true
+              # NOT $failedCompare: "we did not measure" is the integrity gate's
+              # verdict and it has already rendered it under the enforce policy.
+              # Counting it again here would fail the job regardless of enforce.
+              Write-Host "::warning::${category}: no scorecard produced - nothing to compare (already reported by the integrity gate)."
               continue
             }
             # `--compare` exits 2 on status/score/time regressions, 0 otherwise
@@ -1148,9 +1150,11 @@ jobs:
           Write-Host "on this runner."
           Write-Host "=================================================================="
 
-          # A harness/IO error is never tolerated - it means we did not actually measure.
+          # A compare that exits with something other than 0 or 2 is the TOOL
+          # failing, not a verdict - `enforce` governs what a measurement is
+          # allowed to say, never whether the tool ran. Always fatal.
           if ($failedCompare) {
-            Write-Host "::error::One or more comparisons could not be performed. Failing regardless of enforce."
+            Write-Host "::error::One or more comparisons could not be performed - 'gaia eval agent --compare' itself failed. This is a harness/IO error, not a regression verdict, so it fails regardless of enforce."
             exit 1
           }
           if ($regressed.Count -gt 0) {

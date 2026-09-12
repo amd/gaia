@@ -3920,10 +3920,22 @@ Let me know your answer!
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero
+                    # If compare detected regressions or significant score drops, fail non-zero.
+                    # Scenarios with no measurement are deliberately NOT counted:
+                    # an infra failure is not a quality regression. Completeness
+                    # is the integrity gate's verdict (gaia.eval.integrity_gate),
+                    # so it is surfaced here and blocks there.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
+                    unmeasured = result.get("unmeasured", [])
+                    if unmeasured:
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from this verdict: {ids}. Run "
+                            "`python -m gaia.eval.integrity_gate --help` for the completeness check."
+                        )
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
