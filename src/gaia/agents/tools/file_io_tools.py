@@ -11,7 +11,7 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.file_edit import (
@@ -19,6 +19,27 @@ from gaia.agents.tools.file_edit import (
     record_read,
     record_write,
 )
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
+    """Run a post-write display step and report, never raise (#3676).
+
+    The bytes are on disk before any of these run, so a failure here is a
+    display failure, not a failed edit. Letting it reach the tool's ``except``
+    turned a completed write into ``{"status": "error"}``, and the model then
+    told the user the file was untouched.
+    """
+    if console is None:
+        return None
+    try:
+        show(console)
+        return None
+    except Exception as e:
+        logger.warning("Could not display the change (the write succeeded): %s", e)
+        return f"the file was written; displaying the change failed: {e}"
 
 
 class FunctionLookupError(Exception):
@@ -861,16 +882,20 @@ class FileIOToolsMixin:
                 record_write(str(path), content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if content.strip():
-                        console.print_prompt(
-                            content,
-                            title=f"✏️ write_file → {path}",
-                        )
-                    else:
-                        console.print_info(
+                if content.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_prompt(
+                            content, title=f"✏️ write_file → {path}"
+                        ),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
                             f"write_file: {path} was created but no content was written."
-                        )
+                        ),
+                    )
 
                 # Audit successful write
                 if path_validator is not None:
@@ -889,6 +914,8 @@ class FileIOToolsMixin:
                 }
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -1016,11 +1043,18 @@ class FileIOToolsMixin:
                 record_write(str(path), updated_content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if diff.strip():
-                        console.print_diff(diff, os.path.basename(str(path)))
-                    else:
-                        console.print_info(f"edit_file: No changes were made to {path}")
+                if diff.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_diff(diff, os.path.basename(str(path))),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
+                            f"edit_file: No changes were made to {path}"
+                        ),
+                    )
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -1045,6 +1079,8 @@ class FileIOToolsMixin:
                 }
                 if backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
