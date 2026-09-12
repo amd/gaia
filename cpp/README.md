@@ -50,7 +50,7 @@ How the server starts depends on the install, and there is no cross-platform
 `serve` command — Lemonade removed the `lemonade-server` CLI in 10.7. Windows
 starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
 `lemond` systemd unit; macOS installs a LaunchDaemon. On Windows you can also
-start one from the repo:
+start one from the repo (this restarts the server and frees its port first):
 
 ```powershell
 .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel

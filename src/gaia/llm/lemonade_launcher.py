@@ -327,7 +327,8 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     The single source of user-facing "here's how to start it" advice. It
     never names a command that does not exist on the host: on platforms
     started from a GUI (Windows tray, macOS app) it returns prose with
-    ``command=None`` rather than guessing a shell command, and the legacy
+    ``command=None`` rather than guessing a shell command. Service-managed
+    context changes also return manual configuration steps. The legacy
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
@@ -346,6 +347,15 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
                 )
             )
         spec = build_start_command(tooling, ctx_size)
+        if spec.argv[0] == "systemctl" and ctx_size is not None:
+            return StartHint(
+                instruction=(
+                    "If Lemonade is stopped, run `systemctl --user start lemond`. "
+                    f"In Lemonade's model settings, set the context size to {ctx_size} "
+                    "and reload the model. Starting an already running service "
+                    "does not change its context size."
+                )
+            )
         command = _render_command(spec.argv, spec.env)
         if system == "Darwin":
             # The app is the normal macOS path; the daemon is the CLI way.
