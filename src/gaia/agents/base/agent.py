@@ -520,7 +520,7 @@ def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
         if not isinstance(stats, dict):
             continue
         rate = stats.get("tokens_per_second")
-        tokens = stats.get("completion_tokens", stats.get("output_tokens"))
+        tokens = stats.get("completion_tokens") or stats.get("output_tokens")
         if (
             not isinstance(rate, (int, float))
             or isinstance(rate, bool)
