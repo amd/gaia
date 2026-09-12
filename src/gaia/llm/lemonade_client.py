@@ -1234,6 +1234,14 @@ class LemonadeClient:
             # Never log the key value itself — only its presence.
             self.log.debug("Lemonade API key configured")
 
+    #: Hostnames that mean "this machine", so launching a server here can
+    #: actually satisfy this client.
+    _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
+
+    def _targets_this_machine(self) -> bool:
+        """True when this client's server would run on the local host."""
+        return (self.host or "").strip().lower() in self._LOCAL_HOSTS
+
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
         Launch the Lemonade server using subprocess.
@@ -1250,7 +1258,22 @@ class LemonadeClient:
                      For chat/RAG applications, use 32768 or higher.
 
         This method follows the approach in test_lemonade_server.py.
+
+        Raises:
+            LemonadeClientError: this client is pointed at a server on another
+                host. Launching is a local act — it frees a local port and
+                starts a local process — so it can only ever satisfy a local
+                client (#3558).
         """
+        if not self._targets_this_machine():
+            raise LemonadeClientError(
+                f"Refusing to start a local Lemonade server: this client is "
+                f"configured for {self.base_url}, which is not on this machine. "
+                f"Launching would free local port {self.port} and start a "
+                "server the client would not talk to. Start Lemonade on that "
+                "host, or unset LEMONADE_BASE_URL to use a local one."
+            )
+
         self.log.info("Starting Lemonade server...")
 
         # Skip the port takeover when a healthy server is already listening —
@@ -4834,17 +4857,26 @@ def create_lemonade_client(
     server_host = host or env_host or DEFAULT_HOST
     server_port = port or (int(env_port) if env_port else DEFAULT_PORT)
 
+    # A named host or port wins; otherwise let the client resolve the address
+    # itself — LEMONADE_BASE_URL, then GAIA's own embedded server's dynamic
+    # port, then the default. Passing host/port unconditionally pinned every
+    # caller to localhost:13305: a documented remote setup was contacted on the
+    # developer's own machine, and the embedded server (whose port is chosen at
+    # start time, and whose generated API key is keyed to it) was unreachable
+    # (#3558).
+    client_kwargs = {
+        "verbose": verbose,
+        "keep_alive": keep_alive,
+        "api_key": api_key,
+        "ctx_size_override": ctx_size_override,
+        "model_lease_priority": model_lease_priority,
+    }
+    if host is not None or port is not None or env_host or env_port:
+        client_kwargs["host"] = server_host
+        client_kwargs["port"] = server_port
+
     # Create the client
-    client = LemonadeClient(
-        model=model_name,
-        host=server_host,
-        port=server_port,
-        verbose=verbose,
-        keep_alive=keep_alive,
-        api_key=api_key,
-        ctx_size_override=ctx_size_override,
-        model_lease_priority=model_lease_priority,
-    )
+    client = LemonadeClient(model=model_name, **client_kwargs)
 
     # Auto-start server if requested
     if auto_start:
@@ -4855,9 +4887,7 @@ def create_lemonade_client(
                 client.log.info("Lemonade server is already running")
             except LemonadeClientError:
                 # Server not running, start it
-                client.log.info(
-                    f"Starting Lemonade server at {server_host}:{server_port}"
-                )
+                client.log.info(f"Starting Lemonade server at {client.base_url}")
                 client.launch_server(background=background)
 
                 # Perform a health check to verify the server is running
@@ -4944,8 +4974,8 @@ def initialize_lemonade(
     timeout: int = 120,
     verbose: bool = False,
     quiet: bool = False,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
 ) -> LemonadeStatus:
     """
     Convenience function to initialize Lemonade Server.
@@ -4960,8 +4990,9 @@ def initialize_lemonade(
         timeout: Timeout for server startup
         verbose: Enable verbose output
         quiet: Suppress output
-        host: Lemonade server host
-        port: Lemonade server port
+        host: Lemonade server host (defaults to LEMONADE_BASE_URL, then
+              LEMONADE_HOST, then localhost)
+        port: Lemonade server port (same resolution as host)
 
     Returns:
         LemonadeStatus with server status
@@ -4975,6 +5006,9 @@ def initialize_lemonade(
         # Initialize for code agent with larger context
         status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
+    # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
+    # past entirely — a documented remote server was initialized on localhost
+    # instead, and auto_start then tried to free the local port (#3558).
     client = LemonadeClient(host=host, port=port, keep_alive=True)
     return client.initialize(
         agent=agent,
