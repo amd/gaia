@@ -2124,6 +2124,11 @@ Examples:
         help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
     )
     agent_eval_parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="With --compare, fail when baseline scenarios are missing or unmeasured",
+    )
+    agent_eval_parser.add_argument(
         "--save-baseline",
         action="store_true",
         help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
@@ -3911,37 +3916,49 @@ Let me know your answer!
                                 "  Run `gaia eval agent --save-baseline` first to save a baseline."
                             )
                             sys.exit(1)
+                        current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), compare_paths[0]
+                            str(baseline_path), str(current_path)
                         )
                     elif len(compare_paths) == 2:
-                        result = compare_scorecards(compare_paths[0], compare_paths[1])
+                        baseline_path, current_path = map(Path, compare_paths)
+                        result = compare_scorecards(
+                            str(baseline_path), str(current_path)
+                        )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero.
-                    # Scenarios with no measurement are deliberately NOT counted:
-                    # an infra failure is not a quality regression. Completeness
-                    # is the integrity gate's verdict (gaia.eval.integrity_gate),
-                    # so it is surfaced here and blocks there.
+                    # Quality and completeness are separate checks. The strict
+                    # opt-in uses exactly the CI integrity gate's missing/blocked/
+                    # skipped/error semantics, including newly added scenarios.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
-                    unmeasured = result.get("unmeasured", [])
-                    if unmeasured:
-                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
-                        print(
-                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
-                            f"excluded from this verdict: {ids}. Run "
-                            "`python -m gaia.eval.integrity_gate --help` for the completeness check."
-                        )
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
+                    if getattr(args, "require_complete", False):
+                        from gaia.eval.integrity_gate import check_category
+
+                        problems, status_line = check_category(
+                            baseline_path, current_path, "comparison"
+                        )
+                        print(status_line)
+                        for problem in problems:
+                            print(f"[ERROR] {problem}")
+                        total_issues += len(problems)
+                    elif result.get("unmeasured"):
+                        unmeasured = result["unmeasured"]
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from the quality verdict: {ids}. Add "
+                            "--require-complete to also enforce measurement completeness."
+                        )
                     if total_issues > 0:
                         print(
-                            f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
+                            f"[ERROR] Detected {total_issues} regression or required-completeness issue(s); failing."
                         )
                         sys.exit(2)
                     # Otherwise success
