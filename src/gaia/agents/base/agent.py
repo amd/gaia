@@ -4975,10 +4975,6 @@ Do NOT wrap conversational replies in JSON.
 
         # Process the query in steps, allowing for multiple tool usages
         while steps_taken < steps_limit and final_answer is None:
-            # Anything the user sent mid-turn is folded in here, before the
-            # step runs: the loop is between steps, so nothing is half-applied.
-            self._drain_followups(messages, conversation)
-
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -4997,6 +4993,13 @@ Do NOT wrap conversational replies in JSON.
                     "into smaller steps."
                 )
                 break
+
+            # Anything the user sent mid-turn joins the context here, where the
+            # loop is between steps and nothing is half-applied. AFTER the
+            # cancel check above, deliberately: a cancelled turn breaks out
+            # without running another step, and draining first would consume a
+            # message this turn can no longer answer.
+            self._drain_followups(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array

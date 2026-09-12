@@ -19,6 +19,7 @@ model call. These tests pin the three things that make that safe:
 
 import queue
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -154,3 +155,91 @@ def test_the_queue_is_safe_to_write_from_the_http_thread(agent):
     t.join(timeout=10)
 
     assert len(drained) == 50
+
+
+# --------------------------------------------------------------------------
+# The wiring, not just the helper
+# --------------------------------------------------------------------------
+#
+# Everything above tests ``_drain_followups`` by calling it. That proves the
+# helper works and proves nothing about whether the agent loop ever reaches it
+# — delete the call site in ``_process_query_impl`` and every test above still
+# passes while the feature is silently dead. These drive the real loop.
+
+
+def _reply(text: str):
+    """One complete non-streaming reply, the shape the loop's reader expects."""
+    return SimpleNamespace(text=text, stats={})
+
+
+@pytest.fixture
+def loop_agent(agent):
+    """The same agent with a REAL console.
+
+    The MagicMock console above exists so a test can read back what the user
+    was told; it cannot drive the loop, which reads real strings off the
+    handler. These tests run the loop, so they need the real thing.
+    """
+    from gaia.agents.base.console import SilentConsole
+
+    agent.console = SilentConsole()
+    return agent
+
+
+def test_the_agent_loop_hands_a_followup_to_the_model(loop_agent):
+    """The wiring: a queued follow-up reaches the NEXT model call of this turn."""
+    sent = []
+
+    def capture(messages, **kwargs):
+        sent.append([dict(m) for m in messages])
+        return _reply("All done.")
+
+    loop_agent.chat.send_messages = MagicMock(side_effect=capture)
+    loop_agent._followup_queue = queue.Queue()
+    loop_agent.queue_followup("only the unread ones")
+
+    loop_agent.process_query("triage my inbox")
+
+    assert sent, "the loop never called the model"
+    first_call = sent[0]
+    assert any(
+        m["role"] == "user" and "only the unread ones" in str(m["content"])
+        for m in first_call
+    ), f"the follow-up never reached the model: {first_call}"
+    # And it arrives AFTER the original request, not instead of it — the whole
+    # point is that the turn in progress is continued, not replaced.
+    users = [str(m["content"]) for m in first_call if m["role"] == "user"]
+    assert "triage my inbox" in users[0]
+    assert "only the unread ones" in users[-1]
+
+
+def test_a_cancelled_turn_does_not_swallow_a_followup(loop_agent):
+    """A cancelled turn breaks out without running another step.
+
+    Draining before the cancel check consumed a message the turn could no
+    longer answer — gone from the queue and never sent to the model.
+    """
+    loop_agent.chat.send_messages = MagicMock(side_effect=lambda *a, **k: _reply("x"))
+    loop_agent._cancel_event = threading.Event()
+    loop_agent._cancel_event.set()
+    loop_agent._followup_queue = queue.Queue()
+    loop_agent.queue_followup("only the unread ones")
+
+    loop_agent.process_query("triage my inbox")
+
+    assert not loop_agent._followup_queue.empty(), (
+        "a cancelled turn consumed the follow-up; it is now in no queue and no "
+        "conversation"
+    )
+
+
+def test_a_turn_with_nothing_queued_is_untouched(loop_agent):
+    """Every ordinary turn now runs this on every step. It must be inert."""
+    loop_agent.chat.send_messages = MagicMock(
+        side_effect=lambda *a, **k: _reply("All done.")
+    )
+    loop_agent._followup_queue = queue.Queue()
+
+    result = loop_agent.process_query("triage my inbox")
+
+    assert result["status"] != "error", result
