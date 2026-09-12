@@ -287,7 +287,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activity = "Connecting"
 				c := m.client
 				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					defer func() { key = "" }()
 					if err := c.Configure(m.ctx, p, key); err != nil {
 						return modelsMsg{source: c, err: err}
 					}

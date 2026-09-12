@@ -113,6 +113,16 @@ the terminal UI meant building it from source.
 - **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
   trusted local mirror.
 
+### Changed
+
+- **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
+  written.** Previously any URL not ending in `/api/v1` had that suffix appended,
+  so a reverse proxy configured as `https://proxy.example/lemonade` was silently
+  rewritten to `https://proxy.example/lemonade/api/v1`. It now resolves to
+  `https://proxy.example/lemonade` unchanged, and only a bare origin with no path
+  at all gains `/api/v1`. If a proxied install starts returning `404` after
+  upgrading, append the API path to the variable yourself.
+
 ### Fixed
 
 - **A second `gaia serve` no longer reports success against a server it does not

@@ -600,6 +600,7 @@ def _format_model_list(agent: Any) -> str:
     try:
         models = _lemonade_models(chat.config.base_url)
     except RuntimeError as exc:
+        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
         for provider, heading in (
@@ -611,7 +612,7 @@ def _format_model_list(agent: Any) -> str:
             group = [m for m in models if cloud_model_provider(m) == provider]
             if not group:
                 lines.append(
-                    "- (none downloaded — run `lemonade-server pull <model>`)"
+                    "- (none downloaded — run `gaia init`)"
                     if provider is None
                     else "- (connect this provider in the TUI provider settings)"
                 )

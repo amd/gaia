@@ -42,12 +42,12 @@ func TestSuggestedGemmaIsFirstAndSelectionIsExplicit(t *testing.T) {
 	m := New("", 100, 30)
 	m.selected = 1
 	m = m.setup()
-	next, cmd := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.z"}, {ID: lemonade.FireworksModel}}})
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.z"}, {ID: lemonade.FireworksModel}}})
 	m = next.(Model)
 	if m.ctx.Err() != nil || m.models[0].ID != lemonade.FireworksModel || m.stage != "models" {
 		t.Fatal("model silently selected or suggestion missing")
 	}
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd().(SelectedMsg).ID != lemonade.FireworksModel {
 		t.Fatal("wrong selection")
 	}
