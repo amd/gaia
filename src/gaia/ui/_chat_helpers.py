@@ -1349,7 +1349,7 @@ async def _get_chat_response(
 
     def _do_chat():
         # Build conversation history from database
-        messages = db.get_messages(request.session_id, limit=20)
+        messages = db.get_recent_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
@@ -1747,7 +1747,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         )
 
         # Build conversation history
-        messages = db.get_messages(request.session_id, limit=20)
+        messages = db.get_recent_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
