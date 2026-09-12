@@ -52,7 +52,7 @@ public:
 
     /// Load conversation history from a session file.
     /// @param id Session identifier.
-    /// @return The persisted conversation messages.
+    /// @return The persisted conversation messages, preserving ordered text/image parts.
     /// @throws std::runtime_error if the session file doesn't exist or is malformed.
     /// @throws std::invalid_argument if the session ID contains invalid characters.
     std::vector<Message> load(const std::string& id) const;
