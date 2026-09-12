@@ -240,13 +240,20 @@ def split_verification_scope(text: str) -> Tuple[str, str]:
     transcript, an explanation of the feature, this repo's own source — has to
     come back with the quote intact, or the deletion lands in the middle of a
     fence and leaves an empty pair of backticks.
+
+    A statement sharing a line with prose is left alone on purpose: the models
+    emit it on its own line, and matching mid-line risks eating real prose.
     """
     if not isinstance(text, str) or VERIFICATION_SCOPE_PREFIX.strip() not in text:
         return (text if isinstance(text, str) else "", "")
     kept: List[str] = []
     found = ""
     fence = ""
-    for line in text.splitlines():
+    removed = False
+    # split("\n"), not splitlines(): the email agent compares a stripped answer
+    # against the original for identity, and splitlines() also breaks on \x0b,
+    # \x0c and U+2028 and would rewrite CRLF as LF.
+    for line in text.split("\n"):
         marker = _FENCE_RE.match(line)
         if marker:
             token = marker.group(1)[:3]
@@ -263,8 +270,11 @@ def split_verification_scope(text: str) -> Tuple[str, str]:
             # The blank line that set this statement apart goes with it.
             if kept and not kept[-1].strip():
                 kept.pop()
+            removed = True
             continue
         kept.append(line)
+    if not removed:
+        return text, found
     return "\n".join(kept).rstrip(), found
 
 

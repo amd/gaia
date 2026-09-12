@@ -1073,3 +1073,16 @@ def test_an_unterminated_fence_is_left_alone_rather_than_edited_inside():
     """Ambiguous markup: keep the answer whole instead of guessing."""
     text = "Broken:\n\n```\n" + ECHOED
     assert strip_verification_scope(text) == text
+
+
+def test_an_answer_without_a_statement_comes_back_byte_for_byte():
+    """The email agent compares the stripped answer against the original."""
+    text = "Line one.\r\nLine two.\r\n\r\nStill line two.\n"
+
+    assert strip_verification_scope(text) == text
+
+
+def test_an_exotic_separator_is_not_treated_as_a_line_break():
+    text = "before\x0cafter"
+
+    assert strip_verification_scope(text) == text
