@@ -7,26 +7,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Who owns the mouse, and why — the terminal by default (see teaOptions in
-// ui/app.go), the app only for as long as it genuinely needs clicks.
+// Who owns the mouse, and why — the app by default (the wheel scrolls and
+// links are clickable), the terminal only when the user asks for selection.
 //
-// There are two independent reasons the app might want the mouse:
+// There are two independent reasons the app wants the mouse:
 //
-//  1. mouseWheelOn: the user asked for it, via Ctrl+T (selectmode.go) — wheel
-//     scrolling instead of drag-select, until they ask again.
+//  1. The transcript itself, unless the user turned on SELECT MODE via Ctrl+T
+//     (selectmode.go) to get native drag-select back.
 //  2. An interactive overlay is open (the "/" palette, a mid-run question)
 //     and needs clicks — see overlayOpen. This one is never a user choice: it
-//     is scoped to exactly the frames the overlay is on screen, and releases
-//     itself the moment it closes.
+//     is scoped to exactly the frames the overlay is on screen, and outlives
+//     SELECT MODE, since an overlay you cannot click is worse than one you
+//     cannot select text out of.
 //
-// mouseCaptured (selectmode.go) is the actual, reconciled state — whichever
-// of the two (or both) currently wants the mouse. Deriving it fresh on every
-// Update (applyMouseCapture, called from the top-level Update wrapper) rather
-// than letting each caller flip it directly is what makes the two reasons
-// composable: an overlay opening while wheel mode is already on must not
-// re-issue a redundant escape sequence, and an overlay closing while wheel
-// mode is on must leave the mouse captured rather than yanking it back to the
-// terminal out from under a user who never asked for that.
+// mouseCaptured (model.go) is the actual, reconciled state. Deriving it fresh
+// on every Update (applyMouseCapture, called from the top-level Update
+// wrapper) rather than letting each caller flip it directly is what makes the
+// two reasons composable: an overlay opening while the transcript already
+// holds the mouse must not re-issue a redundant escape sequence, and an
+// overlay closing in SELECT MODE must hand the mouse back to the terminal
+// rather than silently keeping the capture the overlay needed.
 //
 // overlayOpen also decides whether motion (hover, no button held) is worth
 // asking the terminal for: an overlay needs it (clicking the row you are
@@ -45,7 +45,7 @@ func (m ChatModel) overlayOpen() bool {
 // needs_confirmation event, the turn settling) is covered from one place
 // rather than requiring every such call site to remember to reconcile it.
 func (m *ChatModel) applyMouseCapture() tea.Cmd {
-	wantOn := m.mouseWheelOn || m.overlayOpen()
+	wantOn := !m.mouseSelectMode || m.overlayOpen()
 	wantAll := m.overlayOpen()
 
 	switch {

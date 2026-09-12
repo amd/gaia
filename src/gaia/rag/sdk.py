@@ -696,7 +696,12 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
-            - pdf_status: str ("readable", "encrypted", "corrupted", "empty")
+            - pdf_status: str ("readable", "degraded", "encrypted",
+              "corrupted", "empty"). "degraded" means the document indexed but
+              at least one page may be incomplete — see degraded_pages.
+            - degraded_pages: list[int], present only when pdf_status is
+              "degraded"
+            - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
             EncryptedPDFError: PDF is password-protected.
@@ -761,6 +766,7 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfPageInspectionError,
                     count_images_in_page,
                     extract_images_from_page_pymupdf,
                 )
@@ -800,6 +806,8 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            degraded_pages = []
+            page_warnings = {}
 
             for i, page in enumerate(reader.pages, 1):
                 page_start = time_module.time()
@@ -810,11 +818,21 @@ class RAGSDK:
                 # Step 2: Check for images
                 has_imgs = False
                 num_imgs = 0
+                page_warning = None
                 if vlm_available:
                     try:
-                        has_imgs, num_imgs = count_images_in_page(page)
-                    except Exception:  # pylint: disable=broad-except
-                        pass
+                        has_imgs, num_imgs = count_images_in_page(page, page_num=i)
+                    except PdfPageInspectionError as e:
+                        # Unknown, not "none". The inventory comes from pypdf
+                        # and the extraction from PyMuPDF, so a page pypdf
+                        # cannot inspect may still extract — try it rather than
+                        # indexing the page as blank (#3551).
+                        page_warning = str(e)
+                        self.log.warning("%s - attempting extraction anyway", e)
+                        has_imgs = True
+                        # Not zero — unknown. Reporting 0 alongside
+                        # has_images=True is a contradiction on the record.
+                        num_imgs = None
 
                 # Step 3: Extract from images if present
                 image_texts = []
@@ -829,24 +847,30 @@ class RAGSDK:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
                     except Exception as img_error:
-                        self.log.warning(
-                            f"Image extraction failed on page {i}: {img_error}"
+                        page_warning = (
+                            f"image extraction failed on page {i}: {img_error}"
                         )
+                        self.log.warning(page_warning)
 
                 # Step 4: Merge
                 merged_text = self._merge_page_texts(
                     pypdf_text, image_texts, page_num=i
                 )
 
-                pages_data.append(
-                    {
-                        "page": i,
-                        "text": merged_text,
-                        "has_images": has_imgs,
-                        "num_images": num_imgs,
-                        "vlm_used": len(image_texts) > 0,
-                    }
-                )
+                page_record = {
+                    "page": i,
+                    "text": merged_text,
+                    "has_images": has_imgs,
+                    "num_images": num_imgs,
+                    "vlm_used": len(image_texts) > 0,
+                }
+                if page_warning:
+                    # Into the metadata, which is what leaves this function.
+                    # pages_data is local — a key written here would be a
+                    # record nothing could read.
+                    degraded_pages.append(i)
+                    page_warnings[i] = page_warning
+                pages_data.append(page_record)
 
                 page_duration = time_module.time() - page_start
 
@@ -931,8 +955,18 @@ class RAGSDK:
                 "total_images": total_images_processed,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
-                "pdf_status": "readable",
+                "pdf_status": "degraded" if degraded_pages else "readable",
             }
+            if degraded_pages:
+                metadata["degraded_pages"] = degraded_pages
+                metadata["page_warnings"] = page_warnings
+                self.log.warning(
+                    "%s: %d of %d page(s) may be incomplete: %s",
+                    file_name,
+                    len(degraded_pages),
+                    total_pages,
+                    degraded_pages,
+                )
 
             return full_text, total_pages, metadata
         except PDFExtractionError:
@@ -1854,6 +1888,12 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            # Carry the degraded-page report up. Dropping it here is what made
+            # "which pages are incomplete" a log line nobody could act on.
+            metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
+            if pdf_metadata.get("degraded_pages"):
+                metadata["degraded_pages"] = pdf_metadata["degraded_pages"]
+                metadata["page_warnings"] = pdf_metadata.get("page_warnings", {})
             return text, metadata
 
         # PowerPoint files
@@ -2427,6 +2467,23 @@ These positions indicate where to split the text."""
         """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
+            previous_state = {
+                name: getattr(self, name).copy()
+                for name in (
+                    "chunks",
+                    "indexed_files",
+                    "chunk_to_file",
+                    "file_to_chunk_indices",
+                    "file_indices",
+                    "file_embeddings",
+                    "file_metadata",
+                    "file_access_times",
+                    "file_index_times",
+                )
+            }
+            previous_state.update(
+                index=self.index, _access_counter=self._access_counter
+            )
             # Keep remove+reindex under the same lock so readers never observe a
             # gap where the document disappeared between generations. Query
             # paths snapshot state quickly under this same lock and then do the
@@ -2443,10 +2500,22 @@ These positions indicate where to split the text."""
 
             # Index the new version
             self.log.info(f"Indexing new version of {file_path}")
-            result = self.index_document(file_path)
-            if result.get("success"):
-                result["reindexed"] = True
-            return result
+            succeeded = False
+            result = None
+            try:
+                result = self.index_document(file_path)
+                succeeded = bool(result.get("success"))
+                if succeeded:
+                    result["reindexed"] = True
+                return result
+            finally:
+                if not succeeded:
+                    # Removal builds a fresh index, so the old generation is intact.
+                    for name, value in previous_state.items():
+                        setattr(self, name, value)
+                    if result is not None:
+                        result["total_indexed_files"] = len(self.indexed_files)
+                        result["total_chunks"] = len(self.chunks)
 
     def _evict_lru_document(self) -> bool:
         """
@@ -2948,6 +3017,17 @@ These positions indicate where to split the text."""
 
                 file_index = self._create_faiss_index(file_embeddings)
 
+                # Persist before publishing any searchable state or ownership maps.
+                if self.config.show_stats:
+                    print("💾 Caching processed chunks...")
+                cache_data = {
+                    "chunks": new_chunks,
+                    "full_text": text,
+                    "metadata": file_metadata,
+                }
+                self._save_cache(cache_path, cache_data)
+                self._save_extracted_markdown(file_path, text, file_metadata)
+
                 if self.index is None:
                     self.index = new_index
                 else:
@@ -2959,23 +3039,6 @@ These positions indicate where to split the text."""
                 self.file_indices[file_path] = file_index
                 self.file_embeddings[file_path] = file_embeddings
 
-            if self.config.show_stats:
-                print(f"✅ Cached per-file index with {len(new_chunks)} chunks")
-
-            # Cache the results for this specific document
-            if self.config.show_stats:
-                print("💾 Caching processed chunks...")
-            cache_data = {
-                "chunks": new_chunks,  # Cache only new chunks for this document
-                "full_text": text,  # Cache full extracted text (for /dump)
-                "metadata": file_metadata,  # Cache metadata (num_pages, vlm_pages, etc.)
-            }
-            self._save_cache(cache_path, cache_data)
-
-            # Auto-save markdown version to cache directory for easy access
-            self._save_extracted_markdown(file_path, text, file_metadata)
-
-            with self._state_lock:
                 # Store metadata in memory for fast access
                 self.file_metadata[file_path] = {
                     "full_text": text,
@@ -3018,7 +3081,13 @@ These positions indicate where to split the text."""
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
             if file_type == ".pdf":
-                stats["pdf_status"] = "readable"
+                # Whatever extraction reported — "readable" or "degraded".
+                # Hardcoding "readable" here erased the one signal saying some
+                # pages may be incomplete (#3551).
+                stats["pdf_status"] = file_metadata.get("pdf_status", "readable")
+                if file_metadata.get("degraded_pages"):
+                    stats["degraded_pages"] = file_metadata["degraded_pages"]
+                    stats["page_warnings"] = file_metadata.get("page_warnings", {})
             elif file_type == ".pptx":
                 stats["pptx_status"] = "readable"
             return stats

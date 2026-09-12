@@ -28,7 +28,8 @@ type Message struct {
 	ToolName  string
 	Success   *bool
 	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // time to first inference token; never model-load or a tool/status event
+	TTFT      time.Duration // backend-measured time to first token; 0 => not reported, omit from display
+	TokPerS   float64       // backend-measured generation rate; 0 => not reported, omit from display
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
 	Tokens    int           // real generated-token count; 0 => not reported, omit from display

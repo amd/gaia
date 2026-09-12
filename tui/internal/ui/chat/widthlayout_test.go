@@ -270,18 +270,35 @@ func TestCaptureKeepsMoreThanOneScreensWorth(t *testing.T) {
 
 // A resize storm — dragging a window edge emits one WindowSizeMsg per frame —
 // must not churn the markdown renderer, which SetWordWrap rebuilds on every
-// width CHANGE. It cannot: the answer measure is capped, so every width past
-// the cap asks for the same wrap and SetWordWrap short-circuits.
+// width CHANGE. It cannot past the cap: every width beyond it asks for the
+// same wrap and SetWordWrap short-circuits.
 func TestResizingWideDoesNotChurnTheMarkdownWrap(t *testing.T) {
-	m := sizedChat(t, 120, 40)
+	m := sizedChat(t, answerMeasure+4, 40)
 	first := m.answerWidth()
-	for w := 121; w <= 240; w++ {
+	for w := answerMeasure + 5; w <= answerMeasure+120; w++ {
 		m.width = w
 		m.resize()
 		if got := m.answerWidth(); got != first {
 			t.Fatalf("answer width changed from %d to %d at %d columns; the wrap is capped and should be stable",
 				first, got, w)
 		}
+	}
+}
+
+// Below the cap, widening the terminal must widen the prose with it. Prose
+// that stopped at 88 in a 120-column window did not read as a chosen measure;
+// it read as text that failed to fill the window the header, divider and every
+// card around it already filled.
+func TestProseFollowsTheTerminalBelowTheCap(t *testing.T) {
+	narrow := sizedChat(t, 100, 40)
+	wide := sizedChat(t, 118, 40)
+	if wide.answerWidth() <= narrow.answerWidth() {
+		t.Errorf("prose stayed at %d columns when the terminal grew from 100 to 118",
+			wide.answerWidth())
+	}
+	if got, want := wide.answerWidth(), 118-4; got != want {
+		t.Errorf("answer width = %d at 118 columns, want %d — the same pane every card fills",
+			got, want)
 	}
 }
 

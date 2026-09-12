@@ -675,11 +675,29 @@ class ChatDatabase:
             rows = self._conn.execute(
                 """SELECT * FROM messages
                    WHERE session_id = ?
-                   ORDER BY created_at ASC
+                   ORDER BY created_at ASC, id ASC
                    LIMIT ? OFFSET ?""",
                 (session_id, limit, offset),
             ).fetchall()
 
+        return self._decode_messages(rows)
+
+    def get_recent_messages(
+        self, session_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get the newest messages in chronological order for agent context."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM (
+                       SELECT * FROM messages WHERE session_id = ?
+                       ORDER BY created_at DESC, id DESC LIMIT ?
+                   ) ORDER BY created_at ASC, id ASC""",
+                (session_id, limit),
+            ).fetchall()
+        return self._decode_messages(rows)
+
+    @staticmethod
+    def _decode_messages(rows) -> List[Dict[str, Any]]:
         messages = []
         for row in rows:
             msg = dict(row)

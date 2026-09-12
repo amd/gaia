@@ -740,7 +740,7 @@ class TestApiCorsPolicy:
             assert response.headers.get("access-control-allow-origin") == origin
 
     def test_env_var_adds_explicit_origin(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv(
             "GAIA_API_CORS_ORIGINS", "https://myapp.example.com, https://other.example"
@@ -753,7 +753,7 @@ class TestApiCorsPolicy:
         assert cfg["allow_credentials"] is True
 
     def test_blank_env_var_does_not_become_wildcard(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "")
         cfg = _cors_config()
@@ -761,7 +761,7 @@ class TestApiCorsPolicy:
         assert cfg["allow_origin_regex"]
 
     def test_explicit_wildcard_disables_credentials(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "*")
         cfg = _cors_config()

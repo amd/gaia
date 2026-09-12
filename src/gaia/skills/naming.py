@@ -14,6 +14,14 @@ name against the canonical :data:`gaia.skills.format.NAME_PATTERN` *and* asserts
 the resolved target is a direct child of the resolved root — the second half is
 the load-bearing one, because it catches the symlink and ``\\\\?\\`` shapes the
 pattern never sees.
+
+A hub manifest's ``artifact.filename`` is the same problem one layer out: it is
+joined onto a temp workdir *before* the signature, tier and grant gates run, so
+a hostile origin's ``'../autorun.zip'`` lands wherever it likes and the
+manifest's own SHA-256 attests to the bytes, never to the destination.
+:func:`artifact_path` is the join for that; it shares
+:func:`gaia.utils.paths.safe_path_segment` with the agent-hub installer so there
+is one rule rather than two that drift.
 """
 
 from __future__ import annotations
@@ -22,8 +30,14 @@ from pathlib import Path
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.format import MAX_NAME_LENGTH, NAME_PATTERN
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
-__all__ = ["validated_skill_name", "skill_directory"]
+__all__ = [
+    "validated_skill_name",
+    "skill_directory",
+    "validated_artifact_filename",
+    "artifact_path",
+]
 
 
 def validated_skill_name(name: str, *, source: str = "skill name") -> str:
@@ -81,5 +95,43 @@ def skill_directory(root: Path | str, name: str, *, source: str = "skill name") 
             f"root {root_path} (it resolves to {target.resolve()}). Refusing to "
             "touch it. If the skill directory is a symlink, delete the link "
             "yourself — this command only manages real directories inside the root."
+        )
+    return target
+
+
+def validated_artifact_filename(name: str, *, origin: str = "") -> str:
+    """Return *name*, or raise if it is not usable as a bundle file name.
+
+    Args:
+        name: ``artifact.filename`` exactly as the hub manifest declared it.
+        origin: The hub URL or skill/version the manifest came from, quoted back
+            in the error so a bad manifest is attributable.
+
+    Raises:
+        SkillValidationError: the name is not a single safe path segment.
+    """
+    try:
+        return safe_path_segment(name, what="artifact filename", origin=origin)
+    except UnsafePathSegment as exc:
+        raise SkillValidationError(str(exc)) from exc
+
+
+def artifact_path(workdir: Path | str, name: str, *, origin: str = "") -> Path:
+    """``workdir/<name>`` for a hub-supplied artifact filename, asserted contained.
+
+    Raises:
+        SkillValidationError: the name is not a single safe path segment, or the
+            join does not resolve to a direct child of *workdir*.
+    """
+    validated = validated_artifact_filename(name, origin=origin)
+    root = Path(workdir)
+    target = root / validated
+    if target.resolve().parent != root.resolve():
+        raise SkillValidationError(
+            f"Refusing to download artifact {name!r}"
+            + (f" (from {origin})" if origin else "")
+            + f": {target} does not resolve to a direct child of the download "
+            f"directory {root} (it resolves to {target.resolve()}). Nothing was "
+            "written — report the hub manifest as malformed."
         )
     return target

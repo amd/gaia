@@ -49,7 +49,9 @@ def _shell_tools():
 
     def spy(**kwargs):
         def decorate(fn):
-            captured[kwargs.get("name")] = fn
+            # Keyed on the function name, which is where @tool takes a tool's
+            # name from — it has no `name=` argument to read.
+            captured[fn.__name__] = fn
             return original(**kwargs)(fn)
 
         return decorate

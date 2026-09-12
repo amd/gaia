@@ -214,6 +214,37 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
     r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
 )
 
+#: Binaries an agent reaches for when it means "change this file". None are on
+#: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
+#: says "only read-only commands are allowed" and lists read-only examples,
+#: which leaves no route to the thing the agent was trying to do. Naming these
+#: lets the refusal point at edit_file instead of dead-ending (#3600).
+FILE_REWRITE_BINARIES = frozenset(
+    {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
+)
+
+#: In-place flags for the binaries that can also be used read-only. ``sed -n
+#: '10,20p' f`` prints a range and ``awk '{print $1}' f`` filters a stream;
+#: neither is an edit, and answering them with "use edit_file" would push the
+#: agent toward a write tool when it was trying to read.
+_IN_PLACE_FLAGS = ("-i", "--in-place")
+
+#: These write by definition — there is no read-only invocation to protect.
+_ALWAYS_WRITES = frozenset({"tee", "patch", "dd", "truncate", "ed"})
+
+
+def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
+    """Would this invocation change a file, as opposed to reading one?"""
+    if cmd_base in _ALWAYS_WRITES:
+        return True
+    return any(
+        part == flag
+        or part.startswith(flag + "=")
+        or (flag == "-i" and part.startswith("-i") and not part.startswith("--"))
+        for part in cmd_parts[1:]
+        for flag in _IN_PLACE_FLAGS
+    )
+
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
 #: only one a ``shell:execute`` grant may exempt from confirmation.
@@ -792,6 +823,30 @@ class ShellToolsMixin:
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
                 }
         elif cmd_base not in ALLOWED_COMMANDS:
+            # Refusing a file rewrite with "only read-only commands are allowed"
+            # is a dead end: the agent wanted to change a file and the message
+            # names nothing that can. Point at the tool that does the job.
+            #
+            # Only when the invocation actually writes. `sed -n '10,20p' f`
+            # prints a line range; answering that with "use edit_file" sends the
+            # agent to a write tool when it was trying to read.
+            if cmd_base in FILE_REWRITE_BINARIES and _rewrites_in_place(
+                cmd_base, cmd_parts
+            ):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_base}' rewrites files and is not available. Use the "
+                        f"edit tools instead — they are not blocked."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Call edit_file with the exact existing text as old_content, "
+                        "or edit_python_file for .py to have the edit syntax-checked. "
+                        "Use write_file to create a file that does not exist yet."
+                    ),
+                    "examples": "edit_file(file_path=..., old_content=..., new_content=...)",
+                }
             return {
                 "status": "error",
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
@@ -808,39 +863,10 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="run_shell_command",
             # The agent-level guard must outlast the longest command class, or a
             # build would be abandoned by the loop while the subprocess is still
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
-            description=(
-                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
-                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
-                "navigation (pwd), and system information. "
-                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
-                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": "The shell command to execute (e.g., 'ls -la', 'pwd', 'cat file.txt')",
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the command in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": (
-                        "Timeout in seconds. Omit it for the default that suits this "
-                        f"kind of command. Maximum {MAX_COMMAND_TIMEOUT}."
-                    ),
-                    "required": False,
-                },
-            },
         )
         def run_shell_command(
             command: str,
@@ -1206,52 +1232,9 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="wait_for_condition",
             # Outlast the longest wait the tool itself permits, so the agent
             # loop never abandons a wait that is still inside its deadline.
             timeout=WAIT_MAX_TIMEOUT + 60,
-            description=(
-                "Wait until a shell command succeeds (exit code 0), or give up at a "
-                "deadline. Use this instead of sleeping and re-checking: waiting for a "
-                "server to answer, a file to appear, a log line to be written, or a CI "
-                "run to finish is ONE call, not one call per check. "
-                f"Polls every {WAIT_DEFAULT_POLL_INTERVAL}s by default "
-                f"({WAIT_MIN_POLL_INTERVAL}-{WAIT_MAX_POLL_INTERVAL}s), waits "
-                f"{WAIT_DEFAULT_TIMEOUT}s by default and {WAIT_MAX_TIMEOUT}s at most. "
-                "Examples: 'ls build/output.bin' (file exists), "
-                "'grep -q \"Server started\" server.log' (log line written)."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": (
-                        "The predicate: a shell command that exits 0 once the condition "
-                        "holds and non-zero until then. Same allowlist as run_shell_command."
-                    ),
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the predicate in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": (
-                        f"Give up after this many seconds (default {WAIT_DEFAULT_TIMEOUT}, "
-                        f"maximum {WAIT_MAX_TIMEOUT})."
-                    ),
-                    "required": False,
-                },
-                "poll_interval": {
-                    "type": "int",
-                    "description": (
-                        f"Seconds between checks (default {WAIT_DEFAULT_POLL_INTERVAL}, "
-                        f"{WAIT_MIN_POLL_INTERVAL}-{WAIT_MAX_POLL_INTERVAL})."
-                    ),
-                    "required": False,
-                },
-            },
         )
         def wait_for_condition(
             command: str,

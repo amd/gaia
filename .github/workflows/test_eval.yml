@@ -20,7 +20,7 @@ on:
       - 'setup.py'
       - '.github/workflows/test_eval.yml'
   pull_request:
-    branches: ["main"]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/eval/**'

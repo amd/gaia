@@ -65,6 +65,130 @@ SENSITIVE_EXTENSIONS: Set[str] = {
     ".keystore",
 }
 
+# Files whose contents run automatically — on the next login, the next shell, or
+# the next git command. A write here is persistence, not a document edit, so it
+# is the cleanest prompt-injection-to-code-execution step there is.
+STARTUP_EXECUTION_FILE_NAMES: Set[str] = {
+    # POSIX shells
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".bash_aliases",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".kshrc",
+    ".cshrc",
+    ".tcshrc",
+    ".login",
+    ".logout",
+    ".inputrc",
+    "config.fish",
+    # X11 / desktop session
+    ".xinitrc",
+    ".xprofile",
+    ".xsession",
+    ".xsessionrc",
+    # PowerShell
+    "profile.ps1",
+    "microsoft.powershell_profile.ps1",
+    "microsoft.vscode_profile.ps1",
+    # git — aliases and hook paths in a config are executed by ordinary commands
+    ".gitconfig",
+    "gitconfig",
+    # cron
+    "crontab",
+}
+
+# Directory shapes whose *contents* execute regardless of file name: a git hook
+# is `pre-commit` with no extension, an autostart entry is any `.desktop` file.
+# Each entry is an ordered run of lowercase path segments to find in the path.
+_STARTUP_EXECUTION_DIR_MARKERS: Tuple[Tuple[str, ...], ...] = (
+    # Covers hooks/ and config alike; no agent file tool has business in here.
+    (".git",),
+    (".config", "autostart"),
+    (".config", "systemd", "user"),
+    ("launchagents",),
+    ("launchdaemons",),
+    ("windowspowershell",),
+)
+
+
+def _secret_directories() -> Set[str]:
+    """Directories whose every file is a credential, whatever it is called.
+
+    Returns:
+        Normalized paths. Read-blocked wholesale — ``~/.ssh/config`` names hosts
+        and key files, ``~/.aws/credentials`` is the key itself, and neither has
+        a name the extension/name denylists would catch.
+    """
+    home = Path.home()
+    candidates = [
+        home / ".ssh",
+        home / ".gnupg",
+        home / ".aws",
+        home / ".azure",
+        home / ".kube",
+        home / ".docker",
+        home / ".config" / "gcloud",
+        home / "AppData" / "Roaming" / "gcloud",
+    ]
+    return {os.path.normpath(str(c)) for c in candidates}
+
+
+def _path_is_within(candidate: Path, parent: Path) -> bool:
+    """Whether *candidate* is *parent* or sits underneath it.
+
+    Args:
+        candidate: An already-resolved path.
+        parent: The directory to test containment against.
+
+    Returns:
+        True when candidate == parent or candidate is inside it.
+    """
+    is_windows = platform.system() == "Windows"
+    norm_candidate = os.path.normpath(_normalize_macos_symlinks(str(candidate)))
+    norm_parent = os.path.normpath(_normalize_macos_symlinks(str(parent)))
+    if is_windows:
+        norm_candidate, norm_parent = norm_candidate.lower(), norm_parent.lower()
+    return norm_candidate == norm_parent or norm_candidate.startswith(
+        norm_parent + os.sep
+    )
+
+
+def _startup_execution_reason(real_path: Path) -> Optional[str]:
+    """Why writing *real_path* would plant code that runs on its own.
+
+    Args:
+        real_path: A symlink-resolved path.
+
+    Returns:
+        A reason naming what would execute it, or ``None`` when the path is an
+        ordinary file.
+    """
+    if real_path.name.lower() in STARTUP_EXECUTION_FILE_NAMES:
+        return (
+            f"'{real_path.name}' is executed automatically when a shell, login "
+            f"session or git command starts"
+        )
+
+    segments = [part.lower() for part in real_path.parts]
+    for marker in _STARTUP_EXECUTION_DIR_MARKERS:
+        span = len(marker)
+        # The marker must appear as consecutive segments *above* the file itself.
+        for start in range(0, max(0, len(segments) - span)):
+            if tuple(segments[start : start + span]) == marker:
+                return (
+                    f"'{real_path}' is inside '{'/'.join(marker)}', whose contents "
+                    f"are executed automatically at login, on a git operation, or "
+                    f"by the session manager"
+                )
+    return None
+
 
 # Subdirectories of GAIA's state tree that hold user content rather than
 # configuration. The Agent UI puts browser uploads here and makes them the
@@ -192,6 +316,7 @@ def _get_blocked_directories() -> Set[str]:
 # Pre-compute once at module load
 BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
 GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
+SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
 
 def _normalize_macos_symlinks(path_str: str) -> str:
@@ -219,10 +344,15 @@ class PathValidator:
     Validates file paths against an allowed list, with user prompting for exceptions.
     Persists allowed paths to ~/.gaia/cache/allowed_paths.json.
 
+    An allowed path may be a directory *or* a single file — callers deriving a
+    scope from user-attached documents should grant the files, never the folders
+    they happen to sit in.
+
     Security features:
     - Allowlist-based path access control
     - Blocked directory enforcement for writes (system dirs, .ssh, etc.)
-    - Sensitive file protection (.env, credentials, keys)
+    - Sensitive file protection (.env, credentials, keys) on reads and writes
+    - Login/startup-execution file protection (shell rc, autostart, git hooks)
     - Write size limits
     - Overwrite confirmation prompting
     - Audit logging for all file mutations
@@ -239,7 +369,12 @@ class PathValidator:
         Initialize PathValidator.
 
         Args:
-            allowed_paths: Initial list of allowed paths. Defaults to [CWD].
+            allowed_paths: The scope for this validator. ``None`` means "no scope
+                supplied" and defaults to the CWD plus any paths the interactive
+                CLI previously persisted. An explicit list — including an empty
+                one — is the whole scope: a host that computes a per-session
+                allowlist gets exactly what it asked for, and an empty list
+                denies everything rather than silently widening to the CWD.
             on_prompt_start: Optional callback invoked before prompting the
                 user for input (e.g. to pause a progress spinner).
             on_prompt_end: Optional callback invoked after user input is
@@ -247,12 +382,16 @@ class PathValidator:
         """
         self.allowed_paths: Set[Path] = set()
 
-        # Add default allowed paths
-        if allowed_paths:
+        # A host-supplied scope must not union with the machine-global grants the
+        # CLI's "[a]lways" writes — that turned one user's one-off approval into
+        # standing access for every later Agent UI session.
+        self._use_persisted_grants = allowed_paths is None
+
+        if allowed_paths is None:
+            self.allowed_paths.add(Path.cwd().resolve())
+        else:
             for p in allowed_paths:
                 self.allowed_paths.add(Path(p).resolve())
-        else:
-            self.allowed_paths.add(Path.cwd().resolve())
 
         # Setup cache directory
         self.cache_dir = Path.home() / ".gaia" / "cache"
@@ -294,7 +433,14 @@ class PathValidator:
             audit_logger.setLevel(logging.INFO)
 
     def _load_persisted_paths(self):
-        """Load allowed paths from cache file."""
+        """Load allowed paths from cache file, unless this scope was host-supplied."""
+        if not self._use_persisted_grants:
+            logger.debug(
+                "Skipping machine-global grants in %s: this validator was built "
+                "with an explicit allowlist.",
+                self.config_file,
+            )
+            return
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -312,7 +458,20 @@ class PathValidator:
                 )
 
     def _save_persisted_path(self, path: Path):
-        """Save a new allowed path to cache file."""
+        """Save a new allowed path to cache file.
+
+        A validator built from a host-supplied allowlist never writes here: its
+        scope is one session's, and promoting it to the machine-global file
+        would leak that session's access into every later one.
+        """
+        if not self._use_persisted_grants:
+            logger.info(
+                "Granting %s for this session only — a host-supplied allowlist "
+                "is not promoted to the machine-global grants in %s.",
+                path,
+                self.config_file,
+            )
+            return
         try:
             data = {"paths": []}
             if self.config_file.exists():
@@ -484,6 +643,83 @@ class PathValidator:
 
                 print("Please answer 'y', 'n', or 'a'.")
 
+    # ── Read Guardrails ───────────────────────────────────────────────
+
+    def is_read_blocked(self, path: str) -> Tuple[bool, str]:
+        """Check whether a path holds secrets the agent must not read back.
+
+        The allowlist answers "is this in scope"; it cannot answer "is this a
+        private key". Being inside an allowed directory has never made
+        ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
+        whatever the model is told to do with it — then sees.
+
+        Args:
+            path: File path to check for read permission.
+
+        Returns:
+            Tuple of (is_blocked, reason). If blocked, reason explains why.
+        """
+        try:
+            real_path = Path(os.path.realpath(path))
+            file_name = real_path.name.lower()
+            file_ext = real_path.suffix.lower()
+
+            if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+                return (
+                    True,
+                    f"Read blocked: '{real_path.name}' holds credentials, keys or "
+                    f"secrets. Open it yourself if you need its contents — the "
+                    f"agent is not allowed to read it into the conversation.",
+                )
+
+            if file_ext in SENSITIVE_EXTENSIONS:
+                return (
+                    True,
+                    f"Read blocked: files with extension '{file_ext}' are "
+                    f"certificates or private keys. The agent is not allowed to "
+                    f"read them into the conversation.",
+                )
+
+            for secret_dir in SECRET_DIRECTORIES:
+                if _path_is_within(real_path, Path(secret_dir)):
+                    return (
+                        True,
+                        f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                        f"which holds credentials. The agent is not allowed to "
+                        f"read from it.",
+                    )
+
+            return (False, "")
+
+        except Exception as e:
+            logger.error(f"Error checking read block for {path}: {e}")
+            # Fail-closed: refuse if we can't determine safety.
+            return (True, f"Read blocked: unable to validate path safety: {e}")
+
+    def validate_read(self, path: str, prompt_user: bool = True) -> Tuple[bool, str]:
+        """Allowlist + sensitive-file check for a read.
+
+        Args:
+            path: File path to validate for reading.
+            prompt_user: Whether to prompt the user when the path is out of scope.
+
+        Returns:
+            Tuple of (is_allowed, reason). If not allowed, reason explains why.
+        """
+        if not self.is_path_allowed(path, prompt_user=prompt_user):
+            return (
+                False,
+                f"Access denied: '{path}' is not in allowed paths. Attach the "
+                f"file to this session, or start the agent with an "
+                f"allowed_paths list that covers it.",
+            )
+
+        is_blocked, reason = self.is_read_blocked(path)
+        if is_blocked:
+            return (False, reason)
+
+        return (True, "")
+
     # ── Write Guardrails ──────────────────────────────────────────────
 
     def is_write_blocked(self, path: str) -> Tuple[bool, str]:
@@ -493,6 +729,8 @@ class PathValidator:
         1. System/blocked directories (Windows, /etc, .ssh, ~/.gaia, etc.)
         2. Sensitive file names (.env, credentials, keys, etc.)
         3. Sensitive file extensions (.pem, .key, .crt, etc.)
+        4. Files that execute on their own (shell rc, PowerShell profile,
+           autostart entries, git hooks and config)
 
         Args:
             path: File path to check for write permission.
@@ -548,6 +786,15 @@ class PathValidator:
                     True,
                     f"Write blocked: files with extension '{file_ext}' are "
                     f"sensitive (certificates/keys). Writing is not allowed.",
+                )
+
+            startup_reason = _startup_execution_reason(real_path)
+            if startup_reason:
+                return (
+                    True,
+                    f"Write blocked: {startup_reason}. Writing to it would make "
+                    f"the agent's content run on your machine without you asking. "
+                    f"Edit it yourself if that is what you intended.",
                 )
 
             return (False, "")

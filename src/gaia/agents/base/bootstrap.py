@@ -613,6 +613,9 @@ def _store_entry(
     """
     try:
         knowledge_id = store.store(
+            # Onboarding is an admin path: the user answered the question, so
+            # profile rows are theirs, not a chat turn's.
+            allow_privileged=True,
             category=entry.category,
             content=entry.content,
             context=entry.context,

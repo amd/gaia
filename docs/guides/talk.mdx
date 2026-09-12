@@ -18,17 +18,26 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 ### System Prerequisites
 
+Talk mode leans on two native libraries: PortAudio for the microphone, and espeak-ng, which Kokoro TTS falls back on for words outside its pronunciation dictionary. Install them before the talk extras.
+
 <Tabs>
   <Tab title="Linux">
-    sounddevice requires the PortAudio runtime library:
     ```bash
-    sudo apt-get install -y libportaudio2
+    sudo apt-get install -y libportaudio2 espeak-ng
     ```
   </Tab>
   <Tab title="Windows">
-    No additional system packages required — PortAudio is bundled with the sounddevice Python package.
+    PortAudio ships inside the `sounddevice` wheel, so the microphone needs nothing extra. espeak-ng does not:
+
+    ```powershell
+    winget install eSpeak-NG.eSpeak-NG
+    ```
   </Tab>
 </Tabs>
+
+<Note>
+  Transcribing an **existing** recording is no longer part of talk mode — point the GAIA agent at the file instead. See [Transcription & Meeting Notes](/guides/transcription).
+</Note>
 
 <Steps>
   <Step title="Install talk extras">
@@ -76,7 +85,7 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
     ⠴ Listening...
     ```
 
-    Say "exit" or "quit" to end the session
+    Say "stop" to end the session
   </Step>
 </Steps>
 
@@ -84,7 +93,7 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 <CardGroup cols={2}>
   <Card title="Exit Session" icon="door-open">
-    Say **"exit"** or **"quit"**
+    Say **"stop"**
   </Card>
 
   <Card title="Clear History" icon="rotate-right">
@@ -92,11 +101,7 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
   </Card>
 
   <Card title="Trigger Response" icon="pause">
-    Natural pauses (>1 second)
-  </Card>
-
-  <Card title="Stop Playback" icon="stop">
-    Press **Enter** during audio
+    Natural pauses (~1.3 seconds)
   </Card>
 </CardGroup>
 
@@ -225,26 +230,7 @@ gaia talk --index manual.pdf --no-tts
 
 ## Testing ASR Components
 
-Test the automatic speech recognition system using various test modes:
-
-### Audio File Transcription
-
-Test transcription of existing audio files:
-
-```bash
-gaia test --test-type asr-file-transcription --input-audio-file path/to/audio.wav
-```
-
-<Accordion title="Supported Audio Formats">
-  - WAV
-  - MP3
-  - M4A
-  - Other common formats
-</Accordion>
-
-**Options:**
-- `--input-audio-file`: Path to the audio file (required)
-- `--whisper-model-size`: Model size (default: "base")
+Talk mode's ASR covers **live microphone input only**. To transcribe a file you already have, see [Transcription & Meeting Notes](/guides/transcription).
 
 ### List Audio Devices
 

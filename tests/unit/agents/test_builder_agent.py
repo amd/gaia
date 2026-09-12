@@ -906,6 +906,34 @@ class TestBuilderSurface:
                 f"found params: {list(sig.parameters)}"
             )
 
+    def test_create_agent_schema_describes_required_name(self):
+        """The model must read what 'name' is at the slot it fills, not only in
+        the bundled docstring blob (#3581)."""
+        from unittest.mock import patch
+
+        from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
+
+        config = BuilderAgentConfig(
+            base_url="http://localhost:9999/api/v1",
+            model_id="test-model",
+            silent_mode=True,
+        )
+        with patch("os.path.expanduser", return_value="/tmp/gaia-test"):
+            agent = BuilderAgent(config)
+
+        schema = next(
+            s
+            for s in agent._build_openai_tool_schemas()
+            if s["function"]["name"] == "create_agent"
+        )["function"]["parameters"]
+
+        assert "name" in schema["required"]
+        assert schema["properties"]["name"].get(
+            "description"
+        ), "create_agent's required 'name' must carry a per-argument description"
+        # List-typed arguments must not be advertised to the model as strings.
+        assert schema["properties"]["conversation_starters"]["type"] == "array"
+
     def test_stray_tools_kwarg_surfaces_error(self, tmp_path):
         """If the LLM passes tools=[...] in the tool call, an honest error is returned."""
         from unittest.mock import MagicMock, patch

@@ -288,6 +288,7 @@ func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
 		Duration:  12400 * time.Millisecond,
 		TTFT:      900 * time.Millisecond,
 		Tokens:    420,
+		TokPerS:   44.2,
 		Steps:     4,
 		ToolsUsed: 3,
 	}
@@ -300,7 +301,7 @@ func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
 
 	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
 	full := dev.answerStats(msg)
-	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "tok/s", "4 steps", "3 tools"} {
+	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "44.2 tok/s", "4 steps", "3 tools"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("--dev footnote lost %q: %q", want, full)
 		}
