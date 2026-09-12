@@ -58,6 +58,24 @@ def detect_image_mime_type(image_bytes: bytes) -> str:
     return "image/png"
 
 
+class VLMExtractionError(RuntimeError):
+    """Vision extraction did not produce text (#3555).
+
+    Raised instead of returning ``"[VLM extraction failed: …]"`` as the page's
+    content. No caller anywhere checked for that prefix, so the message was
+    chunked, embedded into the document index, retrieved, and quoted back as an
+    answer — with nothing indicating the page had never been read.
+    """
+
+    def __init__(self, message: str, page_num: int = 1, image_num: int = 1):
+        self.page_num = page_num
+        self.image_num = image_num
+        super().__init__(
+            f"Vision extraction failed for page {page_num}, image {image_num}: "
+            f"{message}"
+        )
+
+
 class VLMClient:
     """
     VLM client for extracting text from images using Lemonade server.
@@ -199,12 +217,20 @@ class VLMClient:
 
         Returns:
             Extracted text in markdown format
+
+        Raises:
+            VLMExtractionError: the page was not read. Never returns an error
+                string — a caller that indexes the return value would otherwise
+                index the error as content (#3555).
         """
         # Ensure VLM is loaded
         if not self._ensure_vlm_loaded():
-            error_msg = "VLM model not available"
+            error_msg = (
+                f"VLM model '{self.vlm_model}' is not available at "
+                f"{self.server_url}"
+            )
             logger.error(error_msg)
-            return f"[VLM extraction failed: {error_msg}]"
+            raise VLMExtractionError(error_msg, page_num, image_num)
 
         # Encode image as base64 and detect MIME type
         # Note: Image size optimization happens in pdf_utils.py during extraction
@@ -279,8 +305,10 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 # Check for specific error types and provide helpful messages
                 error_msg = self._parse_vlm_error(response)
                 logger.error(error_msg)
-                return f"[VLM extraction failed: {error_msg}]"
+                raise VLMExtractionError(error_msg, page_num, image_num)
 
+        except VLMExtractionError:
+            raise
         except Exception as e:
             logger.error(
                 f"VLM extraction failed for page {page_num}, image {image_num}: {e}"
@@ -288,7 +316,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             import traceback
 
             logger.debug(traceback.format_exc())
-            return f"[VLM extraction failed: {str(e)}]"
+            raise VLMExtractionError(str(e), page_num, image_num) from e
 
     def _parse_vlm_error(self, response: dict) -> str:
         """Parse VLM error response and return a helpful error message."""
