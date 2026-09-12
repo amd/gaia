@@ -55,6 +55,7 @@ from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
 
@@ -612,13 +613,21 @@ def _looks_like_wheel(filename: str) -> bool:
 
 
 def _sanitize_artifact_filename(filename: str, agent_id: Optional[str]) -> None:
-    """Refuse a filename that could escape the install dir on path-join."""
-    if not filename or "/" in filename or "\\" in filename or ".." in filename:
-        raise InstallError(
-            f"Artifact filename {filename!r} for '{agent_id}' is unsafe (nested "
-            f"path or path traversal). Refusing to install; report this hub "
-            f"manifest as corrupt."
+    """Refuse a filename that could escape the install dir on path-join.
+
+    Shares :func:`gaia.utils.paths.safe_path_segment` with the skills installer:
+    a separator scan alone lets ``C:evil.whl`` and ``NUL`` through, and both
+    re-root or redirect the join this function exists to protect.
+
+    Raises:
+        InstallError: the manifest's filename is not a single safe path segment.
+    """
+    try:
+        safe_path_segment(
+            filename, what="artifact filename", origin=f"hub manifest for '{agent_id}'"
         )
+    except UnsafePathSegment as exc:
+        raise InstallError(str(exc)) from exc
 
 
 def _select_platform_artifact(

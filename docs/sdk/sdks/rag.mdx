@@ -996,7 +996,9 @@ except PermissionError as e:
 ```
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths.
+**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+
+`allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write). RAG indexing does not yet apply those — treat an indexed directory as fully readable.
 </Warning>
 
 ---
