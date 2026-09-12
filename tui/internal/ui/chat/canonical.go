@@ -215,17 +215,21 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			content = m.buffer
 		}
 		m.buffer = ""
-		m.messages = append(m.messages, Message{
-			Role:      RoleAssistant,
-			Content:   content,
-			Rendered:  components.RenderMarkdown(content),
-			Duration:  time.Since(m.queryStart),
-			TTFT:      m.ttft,
-			Steps:     usage.Steps,
-			ToolsUsed: usage.ToolsUsed,
-			Tokens:    usage.Tokens,
-			Metrics:   usage.Metrics,
-		})
+		// A turn stopped before it said anything ends with an empty final; the
+		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
+		if content != "" || !m.cancelPending {
+			m.messages = append(m.messages, Message{
+				Role:      RoleAssistant,
+				Content:   content,
+				Rendered:  components.RenderMarkdown(content),
+				Duration:  time.Since(m.queryStart),
+				TTFT:      m.ttft,
+				Steps:     usage.Steps,
+				ToolsUsed: usage.ToolsUsed,
+				Tokens:    usage.Tokens,
+				Metrics:   usage.Metrics,
+			})
+		}
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
 		m.streaming = false

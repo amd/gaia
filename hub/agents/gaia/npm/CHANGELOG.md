@@ -190,6 +190,19 @@ the terminal UI meant building it from source.
   incrementally, and a download is still verified *before* the file is moved into
   place.
 
+### Fixed
+
+- **Esc stops a running turn in the terminal UI without killing the agent.**
+  The TUI used to kill the agent process, and on the released one-file binary
+  that killed only the launcher: the cancelled tool call ran to completion and
+  the surviving process consumed the next message. The first Esc now sends the
+  agent a `cancel` control message, so the turn ends and the session keeps its
+  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  the whole process tree.
+- **A restart after a hard stop no longer turns bypass permissions back on.**
+  The replacement agent is launched in the session's current permission mode
+  instead of from the original flags, and the TUI says what the restart lost.
+
 ### Notes
 
 - The sidecar is installed into `~/.gaia/agents/gaia/`, the GAIA daemon's own
