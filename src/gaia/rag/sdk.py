@@ -2427,6 +2427,23 @@ These positions indicate where to split the text."""
         """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
+            previous_state = {
+                name: getattr(self, name).copy()
+                for name in (
+                    "chunks",
+                    "indexed_files",
+                    "chunk_to_file",
+                    "file_to_chunk_indices",
+                    "file_indices",
+                    "file_embeddings",
+                    "file_metadata",
+                    "file_access_times",
+                    "file_index_times",
+                )
+            }
+            previous_state.update(
+                index=self.index, _access_counter=self._access_counter
+            )
             # Keep remove+reindex under the same lock so readers never observe a
             # gap where the document disappeared between generations. Query
             # paths snapshot state quickly under this same lock and then do the
@@ -2443,10 +2460,22 @@ These positions indicate where to split the text."""
 
             # Index the new version
             self.log.info(f"Indexing new version of {file_path}")
-            result = self.index_document(file_path)
-            if result.get("success"):
-                result["reindexed"] = True
-            return result
+            succeeded = False
+            result = None
+            try:
+                result = self.index_document(file_path)
+                succeeded = bool(result.get("success"))
+                if succeeded:
+                    result["reindexed"] = True
+                return result
+            finally:
+                if not succeeded:
+                    # Removal builds a fresh index, so the old generation is intact.
+                    for name, value in previous_state.items():
+                        setattr(self, name, value)
+                    if result is not None:
+                        result["total_indexed_files"] = len(self.indexed_files)
+                        result["total_chunks"] = len(self.chunks)
 
     def _evict_lru_document(self) -> bool:
         """
@@ -2948,6 +2977,17 @@ These positions indicate where to split the text."""
 
                 file_index = self._create_faiss_index(file_embeddings)
 
+                # Persist before publishing any searchable state or ownership maps.
+                if self.config.show_stats:
+                    print("💾 Caching processed chunks...")
+                cache_data = {
+                    "chunks": new_chunks,
+                    "full_text": text,
+                    "metadata": file_metadata,
+                }
+                self._save_cache(cache_path, cache_data)
+                self._save_extracted_markdown(file_path, text, file_metadata)
+
                 if self.index is None:
                     self.index = new_index
                 else:
@@ -2959,23 +2999,6 @@ These positions indicate where to split the text."""
                 self.file_indices[file_path] = file_index
                 self.file_embeddings[file_path] = file_embeddings
 
-            if self.config.show_stats:
-                print(f"✅ Cached per-file index with {len(new_chunks)} chunks")
-
-            # Cache the results for this specific document
-            if self.config.show_stats:
-                print("💾 Caching processed chunks...")
-            cache_data = {
-                "chunks": new_chunks,  # Cache only new chunks for this document
-                "full_text": text,  # Cache full extracted text (for /dump)
-                "metadata": file_metadata,  # Cache metadata (num_pages, vlm_pages, etc.)
-            }
-            self._save_cache(cache_path, cache_data)
-
-            # Auto-save markdown version to cache directory for easy access
-            self._save_extracted_markdown(file_path, text, file_metadata)
-
-            with self._state_lock:
                 # Store metadata in memory for fast access
                 self.file_metadata[file_path] = {
                     "full_text": text,
