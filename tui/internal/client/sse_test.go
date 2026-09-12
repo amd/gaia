@@ -68,12 +68,19 @@ type fakeRelay struct {
 	// down its own read (#2901).
 	onCancelPost func()
 
+	// followUpStatus overrides the status POST .../followup answers with.
+	// Zero means 200. The interesting values are the two refusals the real
+	// route sends (404 for a run that ended, 409 for an agent that will not
+	// take one), because BOTH have to reach the user rather than be swallowed.
+	followUpStatus int
+
 	mu          sync.Mutex
 	token       string
 	queries     []queryRequest
 	rawBodies   []string
 	cancelled   []string
 	confirmed   []confirmCall
+	followUps   []followUpCall
 	auths       []string
 	versionHits int
 }
@@ -82,6 +89,12 @@ type fakeRelay struct {
 type confirmCall struct {
 	runID    string
 	approved bool
+}
+
+// followUpCall is one recorded POST .../query/{run_id}/followup.
+type followUpCall struct {
+	runID string
+	text  string
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -201,6 +214,24 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			// that the ask-to-stop and its eventual effect are decoupled.
 			f.onCancelPost()
 		}
+
+	case strings.HasSuffix(r.URL.Path, "/followup"):
+		parts := strings.Split(r.URL.Path, "/")
+		var body followUpRequest
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("followup body is not valid JSON: %v (%s)", err, raw)
+		}
+		f.mu.Lock()
+		f.followUps = append(f.followUps, followUpCall{runID: parts[len(parts)-2], text: body.Text})
+		f.mu.Unlock()
+		if f.followUpStatus != 0 {
+			w.WriteHeader(f.followUpStatus)
+			_, _ = w.Write([]byte(`{"detail":"no run in flight"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"run_id":%q,"delivered":true}`, parts[len(parts)-2])
 
 	case strings.HasSuffix(r.URL.Path, "/confirm"):
 		// No shipped sidecar has this route (the resume model is unimplemented

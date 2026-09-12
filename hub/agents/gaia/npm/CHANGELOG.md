@@ -19,6 +19,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Say something while the agent is still working.** `POST
+  /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
+  after it started (contract **2.13**). The run is not interrupted and no
+  second turn starts — the agent folds the text into the turn already running
+  at its next step boundary, so a correction during a five-minute task changes
+  that task instead of arriving after it finished. Unknown run → `404`, an
+  agent that cannot take one → `409`; both loud, because the caller has already
+  taken the message from the user. See SPEC §5.6 and SKILL §7.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it

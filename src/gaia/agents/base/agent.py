@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -965,6 +966,10 @@ Do NOT wrap conversational replies in JSON.
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
+        # Optional queue of follow-ups the user sent WHILE this turn was
+        # running. Drained at the step boundary beside the cancel check, so a
+        # second thought reaches the model without waiting out the turn.
+        self._followup_queue: Optional["queue.Queue[str]"] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
@@ -4944,6 +4949,60 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
 
+    #: How a mid-turn follow-up is framed for the model. It is the user
+    #: speaking, so it goes in as a user message — but unlabelled, a user
+    #: message appearing in the middle of a tool sequence is indistinguishable
+    #: from a new request, and the model abandons the work already done. This
+    #: says "as well", and says finish first.
+    FOLLOWUP_PREAMBLE = (
+        "The user sent this while you were still working on their previous "
+        "request. Finish that request first, then address this as well — do "
+        "not discard the work already done:\n\n"
+    )
+
+    def queue_followup(self, text: str) -> bool:
+        """Hand the running turn something the user typed after it started.
+
+        Returns whether it was accepted. False means this agent has no run in
+        flight that could pick it up — the caller must say so rather than let
+        the message disappear, which is the whole failure this exists to avoid.
+        """
+        text = (text or "").strip()
+        if not text:
+            return False
+        pending = self._followup_queue
+        if pending is None:
+            return False
+        pending.put(text)
+        return True
+
+    def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
+        """Fold any queued mid-turn follow-ups into this turn's context.
+
+        Called at the agent-loop step boundary, so the additions are visible to
+        the very next model call. Returns how many were folded in.
+        """
+        pending = self._followup_queue
+        if pending is None:
+            return 0
+        taken = 0
+        while True:
+            try:
+                text = pending.get_nowait()
+            except queue.Empty:
+                break
+            framed = self.FOLLOWUP_PREAMBLE + text
+            # Two dicts, not one shared object: every other append in this loop
+            # builds its own, and downstream code edits entries in place.
+            messages.append({"role": "user", "content": framed})
+            conversation.append({"role": "user", "content": framed})
+            taken += 1
+            # The user is owed visible proof their message landed — silence here
+            # is indistinguishable from the message being dropped.
+            self.console.print_info(f"Picked up your follow-up: {text}")
+            logger.info("Folded a mid-turn follow-up into the running turn")
+        return taken
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -5086,6 +5145,13 @@ Do NOT wrap conversational replies in JSON.
                     "into smaller steps."
                 )
                 break
+
+            # Anything the user sent mid-turn joins the context here, where the
+            # loop is between steps and nothing is half-applied. AFTER the
+            # cancel check above, deliberately: a cancelled turn breaks out
+            # without running another step, and draining first would consume a
+            # message this turn can no longer answer.
+            self._drain_followups(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array

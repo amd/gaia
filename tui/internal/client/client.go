@@ -29,6 +29,33 @@ type AgentResponder interface {
 	Respond(ctx context.Context, requestID, value string) error
 }
 
+// FollowUpSender is implemented by transports that can hand a RUNNING turn
+// something the user typed after it started.
+//
+// Distinct from Send, which starts a new turn and is refused while one is in
+// flight (the sidecar serialises turns per session on a run_lock), and from
+// AgentResponder, which answers a question the run is parked on. This one
+// interrupts nothing: the agent folds the text into the turn already running at
+// its next agent-loop step boundary, so a second thought during a five-minute
+// turn is answered in that turn instead of waiting it out.
+//
+// A transport that cannot do this simply does not implement it, and the UI
+// holds the message locally until the turn ends — today's behaviour — rather
+// than pretending it was delivered.
+type FollowUpSender interface {
+	// SendFollowUp delivers text to whatever run is currently streaming. It
+	// returns an actionable error if there is no live run to take it, or the
+	// request could not be delivered; the caller must then hold the message
+	// rather than drop it.
+	SendFollowUp(ctx context.Context, text string) error
+
+	// FollowUpSupported reports whether the PEER on the other end accepts
+	// follow-ups. Implementing the interface only says this transport speaks
+	// the call; an older sidecar has no endpoint for it, and the UI needs to
+	// know that before it tells the user the message is on its way.
+	FollowUpSupported() bool
+}
+
 // TranscriptResetter is implemented by transports that own the conversation
 // transcript host-side and push it back to a stateless agent on every turn.
 // Clearing the visible history must also clear what gets pushed.

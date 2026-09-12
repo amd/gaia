@@ -108,8 +108,8 @@ describe("executable names", () => {
 
 describe("contract constants", () => {
   it("matches the sidecar's API_VERSION", () => {
-    // gaia_agent_gaia/server.py: API_VERSION = "2.12"
-    expect(API_VERSION).toBe("2.12");
+    // gaia_agent/server.py: API_VERSION = "2.13"
+    expect(API_VERSION).toBe("2.13");
   });
 });
 

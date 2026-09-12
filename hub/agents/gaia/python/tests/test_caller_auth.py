@@ -109,18 +109,37 @@ def test_the_correct_token_gets_past_auth(monkeypatch):
     assert r.status_code != 401, r.text
 
 
-def test_cancel_and_respond_are_also_gated(monkeypatch):
-    """Every route on the router, not just /query — cancel drives a live run."""
+def test_every_route_on_the_router_is_gated(monkeypatch):
+    """Enumerated from the router, not listed by hand.
+
+    The hand-written version named /query, /cancel and /respond while claiming
+    to cover "every route" — so the next route added was ungated and every test
+    still passed. Anything mounted under /v1/gaia now has to answer 401 without
+    a token, whether or not whoever added it thought to come here.
+    """
+    from gaia_agent import server as server_mod
+
     client = _client(monkeypatch, token=_TOKEN)
     run = _QUERY_BODY["run_id"]
-    assert client.post(f"/v1/gaia/query/{run}/cancel").status_code == 401
+
+    checked = 0
+    for route in server_mod.router.routes:
+        path = route.path.replace("{run_id}", run)
+        for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
+            url = f"/v1/gaia{path}"
+            if url in caller_auth.EXEMPT_PATHS:
+                continue
+            # No body: the auth layer runs before validation, so a 422 here
+            # would itself be the bug this asserts against.
+            r = client.request(method, url)
+            assert (
+                r.status_code == 401
+            ), f"{method} {url} answered {r.status_code}, not 401"
+            checked += 1
+    # A router that stopped exposing its routes would otherwise pass vacuously.
     assert (
-        client.post(
-            f"/v1/gaia/query/{run}/respond",
-            json={"request_id": "x", "response": "yes"},
-        ).status_code
-        == 401
-    )
+        checked >= 4
+    ), f"only {checked} routes were checked; the enumeration is not working"
 
 
 # -- 2. Host allowlist (DNS rebinding) ---------------------------------------

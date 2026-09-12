@@ -158,6 +158,30 @@ type ChatModel struct {
 	// and the single slot discarded the first two without saying so.
 	queued []string
 
+	// sending holds follow-ups POSTed to the RUNNING turn but not yet
+	// acknowledged, in the order they were sent. A message lives here for one
+	// loopback round-trip and then becomes either a transcript line (delivered)
+	// or a m.queued entry (refused) — never both, and never neither. It exists
+	// so the composer can be emptied the instant Enter is pressed without the
+	// UI claiming a delivery that has not happened yet.
+	sending []string
+
+	// followUpNoted is true once this session has explained what a mid-turn
+	// send actually does. The explanation is worth one line the first time and
+	// is noise on every message after it.
+	followUpNoted bool
+
+	// viewDirty means streamed text has landed since the last render. Token
+	// events set it instead of re-rendering: rebuilding the whole transcript
+	// per token starves the very keystrokes this screen promises to accept
+	// (Bubble Tea runs Update on one goroutine, so a render and a keypress are
+	// the same queue). Flushed by the spinner tick, which runs ten times a
+	// second for the whole turn — see markDirty.
+	viewDirty bool
+	// lastRender is when the viewport content was last rebuilt, used to hold
+	// streaming repaints to renderInterval.
+	lastRender time.Time
+
 	input    textarea.Model
 	viewport viewport.Model
 	spinner  spinner.Model
@@ -604,6 +628,13 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next.setupChecking || next.setupRunning || next.providerPanel != nil {
 		return next, cmd
 	}
+	// A mid-turn message still in flight settles within one loopback
+	// round-trip, into either the transcript or this same queue. Starting a
+	// turn before it lands would reorder the conversation against the order
+	// the user typed it in.
+	if len(next.sending) > 0 {
+		return next, cmd
+	}
 	// A question or confirmation still on screen owns the conversation; the
 	// queued message waits for the user to deal with it. (Both imply streaming
 	// today, so this is belt-and-braces against a future path that clears
@@ -724,6 +755,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case memoryDumpMsg:
 		return m.handleMemoryDump(msg)
+
+	case followUpSentMsg:
+		return m.handleFollowUpSent(msg)
+
+	case followUpFailedMsg:
+		return m.handleFollowUpFailed(msg)
 
 	case eventMsg:
 		if m.supersededTurn(msg.ch) {
@@ -1109,13 +1146,26 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// The agent is still working: hold this one rather than dropping the
-		// keystroke on the floor. Update sends it the moment the turn settles.
-		// Slash commands queue too — /clear typed mid-turn should clear once
-		// the turn it belongs to is actually over, not silently do nothing.
+		// The agent is still working. Where this goes depends on what the
+		// agent on the other end can take:
+		//
+		//   - a peer that accepts mid-turn input gets it NOW, on the running
+		//     turn, and folds it in at its next step boundary. A follow-up
+		//     during a five-minute turn is answered in that turn.
+		//   - anything else holds it locally until the turn settles (below).
+		//
+		// Slash commands are never sent mid-turn either way — /clear means
+		// "clear once the turn it belongs to is over", and the agent has no
+		// idea what to do with the word "/clear" folded into its context.
+		//
 		// The first-boot gate (setupChecking) and a `gaia init` run
-		// (setupRunning) hold it the same way: there is nothing to send this
-		// to yet.
+		// (setupRunning) always hold: there is nothing running to send to.
+		if m.streaming && !m.setupChecking && !m.setupRunning &&
+			!isSlashCommand(query) && m.followUpSupported() {
+			m.sending = append(m.sending, query)
+			m.updateViewport()
+			return m, m.sendFollowUp(query)
+		}
 		if m.streaming || m.setupChecking || m.setupRunning {
 			m.queued = append(m.queued, query)
 			m.updateViewport()
@@ -1318,12 +1368,20 @@ func (m *ChatModel) restoreQueuedToComposer() {
 	if len(m.queued) == 0 {
 		return
 	}
-	if strings.TrimSpace(m.input.Value()) == "" {
-		m.input.SetValue(strings.Join(m.queued, "\n"))
-		m.input.CursorEnd()
-		m.syncComposerHeight()
-	}
+	m.restoreToComposer(strings.Join(m.queued, "\n"))
 	m.queued = nil
+}
+
+// restoreToComposer puts text back where it was typed, leaving anything
+// already half-typed alone — that is the newer thought, and overwriting it
+// would lose a sentence to recover one.
+func (m *ChatModel) restoreToComposer(text string) {
+	if strings.TrimSpace(m.input.Value()) != "" {
+		return
+	}
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.syncComposerHeight()
 }
 
 // submit routes one composed line: a slash command runs locally, anything else
@@ -1695,6 +1753,10 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 
 	case event.ChunkEvent:
 		m.buffer += e.Content
+		// The legacy transport's token, throttled for the same reason as the
+		// canonical one — see markDirty.
+		m.markDirty()
+		return m, waitForEvent(m.events)
 
 	case event.AgentErrorEvent:
 		m.messages = append(m.messages, Message{
@@ -1831,6 +1893,32 @@ func (m ChatModel) afterScroll() ChatModel {
 	return m
 }
 
+// renderInterval is the fastest the transcript is rebuilt while an answer
+// streams. 50ms is twenty repaints a second — past the eye's limit for text
+// arriving, and far under the rate a local model emits tokens at.
+//
+// The number that matters is not this one but the work it bounds:
+// updateViewport re-wraps every message in the transcript and re-lays-out the
+// whole answer buffer, so at one render per token a long answer costs O(n²) on
+// the SAME goroutine Bubble Tea delivers keystrokes on. That is the mechanism
+// behind "I cannot type while it is printing".
+const renderInterval = 50 * time.Millisecond
+
+// markDirty records that streamed text changed and repaints only if the last
+// repaint is older than renderInterval.
+//
+// Nothing is ever left unrendered: while a turn runs the spinner ticks ten
+// times a second and its handler repaints unconditionally, and every terminal
+// path (final/error/done) calls updateViewport directly. So a skip here delays
+// a token by at most one tick, never drops it.
+func (m *ChatModel) markDirty() {
+	if time.Since(m.lastRender) < renderInterval {
+		m.viewDirty = true
+		return
+	}
+	m.updateViewport()
+}
+
 // chatChromeRows is everything View() draws outside the transcript and the
 // pinned confirmation: header, status bar, the composer with its border, and
 // the two dividers.
@@ -1884,6 +1972,8 @@ type msgSpan struct {
 }
 
 func (m *ChatModel) updateViewport() {
+	m.viewDirty = false
+	m.lastRender = time.Now()
 	m.syncViewportHeight(m.chatChromeRows())
 
 	var sb strings.Builder
@@ -2718,7 +2808,8 @@ func clipTail(s string, limit int) string {
 // key is the part a user can find elsewhere.
 const queuedEchoFloor = 24
 
-// renderQueuedRow shows a follow-up that is waiting for the running turn.
+// renderQueuedRow shows the follow-up the composer is currently holding — in
+// flight to the running turn, or waiting for it to end.
 //
 // The hint names the whole consequence. Esc here does not just un-queue: it
 // runs the same cancel every other Esc runs, so the turn being waited on stops
@@ -2729,6 +2820,15 @@ const queuedEchoFloor = 24
 // and hint appended afterwards, so a long queued line ran past the last column
 // and wrapped onto a second row, shearing the status bar below it.
 func (m ChatModel) renderQueuedRow() string {
+	// In flight wins the row: it is the newer state and the one that is about
+	// to change on its own.
+	if len(m.sending) > 0 {
+		prefix := "⏎ sending · "
+		if n := len(m.sending); n > 1 {
+			prefix = fmt.Sprintf("⏎ %d sending · ", n)
+		}
+		return m.echoRow(prefix, m.sending[0], "")
+	}
 	if len(m.queued) == 0 {
 		return ""
 	}
@@ -2742,17 +2842,31 @@ func (m ChatModel) renderQueuedRow() string {
 	if len(m.queued) > 1 {
 		hint = "  Esc stops the turn and puts these back"
 	}
+	return m.echoRow(prefix, m.queued[0], hint)
+}
 
+// echoRow lays out "<prefix><echoed text><hint>" on one row, dropping the hint
+// before it lets the echo run past the last column.
+func (m ChatModel) echoRow(prefix, text, hint string) string {
 	suffix := hint
 	budget := m.width - lipgloss.Width(prefix) - lipgloss.Width(hint)
 	if budget < queuedEchoFloor {
 		suffix = ""
 		budget = m.width - lipgloss.Width(prefix)
 	}
-
 	return activityStyle.Render(prefix) +
-		statusMsgStyle.Render(truncateRunes(m.queued[0], budget)) +
+		statusMsgStyle.Render(truncateRunes(text, budget)) +
 		activityStyle.Render(suffix)
+}
+
+// midTurnEnterHint says what Enter will actually do right now. The two are
+// genuinely different outcomes — one reaches the agent within a step, the
+// other waits out the whole turn — so the row must not name them alike.
+func (m ChatModel) midTurnEnterHint() string {
+	if m.followUpSupported() && !isSlashCommand(m.input.Value()) {
+		return "⏎ sends to the running turn"
+	}
+	return "⏎ queues"
 }
 
 // contentHeaderRows is how many screen rows sit above the viewport in
@@ -2794,12 +2908,13 @@ func (m ChatModel) View() string {
 		// owns that line; here only the user's own text has anything to add.
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
-			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
-		case len(m.queued) > 0:
+			inputView = m.input.View() + "  " + activityStyle.Render(m.midTurnEnterHint())
+		case len(m.sending) > 0 || len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:
-			// Mid-turn Enter queues rather than sends, so the idle prompt is
-			// untrue while the agent works — an empty composer says it better.
+			// The idle placeholder promises a plain send, which is only half
+			// true mid-turn whichever way Enter is wired — an empty composer
+			// says it better, and the hint beside the text says the rest.
 			m.input.Placeholder = ""
 			inputView = m.input.View()
 		}
