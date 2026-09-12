@@ -468,6 +468,21 @@ agent = MyAgent(
 
 ---
 
+## Large tool results
+
+The agent applies a character budget to plain-string tool results as well as
+structured results before sending them to the model. Strings at or below the
+threshold remain unchanged. Oversized strings become a JSON envelope containing
+`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
+serialized envelope, including escaping, fits the target budget, so long logs
+retain both their initial context and final diagnostic lines.
+
+Local thresholds/targets are 30,000/20,000 characters for NPU or an unspecified
+device and 60,000/40,000 for GPU/CPU; the Claude path uses its existing larger
+window. These are per-result character budgets, not measured remaining tokens.
+The omitted middle is not yet recoverable through a continuation tool. Existing
+structured-result exceptions and tool-specific caps remain separate.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>

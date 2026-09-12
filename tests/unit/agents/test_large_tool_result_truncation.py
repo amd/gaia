@@ -566,3 +566,82 @@ class TestTheBudgetFollowsTheModelInUse:
                 f"{method.__name__} still reads the device profile directly, so "
                 f"a remote model gets the local budget"
             )
+
+
+class TestStringResults:
+    @pytest.mark.parametrize(
+        "device,threshold,target",
+        [(None, 30000, 20000), ("npu", 30000, 20000), ("gpu", 60000, 40000)],
+    )
+    def test_large_string_preserves_head_tail_and_reports_loss(
+        self, device, threshold, target
+    ):
+        agent = make_agent(device=device)
+        text = "HEAD_FACT " + "middle " * threshold + " TAIL_FACT"
+        conversation = []
+        result = agent._handle_large_tool_result("read_file", text, conversation)
+        assert result["head"].startswith("HEAD_FACT")
+        assert result["tail"].endswith("TAIL_FACT")
+        assert result["omitted_chars"] == len(text) - len(result["head"]) - len(
+            result["tail"]
+        )
+        assert len(json.dumps(result, ensure_ascii=False)) <= target
+        assert conversation[-1]["content"] == result
+        wire = agent._create_tool_message("read_file", result, tool_call_id="call-1")
+        assert wire["tool_call_id"] == "call-1"
+        assert json.loads(wire["content"][0]["text"]) == result
+
+    @pytest.mark.parametrize("text", ["", "normal output", "λ" * 30000, '"' * 30000])
+    def test_under_threshold_strings_are_byte_identical(self, text):
+        agent = make_agent(device="npu")
+        result = agent._handle_large_tool_result("read_file", text, [])
+        assert isinstance(result, str)
+        assert result == text
+
+    @pytest.mark.parametrize("unit", ['"', "\\", "\n", "\x00", "λ"])
+    def test_escaped_payload_fits_serialized_budget(self, unit):
+        from gaia.agents.base.tool_output import elide_text
+
+        text = unit * 5000
+        result = elide_text(text, 200)
+        assert len(json.dumps(result, ensure_ascii=False)) <= 200
+        assert result["original_chars"] == len(text)
+        assert result["omitted_chars"] > 0
+        assert result["head"] + result["tail"] == unit * (
+            len(text) - result["omitted_chars"]
+        )
+
+    def test_tiny_budget_fails_loudly(self):
+        from gaia.agents.base.tool_output import elide_text
+
+        with pytest.raises(ValueError, match="too small"):
+            elide_text("large output", 1)
+
+    def test_native_loop_receives_bounded_string_result(self):
+        from unittest.mock import patch
+
+        from tests.unit.agents import test_parallel_tool_calls as parallel
+
+        with (
+            patch("gaia.agents.base.agent.AgentSDK"),
+            patch.dict(parallel._TOOL_REGISTRY, clear=True),
+        ):
+            agent = parallel._DummyAgent(silent_mode=True, skip_lemonade=True)
+            agent.streaming = False
+            parallel._register_tool(
+                "large_text", lambda: "HEAD_FACT " + "x" * 100000 + " TAIL_FACT"
+            )
+            chat = parallel._stub_chat(
+                agent,
+                parallel._native_envelope(("call-1", "large_text", {})),
+                "Finished",
+            )
+            result = agent.process_query("Read the tool evidence")
+            assert result["status"] == "success"
+            messages = chat.send_messages.call_args_list[-1].kwargs["messages"]
+            tools = [message for message in messages if message["role"] == "tool"]
+            assert len(tools) == 1
+            evidence = tools[0]["content"][0]["text"]
+            assert len(evidence) <= 20000
+            assert "HEAD_FACT" in evidence and "TAIL_FACT" in evidence
+            assert json.loads(evidence)["omitted_chars"] > 0

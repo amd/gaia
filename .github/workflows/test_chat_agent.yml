@@ -17,6 +17,8 @@ on:
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'tests/unit/agents/test_large_tool_result_truncation.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
       - 'tests/test_chat_sdk.py'
       - 'setup.py'
@@ -30,6 +32,8 @@ on:
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'tests/unit/agents/test_large_tool_result_truncation.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
       - 'tests/test_chat_sdk.py'
       - 'setup.py'
@@ -72,6 +76,12 @@ jobs:
           uv pip install --system pytest-mock
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
           uv pip install --system -e hub/agents/chat/python
+
+      - name: Test bounded tool output
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          python -m pytest tests/unit/agents/test_large_tool_result_truncation.py tests/unit/agents/test_parallel_tool_calls.py -v --tb=short
 
       - name: Run Chat Agent Package Tests
         env:

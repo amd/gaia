@@ -4123,27 +4123,32 @@ Do NOT wrap conversational replies in JSON.
             The truncated result or original if within limits
         """
         truncated_result = tool_result
-        if isinstance(tool_result, (dict, list)):
+        if isinstance(tool_result, (dict, list, str)):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
             # wire format re-parsed on the other end -- escaping would hand it
             # literal \uXXXX sequences instead of the actual characters.
-            result_str = json.dumps(
-                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            result_str = (
+                tool_result
+                if isinstance(tool_result, str)
+                else json.dumps(
+                    tool_result,
+                    default=self._json_serialize_fallback,
+                    ensure_ascii=False,
+                )
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                # Truncate large results to prevent overwhelming the LLM. The
-                # result is re-parsed just below, so this path must always
-                # come back as valid JSON (#2620).
-                truncated_str = self._truncate_large_content(
-                    tool_result, max_chars=target, as_json=True
-                )
-                try:
+                if isinstance(tool_result, str):
+                    from gaia.agents.base.tool_output import elide_text
+
+                    truncated_result = elide_text(tool_result, target)
+                else:
+                    # Structured results must remain valid JSON for the model.
+                    truncated_str = self._truncate_large_content(
+                        tool_result, max_chars=target, as_json=True
+                    )
                     truncated_result = json.loads(truncated_str)
-                except json.JSONDecodeError:
-                    # If truncated string isn't valid JSON, use it as-is
-                    truncated_result = truncated_str
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
