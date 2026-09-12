@@ -16,6 +16,9 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
+from typing import Any
+
+from gaia.agents.tools.search_scope import search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +58,20 @@ _UNBOUNDED_SCOPES = frozenset({"smart", "everywhere"})
 _INDEX_SCOPE_OVERFETCH = 10
 
 
-def _scope_roots(scope: str) -> list:
-    """Directories an index hit must sit under; empty when the scope is open."""
+def _scope_roots(scope: str, host: Any = None) -> list:
+    """Directories an index hit must sit under; empty when the scope is open.
+
+    ``host`` supplies the workspace for ``cwd``. Resolving that scope to
+    ``Path.cwd()`` filtered index hits against the directory the sidecar was
+    spawned in, which is not where the user's work is — the same mistake the
+    walk path makes without it, and the two must agree or a hit the walk found
+    gets filtered out again (#3576).
+    """
     if scope in _UNBOUNDED_SCOPES:
         return []
     if scope == "cwd":
-        raw = Path.cwd()
-    elif scope == "home":
+        return [Path(root).expanduser().resolve() for root in search_roots(host)]
+    if scope == "home":
         raw = Path.home()
     else:
         raw = Path(scope)
@@ -103,6 +113,10 @@ class FileSystemToolsMixin:
             if not allowed:
                 raise ValueError(f"Access denied: {reason}")
         return resolved
+
+    def workspace_roots(self) -> list:
+        """The agent's allowed paths — see ``search_scope`` (#3576)."""
+        return [str(root) for root in search_roots(self)]
 
     def _get_default_excludes(self) -> set:
         """Get platform-specific default directory exclusion patterns."""
@@ -711,7 +725,7 @@ class FileSystemToolsMixin:
                 ):
                     # The index spans every indexed directory, so the caller's
                     # scope has to be applied to its rows too.
-                    scope_roots = _scope_roots(scope)
+                    scope_roots = _scope_roots(scope, self)
                     try:
                         index_results = mixin._fs_index.query_files(
                             name=query if effective_type != "metadata" else None,
@@ -1183,10 +1197,10 @@ class FileSystemToolsMixin:
         def _get_search_roots(scope: str) -> list:
             """Get search root directories based on scope."""
             home = str(Path.home())
-            cwd = str(Path.cwd())
+            workspace = self.workspace_roots()
 
             if scope == "cwd":
-                return [cwd]
+                return workspace
             elif scope == "home":
                 return [home]
             elif scope == "everywhere":
@@ -1200,7 +1214,7 @@ class FileSystemToolsMixin:
                     ]
                 return ["/"]
             elif scope == "smart":
-                roots = [cwd]
+                roots = list(workspace)
                 common = [
                     "Documents",
                     "Downloads",
@@ -1211,7 +1225,7 @@ class FileSystemToolsMixin:
                 ]
                 for folder in common:
                     p = Path(home) / folder
-                    if p.exists() and str(p) != cwd:
+                    if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots
             else:
