@@ -10,7 +10,6 @@ on:
       - 'src/vscode/**'
       - '.github/workflows/test_vscode.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/vscode/**'
