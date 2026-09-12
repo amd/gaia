@@ -19,6 +19,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **The agent can set up a skill's CLI instead of handing the job back.** Asking
+  it to triage GitHub issues on a machine without `gh` used to end the
+  conversation. Three new tools — `check_cli_setup` (read-only), `install_cli`
+  and `sign_in_cli` — let it report exactly what is wrong, install the CLI with
+  the machine's package manager, and drive the browser sign-in. Both mutating
+  tools are confirmation-gated on every call and no skill grant pre-approves
+  them; over `/v1/gaia/query` they are refused, like every other gated tool
+  (§8). Registered tool count goes 73 → 76.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it

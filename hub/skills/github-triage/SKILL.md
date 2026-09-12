@@ -2,7 +2,7 @@
 name: github-triage
 description: Triage GitHub work with the gh CLI — your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, and posts the reply once you approve it. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, comment on or label an issue, or work out what to fix first.
 license: MIT
-version: 2.1.0
+version: 2.2.0
 metadata:
   gaia:
     security_tier: community
@@ -25,21 +25,33 @@ Run every GitHub command through `run_shell_command`.
 
 ## Setup
 
-Check before you conclude anything is missing. A command that failed is not
-proof `gh` is absent:
+Call `check_cli_setup("gh")` first. It is read-only, prompts nobody, and returns
+the one thing worth acting on — a `state`. Never infer setup from a `gh` command
+that failed, and never run `gh --version` to guess.
 
-```bash
-gh --version     # installed?  ("gh version", no dashes, is refused)
-gh auth status   # logged in?  prints the account and its scopes
-```
+| `state` | Remedy |
+|---|---|
+| `ready` | None. Start the triage. |
+| `missing` | `install_cli`. Linux has no automated install — give the user https://cli.github.com. |
+| `unauthenticated` | `sign_in_cli`. |
+| `insufficient_scopes` | `sign_in_cli` — signing in again re-requests `repo` and `read:org`. |
+| `env_token` | **Never `sign_in_cli`.** The credential is a `GH_TOKEN`/`GITHUB_TOKEN` from the environment, and `gh` refuses to store its own while that is set. Relay the `detail` verbatim — it says whether the token is working, or expired and needing a new value in the variable — and move on. |
 
-- `gh --version` fails → not installed. Offer to install it: `winget install
-  GitHub.cli` (Windows), `brew install gh` (macOS), else https://cli.github.com.
-  That is not a `gh` command, so the user approves it per-call — ask, then run it.
-- `gh auth status` fails → installed but not logged in. `gh auth login` is
-  interactive and you cannot drive it; hand that one step to the user.
-- Any **other** failure is a bug in the command you sent, not a missing `gh`.
-  Quote the error and fix the command. Never diagnose it as "not installed".
+Pass `command` back exactly as `check_cli_setup` returned it — `install_command`
+or `sign_in_command`. That string is what the user sees in the approval prompt,
+and one that does not match is refused rather than run.
+
+Both tools stop and ask, every time: the user sees the exact command and answers
+before anything runs. There is no "always", and loading this skill pre-approves
+neither. Signing in is a **handoff** — GAIA starts the flow and shows a one-time
+code and a URL, then waits while the user enters the code in their browser. You
+cannot type it for them.
+
+Report a setup failure as a failure. Both tools name the manual command when they
+give up; hand that to the user rather than claiming a step succeeded.
+
+Any **other** `gh` failure is a bug in the command you sent, not a missing `gh`.
+Quote the error and fix the command. Never diagnose it as "not installed".
 
 ## What the grant allows
 
