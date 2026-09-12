@@ -103,12 +103,11 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
-	m.ttft = 1 * time.Second
 
 	m = feed(t, m, event.CanonicalFinalEvent{
 		Type:   "final",
 		Answer: "short",
-		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42}`),
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42,"ttft":1.0}`),
 	})
 
 	last := m.messages[len(m.messages)-1]
@@ -166,36 +165,55 @@ func TestCanonicalTTFTIsNeverMeasuredClientSide(t *testing.T) {
 		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
 		event.CanonicalTokenEvent{Type: "token", Delta: "Hi"},
 		event.CanonicalTokenEvent{Type: "token", Delta: " there"},
+		event.CanonicalFinalEvent{Type: "final", Answer: "Hi there"},
 	)
-	if m.ttft != 0 {
-		t.Fatalf("ttft = %v, want 0 — the client measured a latency nobody reported", m.ttft)
-	}
-
-	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Hi there"})
 	if last := m.messages[len(m.messages)-1]; last.TTFT != 0 {
 		t.Errorf("TTFT = %v on a turn whose backend reported none, want 0 (omitted)", last.TTFT)
 	}
 }
 
-// TestCanonicalLegacyTransportNeverSetsTTFT: the legacy transport never
-// fires ChunkEvent, so ttft stays 0 and is omitted — intentional, not a bug.
-func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
+// A legacy answer event carrying no measurements leaves them absent, however
+// long the turn took on this side.
+func TestLegacyTransportWithNoMeasurementsReportsNone(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 
-	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "no chunk events here", Steps: 1, ToolsUsed: 0})
+	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "nothing measured", Steps: 1})
 
 	last := m.messages[len(m.messages)-1]
-	if last.TTFT != 0 {
-		t.Errorf("legacy transport with no ChunkEvent must leave TTFT at 0, got %v", last.TTFT)
+	if last.TTFT != 0 || last.TokPerS != 0 || last.Tokens != 0 {
+		t.Errorf("invented a measurement nobody reported: %+v", last)
 	}
 }
 
-// TestCanonicalTTFTFallsBackToServerReportedValue: when no token ever
-// streamed this turn (the normal non-streaming tool-calling path), the
-// client must use the server-reported usage.ttft instead of leaving it at 0.
-func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
+// ...and one that carries them renders them, same as the daemon transport.
+// The producer has always put these on the answer event; the legacy path used
+// to drop all three, so a subprocess run showed none of them.
+func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	m.streaming = true
+	m.queryStart = time.Now().Add(-37 * time.Second)
+
+	m = feed(t, m, event.AnswerEvent{
+		Type: "answer", Content: "391", Steps: 1,
+		Tokens: 68, TTFT: 31.695, TokPerS: 13.3,
+	})
+
+	last := m.messages[len(m.messages)-1]
+	rendered := m.renderMessage(&last, nil)
+	for _, want := range []string{"ttft 31.7s", "68 tokens", "13.3 tok/s"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("stats line missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// The backend's ttft reaches the user on the non-streaming tool-calling path —
+// which is the normal one for a native tool-calling model, and the path where
+// the old client-side stamp was most wrong.
+func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.dev = true
 	m.streaming = true
@@ -212,7 +230,7 @@ func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	wantTTFT := time.Duration(9.4 * float64(time.Second))
 	if last.TTFT != wantTTFT {
-		t.Fatalf("TTFT = %v, want %v from the server-reported usage.ttft fallback", last.TTFT, wantTTFT)
+		t.Fatalf("TTFT = %v, want the backend-reported %v", last.TTFT, wantTTFT)
 	}
 
 	rendered := m.renderMessage(&last, nil)

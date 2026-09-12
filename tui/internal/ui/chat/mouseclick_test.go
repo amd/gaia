@@ -204,3 +204,65 @@ func findLink(m ChatModel, u string) (x, y int, ok bool) {
 	}
 	return 0, 0, false
 }
+
+// The help panel is drawn over the whole window, so the transcript is no longer
+// what the pointer is on. A click there must not reach through it.
+func TestClicksDoNotReachThroughTheHelpPanel(t *testing.T) {
+	m := sizedChat(t, 100, 30)
+	m.messages = append(m.messages, Message{
+		Role:    RoleAssistant,
+		Content: "https://example.com/x",
+	})
+	m.updateViewport()
+
+	x, y, ok := findLink(m, "https://example.com/x")
+	if !ok {
+		t.Fatal("test setup: the link never reached the rendered transcript")
+	}
+	if _, cmd := clickAt(t, m, x, y); cmd == nil {
+		t.Fatal("test setup: that click should open the link with no panel up")
+	}
+
+	updated, _ := m.Update(ToggleHelpMsg{})
+	m = updated.(ChatModel)
+	if !m.help.Open {
+		t.Fatal("test setup: the help panel should be open")
+	}
+
+	next, cmd := m.Update(tea.MouseMsg{
+		X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	if cmd != nil {
+		t.Error("a click on the help panel opened a link hidden behind it")
+	}
+	if !next.(ChatModel).help.Open {
+		t.Error("the click closed the panel; only keys dismiss it")
+	}
+}
+
+// And the wheel scrolls the panel rather than the transcript underneath —
+// otherwise closing help leaves the reader somewhere they never scrolled to.
+func TestTheWheelScrollsTheHelpPanelNotTheTranscript(t *testing.T) {
+	m := sizedChat(t, 100, 24)
+	for i := 0; i < 60; i++ {
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "line"})
+	}
+	m.updateViewport()
+
+	updated, _ := m.Update(ToggleHelpMsg{})
+	m = updated.(ChatModel)
+	offsetBefore := m.viewport.YOffset
+
+	updated, _ = m.Update(tea.MouseMsg{
+		Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown,
+	})
+	m = updated.(ChatModel)
+
+	if m.viewport.YOffset != offsetBefore {
+		t.Errorf("the transcript scrolled behind the panel: %d → %d",
+			offsetBefore, m.viewport.YOffset)
+	}
+	if m.help.Scroll == 0 {
+		t.Error("the wheel did not scroll the help panel")
+	}
+}

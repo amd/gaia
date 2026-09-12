@@ -201,9 +201,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// reached the screen, which on a multi-step turn is the time the agent
 		// took to finish deciding, not the model's latency: an 11-step turn
 		// printed "2208.3s · ttft 2206.8s".
-		if usage.TTFT > 0 {
-			m.ttft = time.Duration(usage.TTFT * float64(time.Second))
-		}
+		ttft := time.Duration(usage.TTFT * float64(time.Second))
 		// `answer` is the contract's authoritative field (§4), so it wins over the
 		// streamed tokens rather than the other way round — otherwise the view and
 		// the transcript pushed back as `context` could disagree. The buffered
@@ -222,7 +220,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Content:   content,
 				Rendered:  components.RenderMarkdown(content),
 				Duration:  time.Since(m.queryStart),
-				TTFT:      m.ttft,
+				TTFT:      ttft,
 				TokPerS:   usage.TokPerS,
 				Steps:     usage.Steps,
 				ToolsUsed: usage.ToolsUsed,

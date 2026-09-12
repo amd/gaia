@@ -313,9 +313,6 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
-	// ttft is the backend's own time-to-first-token for this turn, set from
-	// the final event's usage. Zero means the backend reported none.
-	ttft time.Duration
 
 	// logPeakRows is the tallest the work log has been THIS turn. The region's
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
@@ -916,6 +913,18 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// alt-screen app the terminal's own scrollback does not exist, so
 		// this and the arrow keys are the only way back to what already
 		// happened.
+		// The help panel is drawn OVER the whole window, so the transcript
+		// under it is not what the reader is pointing at: a click there must
+		// not open a link or copy a message they cannot see. The wheel scrolls
+		// the panel itself, for the same reason.
+		if m.help.Open {
+			if isWheelEvent(msg) {
+				m.help.HandleWheel(
+					tea.MouseEvent(msg).Button == tea.MouseButtonWheelUp,
+					m.width, m.height)
+			}
+			return m, nil
+		}
 		if m.palette.open {
 			return m.handlePaletteMouse(msg)
 		}
@@ -1450,7 +1459,6 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
-	m.ttft = 0
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
@@ -1879,7 +1887,11 @@ func (m *ChatModel) updateViewport() {
 	m.syncViewportHeight(m.chatChromeRows())
 
 	var sb strings.Builder
-	m.msgSpans = m.msgSpans[:0]
+	// A fresh slice, not m.msgSpans[:0]: ChatModel is copied by value on every
+	// Update, so truncate-and-refill would rewrite the spans under any copy
+	// still holding the same backing array. One allocation on a path that
+	// already builds the whole transcript.
+	m.msgSpans = make([]msgSpan, 0, len(m.messages))
 
 	// Show welcome message if no messages yet
 	if len(m.messages) == 0 && !m.streaming && !m.memoryLoading && m.memoryView == nil {
