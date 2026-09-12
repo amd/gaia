@@ -8,6 +8,29 @@ description: Use when testing or validating the GAIA TUI (tui/) by actually runn
 The TUI exposes a loopback control API so an assistant can operate it and read
 what a user would see. **Use it. Never sleep.**
 
+## Isolate memory before you start it — every time
+
+**Set `GAIA_MEMORY_DB` to a throwaway file in every drive.** The agent behind the
+TUI writes to the user's real `~/.gaia/memory.db` by default, and anything you say
+while driving becomes a permanent fact about the user:
+
+```bash
+export GAIA_MEMORY_DB=/tmp/gaia-drive/memory.db     # delete between runs
+```
+
+A drive once planted a persona's overdue deadline; days later the user said
+"sweet!" and got *"Priya needs that Fernbrook deck ASAP."* back. The false bug
+reports this skill exists to prevent have a mirror image — a real report caused
+by a test.
+
+`gaia eval agent` already resets memory between scenarios; a hand-driven session
+has no such cleanup, so isolation has to come from the environment. A blank value,
+or one naming a directory, is a startup error rather than a fall back to the real
+store — if the agent refuses to start, fix the path, don't unset the variable.
+`GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset; it
+does not relocate config, logs, or every other `~/.gaia` path. Config uses
+`GAIA_CONFIG_DIR`. Use a separate OS user or container for complete isolation.
+
 ## Start it
 
 ```bash

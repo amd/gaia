@@ -5764,12 +5764,21 @@ def _bootstrap_infer():
                 if not inferred_deleted:
                     try:
                         store.delete_by_source("inferred")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Could not clear the previous inferred profile ({e}); "
+                            "nothing was stored. Check that the memory database "
+                            "is writable and not held by another GAIA process "
+                            "(`gaia kill` clears stale ones), then re-run "
+                            "`gaia memory bootstrap`."
+                        ) from e
                     inferred_deleted = True
 
                 try:
                     store.store(
+                        # `gaia memory` is an admin path and every row here was
+                        # just approved at the prompt.
+                        allow_privileged=True,
                         category="profile",
                         content=content,
                         source="inferred",
@@ -5794,7 +5803,10 @@ def _bootstrap_infer():
 def _bootstrap_discover():
     """Phase 2: System discovery — scan local system, present findings for review."""
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.agents.base.memory_store import (
+        USER_REVIEWED_CATEGORIES,
+        MemoryStore,
+    )
 
     print("\n=== GAIA Memory Bootstrap — System Discovery ===")
     print("Scanning your system for projects, apps, and more...")
@@ -5852,8 +5864,15 @@ def _bootstrap_discover():
             else:
                 # Default = approve (empty string or 'y')
                 try:
+                    category = item.get("category", "fact")
+                    if category not in USER_REVIEWED_CATEGORIES:
+                        raise ValueError(
+                            f"category {category!r} cannot be approved here; "
+                            f"expected one of {sorted(USER_REVIEWED_CATEGORIES)}"
+                        )
                     store.store(
-                        category=item.get("category", "fact"),
+                        allow_privileged=True,  # approved at the prompt
+                        category=category,
                         content=item["content"],
                         source="discovery",
                         context=item.get("context", "global"),
@@ -5987,6 +6006,7 @@ def _bootstrap_system(force: bool = True):
         for fact in facts:
             try:
                 store.store(
+                    allow_privileged=True,  # system-context collection
                     category="system",
                     content=fact["content"],
                     domain=fact.get("domain"),
