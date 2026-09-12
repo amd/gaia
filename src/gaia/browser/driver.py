@@ -46,6 +46,11 @@ DEFAULT_OP_TIMEOUT_S = 45.0
 #: takes longer than a click.
 DEFAULT_NAV_TIMEOUT_MS = 30_000
 
+#: How long to let an action-triggered navigation commit before snapshotting.
+#: Short: it is paid in full by every action that navigates nowhere, and the
+#: model's own step costs tens of seconds either way.
+NAV_SETTLE_S = 1.5
+
 #: How long a user gets to finish signing in before browser_login gives up.
 DEFAULT_LOGIN_TIMEOUT_S = 300.0
 
@@ -263,13 +268,14 @@ class PlaywrightDriver:
             loc = self._page.locator(selector)
             if loc.count() == 0:
                 raise ElementNotFound(ref)
+            prev_url = self._page.url
             try:
                 # Playwright auto-waits for actionability and scrolls into view,
                 # which is most of what makes a hand-rolled driver flaky.
                 loc.first.click(timeout=self._nav_timeout_ms)
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
                 raise InteractionFailed(ref, "click", str(e).split("\n")[0]) from e
-            self._settle()
+            self._settle_after_action(prev_url)
             return self._snapshot()
 
         return self._submit(_click)
@@ -285,6 +291,7 @@ class PlaywrightDriver:
             if loc.count() == 0:
                 raise ElementNotFound(ref)
             target = loc.first
+            prev_url = self._page.url
             tag = (target.evaluate("(el) => el.tagName.toLowerCase()") or "").strip()
             try:
                 if tag == "select":
@@ -292,11 +299,24 @@ class PlaywrightDriver:
                 else:
                     target.fill(text, timeout=self._nav_timeout_ms)
                     if press_enter:
-                        target.press("Enter")
+                        # focus() + keyboard, rather than locator.press():
+                        # press re-runs the full actionability check, which a
+                        # live TUI run stalled on for its whole 30s budget on a
+                        # field the next attempt typed into fine (the box had
+                        # opened its autocomplete, and the machine was busy
+                        # running inference). focus() is cheap and does not
+                        # wait on actionability.
+                        #
+                        # The explicit focus() is load-bearing: relying on
+                        # fill()'s focus and pressing at page level submitted
+                        # nothing on Wikipedia, because the autocomplete
+                        # re-renders the widget between the two calls.
+                        target.focus(timeout=self._nav_timeout_ms)
+                        self._page.keyboard.press("Enter")
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
                 action = "select an option in" if tag == "select" else "type into"
                 raise InteractionFailed(ref, action, str(e).split("\n")[0]) from e
-            self._settle()
+            self._settle_after_action(prev_url)
             return self._snapshot()
 
         return self._submit(_type)
@@ -408,6 +428,36 @@ class PlaywrightDriver:
         # to __init__): an instance attribute of the same name would
         # shadow this method and _submit would get a dict, not a callable.
         return self._context.storage_state()
+
+    def _settle_after_action(self, prev_url: str) -> None:
+        """Settle after a click/keypress that *might* navigate.
+
+        An action can start a navigation that has not committed by the time the
+        call returns. Snapshotting then captures the OLD document: the tool
+        reports the previous URL and hands the model refs that are about to
+        stop existing. That is not theoretical — it is what made a Wikipedia
+        search look like it had submitted nothing, while the browser was in
+        fact mid-navigation ("Execution context was destroyed").
+
+        So wait briefly for the URL to change, then for the new document. An
+        action that navigates nowhere costs the poll window and no more.
+        """
+        import time as _time
+
+        deadline = _time.monotonic() + NAV_SETTLE_S
+        while _time.monotonic() < deadline:
+            try:
+                if self._page.url != prev_url:
+                    break
+            except Exception:  # noqa: BLE001 — mid-swap; try again
+                pass
+            _time.sleep(0.05)
+
+        try:
+            self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:  # noqa: BLE001 — already loaded, or never navigated
+            pass
+        self._settle()
 
     def _settle(self) -> None:
         """Give client-side rendering a beat to finish.

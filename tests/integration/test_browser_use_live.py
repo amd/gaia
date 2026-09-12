@@ -261,3 +261,64 @@ def test_nothing_is_concluded_inside_the_minimum_dwell(driver, page_url):
     with pytest.raises(LoginTimedOut):
         driver.wait_for_login(page_url, timeout_s=2, poll_s=0.25)
     assert time.monotonic() - t0 >= 1.5
+
+
+# --------------------------------------------------- navigation settling
+
+
+NAV_FORM = """<!doctype html><title>Search</title><body>
+<form action="/landed.html" method="get">
+  <input id="q" name="q" type="text" aria-label="Query">
+</form>
+<a id="stay" href="#nowhere">Goes nowhere</a>
+</body>"""
+
+NAV_LANDED = """<!doctype html><title>Landed</title><body><h1>Landed</h1></body>"""
+
+
+@pytest.fixture(scope="module")
+def nav_url(tmp_path_factory):
+    """A form that navigates on Enter, served over HTTP."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("navsrv")
+    (root / "search.html").write_text(NAV_FORM, encoding="utf-8")
+    (root / "landed.html").write_text(NAV_LANDED, encoding="utf-8")
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(root)
+    )
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/search.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_submitting_returns_the_page_it_navigated_to(driver, nav_url):
+    """The snapshot must describe the NEW document, not the one left behind.
+
+    Regression: Enter submitted correctly but the snapshot was taken before the
+    navigation committed, so the tool reported the old URL and handed the model
+    refs that were already gone. It looked to the agent like nothing happened.
+    """
+    snap = driver.goto(nav_url)
+    ref = next(e["ref"] for e in snap["elements"] if e["role"] == "textbox")
+    after = driver.type_text(ref, "hello", press_enter=True)
+    assert after["title"] == "Landed", f"still on {after['url']}"
+    assert "landed.html" in after["url"]
+    assert "q=hello" in after["url"]
+
+
+def test_an_action_that_navigates_nowhere_stays_fast(driver, nav_url):
+    """The settle window is paid in full by non-navigating actions, so cap it."""
+    driver.goto(nav_url)
+    snap = driver.snapshot()
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "Goes nowhere")
+    t0 = time.monotonic()
+    driver.click(ref)
+    assert time.monotonic() - t0 < 8.0
