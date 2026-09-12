@@ -460,7 +460,14 @@ def _sum_conversation_tokens(
 ) -> Tuple[int, int]:
     """Sum input/output tokens from per-step 'stats' entries already appended
     to conversation, plus any tool-reported usage folded in separately (see
-    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    ``_extract_tool_usage``). Returns (total_input, total_output).
+
+    Both spellings are accepted, the same way the tool-usage loop below already
+    does: a local llama.cpp step reports ``input_tokens``/``output_tokens``,
+    while a cloud-routed one comes back in OpenAI's
+    ``prompt_tokens``/``completion_tokens``. Reading only the first pair threw
+    away a count the backend really had measured, and the turn then reported no
+    token total at all."""
     total_input = 0
     total_output = 0
     for entry in conversation:
@@ -468,8 +475,14 @@ def _sum_conversation_tokens(
             content = entry["content"]
             if content.get("type") == "stats" and "performance_stats" in content:
                 stats = content["performance_stats"]
-                total_input += _safe_number(stats.get("input_tokens"))
-                total_output += _safe_number(stats.get("output_tokens"))
+                if not isinstance(stats, dict):
+                    continue
+                total_input += _safe_number(
+                    stats.get("input_tokens") or stats.get("prompt_tokens")
+                )
+                total_output += _safe_number(
+                    stats.get("output_tokens") or stats.get("completion_tokens")
+                )
     for usage in tool_usage_entries or []:
         total_input += _safe_number(
             usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -478,6 +491,51 @@ def _sum_conversation_tokens(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
     return total_input, total_output
+
+
+def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's generation rate, from the backend's OWN per-call measurement.
+
+    Averaged over the turn's LLM calls weighted by the tokens each generated —
+    ``sum(tokens) / sum(tokens / rate)`` — so a turn whose steps ran at
+    different rates reports the rate a user actually experienced rather than
+    the arithmetic mean of the steps.
+
+    ``None`` when no call reported one. It is never derived from wall time
+    here: a turn's wall clock includes tool execution and agent overhead, and
+    dividing generated tokens by it invents a number roughly an order of
+    magnitude below the hardware's real rate. A backend that does not report
+    a rate (an OpenAI-compatible remote endpoint, say) has not measured one,
+    and nothing downstream should print a figure nobody measured.
+    """
+    tokens_total = 0.0
+    seconds_total = 0.0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if not isinstance(stats, dict):
+            continue
+        rate = stats.get("tokens_per_second")
+        tokens = stats.get("completion_tokens") or stats.get("output_tokens")
+        if (
+            not isinstance(rate, (int, float))
+            or isinstance(rate, bool)
+            or not math.isfinite(rate)
+            or rate <= 0
+        ):
+            continue
+        tokens = _safe_number(tokens)
+        if tokens <= 0:
+            continue
+        tokens_total += tokens
+        seconds_total += tokens / rate
+    if tokens_total <= 0 or seconds_total <= 0:
+        return None
+    return tokens_total / seconds_total
 
 
 def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
@@ -6898,6 +6956,7 @@ Do NOT wrap conversational replies in JSON.
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
                     ttft_seconds=_query_ttft_seconds(conversation),
+                    tok_per_s=_query_tok_per_s(conversation),
                 )
                 break
 

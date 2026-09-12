@@ -249,14 +249,19 @@ Type /help for available commands.
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
 
-By default your terminal owns the mouse, so drag-to-select and its own copy/paste
-(right-click, `Ctrl+Shift+C`, `Cmd+C`) work everywhere with nothing to learn. Two
-things borrow it back, each only for as long as they are on screen:
+By default GAIA owns the mouse, so the wheel scrolls the conversation — a
+full-screen terminal app has no scrollback of its own behind it — and a printed
+link is clickable. Hold `Shift` (`Option` in iTerm2) to drag-select without
+leaving that mode, or press `Ctrl+T` to hand the mouse back to your terminal
+outright.
 
 | Mouse | What it does |
 |---|---|
-| Wheel, with `Ctrl+T` on | Scrolls the conversation. Selection is off while `Ctrl+T` is on; `Ctrl+T` or `Esc` gives it back |
-| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. Released the instant the palette or question closes — a wheel-mode `Ctrl+T` you turned on yourself survives that unaffected |
+| Wheel | Scrolls the conversation |
+| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
+| Double-click, on a message | Copies that message |
+| `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
+| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
 
 | Command | What it does |
 |---|---|

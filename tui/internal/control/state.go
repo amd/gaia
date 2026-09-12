@@ -26,6 +26,47 @@ type Snapshot struct {
 	// model state instead of grepping the rendered remedy for a phrase — the
 	// screen's wording is allowed to change; the row key is not.
 	Blocker string `json:"blocker,omitempty"`
+
+	// Chat is the conversation view's own diagnostics, nil everywhere else.
+	Chat *ChatState `json:"chat,omitempty"`
+}
+
+// ChatState is what a driver needs to tell a real scroll or mouse defect from
+// a mis-aimed test.
+//
+// Every field here answers a question that the rendered screen cannot: whether
+// the transcript is pinned to the newest content or parked where the reader
+// left it, whether the app or the terminal currently owns the mouse, and how
+// many rows of content exist above the window. Without them, "I scrolled and
+// nothing moved" is indistinguishable from "I was already at the top", and
+// "my click did nothing" from "the app never had the mouse".
+type ChatState struct {
+	Messages int `json:"messages"`
+	// ScrollY is the first content row visible in the window, and ContentRows
+	// the total the transcript has laid out.
+	ScrollY     int  `json:"scroll_y"`
+	ContentRows int  `json:"content_rows"`
+	AtBottom    bool `json:"at_bottom"`
+	// FollowTail is whether streamed output still drags the view down. It goes
+	// false the moment the reader scrolls away and true again at the bottom,
+	// so it is the field that says whether a scroll was registered at all.
+	FollowTail bool `json:"follow_tail"`
+	// MouseOwner is "app" while the TUI is tracking the mouse (the wheel
+	// scrolls, links are clickable) or "terminal" while it is not — either
+	// because the user asked for SELECT MODE or because nothing wants it yet.
+	MouseOwner string `json:"mouse_owner"`
+	// MouseMotion is "cell" or "all" — which tracking mode is armed. An
+	// overlay needs "all" for hover; the plain transcript does not.
+	MouseMotion string `json:"mouse_motion,omitempty"`
+	// SelectMode is the user's own Ctrl+T choice, independent of who happens
+	// to hold the mouse this frame.
+	SelectMode bool `json:"select_mode"`
+	// ViewportRows is the height of the transcript window in rows, and
+	// HeaderRows how many screen rows sit above it — the offset a client adds
+	// to a content row to get a screen row to click.
+	ViewportRows int  `json:"viewport_rows"`
+	HeaderRows   int  `json:"header_rows"`
+	HelpOpen     bool `json:"help_open"`
 }
 
 // Every view the TUI can report. A client waits on one of these, so they are
@@ -54,6 +95,11 @@ type Frame struct {
 	Seq    int    `json:"seq"`
 	AtMS   int64  `json:"at_ms"`
 	Screen string `json:"screen"`
+	// Raw is the same frame with its styling intact. Screen stays stripped —
+	// it is what a caller greps — but a picture built from stripped text is a
+	// grey wash that looks nothing like the terminal, so the colours have to
+	// survive the ring too.
+	Raw string `json:"raw,omitempty"`
 }
 
 // MarkMsg is a sentinel the control server injects after a batch of keys.
@@ -70,14 +116,15 @@ type MarkMsg struct{ ID int64 }
 // Bubble Tea calls Update and View from its event loop; HTTP handlers read from
 // their own goroutines. Every field is guarded by mu.
 type State struct {
-	mu      sync.RWMutex
-	seq     int
-	lastRaw string
-	frames  []Frame
-	cols    int
-	rows    int
-	snap    Snapshot
-	started time.Time
+	mu        sync.RWMutex
+	seq       int
+	lastRaw   string
+	lastPlain string
+	frames    []Frame
+	cols      int
+	rows      int
+	snap      Snapshot
+	started   time.Time
 
 	// pendingMark is set when Update sees a MarkMsg; renderedMark is promoted
 	// from it by the View that immediately follows.
@@ -132,7 +179,14 @@ func (s *State) recordFrame(raw string) {
 	markAdvanced := s.renderedMark != s.pendingMark
 	s.renderedMark = s.pendingMark
 
-	if raw == s.lastRaw && s.seq > 0 {
+	// Deduped on the VISIBLE screen, not the styled bytes. The composer's
+	// cursor blinks, which changes the bytes a couple of times a second while
+	// the screen says exactly the same thing — and keying the ring on that
+	// filled all 200 slots with one motionless frame, pushing the history
+	// anyone would want to watch out the back.
+	plain := PlainScreen(raw)
+	if plain == s.lastPlain && s.seq > 0 {
+		s.lastRaw = raw
 		if markAdvanced {
 			s.broadcast()
 		}
@@ -140,10 +194,12 @@ func (s *State) recordFrame(raw string) {
 	}
 	s.seq++
 	s.lastRaw = raw
+	s.lastPlain = plain
 	s.frames = append(s.frames, Frame{
 		Seq:    s.seq,
 		AtMS:   time.Since(s.started).Milliseconds(),
-		Screen: PlainScreen(raw),
+		Screen: plain,
+		Raw:    raw,
 	})
 	if len(s.frames) > maxFrames {
 		s.frames = s.frames[len(s.frames)-maxFrames:]

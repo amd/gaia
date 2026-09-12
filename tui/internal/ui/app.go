@@ -99,16 +99,12 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 
 // teaOptions are the terminal capabilities every GAIA TUI program asks for.
 //
-// The mouse is left to the TERMINAL by default, so drag-select and the platform's
-// own copy/paste work the way they do in every other program — Ctrl/Cmd+C,
-// Ctrl+Shift+C, right-click, whatever that terminal uses.
-//
-// Capturing it (mode 1002) buys exactly one thing: the wheel scrolling the
-// transcript, which an alt-screen app cannot get from the terminal's scrollback
-// because it has none. That is not worth breaking selection for every user who
-// never asked for it — "I still can't drag my mouse over terminal text and copy
-// it" is the report this default answers. Ctrl+T turns capture on when the wheel
-// is what you want; ↑/↓ and PgUp/PgDn scroll regardless.
+// The mouse is deliberately NOT among them: who owns it is a per-screen
+// decision, not a program-wide one, and it lives in one place —
+// ui/chat/mousecapture.go. The chat model arms Cell-Motion tracking from its
+// own Init and releases it again for SELECT MODE (Ctrl+T); the splash and the
+// readiness gate never ask for the mouse at all. Setting a program-level mouse
+// option here would fight that reconciliation on every frame.
 func teaOptions() []tea.ProgramOption {
 	return []tea.ProgramOption{
 		tea.WithAltScreen(),

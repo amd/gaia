@@ -240,6 +240,7 @@ class CanonicalTranslator:
             ("elapsed", "elapsed"),
             ("tokens", "tokens"),
             ("ttft", "ttft"),
+            ("tok_per_s", "tok_per_s"),
         ):
             if event.get(src) is not None:
                 usage[dst] = event[src]
