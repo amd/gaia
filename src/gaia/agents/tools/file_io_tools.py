@@ -165,6 +165,10 @@ class FileIOToolsMixin:
         preferred about half the time (#3600) — but the omission was not
         deliberate and this is the largest single lever measured.
         """
+        if not {"edit_file", "edit_python_file"}.issubset(
+            getattr(self, "_tools_registry", {})
+        ):
+            return ""
         return (
             "==== CHANGING A FILE ====\n"
             "To change a file, call edit_file with the exact existing text as "
