@@ -21,6 +21,19 @@
 .PARAMETER ServerExe      Path to LemonadeServer.exe. Defaults to LEMONADE_SERVER_PATH.
 .PARAMETER WarmModel      Model to pull so the backend is warm (default Gemma-4-E4B-it-GGUF).
 .PARAMETER ForceRestart   Restart the task even if the server is already healthy.
+
+.NOTES
+    Concurrency caveat: the drift restart below (Test-TaskCurrent returning
+    $false) stops and restarts the server on this box. Only three of the five
+    workflows that call this script share the serial `lemonade-eval`
+    concurrency group; test_agent_sdk.yml and test_gaia_cli_windows.yml use
+    per-branch concurrency groups instead and can run at the same time as an
+    eval job on the same runner. A version bump here can therefore have the
+    first job that observes it kill the server out from under a concurrently
+    running eval on one of those two workflows. Coordinating that (a
+    machine-wide mutex, or moving those two workflows into the shared slot)
+    was judged not worth doing for this fix -- flagging it so the next
+    version bump isn't a surprise.
 #>
 [CmdletBinding()]
 param(
@@ -32,14 +45,63 @@ param(
 
 $ErrorActionPreference = "Continue"
 $TaskName = "GaiaLemonadeServer"
+# Bump whenever the task ACTION below changes (launch environment, args,
+# redirects). The health fast-path reuses whatever the Task Scheduler started
+# from the definition registered LAST time, so without this marker an edit to
+# the action never reaches a runner whose server is already up -- it waits for a
+# reboot or an explicit -ForceRestart. That is why the stdout/stderr redirect
+# added for #3015 only ever applied on the workflows that pass -ForceRestart.
+$TaskActionVersion = "2026-09-coopmat"
+
+# Fixed ProgramData path (SYSTEM-writable): the task outlives the job that
+# registered it, so its log -- and the version marker below -- have to outlive
+# that job too.
+$LogDir = "C:\ProgramData\GaiaLemonadeServer"
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$StdoutLog = Join-Path $LogDir "lemonade-task-stdout.log"
+$StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
+# Written only after a server launched from this action version is confirmed
+# healthy (see the end of the script). The registered task ACTION and this
+# file can otherwise drift apart -- e.g. a job cancelled between
+# Register-ScheduledTask and the restart loop -- so Test-TaskCurrent requires
+# BOTH to agree before trusting a running server's launch environment.
+$VersionMarkerFile = Join-Path $LogDir "task-version.txt"
+
 function Test-Health {
     try { Invoke-RestMethod "http://localhost:$Port/api/v1/health" -TimeoutSec 5 | Out-Null; return $true }
     catch { return $false }
 }
 
+# What action version does the REGISTERED task claim, if any?
+function Get-RegisteredTaskVersion {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) { return $null }
+    foreach ($a in @($task.Actions)) {
+        if ($a.Arguments -match "GAIA_LEMONADE_TASK_VERSION='([^']*)'") { return $Matches[1] }
+    }
+    return $null
+}
+
+# Is the registered task action AND the confirmed-healthy marker both the
+# version this script writes today? (See $VersionMarkerFile above for why
+# both are required.)
+function Test-TaskCurrent {
+    $registered = Get-RegisteredTaskVersion
+    if ($registered -ne $TaskActionVersion) { return $false }
+    if (-not (Test-Path $VersionMarkerFile)) { return $false }
+    return (Get-Content $VersionMarkerFile -Raw).Trim() -eq $TaskActionVersion
+}
+
+$DriftRestart = $false
 if (-not $ForceRestart -and (Test-Health)) {
-    Write-Host "Lemonade already healthy on port $Port -- reusing persistent server."
-    exit 0
+    if (Test-TaskCurrent) {
+        Write-Host "Lemonade already healthy on port $Port -- reusing persistent server."
+        exit 0
+    }
+    $foundVersion = Get-RegisteredTaskVersion
+    $foundLabel = if ($foundVersion) { "'$foundVersion'" } else { "none" }
+    Write-Host "Lemonade is healthy on port $Port but its scheduled task action marker is $foundLabel (expected '$TaskActionVersion') -- re-registering and restarting so the current launch environment applies."
+    $DriftRestart = $true
 }
 
 # Resolve the server binary. In v10.x the server is LemonadeServer.exe; the
@@ -79,18 +141,23 @@ foreach ($cfg in @(
 # captures the SERVER's streams; whether llama-server's own stderr rides on them
 # or goes to a pipe Lemonade owns is unconfirmed, so do not rely on this alone
 # to explain a child that will not spawn.
-# Fixed ProgramData path (SYSTEM-writable): the task outlives the job that
-# registered it, so its log has to outlive that job too.
-$LogDir = "C:\ProgramData\GaiaLemonadeServer"
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-$StdoutLog = Join-Path $LogDir "lemonade-task-stdout.log"
-$StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
+# ($LogDir / $StdoutLog / $StderrLog are set up near the top of the script,
+# alongside $VersionMarkerFile, since Test-TaskCurrent needs them before this
+# point is reached.)
 # PYTHONUNBUFFERED: Python block-buffers stdout when it is a pipe rather than a
 # console, so without this a server that never exits never flushes and its stdout
 # log stays empty. Measured: stdout 0 bytes without it, 39 with; stderr arrives
 # either way (Python line-buffers stderr). So an empty STDERR log is not a
 # buffering symptom -- it means the server wrote nothing there.
+#
+# GGML_VK_DISABLE_COOPMAT: every OTHER way GAIA starts Lemonade sets it
+# (start-lemonade.ps1/.bat/.sh) and this task was the one launch path that did
+# not, which made the persistent server the only one running the Vulkan
+# cooperative-matrix path. On the eval runner that is the difference between the
+# job that serves the RAG embedder and the gate that cannot (#3016).
 $InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
+             "`$env:GGML_VK_DISABLE_COOPMAT='1'; " +
+             "`$env:GAIA_LEMONADE_TASK_VERSION='$TaskActionVersion'; " +
              "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
              "-RedirectStandardOutput '$StdoutLog' -RedirectStandardError '$StderrLog' " +
              "-NoNewWindow -Wait"
@@ -105,6 +172,10 @@ try {
         -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
     Write-Host "Registered scheduled task '$TaskName' (stdout: $StdoutLog, stderr: $StderrLog)."
 } catch {
+    if ($DriftRestart -and (Test-Health)) {
+        Write-Host "WARN: could not re-register scheduled task ($($_.Exception.Message)). Keeping the existing healthy server on port $Port -- it is still running the OLD launch environment (action marker did not match '$TaskActionVersion'), so this run does NOT pick up the current launch environment."
+        exit 0
+    }
     Write-Host "ERROR: could not register scheduled task (need admin?): $($_.Exception.Message)"
     exit 1
 }
@@ -126,6 +197,12 @@ for ($attempt = 1; $attempt -le 4 -and -not $healthy; $attempt++) {
     if (-not $healthy) { Write-Host "attempt $attempt did not become healthy in 60s" }
 }
 if (-not $healthy) { Write-Host "ERROR: Lemonade server not healthy on $Port after retries."; exit 1 }
+
+# Only now -- with a server launched from THIS action version confirmed
+# healthy -- record the marker Test-TaskCurrent trusts on the next run. Doing
+# this earlier (e.g. right after Register-ScheduledTask) would let a job that
+# registers but never gets a healthy start still mark the version current.
+Set-Content -Path $VersionMarkerFile -Value $TaskActionVersion -NoNewline
 
 # Warm the model so the first inference isn't a cold pull+load.
 Write-Host "Warming model: $WarmModel"

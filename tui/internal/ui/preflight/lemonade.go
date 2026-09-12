@@ -67,6 +67,16 @@ type launcher struct {
 	// Restart is the command for a server that is up but wedged. Equal to Start
 	// where the launcher has no distinct restart form.
 	Restart string
+	// Argv is Start as something this process can SPAWN: program first, then
+	// arguments, already split and unquoted.
+	//
+	// Start is prose — it is quoted for a shell and may carry an env-assignment
+	// prefix, both of which exist so a human can paste it. Splitting that string
+	// back apart to exec it would be a quoting bug waiting to happen, so the
+	// resolver records both forms at the point where it still knows the real
+	// path. Empty means "do not start this automatically" (nothing installed,
+	// or a launcher only a human can drive).
+	Argv []string
 	// AppHint names the way a human is expected to do it when that is not a
 	// command at all — the macOS Applications folder, the Windows tray icon.
 	// Empty on platforms with no such path.
@@ -182,7 +192,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 			return launcher{BadOverride: override}
 		}
 		cmd := quoteCommand(override)
-		return launcher{Start: cmd, Restart: cmd, Found: true}
+		return launcher{Start: cmd, Restart: cmd, Argv: []string{override}, Found: true}
 	}
 
 	switch p.goos {
@@ -206,7 +216,11 @@ func resolveLauncherWith(p hostProbe) launcher {
 	// precise thing to name.
 	if path, err := p.lookPath("lemond"); err == nil {
 		cmd := quoteCommand(path)
-		return launcher{Start: cmd, Restart: cmd, AppHint: appHintFor(p.goos), Found: true}
+		return launcher{
+			Start: cmd, Restart: cmd,
+			Argv:    []string{path},
+			AppHint: appHintFor(p.goos), Found: true,
+		}
 	}
 
 	// 3. Legacy CLI, if this machine really does still have it.
@@ -234,7 +248,13 @@ func resolveLauncherWith(p hostProbe) launcher {
 // AppHint carries a shell-free alternative for exactly that reason: the tray app
 // is what the docs tell a Windows user to use, so it leads the remedy's prose and
 // this line is the terminal fallback.
-func windowsStart(exe string) string { return quoteCommand(exe) + " --silent" }
+// windowsSilentFlag keeps the installer's tray-less start out of a second
+// literal, so the pasted command and the spawned argv cannot drift.
+const windowsSilentFlag = "--silent"
+
+func windowsStart(exe string) string {
+	return quoteCommand(exe) + " " + windowsSilentFlag
+}
 
 const windowsTrayHint = "the 🍋 tray icon → Open Lemonade App"
 
@@ -246,12 +266,20 @@ func resolveWindows(p hostProbe) (launcher, bool) {
 		exe := filepath.Join(local, "lemonade_server", "bin", "LemonadeServer.exe")
 		if p.exists(exe) {
 			cmd := windowsStart(exe)
-			return launcher{Start: cmd, Restart: cmd, AppHint: windowsTrayHint, Found: true}, true
+			return launcher{
+				Start: cmd, Restart: cmd,
+				Argv:    []string{exe, windowsSilentFlag},
+				AppHint: windowsTrayHint, Found: true,
+			}, true
 		}
 	}
 	if path, err := p.lookPath("LemonadeServer.exe"); err == nil {
 		cmd := windowsStart(path)
-		return launcher{Start: cmd, Restart: cmd, AppHint: windowsTrayHint, Found: true}, true
+		return launcher{
+			Start: cmd, Restart: cmd,
+			Argv:    []string{path, windowsSilentFlag},
+			AppHint: windowsTrayHint, Found: true,
+		}, true
 	}
 	return launcher{}, false
 }
@@ -288,12 +316,17 @@ func resolveLinux(p hostProbe) (launcher, bool) {
 		return launcher{
 			Start:          "systemctl --user start lemond",
 			Restart:        "systemctl --user restart lemond",
+			Argv:           []string{"systemctl", "--user", "start", "lemond"},
 			ServiceManaged: true,
 			Found:          true,
 		}, true
 	}
 	if daemon != "" {
-		return launcher{Start: daemon, Restart: daemon, Foreground: true, Found: true}, true
+		return launcher{
+			Start: daemon, Restart: daemon,
+			Argv:       []string{daemon},
+			Foreground: true, Found: true,
+		}, true
 	}
 	return launcher{}, false
 }
@@ -338,6 +371,7 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 		if p.exists(path) {
 			return launcher{
 				Start: path, Restart: path,
+				Argv:       []string{path},
 				AppHint:    appHintFor("darwin"),
 				Foreground: true,
 				Found:      true,

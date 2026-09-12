@@ -5,6 +5,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // ForAgentOptions configures the transport built by ForAgent.
@@ -35,6 +36,11 @@ type ForAgentOptions struct {
 	// ClaudeModel picks which Claude model UseClaude uses; empty lets the
 	// agent pick its default. Meaningless without UseClaude, and refused.
 	ClaudeModel string
+	// Trace records every event the transport receives to a JSONL file
+	// (the TUI's --trace). Nil means tracing is off. Honoured by BOTH
+	// transports: the flagship's is chosen by install state, so tracing only
+	// one of them would leave --trace silently recording nothing.
+	Trace *event.TraceWriter
 }
 
 // BypassPermissionsFlag is the argument that starts a subprocess agent with
@@ -59,6 +65,9 @@ const ClaudeModelFlag = "--claude-model"
 // finding every launch site. It deliberately lives here rather than on a Bubble
 // Tea model — the headless CLI paths need it without a UI.
 func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
+	if err := CheckBypassSupported(agent, opts.BypassPermissions); err != nil {
+		return nil, err
+	}
 	// A model with no backend switch would be accepted and then change nothing.
 	if opts.ClaudeModel != "" && !opts.UseClaude {
 		return nil, fmt.Errorf(
@@ -80,6 +89,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			MaxSteps:    opts.MaxSteps,
 			Logf:        opts.Logf,
 			Interactive: opts.Interactive,
+			Trace:       opts.Trace,
 		}), nil
 
 	case catalog.TransportSubprocess:
@@ -111,14 +121,28 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), extra...)
 		}
-		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev), nil
+		if opts.Model != "" {
+			if agent.ID != catalog.FlagshipID {
+				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
+			}
+			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
-		return NewSubprocessClient(bin, args, opts.Dev), nil
+		if agent.CanonicalEvents {
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+		}
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
 
 	default:
 		return nil, fmt.Errorf(
 			"agent %q declares transport %d, which this build does not know how to reach — "+
 				"upgrade GAIA or fix the catalog entry", agent.ID, int(agent.Transport))
 	}
+}
+
+// CheckBypassSupported validates launch options before readiness can connect.
+func CheckBypassSupported(agent catalog.Agent, enabled bool) error {
+	if enabled && agent.Transport == catalog.TransportDaemon {
+		return fmt.Errorf("--bypass-permissions is not supported for agent %q over the daemon transport. Drop --bypass-permissions to keep confirmation prompts enabled", agent.ID)
+	}
+	return nil
 }

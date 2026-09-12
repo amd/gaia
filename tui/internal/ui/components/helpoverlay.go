@@ -198,7 +198,7 @@ const chatHelpText = `  GAIA Chat
   Ctrl+C      Quit
 
   Commands    /help /clear /bypass
-              /setup /memory /model
+              /setup /memory /model /provider
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close
@@ -206,17 +206,18 @@ const chatHelpText = `  GAIA Chat
   Scroll        ↑ / ↓ line · PgUp/PgDn page
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
-  Mouse wheel   Only in wheel mode — see Ctrl+T
-  Click / hover Palette rows and question options
-                only — never text (see below)
+  Mouse wheel   Scrolls (Ctrl+T for drag-select)
+  Click         Opens a printed link (your terminal
+                may underline it on hover) · picks a
+                palette row or question option
+  Double-click  Copies that message
 
   Copy and paste
   ──────────────────
-  Drag to select and use your terminal's own
-  copy and paste — right-click, Ctrl+Shift+C,
-  Cmd+C, whatever your terminal uses.
-  Ctrl+T      Mouse wheel scrolling. Selection is
-              off while it is on; Esc ends it.
+  Shift+drag (Option in iTerm2) selects text, then
+  copy with your terminal's own Ctrl+Shift+C/Cmd+C.
+  Ctrl+T      Select mode — hands the mouse back
+              for plain drag-select; Esc ends it.
   Ctrl+V      Paste — a clipboard screenshot pastes
               as a file path · Ctrl+Y copy answer ·
               Ctrl+B code

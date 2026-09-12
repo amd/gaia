@@ -21,7 +21,7 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 - **Data exploration** — load a CSV or Excel file into a local SQL scratchpad table and query it, so "which region grew fastest" becomes a real query rather than a guess from a truncated preview.
 - **Web research** — search the web, fetch and read pages, download files.
 - **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
-- **Images** — describe a local image or answer a question about it, using the local vision model.
+- **Images** — describe a local image or answer a question about it, using the local vision model. It can also *generate* one from a description with local Stable Diffusion; that swaps the resident model, so the reply after an image takes an extra moment while the chat model reloads.
 - **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
 
 ## Requirements
@@ -33,10 +33,10 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 | RAM | 8 GB minimum |
 | Platforms | Windows x64, Linux x64, macOS Apple Silicon |
 
-Start Lemonade before launching the agent:
+Install Lemonade, download the model, and start the server:
 
 ```bash
-lemonade-server serve
+gaia init
 ```
 
 The agent runs local inference only: the sidecar's `/query` endpoint rejects any request naming a provider other than `lemonade` with **HTTP 400**.
@@ -58,10 +58,15 @@ The agent runs local inference only: the sidecar's `/query` endpoint rejects any
 
     ```bash
     uv pip install -e hub/agents/gaia/python    # once
-    gaia daemon start-agent gaia --mode dev
+    GAIA_GAIA_AGENT_MODE=dev gaia-tui
     ```
 
-    Dev mode always runs from **the daemon's own checkout**. If the daemon is already running from a different checkout, it refuses loudly and names both paths rather than quietly serving the wrong source. Check what's running with `gaia daemon agents`; stop it with `gaia daemon stop-agent gaia`.
+    Set `GAIA_GAIA_AGENT_MODE=dev` on the TUI launch as well as on any manual
+    `gaia daemon start-agent gaia --mode dev` launch. The TUI sends its caller
+    checkout to the daemon, so both sides agree on the source tree. Dev mode
+    refuses loudly if a sidecar is already running from a different checkout;
+    check what's running with `gaia daemon agents` and stop it with `gaia daemon
+    stop-agent gaia`.
 
     Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
   </Tab>
@@ -85,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **69 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **72 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -94,9 +99,9 @@ The default construction registers **69 tools** — the 55 of the Chat agent's `
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
-| Images | `analyze_image`, `answer_question_about_image` |
+| Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command`, `wait_for_condition` |
-| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status` |
+| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools` |
 
@@ -104,9 +109,9 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 `run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
 
-How long a command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop.
+How long a command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. Those longer classes only come into play for a binary a loaded skill has granted, since the base allowlist refuses test runners, installers and network fetches outright. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop.
 
-**Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
+**Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
 
 ### Tools that need your approval
 
@@ -125,7 +130,14 @@ The agent's file, document, and data tools are confined to a set of allowed path
 
 That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied to path:` error naming both the requested and the resolved path.
 
-To narrow it, construct the agent with an explicit list:
+**The allowed set is not the whole story, and shouldn't be treated as one.** Two denylists apply *inside* it, because "in scope" and "safe" are different questions:
+
+- **Secrets are never read back.** `.env`, `id_rsa`, `credentials.json`, `.netrc`, any `.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` are refused on read even when they sit in an allowed directory — otherwise "summarise this folder" is a credential exfiltration primitive.
+- **Files that run on their own are never written.** Shell startup files (`.bashrc`, `.zshrc`, `.profile`), PowerShell profiles, `~/.config/autostart/*`, systemd user units, `LaunchAgents`, and anything inside a repo's `.git/` — hooks and config alike. Writing to one of those isn't editing a document, it's arranging for the agent's output to execute at your next login.
+
+Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
+
+To narrow the scope, construct the agent with an explicit list:
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -207,7 +219,7 @@ If neither token variable is set, the sidecar starts with the token check off an
 
 ### "Local Lemonade Server is not reachable"
 
-The model server isn't running. Start it with `lemonade-server serve`, or point the agent elsewhere with `LEMONADE_BASE_URL`. `GET /v1/gaia/init` tells you which of the three preconditions failed (reachable / version / model present) rather than making you guess.
+The model server isn't running. Run `gaia init` to install and start it, or point the agent at one you already have with `LEMONADE_BASE_URL`. `GET /v1/gaia/init` tells you which of the three preconditions failed (reachable / version / model present) rather than making you guess.
 
 ### "The model … is not downloaded"
 
@@ -230,4 +242,4 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
 - **No server-side confirmation flow** — over `/query`, all eight [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
-- **No image generation** — deliberately, so the chat model is never evicted mid-conversation.
+- **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.

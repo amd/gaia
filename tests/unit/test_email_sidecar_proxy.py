@@ -235,7 +235,7 @@ def test_provision_503_unreachable_streams_body_through():
     resp = _StreamResp(
         [
             b"Lemonade Server is not reachable\n",
-            b"Start it with lemonade-server serve\n",
+            b"Install and start it with `gaia init`\n",
         ],
         status=503,
     )
@@ -244,7 +244,7 @@ def test_provision_503_unreachable_streams_body_through():
     status, _media_type, chunks = proxy.provision()
     assert status == 503
     assert b"".join(chunks) == (
-        b"Lemonade Server is not reachable\nStart it with lemonade-server serve\n"
+        b"Lemonade Server is not reachable\nInstall and start it with `gaia init`\n"
     )
 
 

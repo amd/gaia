@@ -261,6 +261,7 @@ Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_l
 </Step>
 <Step title="Add framework generic server">
 `src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`, and serves the agent's [inherited init](#inherited-init) routes.
+The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; `--api` on a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
 </Step>
 <Step title="Add CI/CD workflow">
 `.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries;

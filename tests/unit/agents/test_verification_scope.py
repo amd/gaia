@@ -32,9 +32,11 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
+    NOT_EXECUTED,
     VERIFICATION_SCOPE_MAX_CHARS,
     VERIFICATION_SCOPE_PREFIX,
     build_verification_scope,
+    check_was_executed,
     strip_verification_scope,
     verification_check_label,
 )
@@ -62,6 +64,12 @@ class _DummyAgent(Agent):
         def sandbox_shell_for_verification_scope_test(command: str) -> dict:
             """Run a command in a sandbox."""
             del command
+            return agent.shell_result
+
+        @tool
+        def sandbox_check_with_a_timeout(command: str, timeout: int = 60) -> dict:
+            """Run a command in a sandbox with a timeout."""
+            del command, timeout
             return agent.shell_result
 
     def _create_console(self):
@@ -485,3 +493,400 @@ def test_sse_card_echo_stays_empty_rather_than_scope_line_only():
     """An answer the cleaners strip to nothing must not become a scope line."""
     raw = f'{{"thought": "done", "answer": ""}}\n\n{build_verification_scope([])}'
     assert _sse_answer(raw) == ""
+
+
+# ---------------------------------------------------------------------------
+# A check that never ran is not a check that failed (#3677)
+# ---------------------------------------------------------------------------
+
+# Every shape ``run_shell_command`` can return, and whether the call ran. A
+# refusal and a failing run are both ``status: error``; only the refusal says
+# so, because only the refusal knows.
+EXECUTION_EVIDENCE_CASES = [
+    (
+        "allowlist_refusal",
+        {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": "Command 'python3.14' is not available to this agent.",
+            "has_errors": True,
+        },
+        False,
+    ),
+    (
+        "declined_confirmation",
+        {"status": "denied", "error": "The user declined to run this command."},
+        False,
+    ),
+    (
+        "missing_executable",
+        {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": "[Errno 2] No such file or directory: 'pytest'",
+            "has_errors": True,
+        },
+        False,
+    ),
+    (
+        "policy_refusal_before_the_prompt",
+        {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": "Shell operators are not allowed for security reasons.",
+            "has_errors": True,
+        },
+        False,
+    ),
+    (
+        "ran_and_failed",
+        {
+            "status": "success",
+            "return_code": 1,
+            "stdout": "1 failed",
+            "stderr": "",
+            "has_errors": True,
+        },
+        True,
+    ),
+    (
+        "ran_and_passed",
+        {"status": "success", "return_code": 0, "stdout": "5 passed", "stderr": ""},
+        True,
+    ),
+    (
+        "timed_out_mid_run",
+        {
+            "status": "error",
+            "error": "Command timed out after 180 seconds",
+            "has_errors": True,
+            "timed_out": True,
+            "duration_seconds": 180.0,
+        },
+        True,
+    ),
+    # The direction the evidence-sniffing first draft got wrong: a tool that
+    # really did run a check and reports only a message must NOT read as
+    # refused. Silence is not a refusal.
+    (
+        "bare_error_from_a_check_that_ran",
+        {"status": "error", "error": "pytest exited 1", "has_errors": True},
+        True,
+    ),
+    ("bare_error_with_no_status", {"error": "something went wrong"}, True),
+    ("plain_string_result", "5 passed", True),
+]
+
+
+def _blocked(label="pytest", name="run_shell_command"):
+    return {"tool": name, "check_label": label, "failed": True, "ran": False}
+
+
+def test_a_refused_check_is_unverified_not_partially_verified():
+    statement = build_verification_scope([_blocked()])
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert "did not run" in statement
+    assert "did not pass" not in statement
+
+
+def test_a_refused_check_names_what_was_requested():
+    statement = build_verification_scope([_blocked("pytest")])
+    assert "pytest" in statement
+    assert "refused before execution" in statement
+
+
+def test_a_declined_check_is_not_reported_as_passing():
+    """``status: denied`` is not an error result, so it read as a pass."""
+    declined = {
+        "tool": "run_shell_command",
+        "check_label": "pytest",
+        "failed": False,
+        "ran": False,
+    }
+    statement = build_verification_scope([declined])
+    assert "ran and passed" not in statement
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+
+
+def test_a_refused_check_alongside_a_passing_one_is_only_partial():
+    statement = build_verification_scope(
+        [{"tool": "t", "check_label": "ruff", "failed": False}, _blocked("pytest")]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "ruff ran and passed" in statement
+    assert "pytest did not run" in statement
+
+
+def test_a_refused_check_does_not_inflate_the_ran_tool_count():
+    statement = build_verification_scope(
+        [
+            {"tool": "read_file", "check_label": None, "failed": False},
+            _blocked("pytest"),
+        ]
+    )
+    assert "2 tool calls ran" not in statement
+
+
+def test_non_check_tools_that_never_ran_are_not_counted_as_having_run():
+    statement = build_verification_scope(
+        [{"tool": "read_file", "check_label": None, "failed": True, "ran": False}]
+    )
+    assert "no tools ran" in statement
+
+
+def test_a_tool_that_ran_and_errored_still_counts_as_a_tool_call_that_ran():
+    """An error is not a refusal — read_file on a missing path did run."""
+    statement = build_verification_scope(
+        [
+            {
+                "tool": "read_file",
+                "check_label": None,
+                "failed": True,
+                "ran": check_was_executed(
+                    {"status": "error", "error": "File not found"}
+                ),
+            }
+        ]
+    )
+    assert "1 tool call ran" in statement
+
+
+def test_the_footer_is_still_bounded_with_blocked_checks():
+    executions = [_blocked(f"checker-{i:03d}-with-a-long-name") for i in range(200)]
+    assert len(build_verification_scope(executions)) <= VERIFICATION_SCOPE_MAX_CHARS
+
+
+# --- through the real agent loop -------------------------------------------
+
+
+REJECTION_RESULT = {
+    **NOT_EXECUTED,
+    "status": "error",
+    "error": (
+        "Command 'python3.14' is not available to this agent. It is granted "
+        "only to a skill that declares 'shell:execute:python3.14'."
+    ),
+    "has_errors": True,
+}
+
+
+def test_loop_reports_a_rejected_pytest_as_never_having_run(agent):
+    agent.shell_result = REJECTION_RESULT
+    _stub_chat(
+        agent,
+        _tool_call("python3.14 -m pytest tests/"),
+        _answer("The command was rejected, so no tests ran."),
+    )
+
+    line = _scope_line(agent.process_query("run the tests")["result"])
+
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert "did not run" in line
+    assert "did not pass" not in line
+
+
+def test_loop_reports_a_declined_pytest_as_never_having_run(agent):
+    agent.shell_result = {"status": "denied", "error": "The user said no."}
+    _stub_chat(
+        agent,
+        _tool_call("pytest tests/"),
+        _answer("You declined, so nothing was checked."),
+    )
+
+    line = _scope_line(agent.process_query("run the tests")["result"])
+
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert "ran and passed" not in line
+
+
+def test_loop_still_reports_a_real_failing_test_as_having_run(agent):
+    agent.shell_result = {
+        "status": "success",
+        "return_code": 1,
+        "stdout": "1 failed",
+        "stderr": "",
+        "has_errors": True,
+    }
+    _stub_chat(agent, _tool_call("pytest tests/"), _answer("One test failed."))
+
+    line = _scope_line(agent.process_query("run the tests")["result"])
+
+    assert "partially verified" in line
+    assert "did not pass" in line
+
+
+def test_loop_still_reports_a_passing_test_as_verified(agent):
+    agent.shell_result = {
+        "status": "success",
+        "return_code": 0,
+        "stdout": "5 passed",
+        "stderr": "",
+    }
+    _stub_chat(agent, _tool_call("pytest tests/"), _answer("All green."))
+
+    line = _scope_line(agent.process_query("run the tests")["result"])
+
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}verified")
+
+
+# --- the real shell tool declares its own refusals --------------------------
+#
+# ``check_was_executed`` believes what a tool says. These pin that the tool
+# actually says it — a refusal that forgets the stamp reads as a check that ran.
+
+
+@pytest.fixture
+def shell_tool():
+    """The real ``run_shell_command``, on a bare mixin."""
+    import importlib
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    module = importlib.import_module("gaia.agents.tools.shell_tools")
+    mixin = module.ShellToolsMixin()
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        mixin.register_shell_tools()
+        entry = _TOOL_REGISTRY.get("run_shell_command")
+        assert entry is not None, "run_shell_command was not registered"
+        yield entry["function"]
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+REFUSED_COMMANDS = [
+    ("not_on_the_allowlist", "/usr/local/bin/python3.14 -m pytest tests/"),
+    ("shell_operators", "pytest tests/ && echo done"),
+    ("unknown_binary", "definitely-not-a-real-binary --version"),
+]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [c for _, c in REFUSED_COMMANDS],
+    ids=[i for i, _ in REFUSED_COMMANDS],
+)
+def test_a_refused_command_says_it_did_not_run(shell_tool, command):
+    result = shell_tool(command)
+    assert result["status"] == "error", result
+    assert check_was_executed(result) is False, result
+
+
+def test_a_refused_pytest_leaves_the_turn_unverified(shell_tool):
+    """The whole chain: real refusal -> real classifier -> footer."""
+    result = shell_tool("/usr/local/bin/python3.14 -m pytest tests/")
+    statement = build_verification_scope(
+        [
+            {
+                "tool": "run_shell_command",
+                "check_label": verification_check_label(
+                    "run_shell_command",
+                    {"command": "/usr/local/bin/python3.14 -m pytest tests/"},
+                ),
+                "failed": True,
+                "ran": check_was_executed(result),
+            }
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert "did not pass" not in statement
+
+
+def test_a_command_that_really_runs_says_it_ran(shell_tool):
+    result = shell_tool("echo hello")
+    assert result["status"] == "success", result
+    assert check_was_executed(result) is True
+
+
+# --- every dispatch-time rejection declares itself too (#3677 review) --------
+#
+# ``_execute_tool`` has five exits that return before the tool body: unknown
+# name, guardrail refusal, missing argument, unexpected argument, uncoercible
+# argument. All five reach ``_note_verification_signal``, so all five have to
+# say nothing ran — a model that calls the shell tool for pytest with one
+# hallucinated kwarg is rejected at dispatch, and the footer used to call that
+# a test that ran and failed.
+
+DISPATCH_REJECTIONS = [
+    ("unknown_tool_name", "no_such_tool_at_all", {"command": "pytest tests/"}),
+    (
+        "missing_required_argument",
+        _SANDBOX_SHELL,
+        {},
+    ),
+    (
+        "unexpected_argument",
+        _SANDBOX_SHELL,
+        {"command": "pytest tests/", "timeout_sec": 30},
+    ),
+    (
+        "uncoercible_argument",
+        "sandbox_check_with_a_timeout",
+        {"command": "pytest tests/", "timeout": "not-a-number"},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tool_name,tool_args",
+    [(name, args) for _, name, args in DISPATCH_REJECTIONS],
+    ids=[case[0] for case in DISPATCH_REJECTIONS],
+)
+def test_a_call_rejected_at_dispatch_says_it_did_not_run(agent, tool_name, tool_args):
+    result = agent._execute_tool(tool_name, tool_args)
+    assert result["status"] == "error", result
+    assert check_was_executed(result) is False, result
+
+
+def test_a_hallucinated_kwarg_on_a_pytest_call_leaves_the_turn_unverified(agent):
+    """The exact shape the review reproduced."""
+    args = {"command": "pytest tests/", "timeout_sec": 30}
+    result = agent._execute_tool(_SANDBOX_SHELL, args)
+    statement = build_verification_scope(
+        [
+            {
+                "tool": _SANDBOX_SHELL,
+                "check_label": verification_check_label(_SANDBOX_SHELL, args),
+                "failed": True,
+                "ran": check_was_executed(result),
+            }
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert "ran and did not pass" not in statement
+
+
+# --- a refusal the agent recovered from is not an unrun check ---------------
+
+
+def test_a_refused_check_that_later_ran_is_not_also_reported_as_unrun():
+    statement = build_verification_scope(
+        [
+            _blocked("pytest"),
+            {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_different_check_left_unrun_is_still_reported():
+    statement = build_verification_scope(
+        [
+            _blocked("ruff"),
+            {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "ruff did not run" in statement
+
+
+def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
+    statement = build_verification_scope(
+        [
+            _blocked("pytest"),
+            {"tool": "run_shell_command", "check_label": "pytest", "failed": True},
+        ]
+    )
+    assert "ran and did not pass" in statement
+    assert "did not run" not in statement

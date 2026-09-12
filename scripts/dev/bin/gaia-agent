@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run the flagship agent from the checkout instead of the installed binary.
+#
+# The TUI resolves `gaia-agent` from PATH before ~/.gaia/agents/, so putting
+# this directory first is what makes a source change visible in the TUI.
+# run-tui.sh does that for you.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python:$REPO/hub/agents/chat/python"
+exec "${GAIA_DEV_PYTHON:-python}" -m gaia_agent.server "$@"

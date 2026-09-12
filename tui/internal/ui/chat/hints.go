@@ -50,6 +50,11 @@ const (
 	rankOrient = 70
 	// What else the keyboard does. Genuinely useful, genuinely droppable.
 	rankAffordance = 40
+	// How to get the terminal's own drag-select back. Worth a column when
+	// there is one to spare — the app holds the mouse by default, so a user
+	// who tries to drag and gets nothing needs the way out — but it loses to
+	// every hint that says what is happening right now.
+	rankSecondary = 25
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -77,9 +82,29 @@ func (m ChatModel) statusHints() []hint {
 
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to
 	// earlier turns; a user who does not know that concludes history is gone.
-	hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	if m.mouseSelectMode {
+		hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	} else {
+		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
+		// Not while the agent is parked on a decision: the bar is a sentence,
+		// and "answer above" is the only thing the reader should act on. How
+		// to select text can wait for a frame where nothing is pending.
+		if m.confirmation == nil {
+			hints = append(hints, hint{text: "Ctrl+T select text", rank: rankSecondary})
+		}
+	}
 
-	if m.streaming {
+	if m.confirmation != nil && m.confirmation.Pending() {
+		// The modal owns the keyboard while it is up, so every hint here would
+		// be a lie: typing goes nowhere and Esc denies rather than cancels.
+		// Saying "Esc cancel" one row under a modal that says "esc deny" is
+		// two answers to the same key on the same screen.
+		//
+		// The way out is NOT named here — rankEscape appends it below and
+		// outranks everything, so spelling it again only got the bar saying
+		// "Ctrl+C quits · Ctrl+C quit".
+		hints = append(hints, hint{text: "answer above", rank: rankInterrupt})
+	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.
 		hints = append(hints,

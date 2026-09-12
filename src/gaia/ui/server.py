@@ -315,7 +315,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             from gaia.ui._chat_helpers import model_load_lock
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as

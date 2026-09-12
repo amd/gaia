@@ -25,11 +25,25 @@ var chatCmd = &cobra.Command{
 		"(--agent, which uses the transport that agent declares) or by spawning a " +
 		"binary directly (--subprocess).",
 	SilenceUsage: true,
+	// Everything this command takes is a flag. Without this, a stray argument
+	// was accepted and dropped — and `chat --trace out.jsonl` recorded to the
+	// default path while the file the user named never appeared.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := traceArgAdvice(args, 0); err != nil {
+			return err
+		}
+		return cobra.NoArgs(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if agentID != "" && subprocess != "" {
 			return fmt.Errorf("--agent and --subprocess are mutually exclusive: pick one")
 		}
 		if subprocess != "" {
+			if cmd.Flags().Changed("bypass-permissions") {
+				return fmt.Errorf("--bypass-permissions is not supported with --subprocess: " +
+					"pass permission options inside the subprocess command if it supports them, " +
+					"or drop --bypass-permissions")
+			}
 			// Both were accepted and then silently dropped here — RunChat is
 			// given neither. (--query IS honoured: it opens the chat and sends
 			// that first message.)
@@ -47,35 +61,54 @@ var chatCmd = &cobra.Command{
 				}
 			}
 		}
+		if agentID == "" && subprocess == "" {
+			return fmt.Errorf("one of --agent or --subprocess is required\n\n" +
+				"Usage: gaia tui chat --agent email\n" +
+				"       gaia tui chat --agent email --query \"triage my inbox\"\n" +
+				"       gaia tui chat --subprocess \"./gaia-bash --json-events\"")
+		}
+		// Opened only once the command is known to be runnable, so a refused
+		// launch never announces a trace it is not going to write.
+		trace, err := openTrace(orSubprocess(agentID))
+		if err != nil {
+			return err
+		}
+		defer closeTrace(trace)
 		if agentID != "" {
 			ctrl, err := controlOptionsForAgentRun(cmd, query != "")
 			if err != nil {
 				return err
 			}
 			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl,
-				bypassPermissions, useClaude, claudeModelArg(), mockAgent)
+				bypassPermissions, useClaude, claudeModelArg(), mockAgent, trace)
 			if err != nil {
 				return err
 			}
 			if code != 0 {
+				// Closed explicitly: os.Exit runs no deferred function, so the
+				// trace would never report a recording that stopped early.
+				closeTrace(trace)
 				// The failure was already rendered to stderr; exit without
 				// letting cobra print a second, less useful message.
 				os.Exit(code)
 			}
 			return nil
 		}
-		if subprocess == "" {
-			return fmt.Errorf("one of --agent or --subprocess is required\n\n" +
-				"Usage: gaia tui chat --agent email\n" +
-				"       gaia tui chat --agent email --query \"triage my inbox\"\n" +
-				"       gaia tui chat --subprocess \"./gaia-bash --json-events\"")
-		}
 		ctrl, err := controlOptionsFor(cmd)
 		if err != nil {
 			return err
 		}
-		return ui.RunChat(subprocess, query, dev, ctrl)
+		return ui.RunChat(subprocess, query, dev, ctrl, trace)
 	},
+}
+
+// orSubprocess names the run for the default trace filename. --subprocess has
+// no catalog id, so it gets the transport's name rather than another agent's.
+func orSubprocess(agentID string) string {
+	if agentID != "" {
+		return agentID
+	}
+	return "subprocess"
 }
 
 func init() {

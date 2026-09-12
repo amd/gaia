@@ -45,6 +45,7 @@ from gaia.hub.catalog import (
 )
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
+from gaia.skills.naming import artifact_path, validated_artifact_filename
 from gaia.skills.versions import resolve as resolve_version_spec
 from gaia.skills.versions import validate_spec as validate_version_spec
 
@@ -274,7 +275,11 @@ class RemoteSkill:
                 "version; GAIA will not install an unverifiable artifact."
             )
         return RemoteArtifact(
-            filename=str(raw["filename"]),
+            # Validate at the parse boundary: everything downstream joins this
+            # onto a directory GAIA chose, before any signature or tier gate.
+            filename=validated_artifact_filename(
+                str(raw["filename"]), origin=f"hub manifest for '{self.name}' {version}"
+            ),
             sha256=str(raw["sha256"]),
             size_bytes=int(raw.get("size_bytes") or 0),
             path=str(raw.get("path") or ""),
@@ -386,10 +391,18 @@ def download_artifact(
 
     Raises:
         SkillHubError: on a transport failure or a checksum mismatch.
+        SkillValidationError: the manifest's filename, or the destination built
+            from it, is not a single safe path segment inside its own parent.
     """
     import hashlib
 
     get = fetcher or fetch_bytes
+    origin = f"hub manifest for '{name}' {version}"
+    # Re-checked here, not only where the manifest is parsed: download_artifact
+    # is public, and the write below is what a bad name actually buys.
+    validated_artifact_filename(artifact.filename, origin=origin)
+    destination = Path(destination)
+    artifact_path(destination.parent, destination.name, origin=origin)
     url = skill_artifact_url(name, version, artifact.filename, base_url)
     try:
         payload = get(url)
@@ -409,7 +422,6 @@ def download_artifact(
             "skill name and version."
         )
 
-    destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(payload)
     log.info(
