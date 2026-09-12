@@ -41,7 +41,10 @@ from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
+    NOT_EXECUTED,
     build_verification_scope,
+    check_was_executed,
+    strip_verification_scope,
     verification_check_label,
 )
 
@@ -3697,6 +3700,12 @@ Do NOT wrap conversational replies in JSON.
         """
         Execute a tool by name with the provided arguments.
 
+        Every exit that returns BEFORE the tool body runs carries
+        ``NOT_EXECUTED``. ``_execute_tool_timed`` records each return for the
+        verification footer, which otherwise reads a call rejected at dispatch
+        — unknown name, missing/unexpected/uncoercible argument, guardrail
+        refusal — as a check that ran and failed (#3677).
+
         Args:
             tool_name: Name of the tool to execute
             tool_args: Arguments to pass to the tool
@@ -3761,13 +3770,13 @@ Do NOT wrap conversational replies in JSON.
                     # here would point them at something that isn't there.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
-                return {"status": "error", "error": err}
+                return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
         if refusal is not None:
-            return refusal
+            return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them
@@ -3823,6 +3832,7 @@ Do NOT wrap conversational replies in JSON.
             # Tagged so callers can tell a malformed call (retryable — the model
             # can re-emit it) from a tool that ran and failed (#3581).
             return {
+                **NOT_EXECUTED,
                 "status": "error",
                 "error_type": "invalid_arguments",
                 "error": error_msg,
@@ -3857,6 +3867,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 logger.error(error_msg)
                 return {
+                    **NOT_EXECUTED,
                     "status": "error",
                     "error_type": "invalid_arguments",
                     "error": error_msg,
@@ -3869,6 +3880,7 @@ Do NOT wrap conversational replies in JSON.
         if coercion_error is not None:
             logger.error(coercion_error)
             return {
+                **NOT_EXECUTED,
                 "status": "error",
                 "error_type": "invalid_arguments",
                 "error": coercion_error,
@@ -4809,10 +4821,13 @@ Do NOT wrap conversational replies in JSON.
     def _note_verification_signal(
         self, tool_name: str, tool_args: Dict[str, Any], result: Any
     ) -> None:
-        """Record one executed tool call for this turn's verification scope.
+        """Record one dispatched tool call for this turn's verification scope.
 
         Called from the single execution seam so every loop path — legacy,
-        native tool-calling, and the forced-call branch — is covered.
+        native tool-calling, and the forced-call branch — is covered. That seam
+        also returns for calls that never ran (allowlist refusal, declined
+        confirmation), so ``ran`` says which this was: without it a refused
+        ``pytest`` was reported as a test that ran and failed (#3677).
         """
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
@@ -4822,6 +4837,7 @@ Do NOT wrap conversational replies in JSON.
                 "tool": tool_name,
                 "check_label": verification_check_label(tool_name, tool_args),
                 "failed": self._is_error_result(result),
+                "ran": check_was_executed(result),
             }
         )
 
@@ -4832,14 +4848,25 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Append the scope statement to a non-empty answer (#3376).
+        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+
+        Any statement the model wrote itself comes out first. The line rides in
+        the answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's — and the user then read the same
+        verification paragraph twice, once from the model and once from here.
+        Only the one derived from this turn's tool log is authoritative.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
         """
         if not answer or not answer.strip():
             return answer
-        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+        body = strip_verification_scope(answer)
+        statement = self.verification_scope_statement()
+        if not body.strip():
+            # The whole "answer" was an echoed scope line; one is still one.
+            return statement
+        return f"{body.rstrip()}\n\n{statement}"
 
     def process_query(
         self,
