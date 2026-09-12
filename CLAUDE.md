@@ -371,6 +371,20 @@ python -m gaia.mcp.mcp_bridge
 
 **#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
+### Tests always run against THIS checkout
+
+The root `conftest.py` puts this repo's `src/` and `hub/agents/*/python` at the
+front of `sys.path` before collection, and fails the session if `gaia` still
+resolves somewhere else. You do **not** need `PYTHONPATH=$(pwd)/src` — running
+`pytest` from the repo root is enough, in any clone or worktree.
+
+This exists because `gaia` is normally editable-installed, and on a machine with
+several worktrees that install points at whichever one ran `pip install -e` last.
+Without the pin, `import gaia` inside another checkout's tests silently imports a
+different branch's source — the run is green or red against code that isn't the
+code under review. Set `GAIA_ALLOW_EXTERNAL_IMPORTS=1` only when you deliberately
+want to test an installed wheel.
+
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
 **Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
@@ -509,7 +523,7 @@ gaia/
 │   │   ├── llm/        # LLM standalone app
 │   │   ├── example/    # Reference/starter app
 │   │   └── _shared/    # Shared assets for apps
-│   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
+│   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
@@ -632,6 +646,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 

@@ -410,6 +410,13 @@ FULL_BUNDLES = [
         description="Analyze images and answer questions about them (VLM).",
     ),
     ToolBundle(
+        name="image_gen",
+        members=frozenset(
+            {"generate_image", "list_sd_models", "get_generation_history"}
+        ),
+        description="Generate images from a text prompt (Stable Diffusion).",
+    ),
+    ToolBundle(
         name="memory",
         members=frozenset(
             {
@@ -427,11 +434,41 @@ FULL_BUNDLES = [
         members=frozenset({"set_loop_state", "request_user_input"}),
         description="Control the autonomous loop and ask the user questions.",
     ),
+    # The description carries the file extensions deliberately: a real turn
+    # says "summarize this meeting: <path>.mp4" and never says "transcribe",
+    # so an extension-shaped query needs something to score against. Without
+    # this bundle ``transcribe_media`` was orphaned — in no bundle and not in
+    # CORE — so the loader could never surface it and the model fell back to
+    # summarize_document on the raw .mp4, which fails.
+    # index_document and summarize_document ride along on purpose. They live in
+    # the rag bundles too, but a recording turn does not reliably select those,
+    # and without them in reach the model pulled chunks with query_documents and
+    # asked the user what to dig into instead of summarizing. The four tools are
+    # one pipeline; they have to arrive together.
+    ToolBundle(
+        name="media_transcription",
+        members=frozenset(
+            {
+                "transcribe_media",
+                "refine_transcript",
+                "index_document",
+                "summarize_document",
+            }
+        ),
+        description=(
+            "Transcribe speech from an audio or video recording (mp4, mkv, "
+            "mov, m4a, mp3, wav) into a text transcript, then correct "
+            "mis-hearings and label the speakers — meetings, calls, "
+            "interviews, voice memos. Use for any request to transcribe, "
+            "summarize, take notes on, or pull action items out of a "
+            "recording."
+        ),
+    ),
 ]
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
 # ToolLoader as ``optional_tools`` so ``validate_registry`` tolerates exactly
-# these and still fails loudly on a typo or a deleted tool. Three structural
+# these and still fails loudly on a typo or a deleted tool. Four structural
 # reasons, not "it might be missing, who knows":
 #
 # 1. Environment-conditional registration -- ``search_documentation`` needs npx
@@ -445,6 +482,8 @@ FULL_BUNDLES = [
 #    a degraded-but-running agent has a store and no memory tools. Selection
 #    already skips CORE names absent from the registry; without this, validation
 #    turned that survivable state into a hard ValueError on the first turn.
+# 4. Config-gated registration -- the SD tools register only under
+#    ``enable_sd_tools``, which only GaiaAgentConfig turns on.
 #
 # The CI drift guard checks the other direction against the flagship registry,
 # where every one of these IS present, so a rename still fails the build.
@@ -468,6 +507,9 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "search_skill_hub",
         "install_skill",
         "remove_skill",
+        "generate_image",
+        "list_sd_models",
+        "get_generation_history",
     }
 )
 

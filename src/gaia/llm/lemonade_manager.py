@@ -19,6 +19,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
+    is_llm_model_entry,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -388,6 +389,45 @@ class LemonadeManager:
         print("", file=sys.stderr)
 
     @classmethod
+    def warn_no_llm_loaded(
+        cls,
+        loaded_models: list,
+        base_url: str,
+        min_context_size: int,
+        quiet: bool = False,
+    ) -> None:
+        """Report a Lemonade server that has no LLM loaded.
+
+        A server running only an embedding/image/transcription model reports no
+        context size at all, which must never be read as "context is fine".
+
+        Args:
+            loaded_models: ``LemonadeStatus.loaded_models`` entries.
+            base_url: Server URL to name in the message.
+            min_context_size: Context size GAIA requires.
+            quiet: Log only; skip the stderr message.
+        """
+        others = ", ".join(
+            m.get("model_name") or m.get("id") or "?" for m in loaded_models
+        )
+        loaded_desc = f"only non-LLM models loaded: {others}" if others else "no models"
+        message = (
+            f"Lemonade Server at {base_url} has no LLM loaded ({loaded_desc}), so "
+            f"GAIA cannot confirm the {min_context_size}-token context it needs and "
+            f"has no model to answer with.\n"
+            f"To fix: run `gaia init` to install and load {DEFAULT_MODEL_NAME}, or "
+            f"load an LLM yourself "
+            f"({describe_start_hint(min_context_size).instruction}).\n"
+            f"See the Lemonade server log for details "
+            f"(typical path: ~/.cache/lemonade/server.log)."
+        )
+        cls._log.warning(message)
+        if not quiet:
+            print("", file=sys.stderr)
+            print(f"⚠️  {message}", file=sys.stderr)
+            print("", file=sys.stderr)
+
+    @classmethod
     def _validate_device_requirement(cls, client, required_min_device, device):
         """Raise ``HardwareRequirementError`` if *required_min_device* isn't met.
 
@@ -622,30 +662,34 @@ class LemonadeManager:
                         # Update cached context size
                         cls._context_size = status.context_size or 0
 
-                        # Only warn if LLM models are loaded AND context is insufficient
-                        # SD models don't have context size, only LLM models do
+                        # Only LLM entries carry a meaningful ctx_size; an
+                        # embedding, image, or transcription model says nothing
+                        # about chat capacity.
                         llm_models_loaded = any(
-                            "image" not in model.get("labels", [])
-                            for model in status.loaded_models
+                            is_llm_model_entry(model)
+                            for model in (status.loaded_models or [])
                         )
 
-                        # If models are loaded but the server doesn't report context_size
-                        # (returns 0 — common with Lemonade 10+), treat it as sufficient
-                        # so the fast path is taken on subsequent calls.
-                        if cls._context_size == 0 and llm_models_loaded:
+                        if not llm_models_loaded:
+                            # No chat model at all — say so rather than letting
+                            # ctx_size==0 read as "context is fine".
+                            cls.warn_no_llm_loaded(
+                                status.loaded_models or [],
+                                client.base_url,
+                                min_context_size,
+                                quiet,
+                            )
+                        elif cls._context_size == 0:
+                            # LLM loaded but the server doesn't report ctx_size
+                            # (Lemonade 10+): treat it as sufficient so the fast
+                            # path is taken on subsequent calls.
                             cls._log.debug(
                                 "LLM models loaded but context_size not reported by server; "
                                 "assuming context is sufficient (min=%d)",
                                 min_context_size,
                             )
                             cls._context_size = min_context_size
-
-                        # Only warn if context_size is non-zero (0 means no model loaded or still loading)
-                        if (
-                            cls._context_size > 0
-                            and cls._context_size < min_context_size
-                            and llm_models_loaded
-                        ):
+                        elif cls._context_size < min_context_size:
                             if cls._try_reload_with_ctx(
                                 client, status, min_context_size, quiet, cls._lock
                             ):
@@ -707,16 +751,7 @@ class LemonadeManager:
 
                 # Detect LLM-loaded state once for the branch decisions below.
                 llm_models_loaded = any(
-                    # Health-format ``type=="llm"`` is the precise check;
-                    # the label fallback covers any legacy code path that
-                    # populated ``status.loaded_models`` from the catalog.
-                    model.get("type") == "llm"
-                    or (
-                        model.get("type") is None
-                        and "image" not in model.get("labels", [])
-                        and "embeddings" not in model.get("labels", [])
-                    )
-                    for model in status.loaded_models
+                    is_llm_model_entry(model) for model in status.loaded_models
                 )
 
                 # Idle server (no model loaded, no ctx reported): proactively
@@ -737,8 +772,7 @@ class LemonadeManager:
                     if status.loaded_models is None:
                         status.loaded_models = []
                     llm_models_loaded = any(
-                        "image" not in model.get("labels", [])
-                        for model in status.loaded_models
+                        is_llm_model_entry(model) for model in status.loaded_models
                     )
 
                 # Cache server state for subsequent calls.  Setting
@@ -881,23 +915,8 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
-        # Filter to the LLM(s) actually loaded. ``type=="llm"`` is the
-        # precise check on health-format entries; the label fallback
-        # covers legacy code paths that populate ``loaded_models`` from
-        # the catalog (which lacks ``type``). Embedding and image models
-        # are excluded — reloading them with an LLM ctx_size makes no
-        # sense and (pre-#1030 follow-up) used to load the wrong model
-        # entirely because the embedder can sort before ``Gemma-…``.
-        llm_models = [
-            m
-            for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
-            )
-        ]
+        # Same predicate get_status() uses for context_size — one source of truth.
+        llm_models = [m for m in status.loaded_models if is_llm_model_entry(m)]
         if not llm_models:
             return False
 

@@ -1,6 +1,6 @@
 ---
 title: "Starter Skills"
-description: "Ten ready-made SKILL.md skills to install, read, and fork into your own — the fastest way to see what GAIA can be told to do."
+description: "Ready-made SKILL.md skills to install, read, and fork into your own — the fastest way to see what GAIA can be told to do."
 icon: "puzzle-piece"
 ---
 
@@ -16,8 +16,8 @@ Markdown procedure. That's the whole format. It is not code, not an agent, and
 not a plugin — it is a written-down way of doing something, in a shape an agent
 can load.
 
-The point of shipping ten of them is not that GAIA does ten things. It is that
-**you can describe a new one in an afternoon**. Each skill below is a worked
+The point of shipping a pack of them is not that GAIA does exactly these things.
+It is that **you can describe a new one in an afternoon**. Each skill below is a worked
 example of a different platform primitive, and each is meant to be copied and
 edited rather than used verbatim.
 
@@ -78,7 +78,7 @@ it registers the web, RAG, scratchpad, memory, file, and shell tools that these
 skills consume. A skill loaded into a narrower agent still works, but any tool
 it names that the agent lacks is logged as unavailable.
 
-## The ten skills
+## The skills
 
 ### research-report
 
@@ -208,6 +208,21 @@ function, declared in `metadata.gaia.tools` and registered as
 - **Configure** — a feed URL. Handles both RSS 2.0 and Atom.
 - **Note** — it fetches through GAIA's `WebClient`, so private and loopback
   addresses are refused.
+
+### image-gen
+
+Turns "draw me a red bicycle" into a prompt worth generating, runs it through
+local Stable Diffusion, and iterates on the previous image instead of starting
+over. Written around the fact that generation is slow enough that you only get
+a couple of attempts.
+
+- **Demonstrates** — a local non-text model in a skill, and iterating from
+  session history rather than regenerating from scratch.
+- **Consumes** — `generate_image`, `list_sd_models`, `get_generation_history`.
+- **Configure** — a house style clause, if you always want the same look.
+- **Note** — these tools are only registered on the flagship `gaia` agent, which
+  turns `enable_sd_tools` on. Generating evicts the chat model to make room for
+  the SD model, so the next reply reloads it; `ChatAgent` keeps the flag off.
 
 ## Fork one
 

@@ -181,8 +181,19 @@ def lemonade_available():
     Returns:
         bool: True if Lemonade server is available and responding to health checks
     """
+    # Authenticated servers 401 an unauthenticated probe, which reads as "not
+    # running" and silently skips every integration test that asks for one.
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     try:
-        response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
+        response = requests.get(
+            "http://localhost:13305/api/v1/health",
+            timeout=5,
+            headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        )
         return response.status_code == 200
     except (requests.RequestException, requests.ConnectionError):
         return False

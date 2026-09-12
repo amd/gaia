@@ -42,6 +42,11 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `memory_clear` | Clear memory rows |
 | `open_session_in_browser` | Open a session in the default browser |
 
+`get_messages` retrieves every page up to the message count reported at the
+start of the call. Messages added during retrieval are available on the next
+call. A failed or prematurely empty page returns an explicit error rather than
+a partial transcript. Existing content and tool-result excerpt limits still apply.
+
 <Note>
   The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
   `memory_recall`, `memory_get`, `memory_get_by_entity`, `memory_get_conversation_turns`)
@@ -105,14 +110,14 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 The MCP server also supports **Streamable HTTP** transport for clients that connect over HTTP instead of stdio:
 
 ```bash
-# Start as an HTTP MCP server (default port 8765)
+# Start as an HTTP MCP server (default port 8766)
 uv run python -m gaia.mcp.servers.agent_ui_mcp
 
 # Custom port
 uv run python -m gaia.mcp.servers.agent_ui_mcp --port 9000
 ```
 
-Connect your MCP client to `http://localhost:8765/mcp`.
+Connect your MCP client to `http://localhost:8766/mcp`.
 
 ---
 
@@ -187,7 +192,7 @@ The MCP server is a thin wrapper around the Agent UI REST API. When you call `se
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stdio` | off | Use stdio transport (for Claude Code) |
-| `--port` | `8765` | HTTP MCP server port |
+| `--port` | `8766` | HTTP MCP server port |
 | `--host` | `localhost` | HTTP MCP server host |
 | `--backend` | `http://localhost:4200` | Agent UI backend URL |
 

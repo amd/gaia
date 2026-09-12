@@ -364,7 +364,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -382,7 +382,7 @@ gaia uninstall --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
 gaia uninstall --purge
 ```
 
@@ -396,7 +396,8 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
+`--purge` permanently deletes your chat history, uploaded documents, configuration,
+and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
 <Note>
@@ -1022,9 +1023,10 @@ gaia telegram stop
 | `start` | `--token` (required) | – | Telegram bot token. |
 | `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
+| `start` | `--health-port` | 8768 | Health server port (background mode). |
 | `stop` | `--force` | false | Force stop if graceful shutdown fails. |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
-| `status` | `--health-port` | 8765 | Health server port. |
+| `status` | `--health-port` | 8768 | Health server port. |
 
 [→ Telegram Adapter Guide](/guides/telegram-adapter)
 
@@ -1081,8 +1083,11 @@ curl http://localhost:8080/health
     gaia api start --debug
     ```
 
-    Custom host/port:
+    Custom host/port. Binding beyond loopback is refused unless
+    `GAIA_API_KEY` is set, since the agent loop would otherwise be open to the
+    network ([Authentication](/sdk/infrastructure/api-server#authentication)):
     ```bash
+    export GAIA_API_KEY=$(openssl rand -hex 32)
     gaia api start --host 0.0.0.0 --port 8888
     ```
 
@@ -1249,6 +1254,15 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--log-file` | stdout | Write logs to this path (useful with `--background`) |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+##### Browser origins
+
+A web page can reach `http://localhost:8765` from the user's own browser, so
+the bridge refuses any request whose `Origin` is not loopback (`localhost`,
+`127.0.0.1`, `[::1]`) with **403**, and never answers
+`Access-Control-Allow-Origin: *`. Clients that send no `Origin` — curl, MCP
+clients, n8n — are unaffected. To allow a browser app on another origin, list
+it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
 ##### Authentication
 
@@ -1552,6 +1566,7 @@ serving everything else.
 gaia lemonade embedded start      # download if needed, then run
 gaia lemonade embedded status
 gaia lemonade embedded stop
+gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
 Both the port and the API key change on every start, and requests without the key
@@ -1583,6 +1598,7 @@ file to point them at it. Automatic preference is coming with the startup wiring
 | `start` | Start the private instance, downloading the artifact if missing |
 | `stop` | Stop the private instance |
 | `status` | Show installed version, running port, and installed backends |
+| `uninstall` | Remove the private runtime and downloaded backends |
 | `install` | Download and unpack the artifact without starting it |
 | `install-backend SPEC` | Download an inference backend, e.g. `llamacpp:vulkan` |
 
@@ -1639,6 +1655,8 @@ are picked up immediately.
 <Note>
 `cache/` is deliberately shared across versions. Backends run from 141 MB to
 4.3 GB, so a Lemonade version bump re-downloads the 5 MB server, not the backends.
+`gaia uninstall --purge` and `gaia lemonade embedded uninstall` remove this
+directory, including those downloaded backends.
 </Note>
 
 After a Lemonade version bump, stop the old instance before starting the new one —
@@ -2526,23 +2544,19 @@ gaia test --test-type TYPE [OPTIONS]
 
   <Tab title="ASR Tests">
     **Test Types:**
-    - `asr-file-transcription` - Test ASR file transcription
     - `asr-microphone` - Test ASR microphone input
     - `asr-list-audio-devices` - List audio input devices
 
     **Options:**
-    - `--input-audio-file` - Input audio file path
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
     - `--whisper-model-size` - Whisper model size (default: base)
 
-    **Examples:**
+    <Note>
+      These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
+    </Note>
 
-    Test file transcription:
-    ```bash
-    gaia test --test-type asr-file-transcription \
-      --input-audio-file ./data/audio/test.m4a
-    ```
+    **Examples:**
 
     Test microphone (30 seconds):
     ```bash
@@ -2825,11 +2839,16 @@ ctrl+c.
 | Key | Action |
 |-----|--------|
 | `f` | Apply the focused row's fix — shown only when that row has one |
+| `p` | Choose Local, Fireworks AI, or AMD LLM Gateway (flagship setup) |
 | `r` | Re-check everything |
 | `d` | Toggle the raw answer behind the focused row |
 | `↑` / `↓` (or `k` / `j`) | Move between rows |
 | `enter` | Continue anyway — offered only when nothing is outright broken |
 | `esc`, `ctrl+c` | Quit. There is no screen behind the gate to go back to |
+
+In chat, `/provider` opens the same provider panel with masked key entry and a
+searchable model list. See [AI providers](/guides/ai-providers) for credentials,
+Gemma 4 31B, and gateway settings.
 
 #### Waiting on a consequential readiness problem
 
@@ -2874,7 +2893,7 @@ token.
 ```bash
 gaia tui --control                 # auto-assign a port
 gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --debug         # log every injected key, state change, and wait
+gaia tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
@@ -2887,7 +2906,7 @@ gaia tui --control --debug         # log every injected key, state change, and w
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading
@@ -2938,6 +2957,74 @@ does.
 
 Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
+
+---
+
+### TUI Event Trace
+
+`--trace` writes down what the agent actually did, so a wrong answer can be
+diagnosed from a file instead of from a screenshot. Every event the TUI receives
+is appended to a JSONL file — one JSON object per line, in arrival order, with
+tool calls carrying **their arguments** and tool results carrying **their
+payloads**.
+
+```bash
+gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia tui --trace=run.jsonl             # a path you choose
+gaia tui --trace --dev                 # record to a file AND show it on screen
+```
+
+The path is printed on startup (`trace → …`). An unwritable path is a startup
+error, not a warning: a trace that is silently not being written looks exactly
+like an agent that did nothing.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--trace` | string | off | Record every agent event to a JSONL file. Bare `--trace` picks `~/.gaia/traces/<timestamp>-<agent>.jsonl`. |
+
+<Note>
+  The path must be **attached** — `--trace=run.jsonl`, not `--trace run.jsonl`.
+  A spaced value is read as a command name (the flag is legal with no value, so
+  it never consumes the next argument); the TUI says so and names the working
+  form.
+</Note>
+
+Each line wraps the event with the two things the payload itself does not carry
+— when it arrived, and where it sits in the run:
+
+```json
+{"at":"2026-09-08T18:39:32.455Z","seq":188,"event":{"type":"tool_call","tool":"find_files","args":{"query":"*.go","scope":"smart"}}}
+{"at":"2026-09-08T18:39:32.547Z","seq":189,"event":{"type":"tool_result","tool":"find_files","data":{"success":true,"summary":"Found 25 result(s)…","summary_truncated":true}}}
+```
+
+A frame the TUI could not parse is still recorded — that is the frame a trace is
+most wanted for. It carries `unparsed` (the raw text) instead of `event`, or
+`unparsed_b64` when the bytes are not valid UTF-8, since encoding those as a
+JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
+A reader must check all three keys. Events are flushed one at a time, so a run
+that crashes mid-turn still leaves everything it received.
+
+`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
+screen, `--trace` chooses what is written to disk. Use both together to watch a
+run and keep it.
+
+<Note>
+  This records the agent's externally visible behaviour — tool calls, arguments,
+  results, errors, and timings. It does **not** capture prompt size or token
+  accounting, which exist only in the agent's own per-turn recorder
+  (`GAIA_TURN_LOG`).
+</Note>
+
+<Warning>
+  A trace contains verbatim tool results — file contents, shell output, email,
+  whatever the agent read on your behalf. The file is written `0600` under a
+  `0700` directory, but attaching one to a bug report shares all of it. Read it
+  before you send it.
+</Warning>
+
+A launch that fails before the agent says anything (a refused port, an unmet
+precondition) removes its own empty trace rather than leaving a 0-byte file
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
 
 ---
 

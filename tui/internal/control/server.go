@@ -52,8 +52,8 @@ type Sender interface {
 type Options struct {
 	// Port to bind. 0 auto-assigns. 4001 is rejected — it is reserved.
 	Port int
-	// Debug mirrors the TUI's --debug flag: every injected key, every state
-	// transition, and every wait resolution is logged to stderr.
+	// Debug records input counts (never contents), state transitions, and waits
+	// to the TUI diagnostic file.
 	Debug bool
 	// Version is reported by /status and written to the discovery file.
 	Version string
@@ -548,7 +548,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	if !s.injectable(w) {
 		return
 	}
-	s.debugf("inject: keys %v (delay %dms)", req.Keys, req.DelayMS)
+	s.debugf("inject: keys (%d inputs; content omitted; delay %dms)", len(req.Keys), req.DelayMS)
 	seq, settled := s.send(msgs, time.Duration(req.DelayMS)*time.Millisecond)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sent":    len(msgs),
@@ -589,7 +589,7 @@ func (s *Server) handleText(w http.ResponseWriter, r *http.Request) {
 	if !s.injectable(w) {
 		return
 	}
-	s.debugf("inject: text %q (%d runes)", req.Text, len(keys))
+	s.debugf("inject: text (%d runes; content omitted)", len(keys))
 	seq, settled := s.send(msgs, time.Duration(req.DelayMS)*time.Millisecond)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sent_runes": len(keys),

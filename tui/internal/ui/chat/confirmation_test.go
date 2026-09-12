@@ -292,9 +292,9 @@ func TestTerminalEventDoesNotDoubleRecordTheOutcome(t *testing.T) {
 	}
 }
 
-// The 30s client-side timeout resolves to deny and clears the modal — this
+// The client-side timeout resolves to deny and clears the modal — this
 // exercises the message ChatModel.Update actually receives from
-// components.StartConfirmationTimeout, not just the component in isolation.
+// ConfirmationModel.TimeoutCmd, not just the component in isolation.
 func TestConfirmationTimeoutDeniesAndClearsModal(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -317,6 +317,39 @@ func TestConfirmationTimeoutDeniesAndClearsModal(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	if !strings.Contains(last.Content, "timeout") {
 		t.Errorf("the timeout warning was not recorded: %q", last.Content)
+	}
+}
+
+// The transcript line is the copy that SURVIVES: resolving clears the modal, so
+// a frame later the only thing on screen saying why the call died is this.
+// It named 30s while a live prompt waited ten minutes, because it spelled the
+// duration by hand instead of reading the clock the prompt actually ran.
+func TestTheRecordedTimeoutNamesTheClockThatActuallyRan(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("a live prompt must still be bounded")
+	}
+	msg := cmd().(components.ConfirmationDecidedMsg)
+	if msg.Timeout != components.DeliverableConfirmationTimeout {
+		t.Errorf("decision carried %v, want the live clock %v",
+			msg.Timeout, components.DeliverableConfirmationTimeout)
+	}
+
+	updated2, _ := m.Update(msg)
+	m = updated2.(ChatModel)
+	last := m.messages[len(m.messages)-1].Content
+	want := components.HumanTimeout(components.DeliverableConfirmationTimeout)
+	if !strings.Contains(last, want) {
+		t.Errorf("the record does not name the wait the user actually had: %q, want %q in it",
+			last, want)
+	}
+	if strings.Contains(last, "30s") {
+		t.Errorf("the record still names the short clock: %q", last)
 	}
 }
 

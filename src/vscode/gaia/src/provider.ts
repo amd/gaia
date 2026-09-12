@@ -20,7 +20,6 @@ import type { GaiaModel, GaiaModelsResponse } from "./types";
 const DEFAULT_BASE_URL = "http://localhost:8080";
 const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
 const DEFAULT_CONTEXT_LENGTH = 128000;
-const HARDCODED_API_KEY = "gaia";
 
 /**
  * VS Code Chat provider backed by GAIA local LLM server.
@@ -227,7 +226,7 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			const response = await fetch(`${baseUrl}/v1/models`, {
 				method: "GET",
 				headers: {
-					Authorization: `Bearer ${HARDCODED_API_KEY}`,
+					Authorization: `Bearer ${(await this.secrets.get("gaia.apiKey")) || "gaia"}`,
 					"User-Agent": this.userAgent,
 				},
 			});
@@ -385,7 +384,7 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			const response = await fetch(`${baseUrl}/v1/chat/completions`, {
                 method: "POST",
                 headers: {
-                    Authorization: `Bearer ${HARDCODED_API_KEY}`,
+                    Authorization: `Bearer ${(await this.secrets.get("gaia.apiKey")) || "gaia"}`,
                     "Content-Type": "application/json",
 					"User-Agent": this.userAgent,
                 },
@@ -475,9 +474,15 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                     if (data === "[DONE]") {
                         // Do not throw on [DONE]; any incomplete/empty buffers are ignored.
                         await this.flushToolCallBuffers(progress, /*throwOnInvalid*/ false);
-                        // Flush any in-progress text-embedded tool call (silent if incomplete)
-                        await this.flushActiveTextToolCall(progress);
-                        continue;
+                        await this.finishStreamingText(progress);
+                        try {
+                            await reader.cancel();
+                        } catch (error) {
+                            // Completion already succeeded; report cleanup failure
+                            // without replacing it with a later transport error.
+                            console.error("[GAIA Model Provider] Failed to close completed stream", error);
+                        }
+                        return;
                     }
 
 					try {
@@ -487,6 +492,9 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                         // Silently ignore malformed SSE lines temporarily
                     }
                 }
+            }
+            if (!token.isCancellationRequested) {
+                await this.finishStreamingText(progress);
             }
         } finally {
             reader.releaseLock();
@@ -501,6 +509,21 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			this._emittedTextToolCallIds.clear();
 			this._controlTokenBuffer = "";
         }
+    }
+
+    /** Flush visible suffixes on normal completion, never on cancellation/error. */
+    private async finishStreamingText(
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    ): Promise<void> {
+        // Check before flushing the active call: its pending END prefix belongs
+        // to the tool protocol even if flushing clears the active-call state.
+        if (!this._textToolActive) {
+            const text = this._controlTokenBuffer + this._textToolParserBuffer;
+            this._controlTokenBuffer = "";
+            this._textToolParserBuffer = "";
+            if (text) { progress.report(new vscode.LanguageModelTextPart(text)); }
+        }
+        await this.flushActiveTextToolCall(progress);
     }
 
 	/**
@@ -701,6 +724,12 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
         const BEGIN = "<|tool_call_begin|>";
         const ARG_BEGIN = "<|tool_call_argument_begin|>";
         const END = "<|tool_call_end|>";
+        const partialSuffixLength = (text: string, token: string): number => {
+            for (let k = Math.min(token.length - 1, text.length); k > 0; k--) {
+                if (text.endsWith(token.slice(0, k))) { return k; }
+            }
+            return 0;
+        };
 
         let data = this._textToolParserBuffer + input;
         let emittedText = false;
@@ -712,17 +741,11 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                 const b = data.indexOf(BEGIN);
                 if (b === -1) {
                     // No tool-call start: emit visible portion, but keep any partial BEGIN prefix as buffer
-                    const longestPartialPrefix = ((): number => {
-                        for (let k = Math.min(BEGIN.length - 1, data.length - 1); k > 0; k--) {
-                            if (data.endsWith(BEGIN.slice(0, k))) { return k; }
-                        }
-                        return 0;
-                    })();
+                    const longestPartialPrefix = partialSuffixLength(data, BEGIN);
                     if (longestPartialPrefix > 0) {
                         const visible = data.slice(0, data.length - longestPartialPrefix);
                         if (visible) { visibleOut += this.stripControlTokensWithBuffering(visible); }
-                        this._textToolParserBuffer = data.slice(data.length - longestPartialPrefix);
-                        data = "";
+                        data = data.slice(data.length - longestPartialPrefix);
                         break;
                     } else {
                         // All visible, clean other control tokens with buffering
@@ -748,8 +771,7 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                 else if (e !== -1) { delimIdx = e; delimKind = "end"; }
                 else {
                     // Incomplete header; keep for next chunk (re-add BEGIN so we don't lose it)
-                    this._textToolParserBuffer = BEGIN + data;
-                    data = "";
+                    data = BEGIN + data;
                     break;
                 }
 
@@ -777,8 +799,10 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
             // We are inside arguments, collect until END and emit as soon as JSON becomes valid
             const e2 = data.indexOf(END);
             if (e2 === -1) {
-                // No end marker yet, accumulate and check for early valid JSON
-                this._textToolActive.argBuffer += data;
+                // Keep a partial terminator out of arguments until the next chunk.
+                const partialEnd = partialSuffixLength(data, END);
+                this._textToolActive.argBuffer += data.slice(0, data.length - partialEnd);
+                data = data.slice(data.length - partialEnd);
                 // Early emit when JSON becomes valid and we haven't emitted yet
                 if (!this._textToolActive.emitted) {
                     const did = this.emitTextToolCallIfValid(progress, this._textToolActive, this._textToolActive.argBuffer);
@@ -787,7 +811,6 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
                         emittedAny = true;
                     }
                 }
-                data = "";
                 break;
             } else {
                 this._textToolActive.argBuffer += data.slice(0, e2);

@@ -207,7 +207,7 @@ class TestValidatePath:
     def test_validate_path_blocked_by_validator(self, tmp_path):
         """PathValidator can block access to a path."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         with pytest.raises(ValueError, match="Access denied"):
@@ -216,7 +216,7 @@ class TestValidatePath:
     def test_validate_path_allowed_by_validator(self, tmp_path):
         """PathValidator allows the path through."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = True
+        mock_validator.validate_read.return_value = (True, "")
         self.agent._path_validator = mock_validator
 
         result = self.agent._validate_path(str(tmp_path))
@@ -373,7 +373,7 @@ class TestBrowseDirectory:
     def test_browse_path_validation_denied(self, tmp_path):
         """Path validator denial is returned as error string."""
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         result = self.browse(path=str(tmp_path))
@@ -686,6 +686,23 @@ class TestFindFiles:
         assert "index" in result.lower()
         mock_index.query_files.assert_called_once()
 
+    def test_find_missing_scope_errors_before_index(self, tmp_path):
+        """A missing caller scope errors even when the index could answer."""
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="indexed", scope=str(tmp_path / "does_not_exist"))
+        assert "does not exist" in result
+        assert "indexed.txt" not in result
+        mock_index.query_files.assert_not_called()
+
     def test_find_index_fallback(self, tmp_path):
         """Falls back to filesystem search when index query fails."""
         _populate_directory(tmp_path)
@@ -925,7 +942,7 @@ class TestReadFile:
         f = tmp_path / "secret.txt"
         f.write_text("classified")
         mock_validator = MagicMock()
-        mock_validator.is_path_allowed.return_value = False
+        mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         result = self.read(file_path=str(f))
@@ -1539,12 +1556,27 @@ class TestEdgeCases:
         assert str(tmp_path.resolve()) in result
 
     def test_find_files_with_invalid_scope(self, tmp_path):
-        """find_files with a nonexistent scope path returns no results."""
+        """find_files with a nonexistent scope path returns an error."""
+        missing = tmp_path / "does_not_exist"
         result = self.tools["find_files"](
             query="anything",
-            scope=str(tmp_path / "does_not_exist"),
+            scope=str(missing),
         )
-        assert "No files found" in result
+        assert "does not exist" in result
+        assert "is not a directory" not in result
+        assert "No files found" not in result
+
+    def test_find_files_with_file_as_scope(self, tmp_path):
+        """find_files with a file as scope says it is not a directory."""
+        report = tmp_path / "report.pdf"
+        report.write_text("data")
+        result = self.tools["find_files"](
+            query="anything",
+            scope=str(report),
+        )
+        assert "is not a directory" in result
+        assert "does not exist" not in result
+        assert "No files found" not in result
 
     def test_read_file_with_encoding_fallback(self, tmp_path):
         """read_file falls back to utf-8 with error replacement on decode failure."""

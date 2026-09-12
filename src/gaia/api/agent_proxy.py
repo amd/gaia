@@ -30,27 +30,25 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import secrets
-from typing import Optional
 
 # Module-level import (matches gaia.daemon.relay): the endpoint annotation
 # ``request: Request`` below must resolve from module globals under PEP 563.
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.convertors import Convertor, register_url_convertor
 
+from gaia.api import local_http
 from gaia.daemon.errors import DaemonError
 from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-#: Environment variable holding the API key that gates the agent query surface.
-API_KEY_ENV = "GAIA_API_KEY"
-#: Auth scheme for the API key (mirrors the daemon's Bearer contract).
-AUTH_SCHEME = "Bearer"
+#: Re-exported from the shared local-HTTP policy so callers of this module
+#: keep working and there is still one definition.
+API_KEY_ENV = local_http.API_KEY_ENV
+AUTH_SCHEME = local_http.AUTH_SCHEME
 
 #: Connect timeout — a dead daemon should fail fast on TCP connect.
 CONNECT_TIMEOUT = 10.0
@@ -185,55 +183,14 @@ def _synthetic_error_frame(detail: str) -> bytes:
 def build_require_api_key():
     """FastAPI dependency enforcing the ``GAIA_API_KEY`` on the agent surface.
 
-    No silent fallback: an unset key disables the surface with a loud 503 naming
-    the remedy (rather than allowing unauthenticated access to the agentic loop);
-    a missing/malformed/invalid key is a 401 naming what to send.
+    ``required=True``: an unset key disables the surface with a loud 503 naming
+    the remedy, rather than allowing unauthenticated access to the agentic
+    loop. The check itself lives in :mod:`gaia.api.local_http`, shared with
+    every other GAIA local HTTP server.
     """
-
-    def require_api_key(authorization: Optional[str] = Header(default=None)) -> None:
-        expected = os.environ.get(API_KEY_ENV)
-        if not expected:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The agent query surface (POST /v1/<agent>/query) is disabled: "
-                    f"no API key is configured. Set {API_KEY_ENV} in the API "
-                    "server's environment (e.g. "
-                    f"`export {API_KEY_ENV}=$(openssl rand -hex 32)`), restart "
-                    "`gaia api`, and send it as "
-                    f"'Authorization: {AUTH_SCHEME} <key>'."
-                ),
-            )
-        if not authorization:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    f"Missing API key. Send 'Authorization: {AUTH_SCHEME} <key>' "
-                    f"matching {API_KEY_ENV} on the API server."
-                ),
-                headers={"WWW-Authenticate": AUTH_SCHEME},
-            )
-        scheme, _, credential = authorization.partition(" ")
-        if scheme.lower() != AUTH_SCHEME.lower() or not credential:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    f"Malformed Authorization header. Expected "
-                    f"'{AUTH_SCHEME} <key>'."
-                ),
-                headers={"WWW-Authenticate": AUTH_SCHEME},
-            )
-        if not secrets.compare_digest(credential, expected):
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    f"Invalid API key. It must match {API_KEY_ENV} on the API "
-                    "server."
-                ),
-                headers={"WWW-Authenticate": AUTH_SCHEME},
-            )
-
-    return require_api_key
+    return local_http.build_require_api_key(
+        "The agent query surface (POST /v1/<agent>/query)", required=True
+    )
 
 
 async def _acquire_daemon():

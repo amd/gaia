@@ -22,7 +22,7 @@ import uuid
 from typing import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -30,6 +30,7 @@ from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
+from .local_http import build_caller_guard, cors_config
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -119,45 +120,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Browser origins allowed by default: localhost/127.0.0.1 on any port.
-_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Cross-origin and caller-auth policy live in one place for every GAIA local
+# HTTP server -- see gaia/api/local_http.py.
+app.add_middleware(CORSMiddleware, **cors_config())
 
-
-def _cors_config() -> dict:
-    """Build the CORS policy: localhost-only by default.
-
-    ``GAIA_API_CORS_ORIGINS`` (comma-separated) adds extra allowed origins,
-    e.g. ``https://myapp.example.com``. A literal ``*`` opts into open CORS
-    for all origins, which the Fetch spec forbids combining with credentials
-    — so the wildcard also disables credentialed requests. Wildcard origins
-    WITH credentials are never configured: Starlette would reflect any
-    request Origin, letting any website the user visits call this local,
-    unauthenticated API with credentials.
-    """
-    raw = os.environ.get("GAIA_API_CORS_ORIGINS", "")
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    if "*" in origins:
-        logger.warning(
-            "GAIA_API_CORS_ORIGINS='*': allowing all origins WITHOUT "
-            "credentials. To allow credentialed cross-origin calls, list "
-            "explicit origins instead of '*'."
-        )
-        return {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
-        }
-    return {
-        "allow_origins": origins,
-        "allow_origin_regex": _LOCAL_ORIGIN_REGEX,
-        "allow_credentials": True,
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-    }
-
-
-app.add_middleware(CORSMiddleware, **_cors_config())
 
 # The email agent's REST surface (POST /v1/email/*) is no longer mounted
 # in-process (#2176). It was the last in-process agent mount after the v2
@@ -213,7 +179,14 @@ async def log_raw_requests(request: Request, call_next):
     return response
 
 
-@app.post("/v1/chat/completions")
+#: Foreign browser origins are refused; the API key is enforced when set and
+#: warned about once when not (mandatory would break every consumer at once).
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
+)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
