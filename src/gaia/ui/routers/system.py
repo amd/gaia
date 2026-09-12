@@ -450,7 +450,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     try:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
-        hint = describe_start_hint()
+        # Resolve WITH the required ctx so the rendered command carries it;
+        # callers must print it verbatim, never append their own flag.
+        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
         status.start_instruction = hint.instruction
         status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001

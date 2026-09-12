@@ -33,10 +33,10 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 | RAM | 8 GB minimum |
 | Platforms | Windows x64, Linux x64, macOS Apple Silicon |
 
-Start Lemonade before launching the agent:
+Install Lemonade, download the model, and start the server:
 
 ```bash
-lemonade-server serve
+gaia init
 ```
 
 The agent runs local inference only: the sidecar's `/query` endpoint rejects any request naming a provider other than `lemonade` with **HTTP 400**.
@@ -210,7 +210,7 @@ If neither token variable is set, the sidecar starts with the token check off an
 
 ### "Local Lemonade Server is not reachable"
 
-The model server isn't running. Start it with `lemonade-server serve`, or point the agent elsewhere with `LEMONADE_BASE_URL`. `GET /v1/gaia/init` tells you which of the three preconditions failed (reachable / version / model present) rather than making you guess.
+The model server isn't running. Run `gaia init` to install and start it, or point the agent at one you already have with `LEMONADE_BASE_URL`. `GET /v1/gaia/init` tells you which of the three preconditions failed (reachable / version / model present) rather than making you guess.
 
 ### "The model … is not downloaded"
 
