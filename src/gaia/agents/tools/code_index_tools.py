@@ -11,7 +11,7 @@ Follows the same pattern as ``RAGToolsMixin`` and ``FileIOToolsMixin``:
 the mixin exposes a ``register_code_index_tools()`` method that the
 consuming agent calls from its ``_register_tools`` hook.
 
-State (``_repo_path``, ``_code_index_ceiling``, ``_code_index_config``,
+State (``_repo_path``, ``_code_index_ceilings``, ``_code_index_config``,
 ``_code_index_sdk``) is
 set up lazily on first tool invocation if the consumer did not
 initialise it explicitly. This keeps the mixin composable without
@@ -21,7 +21,7 @@ requiring cooperative ``__init__`` chaining.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
@@ -53,6 +53,9 @@ class CodeIndexToolsMixin:
     - Call ``self.register_code_index_tools()`` from ``_register_tools``.
     - Optionally set ``self._repo_path`` (absolute path) before first use.
       If unset, defaults to the current working directory.
+    - Optionally pass ``ceiling_paths`` to ``_init_code_index_state`` — the
+      roots a requested ``repo_path`` must sit under. Defaults to
+      ``_repo_path``, which locks the session to one repository.
     - Optionally set ``self._code_index_config`` to a pre-built
       ``CodeIndexConfig``; otherwise one is constructed from
       ``_repo_path``.
@@ -62,23 +65,32 @@ class CodeIndexToolsMixin:
         self,
         repo_path: str = ".",
         code_index_config: Optional[Any] = None,
+        ceiling_paths: Optional[Sequence[str]] = None,
     ) -> None:
-        """Initialise mixin state. Safe to call multiple times (idempotent).
+        """Initialise mixin state. Safe to call multiple times.
+
+        Not idempotent in one respect: a later call replaces the sandbox
+        ceilings as well as the default repository.
 
         Args:
             repo_path: Repository root (absolute or relative, resolved here).
             code_index_config: Optional pre-built ``CodeIndexConfig``.
+            ceiling_paths: Roots a requested ``repo_path`` must sit under —
+                the consumer's declared file scope. Defaults to ``repo_path``.
         """
         # expanduser everywhere a root is stored, or a '~'-style
         # allowed_paths config produces a "<cwd>/~" root that rejects the
         # very paths it was meant to allow.
         self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
-        # The sandbox ceiling: what a requested repo_path must sit under. Set
-        # once and never moved. ``_repo_path`` tracks the repository currently
-        # indexed and does move — conflating the two meant the first index
-        # narrowed the ceiling to that repo, so a second repository in the same
-        # session could never be indexed (#3544).
-        self._code_index_ceiling = self._repo_path
+        # The sandbox ceilings: what a requested repo_path must sit under.
+        # ``_repo_path`` tracks the repository currently indexed and does move —
+        # conflating the two meant the first index narrowed the ceiling to that
+        # repo, so a second repository could never be indexed (#3544).
+        self._code_index_ceilings = (
+            tuple(os.path.abspath(os.path.expanduser(p)) for p in ceiling_paths)
+            if ceiling_paths
+            else (self._repo_path,)
+        )
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 
@@ -86,8 +98,8 @@ class CodeIndexToolsMixin:
         """Populate default state on first access if consumer skipped init."""
         if not hasattr(self, "_repo_path"):
             self._repo_path = os.path.abspath(".")
-        if not hasattr(self, "_code_index_ceiling"):
-            self._code_index_ceiling = self._repo_path
+        if not hasattr(self, "_code_index_ceilings"):
+            self._code_index_ceilings = (self._repo_path,)
         if not hasattr(self, "_code_index_config"):
             self._code_index_config = None
         if not hasattr(self, "_code_index_sdk"):
@@ -147,16 +159,21 @@ class CodeIndexToolsMixin:
                 # silently re-root the whole index/search sandbox onto the
                 # symlink's target.
                 real_resolved = str(Path(resolved).resolve())
-                # Against the CEILING, not the repo indexed last: the check may
-                # only ever narrow, so validating against a moving root let the
-                # first index lock the session to one repository.
-                real_ceiling = str(Path(self._code_index_ceiling).resolve())
-                if (
-                    not real_resolved.startswith(real_ceiling + os.sep)
-                    and real_resolved != real_ceiling
+                # Against the CEILINGS, not the repo indexed last: the check
+                # may only ever narrow, so validating against a moving root let
+                # the first index lock the session to one repository.
+                real_ceilings = [
+                    str(Path(c).resolve()) for c in self._code_index_ceilings
+                ]
+                if not any(
+                    real_resolved == c or real_resolved.startswith(c + os.sep)
+                    for c in real_ceilings
                 ):
                     return json.dumps(
-                        {"error": f"repo_path must be within {real_ceiling}"}
+                        {
+                            "error": "repo_path must be within "
+                            + " or ".join(real_ceilings)
+                        }
                     )
                 self._repo_path = resolved
                 self._code_index_config = None

@@ -302,7 +302,10 @@ class GaiaAgent(
         # Through the mixin, so both read the one cached resolution and can
         # never end up describing two different trees.
         index_root = self._project_map_root() or allowed[0]
-        self._init_code_index_state(repo_path=index_root)
+        # The project root is where code search STARTS; allowed_paths is how far
+        # it may reach. Passing one value for both locked a session that began
+        # inside a repo to that repo (#3544).
+        self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
         super()._register_tools()
 

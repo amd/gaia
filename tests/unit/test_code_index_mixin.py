@@ -60,14 +60,14 @@ class _Harness(CodeIndexToolsMixin):
     mixin's own behaviour.
     """
 
-    def __init__(self, repo_path="."):
-        self._init_code_index_state(repo_path=repo_path)
+    def __init__(self, repo_path=".", ceiling_paths=None):
+        self._init_code_index_state(repo_path=repo_path, ceiling_paths=ceiling_paths)
         self.register_code_index_tools()
 
 
-def make_harness(tmp_path=None):
+def make_harness(tmp_path=None, ceiling_paths=None):
     repo = str(tmp_path) if tmp_path else "."
-    return _Harness(repo_path=repo)
+    return _Harness(repo_path=repo, ceiling_paths=ceiling_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +318,7 @@ class TestASecondRepositoryCanStillBeIndexed:
         with patch.object(h, "_get_code_index_sdk", return_value=None):
             fn(repo_path=str(first))
 
-        assert h._code_index_ceiling == os.path.abspath(str(ceiling))
+        assert h._code_index_ceilings == (os.path.abspath(str(ceiling)),)
         assert h._repo_path == os.path.abspath(str(first))
 
     def test_the_guard_still_holds_after_indexing(self, tmp_path):
@@ -362,3 +362,50 @@ class TestASecondRepositoryCanStillBeIndexed:
             fn(repo_path=str(second))
 
         assert h._code_index_sdk is None
+
+
+class TestSeparateCeilings:
+    """The starting repository and the reachable scope are different values."""
+
+    def test_a_repo_under_a_second_allowed_root_is_accepted(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        side = tmp_path / "side"
+        side.mkdir()
+        other = side / "other-repo"
+        other.mkdir()
+        h = make_harness(work, ceiling_paths=[str(work), str(side)])
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            result = json.loads(fn(repo_path=str(other)))
+
+        assert result == {"error": "code_index SDK not initialised"}
+        assert h._repo_path == os.path.abspath(str(other))
+
+    def test_outside_every_ceiling_is_still_refused(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        side = tmp_path / "side"
+        side.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        h = make_harness(work, ceiling_paths=[str(work), str(side)])
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        result = json.loads(fn(repo_path=str(elsewhere)))
+
+        assert "must be within" in result["error"]
+        assert str(side.resolve()) in result["error"]
+
+    def test_the_lazy_default_ceiling_is_the_repo(self, tmp_path):
+        """Consumers that skip _init_code_index_state still get a sandbox."""
+
+        class _Bare(CodeIndexToolsMixin):
+            pass
+
+        bare = _Bare()
+        bare._repo_path = str(tmp_path)
+        bare._ensure_code_index_state()
+
+        assert bare._code_index_ceilings == (str(tmp_path),)
