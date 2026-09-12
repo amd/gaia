@@ -334,6 +334,15 @@ type ChatModel struct {
 	// auto-started because the first-boot check said not ready, or started on
 	// demand by /setup.
 	setupRunning bool
+	// slackSetup is the in-flight Slack setup, if any — which question the
+	// panel is on and what it has collected. Non-nil only between /slack setup
+	// and the flow finishing or being cancelled.
+	slackSetup *slackSetupState
+	// slackOffered records that the one-time Slack offer has already been shown
+	// this session, so a second launch-time probe cannot repeat it. The durable
+	// answer lives in `gaia slack decline`; this only stops a duplicate inside
+	// one run.
+	slackOffered bool
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -432,6 +441,14 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
+	}
+	if m.agentID == setupAgentID && m.initialQuery == "" {
+		// The one-time Slack offer. Gated on an empty initial query so a user
+		// who launched with a question gets their answer, not an ad; and run
+		// only for the flagship, which is the agent a Slack message drives.
+		// Whether it actually shows is `gaia slack status`'s decision, not
+		// ours -- this only asks.
+		cmds = append(cmds, querySlackCmd(true /* offer */))
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
@@ -616,6 +633,18 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case setupCheckResultMsg:
 		return m.handleSetupCheckResult(msg)
 
+	case slackStatusMsg:
+		return m.handleSlackStatus(msg)
+
+	case slackDeclinedMsg:
+		return m.handleSlackDeclined(msg)
+
+	case slackURLMsg:
+		return m.handleSlackURL(msg)
+
+	case slackConnectedMsg:
+		return m.handleSlackConnected(msg)
+
 	case setupStreamMsg:
 		if m.supersededSetup(msg.ch) {
 			return m, nil
@@ -736,6 +765,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A late answer for a question that is no longer up — dropping it is
 			// correct, but never silently: the agent moved on.
 			return m, nil
+		}
+		if isSlackSetupQuestion(msg.RequestID) {
+			// A local panel's question, not one the agent is parked on. Posting
+			// it to the agent would answer a question nobody asked — and for
+			// the token steps it would put a secret in the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
 		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
@@ -1337,6 +1374,21 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
 		return m.startSetupRun(false /* firstBoot */)
+
+	case "/slack":
+		return m.startSlackCheck()
+
+	case "/slack setup":
+		if m.slackSetup != nil {
+			return m.statusNote("Slack setup is already open — answer it, or press Esc."), nil
+		}
+		return m.startSlackSetup()
+
+	case "/slack skip":
+		return m, declineSlackCmd(false)
+
+	case "/slack never":
+		return m, declineSlackCmd(true)
 	}
 
 	return m.sendQuery(query)

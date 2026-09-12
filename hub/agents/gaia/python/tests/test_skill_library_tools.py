@@ -28,8 +28,8 @@ developer's own ``~/.gaia``.
 
 from __future__ import annotations
 
-import pathlib
 import base64
+import pathlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -871,8 +871,9 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia.llm.lemonade_client import truncation_budget
         from gaia_agent.skill_tools import _summarize
+
+        from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
             {
@@ -916,15 +917,15 @@ class TestLoadTellsTheModelWhereTheSkillLives:
         )
         directory = pathlib.Path(result["directory"])
         assert directory.is_dir()
-        assert (directory / "SKILL.md").is_file(), (
-            f"{directory} is not the folder the skill was actually loaded from"
-        )
+        assert (
+            directory / "SKILL.md"
+        ).is_file(), f"{directory} is not the folder the skill was actually loaded from"
 
     def test_it_says_what_the_directory_is_for(self, session):
         result = call(session, "load_skill", name="note-taker")
         hint = result.get("resolving_paths", "")
 
-        assert result["directory"] in hint, (
-            "the hint must name the directory it is talking about"
-        )
+        assert (
+            result["directory"] in hint
+        ), "the hint must name the directory it is talking about"
         assert "relative" in hint.lower()

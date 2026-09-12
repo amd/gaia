@@ -29,6 +29,7 @@ import json
 import threading
 import time
 import uuid
+from unittest import mock
 
 import pytest
 
@@ -54,10 +55,20 @@ class _ScriptedAgent:
         self.saw_cancelled = None
         self.raise_on_query = False
         self.block = None  # optional threading.Event to park the loop on
+        self.approved = None  # outcome of a gated_call, once answered
+
+    #: When set, the loop asks for approval of this (tool, args) before
+    #: answering — the real handler emits needs_confirmation and blocks the
+    #: agent thread, exactly as the base loop does for a gated tool.
+    gated_call = None
 
     def process_query(self, query, max_steps=None):
         if self.block is not None:
             self.block.wait(timeout=10)
+        if self.gated_call is not None:
+            tool, args = self.gated_call
+            self.approved = self.console.confirm_tool_execution(tool, args)
+            return {"answer": f"approved={self.approved}"}
         # Mirrors the base loop, which checks the flag at its first step
         # boundary — before any model call.
         self.saw_cancelled = bool(
@@ -71,6 +82,25 @@ class _ScriptedAgent:
 
     def close(self):
         self.closed += 1
+
+
+@pytest.fixture
+def switched(monkeypatch):
+    """Records every live model switch, in place of a real client swap.
+
+    ``_AgentSession.switch_model`` delegates to the stdio transport's real
+    machinery, which builds an LLM client and talks to Lemonade — neither of
+    which belongs in a route test.
+    """
+    calls: list = []
+
+    def fake_switch(self, target):
+        calls.append((target,))
+        self.model_id = target
+        return target
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", fake_switch)
+    return calls
 
 
 @pytest.fixture
@@ -272,8 +302,14 @@ def test_a_reused_run_id_is_fine_once_the_first_run_finished(built):
 # ---------------------------------------------------------------------------
 
 
-def test_switching_model_on_a_live_session_is_refused(built):
-    """It used to run the OLD model with no error and no warning."""
+def test_switching_model_on_a_live_session_switches_it(built, switched):
+    """It used to answer 409 and tell the caller to start a new session_id.
+
+    That was honest but lossy: a new session throws away the conversation and
+    every loaded skill, which is exactly what a retained session is for. The
+    stdio transport has always switched in place (``/model``), and the two
+    transports must not disagree about what switching a model costs.
+    """
     client, agents = built
 
     first = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -283,17 +319,50 @@ def test_switching_model_on_a_live_session_is_refused(built):
         "/v1/gaia/query", json=_body(session_id="s-1", model="model-b")
     )
 
-    assert second.status_code == 409, second.text
-    detail = second.json()["detail"]
-    assert "model-a" in detail and "model-b" in detail
-    assert "new session_id" in detail
-    # The refusal must not have built a second agent, nor stranded the session.
+    assert second.status_code == 200, second.text
+    assert switched == [("model-b",)], "the live switch must have been performed"
+    # The whole point: the SAME agent, so history and loaded skills survive.
     assert len(agents) == 1
 
 
-def test_the_refused_switch_leaves_the_session_usable(built):
+def test_a_switched_session_reports_its_new_model(built, switched):
+    """A later turn on the old id must not re-switch, or every turn pays for it."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
+
+    assert switched == [("model-b",)], "the second turn on model-b must be a no-op"
+
+
+def test_a_failed_switch_leaves_the_session_on_its_old_model(built, monkeypatch):
+    """All-or-nothing: a bad credential must not strand the conversation."""
+    client, _ = built
+
+    def explode(self, target):
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", explode)
+
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    failed = client.post(
+        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
+    )
+
+    assert failed.status_code == 409, failed.text
+    detail = failed.json()["detail"]
+    assert "ANTHROPIC_API_KEY" in detail, "the real reason must reach the caller"
+    assert "still running" in detail, "the caller must learn nothing was lost"
+
+
+def test_the_session_survives_a_failed_switch(built, monkeypatch):
     """A 409 must release the run lock, or the session 409s forever after."""
     client, _ = built
+
+    def explode(self, target):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(sr._AgentSession, "switch_model", explode)
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-b"))
 
@@ -433,3 +502,291 @@ def test_cancelling_a_live_run_reports_it_stopped(built, monkeypatch):
         worker.join(timeout=10)
 
     assert result["response"].status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Inference backend
+# ---------------------------------------------------------------------------
+#
+# The stdio transport has always taken --use-claude. Refusing it here is what
+# made moving the TUI onto the daemon a downgrade rather than a move
+# (docs/plans/daemon-convergence.mdx §3.2).
+
+
+def test_the_claude_provider_configures_the_backend_not_just_an_id(built):
+    """`model` names a CLAUDE model under this provider.
+
+    Threading it through as ``model_id`` would point the LOCAL client at an id
+    Lemonade cannot serve — a failure that surfaces much later and much less
+    clearly than the 400 this replaced.
+    """
+    client, agents = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(agents) == 1
+    built_with = agents[0].kwargs
+    assert built_with.get("use_claude") is True
+    assert built_with.get("claude_model") == "claude-opus-5"
+    assert "model_id" not in built_with, "a Claude id must not reach the local client"
+
+
+def test_the_local_provider_still_threads_a_model_id(built):
+    client, agents = built
+
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="Gemma-4-E4B-it-GGUF", provider="lemonade"),
+    )
+
+    built_with = agents[0].kwargs
+    assert built_with.get("model_id") == "Gemma-4-E4B-it-GGUF"
+    assert not built_with.get("use_claude")
+
+
+def test_omitting_the_provider_stays_local(built):
+    """The default must not change: this is the overwhelmingly common request."""
+    client, agents = built
+
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    assert agents[0].kwargs.get("model_id") == "model-a"
+    assert not agents[0].kwargs.get("use_claude")
+
+
+def test_an_unknown_provider_is_still_refused_loudly(built):
+    """Widening the set must not turn it into 'anything goes'."""
+    client, _ = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="gpt-4", provider="openai"),
+    )
+
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert "openai" in detail
+    assert "claude" in detail and "lemonade" in detail, "name what IS allowed"
+
+
+def test_a_brand_new_claude_session_is_not_immediately_switched(built, switched):
+    """A session built with exactly what was asked for must not then 'change'.
+
+    The two backends name their model in different kwargs — local passes
+    ``model_id``, Claude passes ``claude_model``. While the registry recorded
+    only the first, a Claude session reported no model at all, so the very
+    request that created it looked like a model change and tried to switch an
+    agent that had just been constructed correctly.
+    """
+    client, agents = built
+
+    response = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert switched == [], "construction already applied the model; nothing to switch"
+    assert len(agents) == 1
+
+
+def test_a_second_turn_on_the_same_claude_model_does_not_re_switch(built, switched):
+    client, _ = built
+    body = _body(session_id="s-1", model="claude-opus-5", provider="claude")
+    client.post("/v1/gaia/query", json=body)
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    assert switched == []
+
+
+# ---------------------------------------------------------------------------
+# Tool confirmations over HTTP
+# ---------------------------------------------------------------------------
+#
+# Before this the stream REFUSED a needs_confirmation and cancelled the run —
+# "this streaming surface cannot collect that yet" — so a gated tool could not
+# run over the daemon transport at all. These pin the seam that changed
+# (docs/plans/daemon-convergence.mdx §3.4).
+
+
+def test_a_decision_for_a_finished_run_is_refused_rather_than_dropped(built):
+    """Dropping it would leave the caller believing it approved something."""
+    client, _ = built
+    run_id = str(uuid.uuid4())
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", run_id=run_id))
+
+    response = client.post(
+        f"/v1/gaia/query/{run_id}/tool_decision",
+        json={"decision": "allow", "confirm_id": "c1"},
+    )
+
+    assert response.status_code == 404, response.text
+    assert "not delivered" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny", "always"])
+def test_every_decision_the_stdio_channel_accepts_is_accepted_here(decision):
+    """The two transports must not disagree about the vocabulary."""
+    from gaia_agent import stdio
+
+    assert decision in {
+        stdio.DECISION_ALLOW,
+        stdio.DECISION_DENY,
+        stdio.DECISION_ALWAYS,
+    }
+    assert decision in server_mod._TOOL_DECISIONS
+
+
+def test_an_unknown_decision_is_refused_not_guessed(built):
+    """Fail closed: an unreadable decision is not consent."""
+    client, _ = built
+    response = client.post(
+        f"/v1/gaia/query/{uuid.uuid4()}/tool_decision", json={"decision": "maybe"}
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_a_decision_for_an_unknown_run_is_a_404(built):
+    client, _ = built
+    response = client.post(
+        "/v1/gaia/query/11111111-1111-4111-8111-111111111111/tool_decision",
+        json={"decision": "allow"},
+    )
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Bypass
+# ---------------------------------------------------------------------------
+
+
+def test_bypass_applies_to_the_session_and_survives_the_turn(built):
+    """Bypass outliving a turn is the entire point of it."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+
+    response = client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"session_id": "s-1", "enabled": True}
+    assert sr.registry.get("s-1").permissions.bypass is True
+
+
+def test_bypass_can_be_turned_back_off(built):
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+    client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": False})
+
+    assert sr.registry.get("s-1").permissions.bypass is False
+
+
+def test_bypass_on_an_unknown_session_is_a_404_not_a_new_session(built):
+    """Building an agent as a side effect of a settings toggle would be a bug,
+    and a typo'd id would silently 'succeed' against it."""
+    client, agents = built
+
+    response = client.post(
+        "/v1/gaia/sessions/never-seen/bypass", json={"enabled": True}
+    )
+
+    assert response.status_code == 404, response.text
+    assert agents == [], "no agent may be built by a bypass toggle"
+
+
+def test_the_session_hands_each_turn_its_accumulated_permission_state(built):
+    """A fresh handler per turn means bypass and 'always' grants reset unless
+    the session re-applies them."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+
+    session = sr.registry.get("s-1")
+    handler = _RecordingHandler()
+    session.permissions.attach(handler)
+
+    assert handler.auto_approve_gated_tools is True
+
+
+class _RecordingHandler:
+    """Minimal stand-in for SSEOutputHandler's permission surface."""
+
+    def __init__(self):
+        self.auto_approve_gated_tools = False
+        self.confirm_timeout_seconds = 60.0
+        self._grants = set()
+
+    def session_grants(self):
+        return self._grants
+
+
+def test_a_gated_tool_runs_once_the_decision_arrives(built):
+    """The whole point of §3.4, end to end over the real stream.
+
+    The agent parks in ``confirm_tool_execution``; the client answers on
+    ``/tool_decision``; the run resumes and reports what it was told. Before
+    this the stream emitted a refusal and cancelled the run instead.
+    """
+    client, agents = built
+    run_id = str(uuid.uuid4())
+
+    def answer_when_asked():
+        # The decision endpoint 409s until the prompt is actually pending, so
+        # poll rather than sleep a guessed interval.
+        for _ in range(400):
+            response = client.post(
+                f"/v1/gaia/query/{run_id}/tool_decision",
+                json={"decision": "allow"},
+            )
+            if response.status_code == 200:
+                return
+            time.sleep(0.01)
+
+    answerer = threading.Thread(target=answer_when_asked, daemon=True)
+
+    def arm(**kw):
+        agent = _ScriptedAgent(**kw)
+        agent.gated_call = ("run_shell_command", {"command": "pwd"})
+        agents.append(agent)
+        answerer.start()
+        return agent
+
+    with mock.patch.object(sr, "build_session_agent", arm):
+        response = client.post(
+            "/v1/gaia/query", json=_body(session_id="s-gated", run_id=run_id)
+        )
+
+    assert response.status_code == 200, response.text
+    events = _events(response)
+    types = [e.get("type") for e in events]
+    assert "needs_confirmation" in types, f"the prompt must reach the client: {types}"
+    final = [e for e in events if e.get("type") == "final"]
+    assert final, f"the run must finish, not be cancelled: {types}"
+    assert "approved=True" in final[-1].get("answer", ""), final
+    assert agents[0].approved is True
+
+
+def test_a_one_shot_still_refuses_a_gated_tool(built):
+    """Nobody is there to answer, so parking the run would read as a hang."""
+    client, agents = built
+
+    def arm(**kw):
+        agent = _ScriptedAgent(**kw)
+        agent.gated_call = ("run_shell_command", {"command": "pwd"})
+        agents.append(agent)
+        return agent
+
+    with mock.patch.object(server_mod, "build_query_agent", arm):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    events = _events(response)
+    final = [e for e in events if e.get("type") == "final"]
+    assert final, events
+    assert "needs your explicit approval" in final[-1].get("answer", "")

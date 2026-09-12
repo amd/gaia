@@ -1691,6 +1691,108 @@ def build_parser():
 
     telegram_parser.set_defaults(action="telegram")
 
+    # Slack command — drive the flagship agent from a Slack DM (Socket Mode)
+    slack_parser = subparsers.add_parser(
+        "slack",
+        help="Drive the GAIA agent from Slack (setup|start|stop|status)",
+        parents=[parent_parser],
+    )
+    slack_subparsers = slack_parser.add_subparsers(
+        dest="slack_action", help="slack action to perform"
+    )
+
+    s_setup = slack_subparsers.add_parser(
+        "setup", help="Create the Slack app and store its tokens"
+    )
+    s_setup.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the create-app URL instead of opening a browser",
+    )
+    s_setup.add_argument(
+        "--print-url",
+        action="store_true",
+        help=(
+            "Print only the pre-filled create-app URL and exit, for a caller "
+            "running its own prompts (the TUI's setup panel)."
+        ),
+    )
+
+    s_start = slack_subparsers.add_parser("start", help="Start the Slack bridge")
+    # Not argparse-required: the adapter's own refusal explains *why* an
+    # allowlist is mandatory and how to build one, which "the following
+    # arguments are required" does not.
+    s_start.add_argument(
+        "--allowed-users",
+        help=(
+            "Comma-separated Slack member IDs allowed to use the agent "
+            "(required — every member of a workspace can DM a bot). Find "
+            "yours under your avatar -> Profile -> ... -> Copy member ID."
+        ),
+    )
+    s_start.add_argument(
+        "--agent-command",
+        help=(
+            "Command that starts the agent child (default: gaia-agent). Use "
+            "this to point at a specific build."
+        ),
+    )
+    s_start.add_argument(
+        "--deny-gated-tools",
+        action="store_true",
+        help=(
+            "Run read-only: auto-deny every tool that would ask for "
+            "confirmation, instead of offering Allow/Deny buttons in Slack."
+        ),
+    )
+    s_start.add_argument(
+        "--upload-root",
+        action="append",
+        help=(
+            "Directory a file may be uploaded back to Slack from (repeatable; "
+            "default: your home directory). Files the agent writes outside "
+            "these roots are never sent."
+        ),
+    )
+    s_start.add_argument(
+        "--background",
+        action="store_true",
+        help="Record a PID file so `gaia slack stop` can find this process",
+    )
+
+    slack_subparsers.add_parser("stop", help="Stop a backgrounded Slack bridge")
+
+    slack_subparsers.add_parser(
+        "connect",
+        help=(
+            "Store a pair of Slack tokens read from stdin (app-level token on "
+            "the first line, bot token on the second). For a caller that "
+            "collected them itself, such as the TUI's setup panel; use `setup` "
+            "to be walked through it."
+        ),
+    )
+
+    s_decline = slack_subparsers.add_parser(
+        "decline", help="Record that you do not want Slack set up"
+    )
+    s_decline.add_argument(
+        "--never",
+        action="store_true",
+        help=(
+            "Never offer Slack setup again. Without this, the offer returns "
+            "once if you install Slack later."
+        ),
+    )
+
+    s_status = slack_subparsers.add_parser(
+        "status", help="Show Slack detection, configuration, and liveness"
+    )
+    s_status.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+
+    slack_parser.set_defaults(action="slack")
+
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
         "schedule",
@@ -3292,6 +3394,12 @@ def main():
             webui_dist=getattr(args, "ui_dist", None),
         )
         return
+
+    # Handle slack command — see gaia.messaging.slack.cli for the flow
+    if args.action == "slack":
+        from gaia.messaging.slack.cli import main as slack_main
+
+        sys.exit(slack_main(args))
 
     # Handle telegram scaffold command
     if args.action == "telegram":

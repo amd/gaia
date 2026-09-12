@@ -74,6 +74,10 @@ type fakeRelay struct {
 	rawBodies   []string
 	cancelled   []string
 	confirmed   []confirmCall
+	decisions   []decisionCall
+	bypasses    []bypassCall
+	decisionStatus int
+	bypassStatus   int
 	auths       []string
 	versionHits int
 }
@@ -82,6 +86,20 @@ type fakeRelay struct {
 type confirmCall struct {
 	runID    string
 	approved bool
+}
+
+// decisionCall is one recorded POST .../query/{run_id}/tool_decision — the LIVE
+// permission seam, distinct from /confirm's resume model.
+type decisionCall struct {
+	runID     string
+	decision  string
+	confirmID string
+}
+
+// bypassCall is one recorded POST .../sessions/{session_id}/bypass.
+type bypassCall struct {
+	sessionID string
+	enabled   bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -201,6 +219,59 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			// that the ask-to-stop and its eventual effect are decoupled.
 			f.onCancelPost()
 		}
+
+	case strings.HasSuffix(r.URL.Path, "/tool_decision"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("tool_decision method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Decision  string `json:"decision"`
+			ConfirmID string `json:"confirm_id"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("tool_decision body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.decisions = append(f.decisions, decisionCall{
+			runID: parts[len(parts)-2], decision: body.Decision, confirmID: body.ConfirmID,
+		})
+		status := f.decisionStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"nothing pending"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"run_id":"r","decision":"allow","delivered":true}`))
+
+	case strings.HasSuffix(r.URL.Path, "/bypass"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("bypass method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("bypass body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.bypasses = append(f.bypasses, bypassCall{
+			sessionID: parts[len(parts)-2], enabled: body.Enabled,
+		})
+		status := f.bypassStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"no such session"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session_id":"s","enabled":true}`))
 
 	case strings.HasSuffix(r.URL.Path, "/confirm"):
 		// No shipped sidecar has this route (the resume model is unimplemented
