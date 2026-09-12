@@ -230,23 +230,32 @@ type ChatModel struct {
 
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
-	// the user turned on wheel scrolling, or an overlay is open and needs
-	// clicks. False by default, so the terminal owns drag-select and the
-	// platform's own copy/paste — see selectmode.go.
+	// the transcript wants the wheel and clicked links, or an overlay is open
+	// and needs clicks — see selectmode.go.
 	mouseCaptured bool
-	// mouseWheelOn is true only while the USER has wheel mode on (Ctrl+T) —
-	// independent of mouseCaptured, which an overlay can also set. This is
-	// what the banner and the Esc "give selection back first" behaviour key
-	// off, so an overlay opening or closing never touches it, and it is not
-	// silently turned off just because an overlay happened to be open when
-	// it was toggled on.
-	mouseWheelOn bool
+	// mouseSelectMode is true only while the USER has handed the mouse back to
+	// the terminal (Ctrl+T) for native drag-select — independent of
+	// mouseCaptured, which an overlay can still set. Zero value false is the
+	// default, so the wheel scrolls and links are clickable out of the box.
+	mouseSelectMode bool
 	// mouseCaptureAllMotion records which mouse-tracking mode is currently
 	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
 	// wheel scrolling) so applyMouseCapture can tell "already captured, but
 	// in the wrong mode" from "no change needed" and re-issue the right
 	// escape sequence instead of assuming the mode never needs to switch.
 	mouseCaptureAllMotion bool
+	// lastClickRow / lastClickAt are the previous left click's screen row and
+	// when it landed — the whole state a double click needs (mouseclick.go).
+	// A row rather than a point: a reader double-clicking a message is aiming
+	// at the message, and demanding the same column would make copying it a
+	// test of mouse steadiness.
+	lastClickRow int
+	lastClickAt  time.Time
+	// msgSpans maps content rows to the message drawn there, recorded by
+	// updateViewport as it lays the transcript out. Double-click-to-copy reads
+	// it; nothing else may, since it is only valid for the layout that
+	// produced it.
+	msgSpans []msgSpan
 
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
@@ -304,8 +313,9 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
-	firstToken   bool      // whether the first real inference token has arrived this turn (not just any SSE frame)
-	ttft         time.Duration
+	// ttft is the backend's own time-to-first-token for this turn, set from
+	// the final event's usage. Zero means the backend reported none.
+	ttft time.Duration
 
 	// logPeakRows is the tallest the work log has been THIS turn. The region's
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
@@ -397,6 +407,13 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
+		// Optimistically reconciled: Init issues the matching escape sequence
+		// once, so applyMouseCapture has nothing left to do on the first
+		// Update. Recording it here instead of letting that Update discover it
+		// is what keeps every turn's command stream free of a one-off mouse
+		// command nobody is expecting.
+		mouseCaptured: true,
+		lastClickRow:  -1,
 	}
 	// Reads the transport, never a saved preference: bypass and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
@@ -440,6 +457,10 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
+		// The transcript owns the mouse from the first frame: the wheel is the
+		// only way to scroll an alt-screen app, which has no terminal
+		// scrollback behind it. Ctrl+T hands it back — see selectmode.go.
+		tea.EnableMouseCellMotion,
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
@@ -826,6 +847,17 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case urlOpenResultMsg:
+		if msg.err == nil {
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: openURLHint(msg.url, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case clipboardResultMsg:
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
@@ -890,9 +922,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.question != nil {
 			return m.handleQuestionMouse(msg)
 		}
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m.afterScroll(), cmd
+		return m.handleTranscriptMouse(msg)
 
 	case spinner.TickMsg:
 		if m.streaming || m.memoryLoading {
@@ -1013,15 +1043,14 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Hand the mouse back first: while WHEEL MODE is on, selection is
-		// dead, so "never mind" most likely means "let me select text
-		// again". Leaving a turn running is fine — Esc pressed again cancels
-		// it. Keyed on mouseWheelOn, not mouseCaptured: an overlay can also
-		// hold the mouse (for its own clicks), and Esc there means cancel
-		// the question/turn (below) or close the palette (handled earlier,
-		// in the m.palette.open branch) — not silently let go of a capture
-		// the user never asked for.
-		if m.mouseWheelOn {
+		// Leave SELECT MODE first: while it is on the wheel does not scroll,
+		// so "never mind" most likely means "give me my scrolling back".
+		// Leaving a turn running is fine — Esc pressed again cancels it.
+		// Keyed on mouseSelectMode, not mouseCaptured: an overlay can also
+		// hold the mouse (for its own clicks), and Esc there means cancel the
+		// question/turn (below) or close the palette (handled earlier, in the
+		// m.palette.open branch).
+		if m.mouseSelectMode {
 			return m.toggleSelectMode()
 		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -1421,7 +1450,6 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
-	m.firstToken = false
 	m.ttft = 0
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
@@ -1542,11 +1570,6 @@ func (m *ChatModel) CancelActiveTurn() {
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
-	// TTFT is anchored on the first real inference token (CanonicalTokenEvent
-	// / legacy ChunkEvent below), not on the first SSE frame of any kind — a
-	// turn-start status frame arrives in single-digit ms and would otherwise
-	// make ttft measure "server said hello", not "model produced text" (#2899).
-
 	// The daemon transport speaks the canonical seven-event contract; the
 	// subprocess transport speaks the legacy in-process vocabulary below.
 	if updated, cmd, handled := m.handleCanonicalEvent(evt); handled {
@@ -1659,10 +1682,6 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.ChunkEvent:
-		if !m.firstToken {
-			m.firstToken = true
-			m.ttft = time.Since(m.queryStart)
-		}
 		m.buffer += e.Content
 
 	case event.AgentErrorEvent:
@@ -1844,10 +1863,19 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 	m.viewport.Height = vpHeight
 }
 
+// msgSpan is the half-open content-row range [start, end) one message occupies
+// in the laid-out transcript, and which message that is.
+type msgSpan struct {
+	start int
+	end   int
+	index int
+}
+
 func (m *ChatModel) updateViewport() {
 	m.syncViewportHeight(m.chatChromeRows())
 
 	var sb strings.Builder
+	m.msgSpans = m.msgSpans[:0]
 
 	// Show welcome message if no messages yet
 	if len(m.messages) == 0 && !m.streaming && !m.memoryLoading && m.memoryView == nil {
@@ -1861,6 +1889,14 @@ func (m *ChatModel) updateViewport() {
 	// repeat an id an earlier turn's card already rendered (still urgent on
 	// the next scan is not a duplicate), so dedup must not span turns.
 	seen := make(map[string]bool)
+	// Counted as the transcript is written rather than measured afterwards:
+	// re-scanning the buffer per message is quadratic in a long session, and
+	// this runs on every spinner tick of a streaming turn.
+	line := strings.Count(sb.String(), "\n")
+	write := func(chunk string) {
+		sb.WriteString(chunk)
+		line += strings.Count(chunk, "\n")
+	}
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
 			seen = make(map[string]bool)
@@ -1868,14 +1904,16 @@ func (m *ChatModel) updateViewport() {
 			// transcript is one unbroken block and the eye has nothing to
 			// anchor on when scrolling back for "where did I ask that?".
 			if sb.Len() > 0 {
-				sb.WriteString("\n")
+				write("\n")
 			}
 		}
+		start := line
 		// By index, not by value: rendering a card memoizes onto the message.
-		sb.WriteString(m.renderMessage(&m.messages[i], seen))
-		sb.WriteString("\n")
+		write(m.renderMessage(&m.messages[i], seen))
+		write("\n")
+		m.msgSpans = append(m.msgSpans, msgSpan{start: start, end: line, index: i})
 		if spacedAfter(m.messages[i].Role) {
-			sb.WriteString("\n")
+			write("\n")
 		}
 	}
 
@@ -1979,13 +2017,18 @@ func (m ChatModel) cardWidthFor(viewportWidth int) int {
 	return w
 }
 
-// answerMeasure caps how wide a line of prose gets. A 200-column terminal will
-// happily lay an answer out as 200-character lines, and the eye loses the start
+// answerMeasure caps how wide a line of prose gets. A 300-column terminal will
+// happily lay an answer out as 300-character lines, and the eye loses the start
 // of the next one on the way back — the reason newspapers set narrow columns.
-// Tables and cards are not prose and are not capped by this, and neither is the
-// work log: one-line content follows the terminal (see logWidth), because for a
-// single row more columns mean more of the line, not a longer read.
-const answerMeasure = 88
+//
+// It sits well above the ~90 a typographer would pick, because prose is not the
+// only thing on screen: the header, the divider, every table and card follow the
+// terminal, so prose that stops short of them does not read as a chosen measure,
+// it reads as text that failed to fill the window. At 120 a widened terminal
+// keeps filling until it is genuinely wider than anything worth reading across.
+// The work log is uncapped either way (see logWidth): for a single row more
+// columns mean more of the line, not a longer read.
+const answerMeasure = 120
 
 // answerWidth is the width an answer lays out to — the same for the streaming
 // copy and the finished one, so text never reflows when `final` lands.
@@ -2047,18 +2090,19 @@ func (m ChatModel) answerStats(msg *Message) string {
 		return stats[0]
 	}
 
+	// Every figure below is the inference backend's own measurement, passed
+	// through untouched. Zero means it reported none — a remote
+	// OpenAI-compatible endpoint reports neither latency nor rate — and the
+	// stat is omitted rather than derived from the turn's wall clock, which
+	// includes tool time and agent overhead.
 	if msg.TTFT > 0 {
 		stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
 	}
-	// Real generated-token count (#2899) — no longer a char-count guess. Zero
-	// means the sidecar didn't report usage.tokens (the legacy transport, or an
-	// older agent); omit rather than fall back to the old estimate, which would
-	// silently reintroduce the exact bug that replaced.
 	if msg.Tokens > 0 {
 		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
-		if rate, ok := tokensPerSecond(msg.Tokens, msg.Duration, msg.TTFT); ok {
-			stats = append(stats, fmt.Sprintf("%.1f tok/s", rate))
-		}
+	}
+	if msg.TokPerS > 0 {
+		stats = append(stats, fmt.Sprintf("%.1f tok/s", msg.TokPerS))
 	}
 	if msg.Steps > 0 {
 		stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))

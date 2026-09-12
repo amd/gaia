@@ -1095,6 +1095,11 @@ export interface QueryUsage {
   tokens?: number;
   /** Time to first inference token, in seconds, when the backend reports it. */
   ttft?: number;
+  /**
+   * Generation rate the inference backend measured for this turn. Absent when
+   * it reported none — never derived from `elapsed`, which counts tool time.
+   */
+  tok_per_s?: number;
   [key: string]: unknown;
 }
 

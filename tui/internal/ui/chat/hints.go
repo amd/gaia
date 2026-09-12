@@ -50,6 +50,11 @@ const (
 	rankOrient = 70
 	// What else the keyboard does. Genuinely useful, genuinely droppable.
 	rankAffordance = 40
+	// How to get the terminal's own drag-select back. Worth a column when
+	// there is one to spare — the app holds the mouse by default, so a user
+	// who tries to drag and gets nothing needs the way out — but it loses to
+	// every hint that says what is happening right now.
+	rankSecondary = 25
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -77,7 +82,14 @@ func (m ChatModel) statusHints() []hint {
 
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to
 	// earlier turns; a user who does not know that concludes history is gone.
-	hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	if m.mouseSelectMode {
+		hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	} else {
+		hints = append(hints,
+			hint{text: "↑↓/wheel scroll", rank: rankAffordance},
+			hint{text: "Ctrl+T select text", rank: rankSecondary},
+		)
+	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
 		// The modal owns the keyboard while it is up, so every hint here would
