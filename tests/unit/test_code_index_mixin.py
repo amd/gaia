@@ -258,3 +258,107 @@ class TestTraversalGuard:
         # The guard must reject *before* re-rooting mixin state onto the
         # escaped path.
         assert h._repo_path == os.path.abspath(str(root))
+
+
+# ---------------------------------------------------------------------------
+# One repository per session was the real limit (#3544)
+# ---------------------------------------------------------------------------
+#
+# A successful index replaced the mixin's root with the repo just indexed, and
+# the containment check validated against that. So the guard could only ever
+# ratchet inward: index ~/projects/a, and ~/projects/b is then "outside the
+# allowed area" for the rest of the session. `gaia chat` and the flagship hold
+# a long-lived instance, so this was the normal case, not an edge one.
+
+
+class TestASecondRepositoryCanStillBeIndexed:
+    @staticmethod
+    def _two_repos(tmp_path):
+        ceiling = tmp_path / "projects"
+        first = ceiling / "a"
+        second = ceiling / "b"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        return ceiling, first, second
+
+    def test_a_second_repo_under_the_ceiling_is_allowed(self, tmp_path):
+        ceiling, first, second = self._two_repos(tmp_path)
+        h = make_harness(ceiling)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            assert json.loads(fn(repo_path=str(first))) == {
+                "error": "code_index SDK not initialised"
+            }
+            # Used to fail here with "repo_path must be within …/a".
+            assert json.loads(fn(repo_path=str(second))) == {
+                "error": "code_index SDK not initialised"
+            }
+
+        assert h._repo_path == os.path.abspath(str(second))
+
+    def test_switching_back_to_the_first_repo_works_too(self, tmp_path):
+        ceiling, first, second = self._two_repos(tmp_path)
+        h = make_harness(ceiling)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            fn(repo_path=str(first))
+            fn(repo_path=str(second))
+            result = json.loads(fn(repo_path=str(first)))
+
+        assert result == {"error": "code_index SDK not initialised"}
+        assert h._repo_path == os.path.abspath(str(first))
+
+    def test_the_ceiling_does_not_move_with_the_indexed_repo(self, tmp_path):
+        ceiling, first, _ = self._two_repos(tmp_path)
+        h = make_harness(ceiling)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            fn(repo_path=str(first))
+
+        assert h._code_index_ceiling == os.path.abspath(str(ceiling))
+        assert h._repo_path == os.path.abspath(str(first))
+
+    def test_the_guard_still_holds_after_indexing(self, tmp_path):
+        """Widening the check must not widen it past the sandbox."""
+        ceiling, first, _ = self._two_repos(tmp_path)
+        outside = tmp_path / "somewhere-else"
+        outside.mkdir()
+        h = make_harness(ceiling)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            fn(repo_path=str(first))
+            result = json.loads(fn(repo_path=str(outside)))
+
+        assert "must be within" in result["error"]
+        assert str(ceiling) in result["error"]
+
+    def test_a_sibling_of_the_indexed_repo_is_still_refused_above_the_ceiling(
+        self, tmp_path
+    ):
+        """The ceiling is the sandbox, not the repo's parent."""
+        _, first, _ = self._two_repos(tmp_path)
+        sibling_of_ceiling = tmp_path / "other-tree"
+        sibling_of_ceiling.mkdir()
+        h = make_harness(first)  # ceiling IS the repo here
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        result = json.loads(fn(repo_path=str(sibling_of_ceiling)))
+
+        assert "must be within" in result["error"]
+
+    def test_switching_repos_drops_the_previous_sdk(self, tmp_path):
+        """The next search must not answer from the previous repo's index."""
+        ceiling, first, second = self._two_repos(tmp_path)
+        h = make_harness(ceiling)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            fn(repo_path=str(first))
+            h._code_index_sdk = object()  # as a real index would leave it
+            fn(repo_path=str(second))
+
+        assert h._code_index_sdk is None

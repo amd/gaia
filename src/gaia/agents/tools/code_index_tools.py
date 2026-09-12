@@ -11,7 +11,8 @@ Follows the same pattern as ``RAGToolsMixin`` and ``FileIOToolsMixin``:
 the mixin exposes a ``register_code_index_tools()`` method that the
 consuming agent calls from its ``_register_tools`` hook.
 
-State (``_repo_path``, ``_code_index_config``, ``_code_index_sdk``) is
+State (``_repo_path``, ``_code_index_ceiling``, ``_code_index_config``,
+``_code_index_sdk``) is
 set up lazily on first tool invocation if the consumer did not
 initialise it explicitly. This keeps the mixin composable without
 requiring cooperative ``__init__`` chaining.
@@ -72,6 +73,12 @@ class CodeIndexToolsMixin:
         # allowed_paths config produces a "<cwd>/~" root that rejects the
         # very paths it was meant to allow.
         self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
+        # The sandbox ceiling: what a requested repo_path must sit under. Set
+        # once and never moved. ``_repo_path`` tracks the repository currently
+        # indexed and does move — conflating the two meant the first index
+        # narrowed the ceiling to that repo, so a second repository in the same
+        # session could never be indexed (#3544).
+        self._code_index_ceiling = self._repo_path
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 
@@ -79,6 +86,8 @@ class CodeIndexToolsMixin:
         """Populate default state on first access if consumer skipped init."""
         if not hasattr(self, "_repo_path"):
             self._repo_path = os.path.abspath(".")
+        if not hasattr(self, "_code_index_ceiling"):
+            self._code_index_ceiling = self._repo_path
         if not hasattr(self, "_code_index_config"):
             self._code_index_config = None
         if not hasattr(self, "_code_index_sdk"):
@@ -138,13 +147,16 @@ class CodeIndexToolsMixin:
                 # silently re-root the whole index/search sandbox onto the
                 # symlink's target.
                 real_resolved = str(Path(resolved).resolve())
-                real_original = str(Path(self._repo_path).resolve())
+                # Against the CEILING, not the repo indexed last: the check may
+                # only ever narrow, so validating against a moving root let the
+                # first index lock the session to one repository.
+                real_ceiling = str(Path(self._code_index_ceiling).resolve())
                 if (
-                    not real_resolved.startswith(real_original + os.sep)
-                    and real_resolved != real_original
+                    not real_resolved.startswith(real_ceiling + os.sep)
+                    and real_resolved != real_ceiling
                 ):
                     return json.dumps(
-                        {"error": f"repo_path must be within {real_original}"}
+                        {"error": f"repo_path must be within {real_ceiling}"}
                     )
                 self._repo_path = resolved
                 self._code_index_config = None
