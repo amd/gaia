@@ -6,6 +6,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -143,21 +144,36 @@ func TestEscDeniesAndTellsTheAgent(t *testing.T) {
 	}
 }
 
-// A live prompt must not arm the auto-deny at all. This is the regression that
-// made every gated tool unusable: the user paused to read, and 30s later the
-// call had been refused on their behalf.
-func TestALivePromptDoesNotExpire(t *testing.T) {
+// A live prompt is bounded, but on a clock long enough that reading it is not
+// a way to lose the call.
+//
+// Two regressions meet here and pull in opposite directions. A 30s auto-deny
+// made every gated tool unusable — the user paused to read, and the call was
+// refused on their behalf. Removing the bound entirely turned a prompt the
+// user never saw into a turn that could not end: 442s of spinner and no
+// visible question, ended only by Esc. So the tick must fire, must deny rather
+// than approve, and must be far enough out that no real decision reaches it.
+func TestALivePromptIsBoundedButNotRushed(t *testing.T) {
+	if components.DeliverableConfirmationTimeout < 5*time.Minute {
+		t.Errorf("a live prompt gets only %v to be answered — too short to read and decide",
+			components.DeliverableConfirmationTimeout)
+	}
+
 	m, _ := liveModel(t)
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
 
 	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
 	m = updated.(ChatModel)
-	if cmd != nil {
-		t.Error("a timeout tick must not resolve a live confirmation")
+	if cmd == nil {
+		t.Fatal("the tick must resolve the prompt — an unbounded turn can never end")
 	}
-	if m.confirmation == nil || !m.confirmation.Pending() {
-		t.Fatal("the prompt must still be waiting for the user")
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	if decided.Approved {
+		t.Fatal("expiry must never approve")
+	}
+	if !decided.TimedOut {
+		t.Error("the decision must be marked an expiry, so the user is told why")
 	}
 }
 

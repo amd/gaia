@@ -26,10 +26,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 import requests
 
 from gaia.llm.lemonade_client import (
-    LEMONADE_API_VERSION,
-    _get_lemonade_config,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
+    resolve_lemonade_base_url,
 )
 from gaia.logger import get_logger
 
@@ -228,20 +227,6 @@ def _low_confidence_runs(
         yield run_start, len(words)
 
 
-def _resolve_base_url(base_url: Optional[str]) -> str:
-    """Resolve the Lemonade API root, matching ``lemonade_client``'s rules.
-
-    Falls through to ``LEMONADE_BASE_URL`` / the packaged default when the
-    caller passes nothing, and appends the ``/api/v1`` suffix users omit.
-    """
-    if not base_url:
-        return _get_lemonade_config()[2]
-    normalized = base_url.rstrip("/")
-    if not normalized.endswith(f"/api/{LEMONADE_API_VERSION}"):
-        normalized = f"{normalized}/api/{LEMONADE_API_VERSION}"
-    return normalized
-
-
 def _log_slot_wait(reason: str) -> None:
     """Surface a queued model-slot grant instead of looking hung."""
     log.info("Transcription waiting on the model slot — %s", reason)
@@ -388,9 +373,9 @@ class LemonadeASRClient:
                 "model must be a Lemonade transcription model id, e.g. "
                 f"'{DEFAULT_ASR_MODEL}'."
             )
-        self.base_url = _resolve_base_url(base_url)
+        self.base_url = resolve_lemonade_base_url(base_url)
         self.model = model
-        self.api_key = resolve_lemonade_api_key(api_key)
+        self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
         self.timeout = timeout
         self._session = requests.Session()
 

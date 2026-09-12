@@ -12,6 +12,7 @@ misparsing here would corrupt every downstream consumer (e.g. the EMR flow).
 
 import pytest
 
+from gaia.llm import VLMExtractionError
 from gaia.vlm.structured_extraction import StructuredVLMExtractor
 
 
@@ -63,17 +64,31 @@ def test_extract_table_empty_array_returns_empty_list(extractor):
     assert extractor.extract_table(b"fake-image") == []
 
 
-def test_extract_table_non_list_json_falls_back_to_empty(extractor):
-    # VLM misbehaves and returns an object instead of an array.
+def test_extract_table_non_list_json_raises(extractor):
+    """An object where a list was asked for is a parse failure, not zero rows.
+
+    Returning ``[]`` reads downstream as "this page has no table" (#3555).
+    """
     extractor.vlm.extract_from_image.return_value = '{"col1": "value1"}'
 
-    assert extractor.extract_table(b"fake-image") == []
+    with pytest.raises(VLMExtractionError, match="did not parse as a list"):
+        extractor.extract_table(b"fake-image")
 
 
-def test_extract_table_unparsable_text_falls_back_to_empty(extractor):
+def test_extract_table_unparsable_text_raises(extractor):
     extractor.vlm.extract_from_image.return_value = "I could not find a table."
 
-    assert extractor.extract_table(b"fake-image") == []
+    with pytest.raises(VLMExtractionError):
+        extractor.extract_table(b"fake-image")
+
+
+def test_a_table_parse_failure_names_the_page(extractor):
+    extractor.vlm.extract_from_image.return_value = "not json"
+
+    with pytest.raises(VLMExtractionError) as excinfo:
+        extractor.extract_table(b"fake-image", page_num=7)
+
+    assert excinfo.value.page_num == 7
 
 
 # ---------------------------------------------------------------------------
@@ -110,21 +125,20 @@ def test_extract_key_values_with_descriptions_builds_prompt(extractor):
     assert "the patient's full name" in kwargs["prompt"]
 
 
-def test_extract_key_values_malformed_output_defaults_keys_to_none(extractor):
+def test_extract_key_values_malformed_output_raises(extractor):
+    """A null per key is indistinguishable from fields genuinely absent."""
     extractor.vlm.extract_from_image.return_value = "not valid json at all"
 
-    data = extractor.extract_key_values(b"fake-image", keys=["a", "b", "c"])
+    with pytest.raises(VLMExtractionError, match="genuinely absent"):
+        extractor.extract_key_values(b"fake-image", keys=["a", "b", "c"])
 
-    assert data == {"a": None, "b": None, "c": None}
 
-
-def test_extract_key_values_non_dict_json_defaults_to_none(extractor):
+def test_extract_key_values_non_dict_json_raises(extractor):
     # VLM returns an array instead of the requested object.
     extractor.vlm.extract_from_image.return_value = '["a", "b"]'
 
-    data = extractor.extract_key_values(b"fake-image", keys=["a", "b"])
-
-    assert data == {"a": None, "b": None}
+    with pytest.raises(VLMExtractionError):
+        extractor.extract_key_values(b"fake-image", keys=["a", "b"])
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +175,12 @@ def test_extract_structured_empty_schema_still_calls_vlm(extractor):
     extractor.vlm.extract_from_image.assert_called_once()
 
 
-def test_extract_structured_malformed_output_returns_empty_dict(extractor):
+def test_extract_structured_malformed_output_raises(extractor):
+    """``{}`` reads as "the page had none of these fields" (#3555)."""
     extractor.vlm.extract_from_image.return_value = "garbage response"
 
-    assert extractor.extract_structured(b"fake-image", schema={"fields": {}}) == {}
+    with pytest.raises(VLMExtractionError, match="did not parse against the schema"):
+        extractor.extract_structured(b"fake-image", schema={"fields": {}})
 
 
 # ---------------------------------------------------------------------------
@@ -186,17 +202,11 @@ def test_parse_time_to_hours_valid_inputs(extractor, time_str, expected):
     assert extractor._parse_time_to_hours(time_str) == pytest.approx(expected)
 
 
-def test_parse_time_to_hours_malformed_returns_zero(extractor):
-    assert extractor._parse_time_to_hours("not-a-time") == 0.0
-
-
-def test_parse_time_to_hours_empty_string_returns_zero(extractor):
-    assert extractor._parse_time_to_hours("") == 0.0
-
-
-def test_parse_time_to_hours_trailing_colon_returns_zero(extractor):
-    # "14:" splits into ["14", ""] — int("") raises ValueError, caught -> 0.0
-    assert extractor._parse_time_to_hours("14:") == 0.0
+@pytest.mark.parametrize("time_str", ["not-a-time", "", "14:"])
+def test_parse_time_to_hours_malformed_raises(extractor, time_str):
+    """0.0 was summed into ``timeline_totals`` and reported as measured (#3555)."""
+    with pytest.raises(VLMExtractionError, match="as a duration"):
+        extractor._parse_time_to_hours(time_str)
 
 
 # ---------------------------------------------------------------------------
@@ -258,14 +268,16 @@ def test_extract_chart_data_time_hms_decimal_accepts_numeric_values(extractor):
     assert data == {"Active": 5.0, "Idle": 2.5}
 
 
-def test_extract_chart_data_time_hms_decimal_unexpected_type_defaults_zero(extractor):
+def test_extract_chart_data_time_hms_decimal_unexpected_type_raises(extractor):
+    """A zero here is summed into timeline_totals and reported as measured."""
     extractor.vlm.extract_from_image.return_value = '{"Active": null, "Idle": [1, 2]}'
 
-    data = extractor.extract_chart_data(
-        b"fake-image", categories=["Active", "Idle"], value_format="time_hms_decimal"
-    )
-
-    assert data == {"Active": 0.0, "Idle": 0.0}
+    with pytest.raises(VLMExtractionError, match="not a duration"):
+        extractor.extract_chart_data(
+            b"fake-image",
+            categories=["Active", "Idle"],
+            value_format="time_hms_decimal",
+        )
 
 
 def test_extract_chart_data_time_hms_returns_strings_as_is(extractor):
@@ -316,26 +328,15 @@ def test_extract_chart_data_auto_format_passthrough(extractor):
     assert data == {"A": "yes", "B": 3}
 
 
-def test_extract_chart_data_malformed_defaults_to_zero_for_non_time_format(extractor):
+@pytest.mark.parametrize("value_format", ["number", "time_hms", "time_hms_decimal"])
+def test_extract_chart_data_malformed_raises_for_every_format(extractor, value_format):
+    """Zero-filling every category reads as a chart that measured zero."""
     extractor.vlm.extract_from_image.return_value = "not json"
 
-    data = extractor.extract_chart_data(
-        b"fake-image", categories=["Q1", "Q2"], value_format="number"
-    )
-
-    assert data == {"Q1": 0.0, "Q2": 0.0}
-
-
-def test_extract_chart_data_malformed_defaults_to_zero_time_string_for_time_hms(
-    extractor,
-):
-    extractor.vlm.extract_from_image.return_value = "not json"
-
-    data = extractor.extract_chart_data(
-        b"fake-image", categories=["Active", "Idle"], value_format="time_hms"
-    )
-
-    assert data == {"Active": "00:00:00", "Idle": "00:00:00"}
+    with pytest.raises(VLMExtractionError, match="did not parse as an object"):
+        extractor.extract_chart_data(
+            b"fake-image", categories=["Q1", "Q2"], value_format=value_format
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -434,3 +435,78 @@ def test_extract_pdf_multipage_aggregates_timeline(extractor, tmp_path, mocker):
     }
     assert progress_calls == [(1, 2), (2, 2)]
     fake_doc.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# One page that cannot be read is a failed PAGE, not a failed document (#3555)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_page_doc(tmp_path, mocker):
+    """A two-page PDF whose paging and rendering are stubbed."""
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    doc = mocker.MagicMock()
+    doc.__len__.return_value = 2
+    mocker.patch.dict(
+        "sys.modules", {"fitz": mocker.MagicMock(open=mocker.Mock(return_value=doc))}
+    )
+    # Imported inside extract(), so patch it at its source module.
+    mocker.patch("gaia.utils.pdf_page_to_image", return_value=b"fake-image")
+    return pdf
+
+
+class TestAFailedPageDoesNotDiscardTheDocument:
+    def test_the_good_page_still_comes_back(self, extractor, two_page_doc):
+        # Page 1 parses; page 2's table answer is prose, which models do.
+        extractor.vlm.extract_from_image.side_effect = [
+            '[{"col": "value"}]',  # page 1 table
+            "page one text",  # page 1 raw text
+            "There is no table on this page.",  # page 2 table -> raises
+        ]
+
+        result = extractor.extract(str(two_page_doc), extract_tables=True)
+
+        assert [p["page"] for p in result["pages"]] == [1, 2]
+        assert result["pages"][0]["tables"] == [{"col": "value"}]
+
+    def test_the_failed_page_is_named(self, extractor, two_page_doc):
+        extractor.vlm.extract_from_image.side_effect = [
+            '[{"col": "value"}]',
+            "page one text",
+            "There is no table on this page.",
+        ]
+
+        result = extractor.extract(str(two_page_doc), extract_tables=True)
+
+        assert result["metadata"]["pages_failed"] == [2]
+        assert "error" in result["pages"][1]
+
+    def test_a_clean_document_reports_no_failures(self, extractor, two_page_doc):
+        extractor.vlm.extract_from_image.return_value = "[]"
+
+        result = extractor.extract(str(two_page_doc), extract_tables=True)
+
+        assert result["metadata"]["pages_failed"] == []
+        assert all("error" not in p for p in result["pages"])
+
+    def test_a_failed_page_contributes_nothing_to_the_totals(
+        self, extractor, two_page_doc
+    ):
+        """The zeros this whole change exists to stop reporting as measured."""
+        extractor.vlm.extract_from_image.side_effect = [
+            '{"Active": "02:00:00"}',  # page 1 timeline
+            "page one text",
+            "could not read the chart",  # page 2 timeline -> raises
+        ]
+
+        result = extractor.extract(
+            str(two_page_doc),
+            extract_timelines=True,
+            timeline_status_types=["Active"],
+        )
+
+        assert result["metadata"]["pages_failed"] == [2]
+        assert result["aggregated_data"]["timeline_totals"] == {"Active": 2.0}

@@ -12,6 +12,11 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Fixed
+
+- Windows npm launchers now find the Python daemon CLI even when npm passes the
+  package script as argv[1], preserving unrelated tools in shared PATH directories.
+
 ### Added
 
 - **Say something while the agent is still working.** `POST
@@ -22,6 +27,17 @@ the terminal UI meant building it from source.
   that task instead of arriving after it finished. Unknown run → `404`, an
   agent that cannot take one → `409`; both loud, because the caller has already
   taken the message from the user. See SPEC §5.6 and SKILL §7.
+- **Image generation, reachable out of the box.** "Draw me a red bicycle" now
+  generates a PNG with local Stable Diffusion and reports the path; previously
+  the tools existed behind a flag nothing turned on, so the agent just said it
+  couldn't. Adds `generate_image`, `list_sd_models`, and `get_generation_history`
+  (70 tools → 73) plus an `image_gen` bundle so per-turn selection can find them.
+  Generating swaps the resident model, so the next reply waits for the chat model
+  to reload. The `image-gen` starter skill covers prompt expansion and iterating
+  on the previous image.
+- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
+  runtime API keys, discovered models, and remote-inference status.
+
 - **A project map at task start.** In a code repository the agent now opens
   every task knowing the directory shape, the likely entry points, which
   commands are installed, and the three platform differences that change
@@ -48,7 +64,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 26 of its 67 tools on any one call — a
+  profile.** The model is sent at most 26 of its 71 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.
@@ -118,6 +134,16 @@ the terminal UI meant building it from source.
 - **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
   trusted local mirror.
 
+### Changed
+
+- **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
+  written.** Previously any URL not ending in `/api/v1` had that suffix appended,
+  so a reverse proxy configured as `https://proxy.example/lemonade` was silently
+  rewritten to `https://proxy.example/lemonade/api/v1`. It now resolves to
+  `https://proxy.example/lemonade` unchanged, and only a bare origin with no path
+  at all gains `/api/v1`. If a proxied install starts returning `404` after
+  upgrading, append the API path to the variable yourself.
+
 ### Fixed
 
 - **A second `gaia serve` no longer reports success against a server it does not
@@ -180,6 +206,19 @@ the terminal UI meant building it from source.
   incrementally, and a download is still verified *before* the file is moved into
   place.
 
+### Fixed
+
+- **Esc stops a running turn in the terminal UI without killing the agent.**
+  The TUI used to kill the agent process, and on the released one-file binary
+  that killed only the launcher: the cancelled tool call ran to completion and
+  the surviving process consumed the next message. The first Esc now sends the
+  agent a `cancel` control message, so the turn ends and the session keeps its
+  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  the whole process tree.
+- **A restart after a hard stop no longer turns bypass permissions back on.**
+  The replacement agent is launched in the session's current permission mode
+  instead of from the original flags, and the TUI says what the restart lost.
+
 ### Notes
 
 - The sidecar is installed into `~/.gaia/agents/gaia/`, the GAIA daemon's own
@@ -198,7 +237,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI on `PATH` for the daemon the TUI starts.
+  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
+  starts. 0.23.1 is the first core whose daemon knows how to supervise this
+  agent; on 0.23.0 the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.

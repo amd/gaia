@@ -76,11 +76,11 @@
     "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4-5-20251001",
     "DISABLE_AUTOUPDATER": "1",
     "GITHUB_PERSONAL_ACCESS_TOKEN": "${localEnv:GITHUB_PERSONAL_ACCESS_TOKEN}",
-    "LEMONADE_BASE_URL": "http://localhost:8000"
+    "LEMONADE_BASE_URL": "http://localhost:13305"
   },
-  "forwardPorts": [8000, 8080, 3000],
+  "forwardPorts": [13305, 8080, 3000],
   "portsAttributes": {
-    "8000": { "label": "Lemonade Server", "onAutoForward": "notify" },
+    "13305": { "label": "Lemonade Server", "onAutoForward": "notify" },
     "8080": { "label": "GAIA API / MCP Bridge", "onAutoForward": "notify" },
     "3000": { "label": "Eval Visualizer", "onAutoForward": "silent" }
   },

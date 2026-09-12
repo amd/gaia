@@ -111,7 +111,7 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
 
     The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
     (mode `0600`) holding the pid, port, and bearer token. The token is never
-    printed. Add `--debug` to log every injected key, state transition, and
+    printed. Add `--dev` to log input counts, state transitions, and
     wait resolution to stderr.
 
     For a fixed port: `gaia tui --control-port 8770`.
@@ -242,8 +242,8 @@ Environment:
   <Accordion title="tui_wait_for keeps timing out">
     The timeout reports the screen it actually saw. Compare it with what you
     were matching on — styling is stripped in plain mode, so match on the text,
-    not on box-drawing characters. `gaia tui --control --debug` logs every
-    injected key and every wait resolution to stderr.
+    not on box-drawing characters. `gaia tui --control --dev` records input counts, state changes,
+    and waits in the TUI log. Input contents are never logged.
   </Accordion>
 </AccordionGroup>
 

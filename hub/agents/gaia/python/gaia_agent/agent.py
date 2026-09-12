@@ -186,10 +186,12 @@ class GaiaAgentConfig(ChatAgentConfig):
     skill_discovery: bool = True
     skill_discovery_threshold: Optional[float] = None
 
-    # Image generation stays off: it pulls a second resident model, and evicting
-    # the chat model to draw a picture is not a trade a document agent should
-    # make silently.
-    enable_sd_tools: bool = False
+    # On for the flagship only. It does pull a second resident model and evict
+    # the chat model — a cost a document agent should not pay silently, so
+    # ChatAgent keeps it off — but this is the general-purpose surface, and off
+    # here means "draw me a picture" has no answer at all. The image-gen skill
+    # carries the eviction cost into the procedure.
+    enable_sd_tools: bool = True
 
     rag_documents: List[str] = field(default_factory=list)
 
@@ -300,7 +302,10 @@ class GaiaAgent(
         # Through the mixin, so both read the one cached resolution and can
         # never end up describing two different trees.
         index_root = self._project_map_root() or allowed[0]
-        self._init_code_index_state(repo_path=index_root)
+        # The project root is where code search STARTS; allowed_paths is how far
+        # it may reach. Passing one value for both locked a session that began
+        # inside a repo to that repo (#3544).
+        self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
         super()._register_tools()
 

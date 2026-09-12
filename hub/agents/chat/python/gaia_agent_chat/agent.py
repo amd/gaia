@@ -370,6 +370,9 @@ class ChatAgent(
 
         # Initialize web client for browser tools (optional)
         self._web_client = None
+        # Guarded client for the inline open_url/fetch_webpage tools; built on
+        # first use (see _inline_web_client).
+        self._inline_web = None
         if config.enable_browser:
             try:
                 from gaia.web.client import WebClient
@@ -565,6 +568,24 @@ class ChatAgent(
     @session_manager.setter
     def session_manager(self, value: SessionManager) -> None:
         self._session_manager = value
+
+    def _inline_web_client(self):
+        """The SSRF-guarded ``WebClient`` behind ``open_url``/``fetch_webpage``.
+
+        Built on first use so profiles without web tools never pay for it.
+        Kept apart from ``self._web_client`` (the opt-in browser mixin's
+        client) so using these tools does not also switch ``fetch_page`` on.
+        """
+        # getattr: tests build agents via __new__ and skip __init__.
+        if getattr(self, "_inline_web", None) is None:
+            from gaia.web.client import WebClient
+
+            self._inline_web = WebClient(
+                timeout=self.config.browser_timeout,
+                max_download_size=self.config.browser_max_download_size,
+                rate_limit=self.config.browser_rate_limit,
+            )
+        return self._inline_web
 
     def _ensure_tool_loader_reset(self) -> None:
         """Bootstrap a session for a just-created agent, if none exists yet.
@@ -769,12 +790,17 @@ class ChatAgent(
         return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
-        prompts = super()._get_mixin_prompts()
-        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
-        if not hasattr(self, "sd_default_model"):
-            prompts = [p for p in prompts if "Stable Diffusion" not in p]
-        return prompts
+        """Auto-discover mixin prompts, minus SD's.
+
+        ``SDToolsMixin.get_sd_system_prompt`` opens with "You are an expert
+        image generation assistant" and runs ~5K chars. It was written for the
+        standalone SD agent, where that persona was the whole job. Auto-
+        discovery pulls it in for any class composing the mixin, so on a
+        general-purpose agent it front-loads the prompt with an identity that
+        is wrong for every other turn. The procedure lives in the ``image-gen``
+        skill instead, which renders only when a turn calls for it.
+        """
+        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -1498,12 +1524,30 @@ No documents are currently indexed.
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
         if getattr(self.config, "enable_sd_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            # Absolute, under the user's home. The mixin default is relative to
+            # cwd, which for a daemon-launched sidecar is the package directory.
+            sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
             try:
-                self.init_sd()
-                logger.debug("SD tools registered (generate_image, list_sd_models)")
-            except Exception as _sd_err:
+                self.init_sd(output_dir=str(sd_output_dir))
                 logger.debug(
-                    "SD tools not available (SD model not loaded): %s", _sd_err
+                    "SD tools registered (generate_image, list_sd_models, "
+                    "get_generation_history), output=%s",
+                    sd_output_dir,
+                )
+            except OSError as _sd_err:
+                # Only the output-dir mkdir can fail here — the SD client makes
+                # no network call at construction — so a down server is not a
+                # trigger. Anything other than OSError is a bug and propagates.
+                logger.warning(
+                    "Image generation unavailable: could not create the SD "
+                    "output directory %s (%s). Fix that directory's "
+                    "permissions, or point GAIA_CONFIG_DIR somewhere writable. "
+                    "Every other tool is unaffected.",
+                    sd_output_dir,
+                    _sd_err,
+                    exc_info=True,
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
@@ -1514,21 +1558,25 @@ No documents are currently indexed.
 
             @tool
             def open_url(url: str) -> dict:
-                """Open a URL in the system's default web browser.
+                """Open a public URL in the system's default web browser.
+
+                Refuses private, loopback, and link-local addresses.
 
                 Args:
-                    url: The URL to open (must start with http:// or https://)
+                    url: Public http:// or https:// URL to open
 
                 Returns:
                     Dictionary with status and confirmation message
                 """
                 import webbrowser
 
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
+                try:
+                    # Same SSRF screen as fetch_webpage: an injected link to a
+                    # loopback admin page would open with the user's cookies.
+                    self._inline_web_client().validate_url(url)
+                except (ValueError, OSError, ImportError) as e:
+                    logger.warning("open_url refused %s: %s", url, e)
+                    return {"status": "error", "url": url, "error": str(e)}
                 try:
                     webbrowser.open(url)
                     return {
@@ -1549,15 +1597,10 @@ No documents are currently indexed.
                 Returns:
                     Dictionary with status, content (or html), and url
                 """
-                import httpx
-
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
                 try:
-                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    # WebClient refuses private/loopback/link-local targets,
+                    # re-checks after DNS and on every redirect hop.
+                    resp = self._inline_web_client().get(url)
                     resp.raise_for_status()
                     if extract_text:
                         try:
@@ -1583,7 +1626,8 @@ No documents are currently indexed.
                         "html": resp.text[:8000],
                         "truncated": len(resp.text) > 8000,
                     }
-                except Exception as e:
+                except Exception as e:  # tool boundary -> structured error
+                    logger.warning("fetch_webpage failed for %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
 
         @tool
@@ -2385,6 +2429,11 @@ No documents are currently indexed.
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if getattr(self, "_inline_web", None):
+                self._inline_web.close()
+        except Exception as e:
+            logger.error(f"Error closing inline web client during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()

@@ -331,7 +331,7 @@ def find_files(
     - content: search inside file contents (grep-like)
     - metadata: filter by size, date, type
 
-    Scope 'smart' searches: CWD first, then home common locations,
+    Scope 'smart' searches: the agent's workspace first, then home common locations,
     then indexed directories. Use 'everywhere' for full drive search (slow).
     """
 ```
@@ -344,7 +344,7 @@ def find_files(
 5. Apply metadata filters (size, date, type) on results
 
 **"Smart" scope logic:**
-1. Current working directory (deepest)
+1. The agent's workspace — `PathValidator.allowed_paths`, most specific first (deepest)
 2. Home directory common locations
 3. All indexed directories
 4. Full drive search (only if `scope="everywhere"` explicitly)

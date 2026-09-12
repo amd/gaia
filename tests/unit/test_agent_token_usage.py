@@ -27,6 +27,7 @@ import pytest
 from gaia.agents.base.agent import (
     Agent,
     _extract_tool_usage,
+    _query_tok_per_s,
     _query_ttft_seconds,
     _safe_number,
     _sum_conversation_tokens,
@@ -83,6 +84,59 @@ class TestSafeNumber:
 
 
 class TestSumConversationTokens:
+    def test_accepts_the_openai_spelling_a_cloud_routed_step_reports(self):
+        # A cloud-routed step (Lemonade forwarding to Fireworks) reports
+        # prompt_tokens/completion_tokens, not input_tokens/output_tokens.
+        # Reading only the local spelling dropped a count the backend really
+        # measured, and the turn then showed no token total at all.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "prompt_tokens": 8236,
+                        "completion_tokens": 17,
+                        "total_tokens": 8253,
+                    },
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (8236, 17)
+
+    def test_a_local_step_reporting_both_spellings_is_not_double_counted(self):
+        # Lemonade's own /stats carries input_tokens AND prompt_tokens for the
+        # same tokens; summing both would double every local turn's count.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "input_tokens": 8395,
+                        "prompt_tokens": 8395,
+                        "output_tokens": 68,
+                    },
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (8395, 68)
+
+    def test_non_dict_performance_stats_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": "not a dict",
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (0, 0)
+
     def test_sums_per_step_stats(self):
         conversation = [
             {"role": "user", "content": "hi"},
@@ -270,6 +324,80 @@ class TestQueryTTFTSeconds:
             },
         ]
         assert _query_ttft_seconds(conversation) is None
+
+
+# ─────────────────────────── _query_tok_per_s ─────────────────────────────
+#
+# The generation rate comes from the BACKEND's own per-call measurement, never
+# from the turn's wall clock: a turn's elapsed time includes tool execution and
+# agent overhead, so tokens/elapsed reads an order of magnitude below the real
+# rate on any multi-step turn. A backend that reports no rate has not measured
+# one, and the stat is omitted rather than invented.
+def _stats_entry(step, **perf):
+    return {
+        "role": "system",
+        "content": {"type": "stats", "step": step, "performance_stats": perf},
+    }
+
+
+class TestQueryTokPerS:
+    def test_single_call_reports_its_own_rate(self):
+        conversation = [_stats_entry(1, tokens_per_second=44.0, completion_tokens=220)]
+        assert _query_tok_per_s(conversation) == pytest.approx(44.0)
+
+    def test_multiple_calls_are_weighted_by_the_tokens_each_generated(self):
+        # 100 tokens at 50/s (2.0s) + 300 tokens at 30/s (10.0s) = 400/12.0s.
+        # The unweighted mean would be 40/s, which no part of the turn ran at.
+        conversation = [
+            _stats_entry(1, tokens_per_second=50.0, completion_tokens=100),
+            _stats_entry(2, tokens_per_second=30.0, completion_tokens=300),
+        ]
+        assert _query_tok_per_s(conversation) == pytest.approx(400 / 12.0)
+
+    def test_a_backend_that_reports_no_rate_yields_none(self):
+        # The remote OpenAI-compatible case: token counts, no timing.
+        conversation = [_stats_entry(1, completion_tokens=220)]
+        assert _query_tok_per_s(conversation) is None
+
+    def test_no_stats_entries_yields_none(self):
+        assert _query_tok_per_s([]) is None
+        assert _query_tok_per_s([{"role": "user", "content": "hi"}]) is None
+
+    def test_calls_without_a_usable_rate_are_skipped_not_counted(self):
+        conversation = [
+            _stats_entry(1, tokens_per_second=0, completion_tokens=100),
+            _stats_entry(2, tokens_per_second=40.0, completion_tokens=200),
+        ]
+        assert _query_tok_per_s(conversation) == pytest.approx(40.0)
+
+    def test_output_tokens_is_accepted_as_the_token_field(self):
+        conversation = [_stats_entry(1, tokens_per_second=25.0, output_tokens=50)]
+        assert _query_tok_per_s(conversation) == pytest.approx(25.0)
+
+    def test_a_rate_with_no_token_count_yields_none(self):
+        # Nothing to weight it by, and a rate for zero tokens describes nothing.
+        conversation = [_stats_entry(1, tokens_per_second=44.0)]
+        assert _query_tok_per_s(conversation) is None
+
+    @pytest.mark.parametrize(
+        "rate", [float("inf"), float("nan"), -5.0, True, "fast", None]
+    )
+    def test_malformed_rate_does_not_raise(self, rate):
+        conversation = [_stats_entry(1, tokens_per_second=rate, completion_tokens=100)]
+        assert _query_tok_per_s(conversation) is None
+
+    def test_non_dict_performance_stats_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": "not a dict",
+                },
+            },
+        ]
+        assert _query_tok_per_s(conversation) is None
 
 
 # ─────────────────────────── _extract_tool_usage ──────────────────────────

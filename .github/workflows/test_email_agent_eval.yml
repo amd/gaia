@@ -139,7 +139,7 @@ on:
   # (report mode) by default; `ready_for_review` is in `types` so undrafting a PR
   # triggers the run that the draft state skipped.
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The agent itself — prompts, tools, triage/condense, bundled skills, and

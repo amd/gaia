@@ -584,7 +584,8 @@ Each endpoint returns different data structures:
     **Solutions**:
     - **First try**: Ensure MCP server is running and use `http://localhost:8765`
     - Verify n8n can reach the MCP bridge
-    - Check CORS settings if using browser-based n8n
+    - Browser-based n8n on another origin is refused (403) by the bridge; add that
+      origin to `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated) before `gaia mcp start`
     - Test with curl first to isolate issues
   </Accordion>
 </AccordionGroup>
