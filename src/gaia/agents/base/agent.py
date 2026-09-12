@@ -460,7 +460,14 @@ def _sum_conversation_tokens(
 ) -> Tuple[int, int]:
     """Sum input/output tokens from per-step 'stats' entries already appended
     to conversation, plus any tool-reported usage folded in separately (see
-    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    ``_extract_tool_usage``). Returns (total_input, total_output).
+
+    Both spellings are accepted, the same way the tool-usage loop below already
+    does: a local llama.cpp step reports ``input_tokens``/``output_tokens``,
+    while a cloud-routed one comes back in OpenAI's
+    ``prompt_tokens``/``completion_tokens``. Reading only the first pair threw
+    away a count the backend really had measured, and the turn then reported no
+    token total at all."""
     total_input = 0
     total_output = 0
     for entry in conversation:
@@ -468,8 +475,14 @@ def _sum_conversation_tokens(
             content = entry["content"]
             if content.get("type") == "stats" and "performance_stats" in content:
                 stats = content["performance_stats"]
-                total_input += _safe_number(stats.get("input_tokens"))
-                total_output += _safe_number(stats.get("output_tokens"))
+                if not isinstance(stats, dict):
+                    continue
+                total_input += _safe_number(
+                    stats.get("input_tokens") or stats.get("prompt_tokens")
+                )
+                total_output += _safe_number(
+                    stats.get("output_tokens") or stats.get("completion_tokens")
+                )
     for usage in tool_usage_entries or []:
         total_input += _safe_number(
             usage.get("prompt_tokens") or usage.get("input_tokens")

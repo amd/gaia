@@ -84,6 +84,59 @@ class TestSafeNumber:
 
 
 class TestSumConversationTokens:
+    def test_accepts_the_openai_spelling_a_cloud_routed_step_reports(self):
+        # A cloud-routed step (Lemonade forwarding to Fireworks) reports
+        # prompt_tokens/completion_tokens, not input_tokens/output_tokens.
+        # Reading only the local spelling dropped a count the backend really
+        # measured, and the turn then showed no token total at all.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "prompt_tokens": 8236,
+                        "completion_tokens": 17,
+                        "total_tokens": 8253,
+                    },
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (8236, 17)
+
+    def test_a_local_step_reporting_both_spellings_is_not_double_counted(self):
+        # Lemonade's own /stats carries input_tokens AND prompt_tokens for the
+        # same tokens; summing both would double every local turn's count.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "input_tokens": 8395,
+                        "prompt_tokens": 8395,
+                        "output_tokens": 68,
+                    },
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (8395, 68)
+
+    def test_non_dict_performance_stats_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": "not a dict",
+                },
+            },
+        ]
+        assert _sum_conversation_tokens(conversation) == (0, 0)
+
     def test_sums_per_step_stats(self):
         conversation = [
             {"role": "user", "content": "hi"},
