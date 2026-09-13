@@ -319,6 +319,8 @@ class OutputHandler(ABC):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):
         """Print final answer/result.
 
@@ -1619,6 +1621,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
         tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
+        input_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        cached_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer with appropriate styling.
@@ -2581,6 +2585,8 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
         tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
+        input_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        cached_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer.

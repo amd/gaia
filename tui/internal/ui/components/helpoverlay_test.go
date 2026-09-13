@@ -184,6 +184,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/memory":   "/memory",
 		"/setup":    "/setup",
 		"/bypass":   "/bypass",
+		"/cost":     "/cost",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		key := cmd

@@ -67,6 +67,31 @@ type ChatState struct {
 	ViewportRows int  `json:"viewport_rows"`
 	HeaderRows   int  `json:"header_rows"`
 	HelpOpen     bool `json:"help_open"`
+
+	// Cost is what the session has spent so far, nil before the first turn.
+	Cost *SessionCost `json:"cost,omitempty"`
+}
+
+// SessionCost is the session ledger the TUI keeps: what a driver needs to
+// answer "what did that task cost" without re-deriving it from a transcript.
+//
+// Every field is summed from what the inference backend reported. A turn whose
+// backend reported no token counts is counted in Turns but contributes nothing
+// to the token totals, and MeasuredTurns says how many were measured — so a
+// caller can tell a genuinely cheap session from a partly-unmeasured one.
+type SessionCost struct {
+	Turns         int     `json:"turns"`
+	MeasuredTurns int     `json:"measured_turns"`
+	WallSeconds   float64 `json:"wall_seconds"`
+	Steps         int     `json:"steps"`
+	ToolCalls     int     `json:"tool_calls"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	CachedTokens  int     `json:"cached_tokens"`
+	Model         string  `json:"model,omitempty"`
+	// USD is nil when no price is configured for this model — a cost readout
+	// must not invent a rate.
+	USD *float64 `json:"usd,omitempty"`
 }
 
 // Every view the TUI can report. A client waits on one of these, so they are

@@ -37,6 +37,7 @@ var paletteCommands = []paletteCommand{
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
+	{"/cost", "What this session has spent: time, steps, tool calls, tokens, dollars"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the
@@ -392,14 +393,21 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 	}
 
 	lines := paletteBodyLines(query, items, selected, inner)
-	if len(lines)+paletteChromeRows > height {
-		// No scrolling here (unlike help): the list is 7 commands long at
-		// most, so a window too short to hold it is too short for a usable
-		// palette at all — leave the composer visible instead of clipping.
+	rendered := paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
+	// Measured on the RENDERED box, not on len(lines): a row whose description
+	// does not fit `inner` wraps, so the line count under-reports the height
+	// and the palette overflowed the window it was asked to fit. It used to
+	// hold because the list was short enough never to wrap; that is an
+	// assumption about content, and content changes.
+	//
+	// No scrolling here (unlike help): a window too short to hold the list is
+	// too short for a usable palette at all — leave the composer visible
+	// instead of clipping.
+	if lipgloss.Height(rendered) > height {
 		return "", false
 	}
 
-	return paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n")), true
+	return rendered, true
 }
 
 // paletteBodyPrefixRows is how many rendered lines (title, divider, echoed

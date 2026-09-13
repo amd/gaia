@@ -611,6 +611,8 @@ class SSEOutputHandler(OutputHandler):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):
         if answer:
             scope_line = ""
@@ -663,6 +665,14 @@ class SSEOutputHandler(OutputHandler):
         # time as generation time and read an order of magnitude low.
         if tok_per_s is not None and math.isfinite(tok_per_s) and tok_per_s > 0:
             event["tok_per_s"] = round(tok_per_s, 1)
+        # Input and cached counts ride the same omit-don't-fake rule. Cached is
+        # reported at 0 rather than omitted when the turn had input tokens: a
+        # backend that counted the prompt and cached none of it is telling us
+        # zero, which is a different statement from "nobody counted".
+        if input_tokens is not None and input_tokens > 0:
+            event["input_tokens"] = input_tokens
+            if cached_tokens is not None and cached_tokens >= 0:
+                event["cached_tokens"] = cached_tokens
         # Dev-mode only. Gated on the same env var that produced the record, so
         # an ordinary turn's payload stays byte-identical to before this existed.
         record, self._turn_metrics = self._turn_metrics, None

@@ -437,10 +437,20 @@ class LemonadeProvider(LLMClient):
         usage = response.get("usage")
         if isinstance(usage, dict):
             timings = response.get("timings")
+            # cached/reasoning come from the nested *_details objects a
+            # cloud-routed response carries (Fireworks reports both; a local
+            # llama.cpp run reports neither, and 0 there means "none", not
+            # "unmeasured" — the prompt genuinely was not served from a cache).
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            completion_details = usage.get("completion_tokens_details") or {}
             self._last_usage = {
                 "prompt_tokens": int(usage.get("prompt_tokens") or 0),
                 "completion_tokens": int(usage.get("completion_tokens") or 0),
                 "total_tokens": int(usage.get("total_tokens") or 0),
+                "cached_tokens": int(prompt_details.get("cached_tokens") or 0),
+                "reasoning_tokens": int(
+                    completion_details.get("reasoning_tokens") or 0
+                ),
                 "tokens_per_second": float(
                     (timings or {}).get("predicted_per_second") or 0.0
                 ),
