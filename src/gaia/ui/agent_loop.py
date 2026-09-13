@@ -269,6 +269,14 @@ class AgentLoop:
             return LoopDirective("paused", reason="agent_mode=manual")
 
         # ── Hourly rate limit ────────────────────────────────────────────
+        # Checked here so a spent budget still short-circuits before any
+        # session/goal lookups, but the counter itself is only incremented
+        # once we know this tick will actually reach _execute_tick (below).
+        # Incrementing unconditionally here used to let an idle install (no
+        # session, or no actionable goals -- the common/default state) burn
+        # the whole budget on no-op ticks well within the hour, then spend
+        # the remainder of every hour logging this warning even though zero
+        # autonomous LLM calls were ever made.
         now = time.time()
         if now - self._hour_start > 3600:
             self._hour_start = now
@@ -278,7 +286,6 @@ class AgentLoop:
                 "AgentLoop: hourly rate limit reached (%d calls)", _HOURLY_LIMIT
             )
             return LoopDirective("idle", reason="hourly rate limit")
-        self._calls_this_hour += 1
 
         # ── Session selection ────────────────────────────────────────────
         session_id = trigger.session_id or await self._get_active_session()
@@ -299,6 +306,8 @@ class AgentLoop:
             return LoopDirective("idle")
 
         # ── Execute tick ─────────────────────────────────────────────────
+        # Only a tick that reaches here spends hourly budget.
+        self._calls_this_hour += 1
         directive = await self._execute_tick(session_id, session, goals)
         return directive
 
