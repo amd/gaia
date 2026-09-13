@@ -18,6 +18,7 @@ result, a timed-out command is flagged, and partial output survives the kill.
 """
 
 import subprocess
+import time
 
 import pytest
 
@@ -49,7 +50,7 @@ def _shell_tools():
 
     def spy(**kwargs):
         def decorate(fn):
-            captured[kwargs.get("name")] = fn
+            captured[fn.__name__] = fn
             return original(**kwargs)(fn)
 
         return decorate
@@ -67,6 +68,7 @@ class _FakeProcess:
     """A subprocess that returns what the test says, without running anything."""
 
     pid = 4242
+    args = "fake"
 
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode = returncode
@@ -78,6 +80,61 @@ class _FakeProcess:
 
     def kill(self):
         pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class _Clock:
+    """A monotonic clock the test drives.
+
+    The executor waits on the process in short slices so a Stop lands while a
+    command is still running, which means a deadline is now counted in slices
+    rather than handed to one blocking call. Driving the clock is what lets a
+    test assert a 30-minute budget without waiting 30 minutes.
+    """
+
+    def __init__(self, real_time):
+        self._start = 1_000.0
+        self.now = self._start
+        self._real_time = real_time
+
+    def monotonic(self):
+        return self.now
+
+    def time(self):
+        return self._real_time()
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    @property
+    def elapsed(self):
+        return self.now - self._start
+
+
+def _fake_clock(monkeypatch):
+    """Freeze the executor's clock and hand the test the dial."""
+    clock = _Clock(time.time)
+    monkeypatch.setattr(shell_tools, "time", clock)
+    return clock
+
+
+def _hangs_forever(monkeypatch, clock, stdout="partial out", stderr="partial err"):
+    """A command that never finishes: every wait slice burns, none completes."""
+
+    class _Hangs(_FakeProcess):
+        def communicate(self, timeout=None):
+            clock.advance(timeout)
+            raise subprocess.TimeoutExpired(cmd="hangs", timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _Hangs())
+    monkeypatch.setattr(
+        shell_tools, "terminate_process_tree", lambda process: (stdout, stderr)
+    )
 
 
 def _completes(returncode=0, stdout="", stderr="", seen=None):
@@ -242,28 +299,61 @@ class TestResolveTimeout:
 def test_each_class_reaches_subprocess_with_its_default(
     monkeypatch, unrestricted, command, expected_timeout, expected_class
 ):
+    """The class default is the budget the command is really killed at."""
     _, tools = _shell_tools()
-    seen = {}
-
-    monkeypatch.setattr(subprocess, "Popen", _completes(stdout="ok", seen=seen))
+    clock = _fake_clock(monkeypatch)
+    _hangs_forever(monkeypatch, clock)
 
     result = tools["run_shell_command"](command)
 
-    assert seen["timeout"] == expected_timeout
+    assert result["timed_out"] is True
+    assert clock.elapsed == pytest.approx(expected_timeout, abs=1)
     assert result["timeout"] == expected_timeout
     assert result["timeout_class"] == expected_class
 
 
 def test_an_explicit_timeout_still_overrides_the_class(monkeypatch, unrestricted):
     _, tools = _shell_tools()
-    seen = {}
-
-    monkeypatch.setattr(subprocess, "Popen", _completes(seen=seen))
+    clock = _fake_clock(monkeypatch)
+    _hangs_forever(monkeypatch, clock)
 
     result = tools["run_shell_command"]("pytest --version", timeout=60)
 
-    assert seen["timeout"] == 60
+    assert clock.elapsed == pytest.approx(60, abs=1)
     assert result["timeout"] == 60
+
+
+def test_a_granted_binary_reaches_its_class_through_the_real_allowlist(monkeypatch):
+    """The path a user actually has: allowlist on, one binary granted by a skill.
+
+    Every other classification test stands the allowlist down, and with it in
+    place `pytest` is refused — so without this test nothing proves the long
+    classes are reachable at all on a shipped install.
+    """
+    from gaia.skills.binaries import BinaryGrants
+
+    host, tools = _shell_tools()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("pytest", skill_name="python-testing")
+    clock = _fake_clock(monkeypatch)
+    _hangs_forever(monkeypatch, clock)
+
+    result = tools["run_shell_command"]("pytest tests/unit -q")
+
+    assert result["timeout_class"] == "test", "a granted binary was still refused"
+    assert result["timeout"] == TIMEOUT_CLASSES["test"].seconds
+    assert clock.elapsed == pytest.approx(TIMEOUT_CLASSES["test"].seconds, abs=1)
+
+
+def test_without_a_grant_the_same_command_never_reaches_a_timeout_at_all():
+    """The other half: the allowlist refuses it before any class applies."""
+    _, tools = _shell_tools()
+
+    result = tools["run_shell_command"]("pytest tests/unit -q")
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert "timeout_class" not in result
 
 
 def test_an_out_of_range_timeout_is_refused_with_an_actionable_error(monkeypatch):
@@ -291,18 +381,12 @@ def _never_runs(what):
 
 
 def _timing_out(monkeypatch, stdout="partial out", stderr="partial err"):
-    """A command that blows its deadline, killed with output already buffered."""
+    """A command that blows its deadline, killed with output already buffered.
 
-    class _Hangs(_FakeProcess):
-        def communicate(self, timeout=None):
-            raise subprocess.TimeoutExpired(cmd="ls", timeout=timeout)
-
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _Hangs())
-    # The real one taskkills a pid; here it only has to hand back what the
-    # command printed before the kill.
-    monkeypatch.setattr(
-        shell_tools, "terminate_process_tree", lambda process: (stdout, stderr)
-    )
+    ``terminate_process_tree`` is stubbed: the real one taskkills a pid, here it
+    only has to hand back what the command printed before the kill.
+    """
+    _hangs_forever(monkeypatch, _fake_clock(monkeypatch), stdout, stderr)
 
 
 class TestNoRegression:
@@ -354,6 +438,94 @@ class TestNoRegression:
         # The hint carries the next step: which class it ran as, and the ceiling.
         assert "'default'" in error["hint"]
         assert str(MAX_COMMAND_TIMEOUT) in error["hint"]
+
+
+class TestStopDuringACommand:
+    """Stop has to land while the command runs, not after its class default.
+
+    The per-tool guard is over an hour so a build is not abandoned mid-run, so
+    nothing else would end a 30-minute command early.
+    """
+
+    def test_a_stop_mid_command_kills_the_tree_and_says_so(self, monkeypatch):
+        import threading
+
+        host, tools = _shell_tools()
+        clock = _fake_clock(monkeypatch)
+        killed = {}
+
+        cancel = threading.Event()
+        host._cancel_event = cancel
+
+        class _RunsUntilStopped(_FakeProcess):
+            def communicate(self, timeout=None):
+                clock.advance(timeout)
+                cancel.set()  # the user clicks Stop while the command runs
+                raise subprocess.TimeoutExpired(cmd="build", timeout=timeout)
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _RunsUntilStopped())
+
+        def _kill(process):
+            killed["pid"] = process.pid
+            return "made it partway", ""
+
+        monkeypatch.setattr(shell_tools, "terminate_process_tree", _kill)
+
+        result = tools["run_shell_command"]("ls -la")
+
+        assert result["cancelled"] is True
+        assert killed["pid"] == _FakeProcess.pid, "the process tree was left running"
+        assert result["stdout"] == "made it partway"
+        assert clock.elapsed < 5, "Stop waited for the command's own deadline"
+
+    def test_the_loop_giving_up_mid_command_stops_it_too(self, monkeypatch):
+        """The other cancel channel: the agent loop abandoned this call."""
+        import threading
+
+        from gaia.agents.base import tools as tools_module
+
+        _, tools = _shell_tools()
+        clock = _fake_clock(monkeypatch)
+        killed = {}
+        abandoned = threading.Event()
+
+        class _RunsUntilAbandoned(_FakeProcess):
+            def communicate(self, timeout=None):
+                clock.advance(timeout)
+                abandoned.set()  # the loop gives up while the command runs
+                raise subprocess.TimeoutExpired(cmd="build", timeout=timeout)
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _RunsUntilAbandoned())
+
+        def _kill(process):
+            killed["pid"] = process.pid
+            return "partway", ""
+
+        monkeypatch.setattr(shell_tools, "terminate_process_tree", _kill)
+
+        tools_module.set_tool_cancel_event(abandoned)
+        try:
+            result = tools["run_shell_command"]("ls -la")
+        finally:
+            tools_module.set_tool_cancel_event(None)
+
+        assert result["cancelled"] is True
+        assert killed["pid"] == _FakeProcess.pid, "the process tree was left running"
+        assert clock.elapsed < 5, "it waited for the command's own deadline"
+        assert "executed" not in result, "it did run — only a refusal may deny that"
+
+    def test_a_stop_before_the_spawn_never_starts_the_command(self, monkeypatch):
+        import threading
+
+        host, tools = _shell_tools()
+        host._cancel_event = threading.Event()
+        host._cancel_event.set()
+        monkeypatch.setattr(subprocess, "Popen", _never_runs("a stopped command"))
+
+        result = tools["run_shell_command"]("ls -la")
+
+        assert result["cancelled"] is True
+        assert result["executed"] is False, "nothing ran, and it has to say so"
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +585,38 @@ class TestWaitForCondition:
 
         assert result["cancelled"] is True
         assert result["condition_met"] is False
+        # Stopped before the first probe reached a process: nothing ran.
+        assert result["executed"] is False
+
+    def test_a_stop_between_probes_ends_the_wait(self, monkeypatch):
+        """Stop lands while the wait sleeps, not while a probe runs.
+
+        The probe that already ran is why this cannot claim ``executed: False``:
+        a wait that ran `ls` three times did not "never execute".
+        """
+        import threading
+
+        host, tools = _shell_tools()
+        clock = _fake_clock(monkeypatch)
+
+        class _StopsWhileSleeping(threading.Event):
+            def wait(self, timeout=None):
+                # Stands in for real time passing during the inter-probe sleep.
+                clock.advance(timeout or 0)
+                if clock.elapsed >= 5:
+                    self.set()
+                return self.is_set()
+
+        host._cancel_event = _StopsWhileSleeping()
+        monkeypatch.setattr(subprocess, "Popen", _completes(returncode=1))
+
+        result = tools["wait_for_condition"]("ls nope", timeout=WAIT_MAX_TIMEOUT)
+
+        assert result["cancelled"] is True
+        assert result["condition_met"] is False
+        assert result["polls"] == 1
+        assert "executed" not in result, "the probe ran — only a refusal may deny it"
+        assert clock.elapsed < 10, "it slept out the whole poll interval first"
 
     @pytest.mark.parametrize("timeout", [0, -5, WAIT_MAX_TIMEOUT + 1])
     def test_an_unbounded_wait_is_refused(self, timeout):
@@ -515,9 +719,9 @@ def test_a_blown_deadline_really_kills_the_process():
 class TestWhatTheModelIsTold:
     """The table is worthless if the model never sees it.
 
-    The registry takes a tool's description from its ``__doc__`` — the
-    ``description=``/``parameters=`` kwargs on ``@tool`` are swallowed and
-    ignored — and the non-native prompt path renders only the FIRST LINE of it.
+    The registry takes a tool's description from its ``__doc__`` — ``@tool``
+    accepts no ``description=``/``parameters=`` at all — and the non-native
+    prompt path renders only the FIRST LINE of it.
     So the class defaults have to be in that first line, and stay there.
     """
 

@@ -190,8 +190,14 @@ _SUBCOMMAND_CLASS: Dict[str, Dict[str, TimeoutClass]] = {
 _RUN_SCRIPT_BINARIES = frozenset({"npm", "pnpm", "yarn"})
 
 
-def normalize_binary(token: str) -> str:
-    """``C:\\Tools\\PyTest.EXE`` -> ``pytest``: basename, no suffix, lowercase."""
+def command_basename(token: str) -> str:
+    """``C:\\Tools\\PyTest.EXE`` -> ``pytest``: basename, no suffix, lowercase.
+
+    Deliberately not ``gaia.skills.binaries.normalize_binary``, which returns
+    ``""`` for anything path-spelled so that ``./gh`` can never match a grant.
+    Classification wants the opposite — ``/opt/ci/pytest`` is still a test run —
+    so the two keep different names rather than one name with two meanings.
+    """
     name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
     for suffix in (".exe", ".cmd", ".bat", ".ps1"):
         if name.endswith(suffix):
@@ -207,7 +213,7 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
         if token.startswith("-"):  # a flag, incl. python's -m
             index += 1
             continue
-        binary = normalize_binary(token)
+        binary = command_basename(token)
         if binary in _WRAPPERS:
             index += 1
             continue
@@ -215,9 +221,9 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     else:
         return DEFAULT
 
-    binary = normalize_binary(tokens[index])
+    binary = command_basename(tokens[index])
     operands = [
-        (position, normalize_binary(token))
+        (position, command_basename(token))
         for position, token in enumerate(tokens[index + 1 :], start=index + 1)
         if not token.startswith("-")
     ]
@@ -237,24 +243,44 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     return _BINARY_CLASS.get(binary, DEFAULT)
 
 
-def _split_segments(command: str) -> List[List[str]]:
-    """Split *command* into pipeline segments of tokens."""
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        parts = command.split()
+def split_pipeline(tokens: List[str]) -> List[List[str]]:
+    """Already-tokenized *tokens* cut on ``|`` into non-empty segments.
+
+    One implementation, used by both the shell tool's validator and the
+    classifier below. They tokenize differently — the validator is deliberately
+    stricter — but neither should carry its own copy of this.
+    """
     segments: List[List[str]] = []
     current: List[str] = []
-    for part in parts:
-        if part == "|":
+    for token in tokens:
+        if token == "|":
             if current:
                 segments.append(current)
             current = []
         else:
-            current.append(part)
+            current.append(token)
     if current:
         segments.append(current)
     return segments
+
+
+def _tokenize(command: str) -> List[str]:
+    """*command* split into tokens, with ``|`` always a token of its own.
+
+    ``punctuation_chars`` is what makes ``ls|pytest`` classify as a test run:
+    plain ``shlex.split`` keeps it as one token, so the pipeline is missed and
+    the whole thing is timed as a 30s command. Quoted text is untouched, so
+    ``grep "a|b"`` stays one argument.
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    # shlex.split() clears these; a raw shlex does not, and a URL fragment
+    # (curl .../page#frag) would otherwise truncate the command mid-classify.
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return command.split()
 
 
 def classify_command(command: str) -> TimeoutClass:
@@ -264,7 +290,7 @@ def classify_command(command: str) -> TimeoutClass:
     test run whose output happens to be filtered, and the shell waits for the
     whole pipeline anyway.
     """
-    segments = _split_segments(command)
+    segments = split_pipeline(_tokenize(command))
     if not segments:
         return DEFAULT
     return max(
