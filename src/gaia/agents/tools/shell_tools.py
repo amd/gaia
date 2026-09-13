@@ -11,14 +11,39 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.tools.command_timeouts import (
+    MAX_COMMAND_TIMEOUT,
+    TIMEOUT_CLASSES,
+    resolve_timeout,
+    split_pipeline,
+    terminate_process_tree,
+)
 
 logger = logging.getLogger(__name__)
+
+#: ``wait_for_condition`` bounds. The maximum wait is a ceiling, not a default:
+#: a wait that could run unbounded is the spinning the primitive replaces.
+WAIT_DEFAULT_TIMEOUT = 120
+WAIT_MAX_TIMEOUT = 600
+WAIT_DEFAULT_POLL_INTERVAL = 5
+#: Poll floor. At 5s the probe rate stays near the 10-commands-per-minute shell
+#: rate limit the wait is exempt from (it counts as one command, not one per poll).
+WAIT_MIN_POLL_INTERVAL = 5
+WAIT_MAX_POLL_INTERVAL = 60
+#: A predicate is a quick check, not the work. Each probe is capped here, and by
+#: whatever is left of the deadline.
+WAIT_PROBE_TIMEOUT = 30
+
+#: How often a running command is checked against the cancel signal. Short
+#: enough that Stop feels immediate, long enough to cost nothing over 30 minutes.
+CANCEL_POLL_SECONDS = 0.5
 
 # Security: WHITELIST approach - only allow explicitly safe commands
 # This is much safer than a blacklist which always misses dangerous commands
@@ -231,6 +256,23 @@ def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
 #: only one a ``shell:execute`` grant may exempt from confirmation.
 _POLICY_GATED_SHELL_TOOL = "run_shell_command"
 
+#: Runs its predicate through ``run_shell_command``, so the same guardrails
+#: apply and a refused predicate is refused before anyone is prompted. It is
+#: NOT grant-exempt: consent for a binary is not consent to poll with it.
+_WAIT_TOOL = "wait_for_condition"
+
+
+#: Output past this many characters is cut before it reaches the model.
+MAX_OUTPUT_CHARS = 10_000
+
+
+def _truncate(text: Optional[str], stream: str) -> str:
+    """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
+    text = text or ""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    return text[:MAX_OUTPUT_CHARS] + f"\n...output truncated ({stream})..."
+
 
 def skill_granted_binaries(host: Any) -> frozenset:
     """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
@@ -279,32 +321,18 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
-def _split_pipeline(cmd_parts: list) -> list:
-    """Split a shlex-split command on ``|`` into its non-empty segments."""
-    segments: list = []
-    current: list = []
-    for part in cmd_parts:
-        if part == "|":
-            if current:
-                segments.append(current)
-            current = []
-        else:
-            current.append(part)
-    if current:
-        segments.append(current)
-    return segments
-
-
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
 
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
+    - wait_for_condition: Poll a command until it succeeds, or hit a deadline
 
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
+    - A wait_for_condition call is one command; its probes are not metered again
     """
 
     def __init__(self, *args, **kwargs):
@@ -364,7 +392,7 @@ class ShellToolsMixin:
                 [],
             )
 
-        segments = _split_pipeline(cmd_parts)
+        segments = split_pipeline(cmd_parts)
         if not segments:
             return (
                 {"status": "error", "error": "Empty command", "has_errors": True},
@@ -403,7 +431,7 @@ class ShellToolsMixin:
         Duck-typed rather than an override — ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
-        if tool_name != _POLICY_GATED_SHELL_TOOL:
+        if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
             return None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
@@ -458,7 +486,7 @@ class ShellToolsMixin:
             return False
 
         try:
-            segments = _split_pipeline(shlex.split(command))
+            segments = split_pipeline(shlex.split(command))
         except ValueError:
             return False
         if not segments:
@@ -500,6 +528,12 @@ class ShellToolsMixin:
             self.max_commands_per_minute = 10
             self.max_commands_per_10_seconds = 3
 
+        # A wait's probes are one command's worth of budget, charged once when
+        # the wait starts. Metering each poll separately would trip the burst
+        # limit on the second probe and turn the primitive into an error.
+        if getattr(self, "_shell_polling", False):
+            return True, "", 0.0
+
         current_time = time.time()
 
         # Remove old timestamps outside the window
@@ -540,8 +574,88 @@ class ShellToolsMixin:
 
         return True, "", 0.0
 
+    def _wait_interrupt_signal(self) -> threading.Event:
+        """The event the shell tools sleep on while something is running.
+
+        Waiting on the agent's cancel signal rather than sleeping blind is what
+        makes Stop take effect during a wait or a long command; without it the
+        user's click is honoured only once the deadline runs out — up to half an
+        hour later for a build. Falls back to a never-set event for consumers
+        that have no cancel channel (plain CLI runs), where the deadline is the
+        only exit.
+        """
+        for source in (
+            getattr(self, "_cancel_event", None),
+            getattr(getattr(self, "console", None), "cancelled", None),
+        ):
+            if isinstance(source, threading.Event):
+                return source
+        return threading.Event()
+
+    def _cancel_requested(self) -> bool:
+        """True once either cancel channel has fired.
+
+        Two of them: the user's Stop (``_wait_interrupt_signal``) and the agent
+        loop giving up on this tool call (``tools.tool_cancelled``). Either one
+        means nobody is waiting for the output any more.
+        """
+        from gaia.agents.base.tools import tool_cancelled
+
+        return self._wait_interrupt_signal().is_set() or tool_cancelled()
+
+    def _sleep_unless_cancelled(self, seconds: float) -> bool:
+        """Sleep up to *seconds*; True if a cancel landed instead.
+
+        Both channels are watched, not just the user's Stop: a wait the agent
+        loop has already abandoned would otherwise keep sleeping out a full
+        poll interval — a minute at the top of the range — before noticing.
+        """
+        interrupt = self._wait_interrupt_signal()
+        deadline = time.monotonic() + seconds
+        while not self._cancel_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            interrupt.wait(min(CANCEL_POLL_SECONDS, remaining))
+        return True
+
+    def _communicate_or_cancel(
+        self, process: "subprocess.Popen", timeout: int
+    ) -> Tuple[str, str, bool]:
+        """Wait for *process*, checking for Stop while it runs.
+
+        ``communicate(timeout=...)`` blocks for the whole class default, so a
+        Stop during a 30-minute build would be honoured 30 minutes late. Waiting
+        in short slices costs nothing (the call still blocks in select/reader
+        threads) and lets the kill fire while the command is still running.
+
+        Returns:
+            ``(stdout, stderr, cancelled)``.
+
+        Raises:
+            subprocess.TimeoutExpired: the deadline passed; the caller kills the
+                tree and reports the timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._cancel_requested():
+                stdout, stderr = terminate_process_tree(process)
+                return stdout, stderr, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(CANCEL_POLL_SECONDS, remaining)
+                )
+                return stdout, stderr, False
+            except subprocess.TimeoutExpired:
+                continue  # slice expired, not the command's own deadline
+
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
+        if getattr(self, "_shell_polling", False):
+            return  # already charged once, when the wait started
         self.shell_command_times.append(time.time())
 
     @staticmethod
@@ -812,22 +926,52 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
+            # The agent-level guard must outlast the longest command class, or a
+            # build would be abandoned by the loop while the subprocess is still
+            # inside its own (correct) timeout.
+            timeout=MAX_COMMAND_TIMEOUT + 60,
         )
         def run_shell_command(
-            command: str, working_directory: Optional[str] = None, timeout: int = 30
+            command: str,
+            working_directory: Optional[str] = None,
+            # Annotated int, not Optional[int]: the registry infers the JSON
+            # schema type from this annotation and renders anything it cannot
+            # read as a string, so Optional[int] would tell a tool-calling model
+            # to send "60". None still means "use the class default".
+            timeout: int = None,
         ) -> Dict[str, Any]:
-            """
-            Execute a shell command and return the output.
+            """Execute a shell command. Leave timeout unset: it defaults to what the command needs — 900s for test runners, 1800s for builds and installs, 300s for git/network calls, 30s for everything else.
+
+            The class table leads because the prompt renders a tool by the FIRST
+            LINE of its docstring; anything below is seen only by models using
+            native tool calls. ``test_the_docstring_states_every_class`` keeps
+            that line honest when the table changes.
 
             Args:
                 command: Shell command to execute
                 working_directory: Directory to run command in
-                timeout: Maximum execution time in seconds
+                timeout: Maximum execution time in seconds. Omit it for the
+                    class default above. Above the 3600s ceiling it is refused,
+                    not clamped.
 
             Returns:
-                Dictionary with status, output, and error information
+                Dictionary with status, output, and error information. The
+                applied timeout and the class it came from are in ``timeout``
+                and ``timeout_class``; a command killed at the limit carries
+                ``timed_out`` plus whatever it printed first.
             """
             try:
+                try:
+                    timeout, timeout_class = resolve_timeout(command, timeout)
+                except ValueError as exc:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": str(exc),
+                        "command": command,
+                        "has_errors": True,
+                    }
+
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time = self._check_rate_limit()
                 if not allowed:
@@ -1043,12 +1187,34 @@ class ShellToolsMixin:
                 # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
                 # hits it. errors="replace" keeps a stray undecodable byte from
                 # costing the whole output.
+                #
+                # Popen, not subprocess.run, for one reason: on expiry run()
+                # kills only the process it launched and then re-enters
+                # communicate() with NO timeout, so a surviving grandchild
+                # holding the pipes hangs the call for as long as it lives. A
+                # verified 5s timeout took over two minutes and never returned.
+                # terminate_process_tree kills the whole tree first, so the
+                # pipes close and the deadline means what it says.
+                if self._cancel_requested():
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": (
+                            f"Stopped before running, so nothing was changed: {command}"
+                        ),
+                        "command": command,
+                        "has_errors": True,
+                        "cancelled": True,
+                        "cwd": cwd,
+                    }
+
                 start_time = time.monotonic()
                 try:
-                    result = subprocess.run(
+                    process = subprocess.Popen(  # pylint: disable=consider-using-with
                         exec_cmd,
                         cwd=cwd,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         # stdin is DEVNULL, never inherited. capture_output
                         # redirects stdout/stderr but leaves stdin alone, and
                         # this process's stdin is the agent transport's pipe —
@@ -1072,65 +1238,81 @@ class ShellToolsMixin:
                         stdin=subprocess.DEVNULL,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=timeout,
-                        check=False,
                         env=os.environ.copy(),
+                        # POSIX: its own session, so the kill reaches every
+                        # descendant. Windows gets the same reach via taskkill /T.
+                        start_new_session=os.name != "nt",
                         shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
                     )
+                    stdout_str, stderr_str, cancelled = self._communicate_or_cancel(
+                        process, timeout
+                    )
+                    returncode = process.returncode
                     duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
                     self._record_command_execution()
-                except subprocess.TimeoutExpired as exc:
-                    duration = time.monotonic() - start_time
 
-                    # Handle timeout gracefully
-                    stdout_str = ""
-                    stderr_str = ""
-                    if exc.stdout:
-                        stdout_str = (
-                            exc.stdout
-                            if isinstance(exc.stdout, str)
-                            else exc.stdout.decode("utf-8", errors="replace")
-                        )
-                    if exc.stderr:
-                        stderr_str = (
-                            exc.stderr
-                            if isinstance(exc.stderr, str)
-                            else exc.stderr.decode("utf-8", errors="replace")
-                        )
+                    if cancelled:
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Command was stopped after {duration:.1f}s and "
+                                f"killed, so its work is incomplete: {command}"
+                            ),
+                            "command": command,
+                            "stdout": _truncate(stdout_str, "stdout"),
+                            "stderr": _truncate(stderr_str, "stderr"),
+                            "has_errors": True,
+                            "cancelled": True,
+                            "timeout": timeout,
+                            "timeout_class": timeout_class,
+                            "duration_seconds": duration,
+                            "cwd": cwd,
+                        }
+                except subprocess.TimeoutExpired:
+                    duration = time.monotonic() - start_time
+                    stdout_str, stderr_str = terminate_process_tree(process)
+                    # Truncated here too: a command killed at 30 minutes has
+                    # printed far more than one killed at 30 seconds, and all of
+                    # it would otherwise go straight into the model's context.
+                    stdout_str = _truncate(stdout_str, "stdout")
+                    stderr_str = _truncate(stderr_str, "stderr")
 
                     return {
                         "status": "error",
-                        "error": f"Command timed out after {timeout} seconds",
+                        "error": (
+                            f"Command timed out after {timeout} seconds and was "
+                            f"killed, so its work is incomplete: {command}"
+                        ),
                         "command": command,
                         "stdout": stdout_str,
                         "stderr": stderr_str,
                         "has_errors": True,
                         "timed_out": True,
                         "timeout": timeout,
+                        "timeout_class": timeout_class,
                         "duration_seconds": duration,
                         "cwd": cwd,
+                        "hint": (
+                            f"It ran as a '{timeout_class}' command "
+                            f"({TIMEOUT_CLASSES[timeout_class].summary}, "
+                            f"{TIMEOUT_CLASSES[timeout_class].seconds}s by default). "
+                            "Whatever it printed before the kill is in "
+                            "'stdout'/'stderr' above. Either narrow the command (one "
+                            "test file rather than the whole suite) or re-run it with a "
+                            f"larger timeout, up to {MAX_COMMAND_TIMEOUT}s."
+                        ),
                     }
 
-                # Capture and truncate output if too long
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                truncated = False
-                max_output = 10_000
-
-                if len(stdout) > max_output:
-                    stdout = stdout[:max_output] + "\n...output truncated (stdout)..."
-                    truncated = True
-
-                if len(stderr) > max_output:
-                    stderr = stderr[:max_output] + "\n...output truncated (stderr)..."
-                    truncated = True
+                stdout = _truncate(stdout_str, "stdout")
+                stderr = _truncate(stderr_str, "stderr")
+                truncated = stdout != (stdout_str or "") or stderr != (stderr_str or "")
 
                 # Debug logging
                 if hasattr(self, "debug") and self.debug:
                     logger.info(
-                        f"Command completed in {duration:.2f}s with return code {result.returncode}"
+                        f"Command completed in {duration:.2f}s with return code {returncode}"
                     )
 
                 return {
@@ -1138,10 +1320,11 @@ class ShellToolsMixin:
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "return_code": result.returncode,
-                    "has_errors": result.returncode != 0,
+                    "return_code": returncode,
+                    "has_errors": returncode != 0,
                     "duration_seconds": duration,
                     "timeout": timeout,
+                    "timeout_class": timeout_class,
                     "cwd": cwd,
                     "output_truncated": truncated,
                 }
@@ -1159,3 +1342,197 @@ class ShellToolsMixin:
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
+
+        @tool(
+            atomic=True,
+            # Outlast the longest wait the tool itself permits, so the agent
+            # loop never abandons a wait that is still inside its deadline.
+            timeout=WAIT_MAX_TIMEOUT + 60,
+        )
+        def wait_for_condition(
+            command: str,
+            working_directory: Optional[str] = None,
+            timeout: int = WAIT_DEFAULT_TIMEOUT,
+            poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
+        ) -> Dict[str, Any]:
+            """Wait until a shell command succeeds, instead of sleeping and re-checking: give it a command that exits 0 once the thing you are waiting for is ready (a file written, a server answering, a run finished) and it polls every 5s until then, giving up at 120s by default and 600s at most.
+
+            One agent step covers the whole wait. The polling happens inside
+            this call against a monotonic deadline, so the loop's step budget is
+            spent on work rather than on re-asking whether the thing is ready.
+
+            Args:
+                command: The predicate — exits 0 once the condition holds,
+                    non-zero until then. Same allowlist as run_shell_command.
+                working_directory: Directory to run the predicate in
+                timeout: Give up after this many seconds (max 600)
+                poll_interval: Seconds between checks (5-60)
+
+            Returns:
+                A result dict carrying ``condition_met``, how many probes ran and
+                the last probe's output. Deadline expiry is an error, not a
+                quiet False.
+            """
+            try:
+                timeout = int(timeout)
+                poll_interval = int(poll_interval)
+            except (TypeError, ValueError):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout and poll_interval must be whole seconds, got "
+                        f"timeout={timeout!r}, poll_interval={poll_interval!r}."
+                    ),
+                    "has_errors": True,
+                }
+
+            if not 0 < timeout <= WAIT_MAX_TIMEOUT:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout must be between 1 and {WAIT_MAX_TIMEOUT} seconds, "
+                        f"got {timeout}. A longer wait than {WAIT_MAX_TIMEOUT}s is the "
+                        f"agent hanging, not waiting — report progress to the user and "
+                        f"wait again if the condition is still worth waiting for."
+                    ),
+                    "has_errors": True,
+                }
+            if not WAIT_MIN_POLL_INTERVAL <= poll_interval <= WAIT_MAX_POLL_INTERVAL:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"poll_interval must be between {WAIT_MIN_POLL_INTERVAL} and "
+                        f"{WAIT_MAX_POLL_INTERVAL} seconds, got {poll_interval}. The "
+                        f"floor keeps a wait from hammering the machine with probes."
+                    ),
+                    "has_errors": True,
+                }
+
+            # The wait is charged as one command up front; its probes are then
+            # exempt (see _check_rate_limit) rather than each tripping the limit.
+            allowed, reason, wait_time = self._check_rate_limit()
+            if not allowed:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
+                    "has_errors": True,
+                    "rate_limited": True,
+                    "wait_time_seconds": wait_time,
+                }
+            self._record_command_execution()
+
+            start = time.monotonic()
+            deadline = start + timeout
+            polls = 0
+            last: Dict[str, Any] = {}
+
+            def _cancelled(probes: int) -> Dict[str, Any]:
+                """The one shape a stopped wait returns, wherever Stop landed.
+
+                ``executed: False`` is claimed only when no probe ever reached a
+                process — a Stop that landed before the first spawn. Once one
+                has run, saying the predicate never executed is the same false
+                statement as calling an unrun check passed (#3677). Reaching a
+                second probe proves the first one ran; a single probe says so
+                itself.
+                """
+                ran = probes > 1 or bool(last.get(EXECUTED_KEY, True))
+                result = {
+                    "status": "error",
+                    "error": (
+                        f"Wait for '{command}' was stopped after {probes} "
+                        f"check(s); the condition was never met."
+                    ),
+                    "condition_met": False,
+                    "cancelled": True,
+                    "command": command,
+                    "polls": probes,
+                    "timeout": timeout,
+                    "elapsed_seconds": time.monotonic() - start,
+                    "has_errors": True,
+                }
+                return result if ran else {**NOT_EXECUTED, **result}
+
+            while True:
+                remaining = deadline - time.monotonic()
+                probe_timeout = max(1, min(int(remaining), WAIT_PROBE_TIMEOUT))
+                self._shell_polling = True
+                try:
+                    last = run_shell_command(command, working_directory, probe_timeout)
+                finally:
+                    self._shell_polling = False
+                polls += 1
+
+                # Stop landed while the probe itself was running.
+                if last.get("cancelled"):
+                    return _cancelled(polls)
+
+                # No return_code means the predicate never ran — refused by the
+                # guardrails, bad working directory, unparseable. Polling a
+                # command that cannot run just burns the deadline, so stop now
+                # and hand back the reason it was refused.
+                if "return_code" not in last and not last.get("timed_out"):
+                    return {
+                        **last,
+                        "condition_met": False,
+                        "command": command,
+                        "polls": polls,
+                        "hint": (
+                            "The predicate itself could not run, so the wait stopped "
+                            "immediately. Fix the command above, then wait again."
+                        ),
+                    }
+
+                if last.get("return_code") == 0:
+                    elapsed = time.monotonic() - start
+                    return {
+                        "status": "success",
+                        "condition_met": True,
+                        "command": command,
+                        "elapsed_seconds": elapsed,
+                        "polls": polls,
+                        "poll_interval_seconds": poll_interval,
+                        "timeout": timeout,
+                        "stdout": last.get("stdout", ""),
+                        "stderr": last.get("stderr", ""),
+                        "cwd": last.get("cwd"),
+                        "has_errors": False,
+                    }
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if self._sleep_unless_cancelled(min(poll_interval, remaining)):
+                    return _cancelled(polls)
+
+            elapsed = time.monotonic() - start
+            return {
+                "status": "error",
+                "error": (
+                    f"Condition '{command}' was still not true {elapsed:.0f}s later "
+                    f"(deadline {timeout}s, checked {polls} time(s) every "
+                    f"{poll_interval}s). Last exit code: {last.get('return_code')}."
+                ),
+                "condition_met": False,
+                "timed_out": True,
+                "has_errors": True,
+                "command": command,
+                "elapsed_seconds": elapsed,
+                "polls": polls,
+                "poll_interval_seconds": poll_interval,
+                "timeout": timeout,
+                "last_return_code": last.get("return_code"),
+                "stdout": last.get("stdout", ""),
+                "stderr": last.get("stderr", ""),
+                "cwd": last.get("cwd"),
+                "hint": (
+                    "The last check's output is above — read it before waiting again. "
+                    "Whatever you are waiting for is slow, stuck, or never going to "
+                    f"happen; tell the user which. A single wait is capped at "
+                    f"{WAIT_MAX_TIMEOUT}s."
+                ),
+            }
