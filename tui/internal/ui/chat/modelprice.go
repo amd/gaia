@@ -110,6 +110,14 @@ func (p modelPrice) source() string {
 
 // totalUSD is the bill as a number, for callers that render it themselves.
 func (p modelPrice) totalUSD(in, cached, out int) float64 {
+	uncachedUSD, cachedUSD, outUSD := p.split(in, cached, out)
+	return uncachedUSD + cachedUSD + outUSD
+}
+
+// split is one bill broken into the three things that are charged for.
+// Written once: the clamp and the cached-rate rule are billing policy, and a
+// second copy is a second place for them to drift.
+func (p modelPrice) split(in, cached, out int) (uncachedUSD, cachedUSD, outUSD float64) {
 	uncached := in - cached
 	if uncached < 0 {
 		uncached = 0
@@ -118,8 +126,8 @@ func (p modelPrice) totalUSD(in, cached, out int) float64 {
 	if p.CachedPerMTok != nil {
 		cachedRate = *p.CachedPerMTok
 	}
-	return perMTok(uncached, p.InputPerMTok) +
-		perMTok(cached, cachedRate) +
+	return perMTok(uncached, p.InputPerMTok),
+		perMTok(cached, cachedRate),
 		perMTok(out, p.OutputPerMTok)
 }
 
@@ -129,25 +137,49 @@ func (p modelPrice) format(in, cached, out int) string {
 	if cur == "" {
 		cur = "USD"
 	}
-	uncached := in - cached
-	if uncached < 0 {
-		uncached = 0
-	}
-	cachedRate := p.InputPerMTok
-	if p.CachedPerMTok != nil {
-		cachedRate = *p.CachedPerMTok
-	}
-	total := perMTok(uncached, p.InputPerMTok) +
-		perMTok(cached, cachedRate) +
-		perMTok(out, p.OutputPerMTok)
-
-	parts := []string{fmt.Sprintf("$%.4f %s", total, cur)}
+	uncachedUSD, cachedUSD, outUSD := p.split(in, cached, out)
+	parts := []string{fmt.Sprintf("$%.4f %s", p.totalUSD(in, cached, out), cur)}
 	if cached > 0 {
 		parts = append(parts, fmt.Sprintf("(input $%.4f + cached $%.4f + output $%.4f)",
-			perMTok(uncached, p.InputPerMTok), perMTok(cached, cachedRate),
-			perMTok(out, p.OutputPerMTok)))
+			uncachedUSD, cachedUSD, outUSD))
 	}
 	return strings.Join(parts, "  ")
+}
+
+// costHelp explains where rates come from and how to set your own.
+//
+// Reachable as "/cost help" because the readout points there — a readout that
+// names a command which does not exist sends the question to the agent as a
+// chat message, which is worse than saying nothing.
+func costHelp(model string) string {
+	var b strings.Builder
+	b.WriteString("Where cost figures come from\n\n")
+	b.WriteString("  Token counts are measured — every figure is summed from what the\n")
+	b.WriteString("  backend reported for each turn. Nothing is estimated.\n\n")
+	fmt.Fprintf(&b, "  Rates are the provider's published serverless prices, read on %s:\n", pricesAsOf)
+	fmt.Fprintf(&b, "  %s\n\n", pricesSource)
+	b.WriteString("  A model with no published rate here shows tokens and no dollars,\n")
+	b.WriteString("  rather than a guess.\n\n")
+	b.WriteString("To set your own rate — a negotiated price, a tier not listed, or a\n")
+	b.WriteString("correction after the provider moves its prices:\n\n")
+	fmt.Fprintf(&b, "  %s\n", priceFilePath())
+	b.WriteString("  {\n")
+	if model != "" {
+		fmt.Fprintf(&b, "    %q: {\n", model)
+	} else {
+		b.WriteString("    \"fireworks.glm-5p3\": {\n")
+	}
+	b.WriteString("      \"input_per_mtok\": 1.40,\n")
+	b.WriteString("      \"output_per_mtok\": 4.40,\n")
+	b.WriteString("      \"cached_per_mtok\": 0.26\n")
+	b.WriteString("    }\n  }\n\n")
+	b.WriteString("  Dollars per million tokens. Your file wins over the published rates.\n")
+	b.WriteString("  Keys match exactly first, then by longest prefix, so one entry can\n")
+	b.WriteString("  cover a family. Omitting cached_per_mtok bills cached input at the\n")
+	b.WriteString("  full input rate; setting it to 0 means cached input is free — those\n")
+	b.WriteString("  are different offers, so they are written differently.\n\n")
+	b.WriteString("  GAIA_MODEL_PRICES overrides the path above.\n")
+	return b.String()
 }
 
 func perMTok(tokens int, ratePerMTok float64) float64 {
@@ -181,28 +213,47 @@ func priceFilePath() string {
 // corrects a rate, and a readout that keeps quoting the old one until restart
 // is the same staleness problem by another route.
 func lookupPrice(model string) *modelPrice {
-	if p := lookupIn(userPriceTable(), model); p != nil {
+	table, _ := userPriceTable()
+	if p := lookupIn(table, model); p != nil {
 		p.fromUser = true
 		return p
 	}
 	return lookupIn(builtinPrices, model)
 }
 
-// userPriceTable is ~/.gaia/model-prices.json, or nil when absent/unreadable.
-func userPriceTable() map[string]modelPrice {
+// userPriceTable is ~/.gaia/model-prices.json.
+//
+// The error is non-nil only when a file is there and could not be used. No
+// file at all is the ordinary case and not a problem — see priceFileProblem
+// for why the difference has to reach the user.
+func userPriceTable() (map[string]modelPrice, error) {
 	path := priceFilePath()
 	if path == "" {
-		return nil
+		return nil, nil
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	var table map[string]modelPrice
 	if err := json.Unmarshal(raw, &table); err != nil {
-		return nil
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return table
+	return table, nil
+}
+
+// priceFileProblem is the reason the user's rate card was ignored, or nil.
+//
+// A typo in that file used to present as "no price configured" — so the user
+// went and edited a file that was already being discarded, with nothing
+// anywhere to tell them why. A rate the user set and a rate that failed to
+// load are different states and the readout has to say which.
+func priceFileProblem() error {
+	_, err := userPriceTable()
+	return err
 }
 
 // lookupIn resolves a model against one table: exact match, then longest prefix.

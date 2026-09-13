@@ -63,7 +63,7 @@ func (m ChatModel) controlSessionCost() *control.SessionCost {
 	sc := &control.SessionCost{
 		Turns:         len(m.cost.turns),
 		MeasuredTurns: measured,
-		WallSeconds:   d.Seconds(),
+		ActiveSeconds: d.Seconds(),
 		Steps:         steps,
 		ToolCalls:     tools,
 		InputTokens:   in,

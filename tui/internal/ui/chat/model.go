@@ -1404,7 +1404,15 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/cost":
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
-			Content: m.cost.render(m.answerWidth(), m.costModelName(), lookupPrice(m.modelID)),
+			Content: m.cost.render(m.costModelName(), lookupPrice(m.modelID)),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/cost help":
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: costHelp(m.modelID),
 		})
 		m.updateViewport()
 		return m, nil

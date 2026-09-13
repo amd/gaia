@@ -56,8 +56,8 @@ func (s sessionCost) totals() (d time.Duration, steps, tools, in, out, cached, m
 	return
 }
 
-// render draws the session ledger. width is the pane it must fit.
-func (s sessionCost) render(width int, model string, price *modelPrice) string {
+// render draws the session ledger.
+func (s sessionCost) render(model string, price *modelPrice) string {
 	if len(s.turns) == 0 {
 		return "No turns yet this session — nothing to cost."
 	}
@@ -65,7 +65,10 @@ func (s sessionCost) render(width int, model string, price *modelPrice) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Session so far — %d turn%s on %s\n\n", len(s.turns), plural(len(s.turns)), model)
-	fmt.Fprintf(&b, "  wall time     %s\n", compactDuration(d))
+	// "active time", not wall time: this is the sum of the turns, so the
+	// minutes spent reading the last answer are not in it. Naming it wall
+	// time made a half-hour session report one minute.
+	fmt.Fprintf(&b, "  active time   %s\n", compactDuration(d))
 	fmt.Fprintf(&b, "  agent steps   %d\n", steps)
 	fmt.Fprintf(&b, "  tool calls    %d\n", tools)
 
@@ -87,7 +90,12 @@ func (s sessionCost) render(width int, model string, price *modelPrice) string {
 	// Money only with a price to apply. An invented rate in a cost readout is
 	// worse than no number: it looks authoritative and nobody re-checks it.
 	if price == nil {
-		fmt.Fprintf(&b, "\n  cost          no price configured for %s — see /cost help\n", model)
+		if err := priceFileProblem(); err != nil {
+			b.WriteString("\n  cost          your price file could not be read, so no rate was applied\n")
+			fmt.Fprintf(&b, "                %v\n", err)
+			return b.String()
+		}
+		fmt.Fprintf(&b, "\n  cost          no published rate for %s — run /cost help to set one\n", model)
 		return b.String()
 	}
 	fmt.Fprintf(&b, "\n  cost          %s\n", price.format(in, cached, out))

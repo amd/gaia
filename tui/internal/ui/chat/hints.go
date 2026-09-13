@@ -256,7 +256,14 @@ func (m ChatModel) sessionSpendHint() string {
 		return ""
 	}
 	if price := lookupPrice(m.modelID); price != nil {
-		return fmt.Sprintf("$%.3f this session", price.totalUSD(in, cached, out))
+		// Three decimals keep the status bar narrow, but a real spend must
+		// never render as "$0.000" — that reads as free, and the /cost view
+		// would disagree with it.
+		usd := price.totalUSD(in, cached, out)
+		if usd < 0.0005 {
+			return "<$0.001 this session"
+		}
+		return fmt.Sprintf("$%.3f this session", usd)
 	}
 	return fmt.Sprintf("%s tok this session", thousands(in+out))
 }
@@ -264,9 +271,14 @@ func (m ChatModel) sessionSpendHint() string {
 // isMeteredModel reports whether this session's inference is billed per token
 // to the user.
 //
-// Keyed on the model id's provider prefix rather than on modelRemote alone:
-// "remote" and "the user pays per token" are different claims, and an AMD
-// gateway is remote without being the user's bill.
+// Keyed on the provider rather than on modelRemote alone: "remote" and "the
+// user pays per token" are different claims, and an AMD gateway is remote
+// without being the user's bill. Claude is the other way round — it is the
+// most obviously metered thing the TUI runs, and it carries no provider
+// prefix on its model id, so it has to be recognised by its backend.
 func (m ChatModel) isMeteredModel() bool {
-	return m.modelRemote && strings.HasPrefix(m.modelID, "fireworks.")
+	if !m.modelRemote {
+		return false
+	}
+	return m.modelBackend == "claude" || strings.HasPrefix(m.modelID, "fireworks.")
 }
