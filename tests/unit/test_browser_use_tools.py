@@ -255,9 +255,22 @@ def test_acting_on_an_unauthenticated_page_is_not_gated():
     assert a.browser_call_needs_confirmation("browser_type") is False
 
 
+def test_ordinary_browsing_is_not_gated_just_because_a_site_sets_cookies():
+    """Cookie presence is not a session.
+
+    Almost every site sets one. Treating that as "signed in" gated a public
+    weather page in a live run — a gate that fires on normal browsing is a gate
+    people learn to click through.
+    """
+    a = _Agent()._signed_in("https://weather.example", hosts={"weather.example"})
+    assert a.browser_call_needs_confirmation("browser_open") is False
+    assert a.browser_call_needs_confirmation("browser_click") is False
+
+
 def test_acting_inside_a_signed_in_session_is_gated():
     """The case that matters: a page could be steering the model."""
     a = _Agent()._signed_in("https://bank.example", hosts={"bank.example"})
+    a._authenticated_origins().add("https://bank.example")
     assert a.browser_call_needs_confirmation("browser_click") is True
     assert a.browser_call_needs_confirmation("browser_type") is True
 
@@ -271,6 +284,7 @@ def test_a_sibling_origin_of_the_login_is_gated_too():
     real sign-ins split identity provider from product.
     """
     a = _Agent()._signed_in("https://mail.google.com", hosts={"google.com"})
+    a._authenticated_origins().add("https://accounts.google.com")
     assert a.browser_call_needs_confirmation("browser_click") is True
 
 
@@ -282,6 +296,7 @@ def test_a_signed_in_session_does_not_gate_an_unrelated_site():
 def test_navigating_inside_a_signed_in_session_is_gated():
     """A GET acts too — unsubscribe, logout and delete links are navigations."""
     a = _Agent()._signed_in("https://bank.example", hosts={"bank.example"})
+    a._authenticated_origins().add("https://bank.example")
     assert a.browser_call_needs_confirmation("browser_open") is True
 
 
@@ -293,6 +308,7 @@ def test_navigating_with_no_browser_open_is_not_gated():
 def test_the_gate_fails_closed_when_the_browser_cannot_be_asked():
     """A gate that opens when it is confused is not a gate."""
     a = _Agent()._signed_in("https://bank.example", raises=True)
+    a._authenticated_origins().add("https://other.example")
     assert a.browser_call_needs_confirmation("browser_click") is True
 
 

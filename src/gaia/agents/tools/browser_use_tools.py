@@ -236,17 +236,25 @@ class BrowserUseToolsMixin:
         if tool_name not in _ACTING:
             return False
 
-        driver = self._browser_driver
-        if driver is None or not driver.started:
-            # No live browser: browser_open is about to start one on a fresh
-            # context, so there is no session to act inside yet.
-            return False
-
         origin = getattr(self, "_browser_current_origin", None)
         if not origin:
             return False
         if origin in self._authenticated_origins():
             return True
+
+        # Cookie presence alone does NOT mean signed in — almost every site
+        # sets one, and treating that as a session gated ordinary browsing: a
+        # live run was stopped for confirmation on a public weather page.
+        # So the context is only consulted once a sign-in has actually
+        # happened this run, which is what makes sibling origins of that login
+        # (mail.google.com after accounts.google.com) gate without dragging in
+        # every unrelated site.
+        if not self._authenticated_origins():
+            return False
+
+        driver = self._browser_driver
+        if driver is None or not driver.started:
+            return False
         try:
             return driver.origin_has_cookies(origin)
         except Exception as e:  # noqa: BLE001 — see "fails closed" above
