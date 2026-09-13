@@ -1387,6 +1387,28 @@ class FileSearchToolsMixin:
                         )
                     return {**edit_error, "operation": "edit_file"}
 
+                # Validate Python syntax before editing. Existing syntax errors
+                # are allowed so an edit can repair a broken file incrementally.
+                if resolved_path.suffix.lower() == ".py":
+                    try:
+                        ast.parse(current_content)
+                    except SyntaxError as e:
+                        logger.debug(
+                            "Allowing edit to already-invalid Python file %s: %s",
+                            resolved_path,
+                            e,
+                        )
+                    else:
+                        try:
+                            ast.parse(updated_content)
+                        except SyntaxError as e:
+                            return {
+                                "status": "error",
+                                "error": "Edit would result in invalid Python syntax",
+                                "syntax_errors": [str(e)],
+                                "operation": "edit_file",
+                            }
+
                 # Create backup before editing
                 backup_path = None
                 if path_validator is not None:
@@ -1423,6 +1445,7 @@ class FileSearchToolsMixin:
 
                 result = {
                     "status": "success",
+                    "operation": "edit_file",
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
