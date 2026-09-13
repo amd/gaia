@@ -3778,24 +3778,18 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Whitespace first: unlike a hyphen, incidental leading/trailing
-        # whitespace is never semantically part of a real tool name, so it's
-        # always safe to strip regardless of what comes next. Without this, a
-        # long tool name emitted with a trailing space (observed from a local
-        # model) fails every recovery path below identically on the same
-        # stray character — exact match, suffix-resolve, and prefix-candidate
-        # search all compare against the space-containing string — and falls
-        # through to the fully generic "Unknown tool name" error.
+        # Strip whitespace before matching: a stray space fails exact match,
+        # suffix-resolve, and prefix-candidate search identically.
         # Exact name first — skill tools register with a literal hyphen
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
-        tool_name = tool_name.strip().removesuffix("()")
+        tool_name = tool_name.strip().removesuffix("()").strip()
         if tool_name not in self._tools_registry:
             tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
-            return {"status": "error", "error": "No tool name provided"}
+            return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
         if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
