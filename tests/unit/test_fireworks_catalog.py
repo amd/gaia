@@ -57,8 +57,15 @@ CATALOGUE = {
 
 @pytest.fixture
 def no_env(monkeypatch):
+    """No key anywhere: not in the environment, not in the OS keyring.
+
+    The keyring half matters — without it these tests pass or fail depending
+    on whether the developer running them happens to have a real key stored,
+    which is exactly the hidden-state trap the repo's testing rules warn about.
+    """
     for name in API_KEY_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("gaia.connectors.store.peek_secret", lambda _name: None)
 
 
 class TestKeyResolution:
@@ -73,6 +80,21 @@ class TestKeyResolution:
     def test_blank_counts_as_unset(self, monkeypatch, no_env):
         monkeypatch.setenv(API_KEY_ENV_VARS[0], "   ")
         assert resolve_fireworks_api_key() is None
+
+    def test_a_stored_key_is_used_when_nothing_is_set(self, monkeypatch):
+        """The keyring is the whole point: no shell profile, no file."""
+        for name in API_KEY_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring")
+        assert resolve_fireworks_api_key() == "from-keyring"
+
+    def test_environment_beats_the_stored_key(self, monkeypatch):
+        """A key set for this run must not be overridden by an old stored one."""
+        monkeypatch.setenv(API_KEY_ENV_VARS[0], "from-env")
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring")
+        assert resolve_fireworks_api_key() == "from-env"
 
     def test_missing_key_names_what_to_set(self, no_env):
         with pytest.raises(FireworksError) as e:
