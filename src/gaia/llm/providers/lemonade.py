@@ -436,11 +436,6 @@ class LemonadeProvider(LLMClient):
         # HTTP round-trip and no last-request race.
         usage = response.get("usage")
         if isinstance(usage, dict):
-            timings = response.get("timings")
-            # cached/reasoning come from the nested *_details objects a
-            # cloud-routed response carries (Fireworks reports both; a local
-            # llama.cpp run reports neither, and 0 there means "none", not
-            # "unmeasured" — the prompt genuinely was not served from a cache).
             self._capture_usage(usage, response.get("timings"))
 
         if not response["choices"] or len(response["choices"]) == 0:
@@ -517,25 +512,30 @@ class LemonadeProvider(LLMClient):
         """Record one response's token accounting.
 
         Shared by the streamed and non-streamed paths so the two cannot report
-        different shapes for the same turn. cached/reasoning come from the
-        nested ``*_details`` objects a cloud-routed response carries; a local
-        llama.cpp run reports neither, and 0 there means "none" rather than
-        "unmeasured" — the prompt genuinely was not served from a cache.
+        different shapes for the same turn.
+
+        cached/reasoning ride the nested ``*_details`` objects and appear only
+        when the backend actually sent them. A reported 0 is a measurement —
+        the prompt was not served from a cache — so it is kept; a backend that
+        said nothing leaves the key out rather than having a 0 invented for it.
         """
         if not isinstance(usage, dict):
             return
-        prompt_details = usage.get("prompt_tokens_details") or {}
-        completion_details = usage.get("completion_tokens_details") or {}
-        self._last_usage = {
+        captured = {
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "total_tokens": int(usage.get("total_tokens") or 0),
-            "cached_tokens": int(prompt_details.get("cached_tokens") or 0),
-            "reasoning_tokens": int(completion_details.get("reasoning_tokens") or 0),
-            "tokens_per_second": float(
-                (timings or {}).get("predicted_per_second") or 0.0
-            ),
         }
+        for key, container in (
+            ("cached_tokens", usage.get("prompt_tokens_details")),
+            ("reasoning_tokens", usage.get("completion_tokens_details")),
+        ):
+            if isinstance(container, dict) and container.get(key) is not None:
+                captured[key] = int(container[key])
+        captured["tokens_per_second"] = float(
+            (timings or {}).get("predicted_per_second") or 0.0
+        )
+        self._last_usage = captured
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
