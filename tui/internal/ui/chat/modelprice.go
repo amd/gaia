@@ -13,18 +13,21 @@ import (
 
 // Turning measured tokens into money.
 //
-// Prices are NOT compiled in. A provider's rate card changes without notice,
-// and a stale constant in a cost readout is the one kind of wrong that nobody
-// re-checks — it looks like a measurement. So a price is something the user
-// states, and when they have not stated one the view says so and shows tokens
-// only.
+// Two rules decide what may appear here. A rate is either the provider's own
+// published number or the user's own; nothing is ever estimated, interpolated
+// from a neighbouring model, or carried over from a family member. And a model
+// with no rate shows tokens and no dollars — an absent figure sends the reader
+// to look it up, where a guessed one just quietly prices their month wrong.
 //
-// The file is a plain JSON map, read fresh each time it is asked for:
+// Staleness is handled by disclosure rather than by refusing to have an
+// opinion: every dollar figure is rendered with the date its rate was read.
+//
+// A user file overrides the built-ins for any model, read fresh each time:
 //
 //	~/.gaia/model-prices.json
 //	{
-//	  "fireworks.accounts/fireworks/routers/glm-5p2-fast": {
-//	    "input_per_mtok": 0.22, "output_per_mtok": 0.88, "cached_per_mtok": 0.022
+//	  "fireworks.glm-5p3": {
+//	    "input_per_mtok": 1.40, "output_per_mtok": 4.40, "cached_per_mtok": 0.26
 //	  }
 //	}
 //
@@ -33,7 +36,7 @@ import (
 // pricesAsOf is the day the built-in rates below were read from the provider's
 // published table. Rendered next to every dollar figure, because the one thing
 // a cost readout must never do is look current when it is not.
-const pricesAsOf = "2026-09-12"
+const pricesAsOf = "2026-09-13"
 
 // pricesSource is where the built-in rates came from, so the next person can
 // check them without guessing which page.
@@ -60,6 +63,23 @@ var builtinPrices = map[string]modelPrice{
 	"fireworks.glm-5p2": {
 		InputPerMTok: 1.40, OutputPerMTok: 4.40,
 		CachedPerMTok: floatPtr(0.14), Currency: "USD",
+	},
+	// GLM 5.3 Fast — standard serverless tier.
+	"fireworks.accounts/fireworks/routers/glm-5p3-fast": {
+		InputPerMTok: 2.10, OutputPerMTok: 6.60,
+		CachedPerMTok: floatPtr(0.39), Currency: "USD",
+	},
+	// GLM 5.3 — standard serverless tier. Cached input is priced well above
+	// 5.2's, so the family rate is NOT reusable between the two generations.
+	"fireworks.glm-5p3": {
+		InputPerMTok: 1.40, OutputPerMTok: 4.40,
+		CachedPerMTok: floatPtr(0.26), Currency: "USD",
+	},
+	// GLM 5.3 Flash — listed after the entry it extends; the longer key wins
+	// the prefix match, so Flash never inherits the full 5.3 rate.
+	"fireworks.glm-5p3-flash": {
+		InputPerMTok: 0.15, OutputPerMTok: 0.50,
+		CachedPerMTok: floatPtr(0.03), Currency: "USD",
 	},
 }
 

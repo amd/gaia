@@ -118,6 +118,52 @@ func TestBuiltinRatesPriceTheModelsWeShip(t *testing.T) {
 	}
 }
 
+// Every model the live endpoint serves under a GLM name must price exactly as
+// the published card does. The two generations look interchangeable and are
+// not: 5.3 charges nearly double 5.2 for cached input, which is the token
+// class most of a long session is made of.
+func TestGLMRatesMatchThePublishedCard(t *testing.T) {
+	for _, tc := range []struct {
+		model           string
+		in, cached, out float64
+	}{
+		{"fireworks.accounts/fireworks/routers/glm-5p2-fast", 2.10, 0.21, 6.60},
+		{"fireworks.glm-5p2", 1.40, 0.14, 4.40},
+		{"fireworks.accounts/fireworks/routers/glm-5p3-fast", 2.10, 0.39, 6.60},
+		{"fireworks.glm-5p3", 1.40, 0.26, 4.40},
+		{"fireworks.glm-5p3-flash", 0.15, 0.03, 0.50},
+	} {
+		p := lookupPrice(tc.model)
+		if p == nil {
+			t.Errorf("%s: no built-in rate", tc.model)
+			continue
+		}
+		if p.CachedPerMTok == nil {
+			t.Errorf("%s: no cached rate, so cached tokens bill at the full input rate", tc.model)
+			continue
+		}
+		if p.InputPerMTok != tc.in || p.OutputPerMTok != tc.out || *p.CachedPerMTok != tc.cached {
+			t.Errorf("%s: got %v/%v/%v, published card says %v/%v/%v",
+				tc.model, p.InputPerMTok, *p.CachedPerMTok, p.OutputPerMTok, tc.in, tc.cached, tc.out)
+		}
+	}
+}
+
+// "fireworks.glm-5p3" is a prefix of "fireworks.glm-5p3-flash", and Flash is
+// an order of magnitude cheaper. Whichever way the map iterates, the longer
+// key has to win or every Flash session is billed as full 5.3.
+func TestFlashIsNotPricedAsTheFullModel(t *testing.T) {
+	flash := lookupPrice("fireworks.glm-5p3-flash")
+	full := lookupPrice("fireworks.glm-5p3")
+	if flash == nil || full == nil {
+		t.Fatal("missing a GLM 5.3 rate")
+	}
+	if flash.InputPerMTok >= full.InputPerMTok {
+		t.Errorf("Flash priced at or above the full model: %v vs %v",
+			flash.InputPerMTok, full.InputPerMTok)
+	}
+}
+
 // A model nobody has priced shows tokens, never a guessed rate.
 func TestAnUnknownModelHasNoPrice(t *testing.T) {
 	if p := lookupPrice("some-model-nobody-has-priced"); p != nil {
