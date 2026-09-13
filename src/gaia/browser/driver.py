@@ -350,6 +350,62 @@ class PlaywrightDriver:
 
         return self._submit(_type)
 
+    def back(self) -> Dict[str, Any]:
+        """Go back: history for a normal page, close-and-return for a popup.
+
+        A tab the driver adopted is not in the opener's history, so "back"
+        there means closing it and describing the page that opened it —
+        otherwise a task that opens a detail tab can never return to the index
+        it came from.
+        """
+
+        def _back() -> Dict[str, Any]:
+            pages = self._open_pages()
+            if len(pages) > 1 and self._page is pages[-1]:
+                closing = self._page
+                self._page = pages[-2]
+                try:
+                    closing.close()
+                except Exception as e:  # noqa: BLE001 — already gone
+                    logger.debug("Closing popup: %s", e)
+            else:
+                self._page.go_back(wait_until="domcontentloaded")
+            self._settle()
+            return self._snapshot()
+
+        return self._submit(_back)
+
+    def find(self, query: str, context: int = 160) -> Dict[str, Any]:
+        """Locate ``query`` in the page and return its surroundings.
+
+        A snapshot caps interactive elements and readable text, so anything
+        past those limits is invisible — a 200-row inventory simply has no
+        item 150 in it. Searching the live DOM reaches what the snapshot had
+        to leave out, and costs a few hundred tokens instead of the whole
+        page.
+        """
+
+        def _find() -> Dict[str, Any]:
+            return self._page.evaluate(
+                r"""([q, ctx]) => {
+                    const text = (document.body && document.body.innerText) || '';
+                    const hay = text.toLowerCase();
+                    const needle = q.toLowerCase();
+                    const hits = [];
+                    let i = hay.indexOf(needle);
+                    while (i !== -1 && hits.length < 10) {
+                      hits.push(text.slice(Math.max(0, i - ctx), i + needle.length + ctx)
+                                    .replace(/\s+/g, ' ').trim());
+                      i = hay.indexOf(needle, i + needle.length);
+                    }
+                    return {matches: hits, total: hits.length,
+                            page_chars: text.length};
+                }""",
+                [query, context],
+            )
+
+        return self._submit(_find)
+
     def current_url(self) -> str:
         return self._submit(lambda: self._page.url)
 

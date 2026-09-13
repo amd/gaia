@@ -331,6 +331,18 @@ FULL_BUNDLES = [
             "type, and sign in to sites."
         ),
     ),
+    # Second bundle rather than growing the first past MAX_BUNDLE_MEMBERS: one
+    # pull-in must not be able to exhaust the dynamic slots. These two are the
+    # navigation half — needed only when a path dead-ends or the page is longer
+    # than a snapshot shows.
+    ToolBundle(
+        name="browser_nav",
+        members=frozenset({"browser_back", "browser_find"}),
+        description=(
+            "Go back from a dead end or a new tab, and search a long page for "
+            "text a snapshot did not show."
+        ),
+    ),
     ToolBundle(
         name="code_index",
         members=frozenset(
@@ -490,6 +502,8 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "browser_type",
         "browser_login",
         "browser_sessions",
+        "browser_back",
+        "browser_find",
         "remember",
         "recall",
         "update_memory",

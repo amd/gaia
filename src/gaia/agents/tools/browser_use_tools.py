@@ -525,6 +525,56 @@ class BrowserUseToolsMixin:
             )
 
         @tool(atomic=True)
+        def browser_back() -> str:
+            """Go back to the previous page, or close a tab and return to its opener.
+
+            Use when a path turned out to be a dead end, or after reading a
+            page that opened in a new tab and you need the one you came from.
+
+            Returns the interactive elements of the page you land on.
+            """
+            try:
+                driver = mixin._ensure_driver()
+                snap = driver.back()
+                mixin._note_location(snap)
+                mixin._note_elements(snap)
+            except Exception as e:  # noqa: BLE001 — returned to the model
+                logger.error("browser_back failed: %s", e)
+                return _fail(e)
+            return "Went back.\n\n" + render(snap)
+
+        @tool(atomic=True)
+        def browser_find(text: str) -> str:
+            """Search the current page for text and return what surrounds it.
+
+            A snapshot shows only the first part of a long page, so use this
+            when what you need is not in it — a row far down a long list, a
+            figure in a wall of text. Searches the whole page, not just the
+            part the snapshot showed.
+
+            Args:
+                text: The text to look for (case-insensitive)
+            """
+            if not (text or "").strip():
+                return "Error: give some text to search for."
+            try:
+                driver = mixin._ensure_driver()
+                res = driver.find(text)
+            except Exception as e:  # noqa: BLE001 — returned to the model
+                logger.error("browser_find(%s) failed: %s", text, e)
+                return _fail(e)
+            hits = res.get("matches") or []
+            if not hits:
+                return (
+                    f'"{text}" does not appear on this page '
+                    f'({res.get("page_chars", 0):,} characters searched).'
+                )
+            lines = [f'Found "{text}" {len(hits)} time(s):']
+            for h in hits:
+                lines.append(f"  … {h} …")
+            return "\n".join(lines)
+
+        @tool(atomic=True)
         def browser_sessions() -> str:
             """List the sites GAIA has a saved sign-in for.
 
