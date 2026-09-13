@@ -42,6 +42,10 @@ class StepResult:
     tool_name: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    # Prompt tokens the provider served from its own cache. Billed at a
+    # fraction of the input rate, so a run is mispriced without it — and only a
+    # cloud-routed backend reports it, which is exactly where the bill exists.
+    cached_tokens: int = 0
     reasoning_tokens: int = 0  # tokens in <thinking> blocks (estimated)
     total_tokens: int = 0
     duration_ms: int = 0
@@ -94,6 +98,7 @@ class RunResult:
     total_duration_ms: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cached_tokens: int = 0
     total_reasoning_tokens: int = 0
     total_tokens: int = 0
     avg_time_to_first_token_ms: float = 0.0
@@ -267,6 +272,7 @@ def extract_step_stats(conversation: list) -> tuple[list[StepResult], int]:
                         tool_name=last_tool_name,
                         input_tokens=in_tok,
                         output_tokens=out_tok,
+                        cached_tokens=stats.get("cached_tokens", 0) or 0,
                         reasoning_tokens=_extract_reasoning_tokens(
                             _last_assistant_text(conversation, msg)
                         ),
@@ -365,6 +371,7 @@ def extract_from_agent_result(
         total_duration_ms=total_duration_ms,
         total_input_tokens=input_tokens,
         total_output_tokens=output_tokens,
+        total_cached_tokens=sum(s.cached_tokens for s in step_results),
         total_reasoning_tokens=total_reasoning_tokens,
         total_tokens=total_tokens,
         avg_time_to_first_token_ms=round(avg_ttft, 1),
@@ -392,7 +399,11 @@ def to_performance_summary(run: RunResult) -> dict[str, Any]:
         "avg_time_to_first_token_ms": run.avg_time_to_first_token_ms,
         "total_input_tokens": run.total_input_tokens,
         "total_output_tokens": run.total_output_tokens,
+        "total_cached_tokens": run.total_cached_tokens,
         "total_tokens": run.total_tokens,
+        # Steps that actually called a tool, which is the number a reader means
+        # by "how much work did it do" — distinct from the LLM-call count.
+        "tool_calls": sum(1 for s in run.step_results if s.tool_name),
         "total_duration_ms": run.total_duration_ms,
         "pipeline_latency_s": round(run.total_duration_ms / 1000.0, 3),
         "peak_memory_mb": run.peak_memory_mb,
@@ -415,6 +426,7 @@ def run_to_dict(run: RunResult) -> dict[str, Any]:
         "total_duration_ms": run.total_duration_ms,
         "total_input_tokens": run.total_input_tokens,
         "total_output_tokens": run.total_output_tokens,
+        "total_cached_tokens": run.total_cached_tokens,
         "total_reasoning_tokens": run.total_reasoning_tokens,
         "total_tokens": run.total_tokens,
         "avg_time_to_first_token_ms": run.avg_time_to_first_token_ms,
