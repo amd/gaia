@@ -117,15 +117,7 @@ class TestRunStepModeGate:
 class TestHourlyBudgetOnlySpentOnRealTicks:
     """The hourly call budget must only be spent when a tick actually reaches
     _execute_tick, not on idle no-ops (no session, or no actionable goals).
-
-    Observed in production: with zero approved goals in GoalStore (the
-    default/common state), the loop ticked every GAIA_AGENT_TICK_INTERVAL
-    seconds (60s default) and burned the entire GAIA_AGENT_HOURLY_LIMIT
-    budget (30 default) purely on no-op ticks within the first ~30 minutes
-    of every hour, then spent the remaining ~30 minutes logging "hourly
-    rate limit reached" repeatedly even though _execute_tick never ran —
-    895+ occurrences over 3 days with an empty goals table, confirmed via
-    real logs.
+    See #3743 for the full production log evidence.
     """
 
     def _make_loop(self, db):
@@ -135,8 +127,6 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
         return loop
 
     async def _run(self, loop, tmp_path):
-        settings = {"agent_mode": "goal_driven"}
-        loop._db = FakeDB(settings)
         initialized = tmp_path / ".gaia" / "chat" / "initialized"
         initialized.parent.mkdir(parents=True, exist_ok=True)
         initialized.touch()
@@ -150,6 +140,14 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
             for _ in range(5):
                 directive = await self._run(loop, tmp_path)
                 assert directive.directive == "idle"
+        assert loop._calls_this_hour == 0
+
+    async def test_idle_tick_with_no_session_does_not_spend_budget(self, tmp_path):
+        """The other early-return this fix covers: no active session at all."""
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}, sessions=[]))
+        for _ in range(5):
+            directive = await self._run(loop, tmp_path)
+            assert directive.directive == "idle"
         assert loop._calls_this_hour == 0
 
     async def test_idle_tick_with_no_goals_never_hits_rate_limit(self, tmp_path):

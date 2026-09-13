@@ -269,14 +269,8 @@ class AgentLoop:
             return LoopDirective("paused", reason="agent_mode=manual")
 
         # ── Hourly rate limit ────────────────────────────────────────────
-        # Checked here so a spent budget still short-circuits before any
-        # session/goal lookups, but the counter itself is only incremented
-        # once we know this tick will actually reach _execute_tick (below).
-        # Incrementing unconditionally here used to let an idle install (no
-        # session, or no actionable goals -- the common/default state) burn
-        # the whole budget on no-op ticks well within the hour, then spend
-        # the remainder of every hour logging this warning even though zero
-        # autonomous LLM calls were ever made.
+        # Check before the session/goal lookups so a spent budget short-circuits;
+        # the counter is only incremented once a tick reaches _execute_tick.
         now = time.time()
         if now - self._hour_start > 3600:
             self._hour_start = now
