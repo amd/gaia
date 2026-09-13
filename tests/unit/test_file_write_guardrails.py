@@ -842,6 +842,42 @@ class TestChatAgentEditFileGuardrails:
         assert result["status"] == "success"
         assert target.read_text() == "Hello, GAIA!"
 
+    def test_edit_python_file_rejects_invalid_syntax(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify edit_file refuses Python edits that break syntax."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        original = "def main():\n    print('hello')\n"
+        target.write_text(original)
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="print('broken')\nreturn",
+        )
+
+        assert result["status"] == "error"
+        assert "syntax" in result["error"].lower()
+        assert target.read_text() == original
+
+    def test_edit_python_file_accepts_valid_syntax(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify edit_file accepts Python edits that remain syntactically valid."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text("def main():\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="    print('updated')",
+        )
+
+        assert result["status"] == "success"
+        assert target.read_text() == "def main():\n    print('updated')\n"
+
     def test_edit_sensitive_file_blocked(self, mixin_and_registry, tmp_path):
         """Verify editing a sensitive file is blocked."""
         _, edit_fn = mixin_and_registry
