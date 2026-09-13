@@ -20,6 +20,7 @@ round trip. The browser is launched once and reused for the session.
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from gaia.logger import get_logger
@@ -34,6 +35,51 @@ _AUTHENTICATED_MARKER = "_browser_authenticated_origins"
 #: is here because a GET can act: an unsubscribe, logout or "delete" link is a
 #: plain navigation, and inside a signed-in session that is a real change.
 _ACTING = frozenset({"browser_click", "browser_type", "browser_open"})
+
+#: Phrases in a control's own label that mark an action you cannot take back —
+#: money moved, an account destroyed, something published.
+#:
+#: Deliberately phrases, not verbs. Bare "submit", "confirm", "save", "send",
+#: "apply", "continue" and "order" are the most common words on the web —
+#: gating them would put a prompt in front of every search box and sort
+#: control, and a gate that fires constantly is one people learn to click
+#: through. "Order by price" must not prompt; "Place order" must.
+#:
+#: Matched as whole words against the element's accessible name, so "reorder"
+#: and "in order to" do not trip "order".
+_IRREVERSIBLE_PHRASES = (
+    # money
+    "pay now",
+    "pay and",
+    "confirm payment",
+    "complete purchase",
+    "purchase",
+    "buy now",
+    "place order",
+    "order now",
+    "confirm order",
+    "checkout",
+    "check out",
+    "transfer",
+    "withdraw",
+    "send money",
+    "donate",
+    # destruction
+    "delete",
+    "permanently",
+    "deactivate",
+    "close account",
+    "terminate",
+    "erase",
+    "wipe",
+    "cancel subscription",
+    "unsubscribe",
+    # publishing / outbound
+    "send email",
+    "send message",
+    "publish",
+    "send invite",
+)
 
 
 class BrowserUseToolsMixin:
@@ -57,6 +103,8 @@ class BrowserUseToolsMixin:
     #: Origin of the page currently open. Tracked on navigation so the
     #: confirmation gate never costs a round trip to the browser.
     _browser_current_origin: Optional[str] = None
+    #: ref -> accessible name, from the last snapshot.
+    _browser_last_elements: Optional[dict] = None
 
     # ------------------------------------------------------------------ internals
 
@@ -186,6 +234,19 @@ class BrowserUseToolsMixin:
         except Exception:  # noqa: BLE001 — a bad URL is not authenticated
             return False
 
+    def _note_elements(self, snap: dict) -> None:
+        """Remember ref -> label so the gate can see what it is about to click.
+
+        The confirmation decision happens before the tool body runs and only
+        has the ref, so the label has to be carried over from the snapshot
+        that produced it.
+        """
+        self._browser_last_elements = {
+            e.get("ref"): e.get("name") or ""
+            for e in (snap or {}).get("elements") or []
+            if e.get("ref")
+        }
+
     def _note_location(self, snap: dict) -> None:
         """Record the origin the browser actually ended up on.
 
@@ -209,7 +270,21 @@ class BrowserUseToolsMixin:
         except SessionStoreError:
             self._browser_current_origin = None
 
-    def browser_call_needs_confirmation(self, tool_name: str) -> bool:
+    def _element_label(self, ref: str) -> str:
+        """Accessible name of ``ref`` from the last snapshot, or ""."""
+        return (getattr(self, "_browser_last_elements", None) or {}).get(ref, "")
+
+    @staticmethod
+    def _looks_irreversible(label: str) -> bool:
+        """Whether a control's own label names an action that cannot be undone."""
+        if not label:
+            return False
+        text = " " + re.sub(r"[^a-z0-9]+", " ", label.lower()).strip() + " "
+        return any(f" {p} " in text for p in _IRREVERSIBLE_PHRASES)
+
+    def browser_call_needs_confirmation(
+        self, tool_name: str, tool_args: Optional[dict] = None
+    ) -> bool:
         """Whether this browser call must be confirmed by the user.
 
         Reading the open web is ungated — it is what ``fetch_page`` already
@@ -235,6 +310,14 @@ class BrowserUseToolsMixin:
             return True
         if tool_name not in _ACTING:
             return False
+
+        # Irreversible by its own label — gate regardless of sign-in state.
+        # A transfer or a deletion is no more undoable on a site you happen not
+        # to be signed into, and the live suite clicked "Send transfer now"
+        # unprompted precisely because no session existed.
+        ref = (tool_args or {}).get("ref")
+        if ref and self._looks_irreversible(self._element_label(str(ref))):
+            return True
 
         origin = getattr(self, "_browser_current_origin", None)
         if not origin:
@@ -339,6 +422,7 @@ class BrowserUseToolsMixin:
                 driver = mixin._ensure_driver()
                 snap = driver.goto(url)
                 mixin._note_location(snap)
+                mixin._note_elements(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_open(%s) failed: %s", url, e)
                 return _fail(e)
@@ -356,6 +440,7 @@ class BrowserUseToolsMixin:
                 driver = mixin._ensure_driver()
                 snap = driver.snapshot()
                 mixin._note_location(snap)
+                mixin._note_elements(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_snapshot failed: %s", e)
                 return _fail(e)
@@ -373,6 +458,7 @@ class BrowserUseToolsMixin:
                 driver = mixin._ensure_driver()
                 snap = driver.click(ref)
                 mixin._note_location(snap)
+                mixin._note_elements(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_click(%s) failed: %s", ref, e)
                 return _fail(e)
@@ -394,6 +480,7 @@ class BrowserUseToolsMixin:
                 driver = mixin._ensure_driver()
                 snap = driver.type_text(ref, text, press_enter=press_enter)
                 mixin._note_location(snap)
+                mixin._note_elements(snap)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_type(%s) failed: %s", ref, e)
                 return _fail(e)

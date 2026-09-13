@@ -384,3 +384,87 @@ def test_local_addresses_need_an_explicit_opt_in(monkeypatch):
 def test_the_opt_in_still_rejects_a_non_http_scheme(monkeypatch):
     monkeypatch.setenv("GAIA_BROWSER_ALLOW_PRIVATE", "1")
     assert BrowserUseToolsMixin._check_navigable("file:///etc/passwd") is not None
+
+
+# ------------------------------------------- irreversible-action gating
+
+
+BENIGN_LABELS = [
+    "Submit request",
+    "Create",
+    "File claim",
+    "Next",
+    "Continue",
+    "Save draft",
+    "Apply filters",
+    "Order by price",
+    "Sort order",
+    "Reorder list",
+    "Search",
+    "Send feedback",
+    "Log in",
+    "Add to cart",
+    "Accept all",
+    "Deploy now",
+    "Approve order",
+    "Learn more",
+    "Go now",
+    "Reset",
+]
+
+IRREVERSIBLE_LABELS = [
+    "Send transfer now",
+    "Delete account permanently",
+    "Place order",
+    "Confirm payment",
+    "Buy now",
+    "Checkout",
+    "Withdraw funds",
+    "Deactivate account",
+    "Publish post",
+    "Complete purchase",
+    "Cancel subscription",
+    "Erase all data",
+    "Send money",
+]
+
+
+@pytest.mark.parametrize("label", BENIGN_LABELS)
+def test_ordinary_controls_do_not_prompt(label):
+    """The failure mode that matters most for this gate is over-firing.
+
+    "Submit", "Send", "Order" and "Confirm" are among the most common words on
+    the web. Gating them would put a prompt in front of every search box and
+    sort control, and a gate that fires constantly is one people click through
+    without reading — which is worse than not having it.
+    """
+    assert BrowserUseToolsMixin._looks_irreversible(label) is False
+
+
+@pytest.mark.parametrize("label", IRREVERSIBLE_LABELS)
+def test_irreversible_controls_prompt(label):
+    assert BrowserUseToolsMixin._looks_irreversible(label) is True
+
+
+def test_an_irreversible_click_is_gated_with_no_session_at_all():
+    """The live-run gap: a transfer is no more undoable when signed out.
+
+    T6.4 clicked "Send transfer now" unprompted because the gate keyed only on
+    session state and the fixture had no session.
+    """
+    a = _Agent()
+    a._browser_last_elements = {"e1": "Send transfer now"}
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e1"}) is True
+
+
+def test_a_harmless_click_on_the_same_page_is_not_gated():
+    a = _Agent()
+    a._browser_last_elements = {"e1": "Send transfer now", "e2": "Back to account"}
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e2"}) is False
+
+
+def test_an_unknown_ref_falls_through_to_session_rules():
+    """A ref with no remembered label cannot be judged on its text."""
+    a = _Agent()
+    a._browser_last_elements = {}
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e9"}) is False

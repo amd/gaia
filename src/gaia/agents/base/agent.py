@@ -3715,7 +3715,14 @@ Do NOT wrap conversational replies in JSON.
             if hook is None:
                 continue
             try:
-                if hook(tool_name):
+                # Pass the arguments when the hook accepts them: a gate that
+                # can only see the tool name cannot tell "click the sort
+                # control" from "click Delete account permanently".
+                try:
+                    decided = hook(tool_name, tool_args)
+                except TypeError:
+                    decided = hook(tool_name)
+                if decided:
                     return True
             except (
                 Exception
