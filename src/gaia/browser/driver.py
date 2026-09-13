@@ -407,7 +407,21 @@ class PlaywrightDriver:
         def _find() -> Dict[str, Any]:
             return self._page.evaluate(
                 r"""([q, ctx]) => {
-                    const text = (document.body && document.body.innerText) || '';
+                    // Include shadow roots: a web component's content is not
+                    // part of body.innerText, so searching without it misses
+                    // exactly the text a snapshot could not show either.
+                    const shadow = (root) => {
+                      let out = '';
+                      for (const el of root.querySelectorAll('*')) {
+                        if (el.shadowRoot) {
+                          out += ' ' + (el.shadowRoot.textContent || '')
+                               + shadow(el.shadowRoot);
+                        }
+                      }
+                      return out;
+                    };
+                    const text = ((document.body && document.body.innerText) || '')
+                               + shadow(document);
                     const hay = text.toLowerCase();
                     const needle = q.toLowerCase();
                     const hits = [];

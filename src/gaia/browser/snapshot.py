@@ -141,6 +141,16 @@ _SNAPSHOT_JS = """
     return out;
   };
 
+  const shadowText = (root) => {
+    let out = '';
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        out += ' ' + (el.shadowRoot.textContent || '') + shadowText(el.shadowRoot);
+      }
+    }
+    return out;
+  };
+
   // Clear refs from any previous snapshot so stale ids never resolve.
   document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
 
@@ -208,7 +218,13 @@ _SNAPSHOT_JS = """
     truncated,
     // Readable page text, capped. Gives the model page content without a
     // second round trip, and without the markup a raw DOM dump would carry.
-    text: squash((document.body && document.body.innerText) || '').slice(0, maxTextChars),
+    // Shadow roots do not contribute to body.innerText, so a component's own
+    // content is missing from the page text even when its controls are
+    // listed — a device panel showed its Reboot button but not the serial
+    // number printed right next to it.
+    text: squash(
+      ((document.body && document.body.innerText) || '') + ' ' + shadowText(document)
+    ).slice(0, maxTextChars),
   };
 }
 """

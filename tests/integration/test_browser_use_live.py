@@ -594,7 +594,8 @@ HARD_PAGES = {
     "shadow.html": (
         "<!doctype html><title>Panel</title><body><h1>Device panel</h1><div id=h></div>"
         '<script>h.attachShadow({mode:"open"}).innerHTML='
-        '"<button id=b>Reboot device</button>"</script></body>'
+        '"<p>Serial: SHADOW-9021</p><button id=b>Reboot device</button>"'
+        "</script></body>"
     ),
     "dupe.html": (
         "<!doctype html><title>Accounts</title><body>"
@@ -667,6 +668,18 @@ def test_controls_inside_a_shadow_root_are_reachable(driver, hard_url):
     """A web component's controls live in its shadow tree."""
     snap = driver.goto(f"{hard_url}/shadow.html")
     assert any("Reboot" in e["name"] for e in snap["elements"])
+
+
+def test_text_inside_a_shadow_root_is_readable(driver, hard_url):
+    """Listing the controls is not enough if the content beside them is lost.
+
+    Shadow roots do not contribute to body.innerText, so a live run found the
+    Reboot button and then reported there was no serial number on the page —
+    it was printed directly beside that button.
+    """
+    snap = driver.goto(f"{hard_url}/shadow.html")
+    assert "SHADOW-9021" in (snap.get("text") or "")
+    assert driver.find("SHADOW-9021")["matches"], "find cannot see shadow text"
 
 
 def test_repeated_labels_carry_enough_context_to_tell_apart(driver, hard_url):
