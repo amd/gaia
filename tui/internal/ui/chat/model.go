@@ -308,8 +308,12 @@ type ChatModel struct {
 	// this stuck true.
 	awaitingModelSwitch bool
 
-	connected    bool
-	totalSteps   int
+	connected  bool
+	totalSteps int
+	// cost accumulates what each turn spent, for /cost and the control API.
+	// Summed from what the backend reported and never estimated — see
+	// sessioncost.go.
+	cost         sessionCost
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
@@ -1397,6 +1401,22 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/memory":
 		return m.startMemoryFetch()
 
+	case "/cost":
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: m.cost.render(m.costModelName(), lookupPrice(m.modelID)),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/cost help":
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: costHelp(m.modelID),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case "/bypass":
 		if m.bypassPermissions {
 			return m.setBypass(false)
@@ -2087,6 +2107,19 @@ func spacedAfter(role MessageRole) bool {
 		return true
 	}
 	return false
+}
+
+// costModelName is what the cost view calls the model: the display name when
+// the agent has resolved one, the raw id otherwise, and a plain hyphen before
+// the first turn has told us anything.
+func (m ChatModel) costModelName() string {
+	if m.modelDisplay != "" {
+		return m.modelDisplay
+	}
+	if m.modelID != "" {
+		return m.modelID
+	}
+	return "-"
 }
 
 // answerStats is the footnote under a finished answer.

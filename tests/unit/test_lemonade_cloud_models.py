@@ -434,3 +434,50 @@ def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
+
+
+class TestCachedTokenCapture:
+    """A cached-token count is reported when measured and omitted when not.
+
+    Fireworks bills cached prompt tokens at a tenth of the input rate, so the
+    count drives a real dollar figure. That makes the absent case matter as
+    much as the present one: a backend that said nothing about caching must
+    not come back as "0 cached", which reads as a measurement and prices the
+    turn as if the whole prompt were billed fresh.
+    """
+
+    def capture(self, usage):
+        adapter = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        adapter._capture_usage(usage, timings=None)
+        return adapter._last_usage
+
+    def test_reported_counts_are_kept(self):
+        captured = self.capture(
+            {
+                "prompt_tokens": 120,
+                "completion_tokens": 8,
+                "total_tokens": 128,
+                "prompt_tokens_details": {"cached_tokens": 96},
+                "completion_tokens_details": {"reasoning_tokens": 3},
+            }
+        )
+        assert captured["cached_tokens"] == 96
+        assert captured["reasoning_tokens"] == 3
+
+    def test_a_reported_zero_is_a_measurement(self):
+        captured = self.capture(
+            {
+                "prompt_tokens": 120,
+                "completion_tokens": 8,
+                "total_tokens": 128,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            }
+        )
+        assert captured["cached_tokens"] == 0
+
+    def test_an_unreported_count_is_left_out(self):
+        captured = self.capture(
+            {"prompt_tokens": 120, "completion_tokens": 8, "total_tokens": 128}
+        )
+        assert "cached_tokens" not in captured
+        assert "reasoning_tokens" not in captured

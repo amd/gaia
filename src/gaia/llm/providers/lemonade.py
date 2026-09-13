@@ -436,15 +436,7 @@ class LemonadeProvider(LLMClient):
         # HTTP round-trip and no last-request race.
         usage = response.get("usage")
         if isinstance(usage, dict):
-            timings = response.get("timings")
-            self._last_usage = {
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "total_tokens": int(usage.get("total_tokens") or 0),
-                "tokens_per_second": float(
-                    (timings or {}).get("predicted_per_second") or 0.0
-                ),
-            }
+            self._capture_usage(usage, response.get("timings"))
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
@@ -516,6 +508,35 @@ class LemonadeProvider(LLMClient):
             }
         return self._backend.get_stats() or {}
 
+    def _capture_usage(self, usage: dict, timings: Optional[dict]) -> None:
+        """Record one response's token accounting.
+
+        Shared by the streamed and non-streamed paths so the two cannot report
+        different shapes for the same turn.
+
+        cached/reasoning ride the nested ``*_details`` objects and appear only
+        when the backend actually sent them. A reported 0 is a measurement —
+        the prompt was not served from a cache — so it is kept; a backend that
+        said nothing leaves the key out rather than having a 0 invented for it.
+        """
+        if not isinstance(usage, dict):
+            return
+        captured = {
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+        }
+        for key, container in (
+            ("cached_tokens", usage.get("prompt_tokens_details")),
+            ("reasoning_tokens", usage.get("completion_tokens_details")),
+        ):
+            if isinstance(container, dict) and container.get(key) is not None:
+                captured[key] = int(container[key])
+        captured["tokens_per_second"] = float(
+            (timings or {}).get("predicted_per_second") or 0.0
+        )
+        self._last_usage = captured
+
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
         call (#1891), or ``None`` when unavailable (a streaming call, or the
@@ -553,6 +574,11 @@ class LemonadeProvider(LLMClient):
             return out
 
         for chunk in response:
+            # The usage chunk arrives last and carries no choices. It is the
+            # only token accounting a streamed turn gets — see the
+            # stream_options request in lemonade_client.
+            if chunk.get("usage"):
+                self._capture_usage(chunk["usage"], timings=None)
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason

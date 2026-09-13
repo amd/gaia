@@ -30,6 +30,7 @@ from gaia.agents.base.agent import (
     _query_tok_per_s,
     _query_ttft_seconds,
     _safe_number,
+    _sum_cached_tokens,
     _sum_conversation_tokens,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
@@ -510,3 +511,53 @@ class TestToolUsageRollup:
         or survive without the per-turn reset that _process_query_impl does."""
         agent = _make_agent()
         assert agent._tool_reported_usage == []
+
+
+class TestSumCachedTokens:
+    """Prompt tokens the provider served from its own cache, summed per turn.
+
+    Cached input bills at a fraction of the input rate, so this number is the
+    difference between a session costing what it looks like and costing several
+    times that. It is only ever a sum of what the backend reported — a step
+    that reported nothing contributes nothing, never a guess at what share of
+    the prompt "probably" hit the cache.
+    """
+
+    def test_sums_across_steps(self):
+        conversation = [
+            _stats_entry(1, prompt_tokens=1000, cached_tokens=600),
+            _stats_entry(2, prompt_tokens=1400, cached_tokens=1200),
+        ]
+        assert _sum_cached_tokens(conversation) == 1800
+
+    def test_a_step_that_reported_none_contributes_nothing(self):
+        conversation = [
+            _stats_entry(1, prompt_tokens=1000, cached_tokens=600),
+            _stats_entry(2, prompt_tokens=1400),
+        ]
+        assert _sum_cached_tokens(conversation) == 600
+
+    def test_a_local_backend_reporting_nothing_sums_to_zero(self):
+        conversation = [_stats_entry(1, prompt_tokens=1000, completion_tokens=50)]
+        assert _sum_cached_tokens(conversation) == 0
+
+    def test_non_stats_entries_are_ignored(self):
+        conversation = [
+            {"role": "user", "content": "cached_tokens=99999"},
+            {"role": "assistant", "content": "no"},
+            _stats_entry(1, cached_tokens=7),
+        ]
+        assert _sum_cached_tokens(conversation) == 7
+
+    def test_a_malformed_count_does_not_break_the_turn(self):
+        """A bad stat must never take down the run that carries it."""
+        conversation = [
+            _stats_entry(1, cached_tokens="lots"),
+            _stats_entry(2, cached_tokens=-5),
+            _stats_entry(3, cached_tokens=None),
+            _stats_entry(4, cached_tokens=11),
+        ]
+        assert _sum_cached_tokens(conversation) == 11
+
+    def test_an_empty_conversation_is_zero(self):
+        assert _sum_cached_tokens([]) == 0

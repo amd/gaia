@@ -495,6 +495,31 @@ def _sum_conversation_tokens(
     return total_input, total_output
 
 
+def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+    """Prompt tokens the backend served from its own cache this turn.
+
+    Reported by a cloud-routed step (Fireworks puts it in
+    ``prompt_tokens_details.cached_tokens``); a local llama.cpp run reports
+    nothing and sums to 0, which is the truth there rather than a gap — the
+    prompt genuinely was not served from a provider-side cache.
+
+    Worth its own total because it is the one token class that is billed
+    differently, and because a turn whose prompt is mostly cache is a very
+    different cost from one that is not.
+    """
+    total = 0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if isinstance(stats, dict):
+            total += _safe_number(stats.get("cached_tokens"))
+    return total
+
+
 def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
     """Turn's generation rate, from the backend's OWN per-call measurement.
 
@@ -6970,6 +6995,8 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    input_tokens=_pre_input_tokens,
+                    cached_tokens=_sum_cached_tokens(conversation),
                     ttft_seconds=_query_ttft_seconds(conversation),
                     tok_per_s=_query_tok_per_s(conversation),
                 )
