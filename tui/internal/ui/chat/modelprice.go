@@ -30,6 +30,41 @@ import (
 //
 // Matching is exact, then longest-prefix, so one entry can cover a family.
 
+// pricesAsOf is the day the built-in rates below were read from the provider's
+// published table. Rendered next to every dollar figure, because the one thing
+// a cost readout must never do is look current when it is not.
+const pricesAsOf = "2026-09-12"
+
+// pricesSource is where the built-in rates came from, so the next person can
+// check them without guessing which page.
+const pricesSource = "https://docs.fireworks.ai/serverless/pricing"
+
+// builtinPrices are the provider's published serverless rates, in dollars per
+// million tokens, read on the date above.
+//
+// Shipping them is the difference between a feature that costs your work and
+// one that asks you to go and look the numbers up first. The staleness risk is
+// handled by showing the date rather than by refusing to have an opinion — and
+// a model that is NOT in this table still shows tokens only, never a guessed
+// rate, because a wrong number is worse than an absent one.
+//
+// Keys match on longest prefix (see lookupPrice), so the routers under a family
+// inherit the family's rate.
+var builtinPrices = map[string]modelPrice{
+	// GLM 5.2 Fast — standard serverless tier.
+	"fireworks.accounts/fireworks/routers/glm-5p2-fast": {
+		InputPerMTok: 2.10, OutputPerMTok: 6.60,
+		CachedPerMTok: floatPtr(0.21), Currency: "USD",
+	},
+	// GLM 5.2 — standard serverless tier.
+	"fireworks.glm-5p2": {
+		InputPerMTok: 1.40, OutputPerMTok: 4.40,
+		CachedPerMTok: floatPtr(0.14), Currency: "USD",
+	},
+}
+
+func floatPtr(f float64) *float64 { return &f }
+
 // modelPrice is a rate card in dollars per million tokens.
 type modelPrice struct {
 	InputPerMTok  float64 `json:"input_per_mtok"`
@@ -39,6 +74,18 @@ type modelPrice struct {
 	// means "same as input", so the two cases are written differently.
 	CachedPerMTok *float64 `json:"cached_per_mtok,omitempty"`
 	Currency      string   `json:"currency,omitempty"`
+
+	// fromUser marks a rate that came from the user's own file rather than the
+	// built-in table, so the view can say which it quoted.
+	fromUser bool
+}
+
+// source names where this rate came from, for the line under the cost.
+func (p modelPrice) source() string {
+	if p.fromUser {
+		return "your model-prices.json"
+	}
+	return "published rates as of " + pricesAsOf
 }
 
 // totalUSD is the bill as a number, for callers that render it themselves.
@@ -103,12 +150,26 @@ func priceFilePath() string {
 	return filepath.Join(home, "model-prices.json")
 }
 
-// lookupPrice returns the rate card for a model, or nil when none is stated.
+// lookupPrice returns the rate card for a model, or nil when none is known.
+//
+// The user's file wins over the built-in table: a negotiated rate, a tier this
+// table does not model, or a correction after the provider moves its prices all
+// have to be expressible without waiting for a release. Falling back to the
+// built-ins means the common case needs no configuration at all.
 //
 // Read on every call rather than cached: editing the file is how a user
-// corrects a rate, and a cost readout that keeps quoting the old one until
-// restart is the same staleness problem by another route.
+// corrects a rate, and a readout that keeps quoting the old one until restart
+// is the same staleness problem by another route.
 func lookupPrice(model string) *modelPrice {
+	if p := lookupIn(userPriceTable(), model); p != nil {
+		p.fromUser = true
+		return p
+	}
+	return lookupIn(builtinPrices, model)
+}
+
+// userPriceTable is ~/.gaia/model-prices.json, or nil when absent/unreadable.
+func userPriceTable() map[string]modelPrice {
 	path := priceFilePath()
 	if path == "" {
 		return nil
@@ -119,6 +180,14 @@ func lookupPrice(model string) *modelPrice {
 	}
 	var table map[string]modelPrice
 	if err := json.Unmarshal(raw, &table); err != nil {
+		return nil
+	}
+	return table
+}
+
+// lookupIn resolves a model against one table: exact match, then longest prefix.
+func lookupIn(table map[string]modelPrice, model string) *modelPrice {
+	if len(table) == 0 {
 		return nil
 	}
 	if p, ok := table[model]; ok {

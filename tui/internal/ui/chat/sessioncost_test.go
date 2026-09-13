@@ -101,3 +101,26 @@ func TestEmptySessionSaysSoRatherThanShowingZeroes(t *testing.T) {
 		t.Errorf("empty ledger rendered as data:\n%s", out)
 	}
 }
+
+// The built-in table has to be real and reachable without configuration —
+// that is the difference between a feature that costs your work and one that
+// asks you to look the numbers up first.
+func TestBuiltinRatesPriceTheModelsWeShip(t *testing.T) {
+	p := lookupPrice("fireworks.accounts/fireworks/routers/glm-5p2-fast")
+	if p == nil {
+		t.Fatal("no built-in rate for the model the TUI's own provider picker offers")
+	}
+	if p.InputPerMTok != 2.10 || p.OutputPerMTok != 6.60 || p.CachedPerMTok == nil || *p.CachedPerMTok != 0.21 {
+		t.Errorf("built-in rate does not match the published card: %+v", p)
+	}
+	if strings.Contains(p.source(), "model-prices.json") {
+		t.Error("a built-in rate claims it came from the user's file")
+	}
+}
+
+// A model nobody has priced shows tokens, never a guessed rate.
+func TestAnUnknownModelHasNoPrice(t *testing.T) {
+	if p := lookupPrice("some-model-nobody-has-priced"); p != nil {
+		t.Errorf("invented a rate for an unknown model: %+v", p)
+	}
+}

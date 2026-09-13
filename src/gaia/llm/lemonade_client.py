@@ -644,6 +644,35 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
+def _usage_dict(usage: Any) -> Dict[str, Any]:
+    """The SDK's usage object as a plain dict, nested details included.
+
+    ``model_dump`` where the SDK offers it, attribute reads otherwise, so a
+    provider that returns a shape the SDK does not model (Fireworks' cached and
+    reasoning counts live in nested ``*_details`` objects) still survives the
+    trip to the caller.
+    """
+    if hasattr(usage, "model_dump"):
+        try:
+            return usage.model_dump(exclude_none=True)
+        except Exception:  # pragma: no cover - defensive, SDK-version specific
+            pass
+    out: Dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(usage, key, None)
+        if value is not None:
+            out[key] = value
+    for key in ("prompt_tokens_details", "completion_tokens_details"):
+        details = getattr(usage, key, None)
+        if details is None:
+            continue
+        if hasattr(details, "model_dump"):
+            out[key] = details.model_dump(exclude_none=True)
+        else:
+            out[key] = {k: v for k, v in vars(details).items() if not k.startswith("_")}
+    return out
+
+
 def _tool_call_deltas(delta: Any) -> Optional[List[Dict[str, Any]]]:
     """Plain-dict form of one streamed frame's ``tool_calls``, or ``None``.
 
@@ -1963,6 +1992,15 @@ class LemonadeClient:
             **kwargs,
         }
 
+        # An OpenAI-compatible stream sends usage only if asked. Without this
+        # a streamed turn reports no token counts at all, and the gap is
+        # invisible locally — llama.cpp answers the /stats poll, so the numbers
+        # appear to be there — while a cloud-routed model, whose /stats is all
+        # zeros, silently loses them. That is backwards: the counts matter most
+        # where the tokens are billed. Caller-supplied stream_options win.
+        if stream and "stream_options" not in data:
+            data["stream_options"] = {"include_usage": True}
+
         if stop:
             data["stop"] = stop
 
@@ -2149,6 +2187,13 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
+            # An OpenAI-compatible stream sends its token accounting only if
+            # asked, in one final chunk that carries no choices. Without this a
+            # streamed turn reports no tokens at all — invisible locally, where
+            # llama.cpp answers the /stats poll instead, and total for a
+            # cloud-routed model whose /stats is all zeros. That is backwards:
+            # the counts matter most where the tokens are billed.
+            "stream_options": {"include_usage": True},
             **standard_kwargs,
         }
 
@@ -2173,6 +2218,21 @@ class LemonadeClient:
             tokens_generated = 0
             for chunk in stream:
                 tokens_generated += 1
+                # The usage chunk is the last one and carries no choices:
+                # forward it as its own frame rather than dropping it on the
+                # floor with the rest of the non-choice chunks.
+                usage = getattr(chunk, "usage", None)
+                if usage is not None and not chunk.choices:
+                    yield {
+                        "id": chunk.id,
+                        "object": "chat.completion.chunk",
+                        "created": chunk.created,
+                        "model": chunk.model,
+                        "choices": [],
+                        "usage": _usage_dict(usage),
+                    }
+                    continue
+
                 # Convert to dict format expected by our API
                 yield {
                     "id": chunk.id,

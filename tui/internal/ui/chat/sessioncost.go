@@ -91,6 +91,9 @@ func (s sessionCost) render(width int, model string, price *modelPrice) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "\n  cost          %s\n", price.format(in, cached, out))
+	// Which rates these are, and how old. A dollar figure with no provenance
+	// is the one a reader trusts by default and cannot check.
+	fmt.Fprintf(&b, "                %s\n", price.source())
 	return b.String()
 }
 
