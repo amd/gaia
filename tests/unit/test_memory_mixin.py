@@ -1297,6 +1297,120 @@ class TestRecallTool:
         results = result.get("results", result.get("items", []))
         assert len(results) == 0 or result.get("status") == "not_found"
 
+    def test_recall_with_no_arguments_browses_the_most_recent_entries(
+        self, mixin_with_tools
+    ):
+        """A bare recall() is the personalization probe, not an error (#3673).
+
+        On a plain "hi" the agent looks for something to greet the user with
+        and calls recall with no filter. That used to return an error and cost
+        a second round trip before it answered.
+        """
+        mixin_with_tools.memory_store.store(
+            category="fact", content="Unique browse marker alpha"
+        )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func()
+
+        assert result["status"] == "found"
+        contents = [r["content"] for r in result["results"]]
+        assert "Unique browse marker alpha" in contents
+
+    def test_recall_with_only_a_limit_browses_the_most_recent_entries(
+        self, mixin_with_tools
+    ):
+        """The exact call #3673 observed: recall(limit=10) and nothing else."""
+        mixin_with_tools.memory_store.store(
+            category="note", content="Unique browse marker beta"
+        )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func(limit=10)
+
+        assert result["status"] == "found"
+        assert result["count"] == len(result["results"]) <= 10
+
+    def test_recall_with_no_arguments_on_empty_memory_is_empty_not_an_error(
+        self, mixin_with_tools, tmp_path
+    ):
+        """No memories is an empty browse, never an error the agent must retry.
+
+        Swaps in a fresh store rather than emptying the fixture's: it seeds
+        privileged ``system`` rows, which ``delete()`` refuses without the
+        admin flag, and reaching for that flag to clear a fixture would be
+        testing around the guard rather than with it.
+        """
+        from gaia.agents.base.memory_store import MemoryStore
+
+        empty = MemoryStore(db_path=str(tmp_path / "empty-memory.db"))
+        assert empty.get_all_knowledge(limit=1)["items"] == []
+        mixin_with_tools._memory_store = empty
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func()
+
+        assert result["status"] == "empty"
+        assert result["results"] == []
+
+    def test_a_bare_recall_returns_the_newest_entry_first(self, mixin_with_tools):
+        """ "Most recent" is a promise the docstring makes; pin the ordering.
+
+        It holds only because ``get_all_knowledge`` defaults to
+        ``sort_by="updated_at", order="desc"`` — a changed default would
+        silently make the docstring wrong.
+        """
+        for i in range(3):
+            mixin_with_tools.memory_store.store(
+                category="fact", content=f"Ordering marker {i}"
+            )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        results = func()["results"]
+
+        assert results[0]["content"] == "Ordering marker 2"
+
+    def test_a_bare_recall_holds_back_sensitive_entries(self, mixin_with_tools):
+        """A greeting's probe must not be what ships someone's flagged notes.
+
+        On a cloud-backed session everything recall returns is sent to the
+        provider, and a bare recall() is the call an unprompted greeting makes.
+        """
+        mixin_with_tools.memory_store.store(
+            category="fact", content="Ordinary browse marker", sensitive=False
+        )
+        mixin_with_tools.memory_store.store(
+            category="fact", content="Flagged private marker", sensitive=True
+        )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        contents = [r["content"] for r in func(limit=100)["results"]]
+
+        assert "Ordinary browse marker" in contents
+        assert "Flagged private marker" not in contents
+
+    def test_a_filtered_recall_still_reaches_sensitive_entries(self, mixin_with_tools):
+        """Asked for by name, they come back — unchanged from before."""
+        mixin_with_tools.memory_store.store(
+            category="preference", content="Flagged private marker", sensitive=True
+        )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        contents = [
+            r["content"] for r in func(category="preference", limit=100)["results"]
+        ]
+
+        assert "Flagged private marker" in contents
+
+    def test_recall_with_no_arguments_honours_the_limit(self, mixin_with_tools):
+        for i in range(10):
+            mixin_with_tools.memory_store.store(
+                category="fact", content=f"Fact number {i}"
+            )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        assert len(func(limit=4)["results"]) == 4
+
     def test_recall_context_only(self, mixin_with_tools):
         """recall(context=...) with no query/category/entity returns items in that context.
 
@@ -3405,11 +3519,15 @@ class TestRecallToolTemporal:
         assert "status" in result
         assert result["status"] in ("found", "empty")
 
-    def test_recall_with_no_params_returns_error(self, mixin_with_tools):
-        """recall() with no parameters returns an error status."""
+    def test_recall_with_no_params_browses_instead_of_erroring(self, mixin_with_tools):
+        """recall() with no parameters is a browse of the most recent entries.
+
+        It used to be an error, which cost the agent a wasted round trip on
+        every greeting (#3673).
+        """
         func_recall = mixin_with_tools._registered_tools["recall"]["function"]
         result = func_recall()
-        assert result["status"] == "error"
+        assert result["status"] in ("found", "empty")
 
 
 # ===========================================================================
