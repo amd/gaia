@@ -127,6 +127,13 @@ def chat_agent_build_context(
             stack.enter_context(
                 patch.object(Path, "home", return_value=Path("/fake/home"))
             )
+            # Axis: the optional [browser] extra. Its six tools register only
+            # when playwright is importable, so a captured golden would differ
+            # between a machine that has it and one that does not. Pin it off:
+            # the goldens characterize the profile, not the dev box.
+            stack.enter_context(
+                patch("gaia.browser.driver.installed", return_value=False)
+            )
             with stack:
                 agent = ChatAgent.__new__(ChatAgent)
                 agent.config = cfg

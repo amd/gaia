@@ -1,0 +1,249 @@
+---
+title: Browser Use
+description: Scope for giving GAIA a real browser — logging in, acting on pages, and replaying what it learned
+---
+
+# Browser Use — Scope
+
+<Info>
+**Status:** Phases 1–2 shipped, with deviations — see
+[What actually shipped](#what-actually-shipped) before treating anything below
+as current design. Phase 0's measurements are still owed; Phases 3–4 (native
+CDP driver, record/replay) are not started. See
+[the guide](/guides/browser-use) for how to use what landed.
+**Supersedes:** the "no browser engine" half of [Browser Tools](/spec/browser-tools) (decision D1)
+**Issues:** [#458](https://github.com/amd/gaia/issues/458) (browser tools), [#460](https://github.com/amd/gaia/issues/460) (desktop CUA), [#224](https://github.com/amd/gaia/issues/224) (CUA via MCP)
+</Info>
+
+## What's broken
+
+GAIA can read the open web but cannot use the web. `fetch_page` is `requests` + BeautifulSoup — one GET, no JavaScript, no cookies, no session. That is fine for docs and articles and worse than useless where the user actually needs help.
+
+Measured against the current fetcher:
+
+| Target | Result |
+|---|---|
+| `example.com` | 142 chars of text — works |
+| `react.dev` (SSR'd SPA) | 8,343 chars — **works** |
+| `x.com/amd` | 2,279 chars, and all of it is `"Log in Sign up…"` — **the page behind the wall is invisible** |
+
+The failure mode is not JavaScript. Server-rendered SPAs extract fine. The failure is **authentication** — and secondarily bot gates and genuinely client-rendered content. Every shipped skill that watches a page (`price-watch`, `source-watch`) inherits that hole: point either one at a retailer that requires a session and it silently reads a login screen.
+
+Note what is *not* in scope. Google, Microsoft and GitHub already authenticate through [connectors](/plans/connectors) via OAuth, which is strictly better than driving a browser — real tokens, real scopes, no screen-scraping. Browser login is for the long tail with no API.
+
+## The thing to get right first: what actually costs time
+
+The premise behind "Playwright is slow, let's build a fast vision-driven one" does not survive contact with this repo's own numbers. Per-step wall clock decomposes roughly like this:
+
+| Step component | Cost | Whose fault |
+|---|---|---|
+| CDP command (click, type, read) | 1–10 ms | nobody |
+| Page settle / network idle | 0.1–2 s | the web's — every driver pays it |
+| Browser cold launch | 1–3 s | amortizable — keep the browser alive |
+| **LLM decides the next action** | **2–15 s** | **this is the turn** |
+
+The last row dominates by an order of magnitude, and it is measured, not assumed. From [the flagship latency study](https://github.com/amd/gaia/blob/main/docs/plans/gaia-agent-latency.md): Gemma-4-E4B on the GPU profile prefills at **387 tok/s** and generates at 34 tok/s, so **every 1,000 prompt tokens costs ~2.6 seconds**. Committed eval baselines put TTFT between 0.31 s and 2.97 s per call. The flagship already carries ~17,000 tokens of fixed prefill — 43.9 s — before the page is even described to it.
+
+Two conclusions follow, and they point away from the original instinct.
+
+**Swapping Playwright for a hand-rolled driver saves milliseconds.** Playwright's real costs are its ~200 MB browser download and its cold launch, not its per-action latency. Those are install-time and session-time costs, not per-step ones.
+
+**A vision-first loop is slower and less accurate, not faster.** A screenshot is the most expensive possible way to describe a page to a model that charges 2.6 s per 1,000 tokens — an image costs on the order of 1,000–2,000 prefill tokens where a filtered accessibility tree costs a few hundred. Worse, the reliability argument cuts the same way: a 4B model predicting pixel coordinates is guessing, while a DOM ref is exact. Gemma-4-E4B in particular is not a GUI-grounding model; if vision is used at all it should be Qwen3-VL, which is trained for it.
+
+**So: text-first, vision as a narrow fallback.** Vision earns its place on `<canvas>` apps, image CAPTCHAs we decline to solve anyway, and "does this page look right" verification — not as the primary observation channel.
+
+### Where the real speedup actually is
+
+Not in the driver. In **not calling the model at all**.
+
+A browser task is overwhelmingly repetitive — the same login, the same three clicks, the same table, every morning. Record a successful trajectory as a deterministic script and replay it; on the second run the LLM is consulted only when replay diverges from what it recorded. `price-watch` goes from ~8 LLM steps (~30 s) to zero (~2 s). That is the 10–100×, and it is a *caching* problem, not a driver problem.
+
+This has a natural home already: skills carry `permissions:` and `tools_required:` metadata, and [`skill_learning_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/skill_learning_tools.py) already lets an agent write back what it learned under provenance constraints.
+
+## What actually shipped
+
+This plan was written before the work; three things landed differently, and the
+sections below still describe the plan rather than the code.
+
+| Planned | Shipped | Why |
+|---|---|---|
+| Nine tools, incl. `browser_select`, `browser_scroll`, `browser_back`, `browser_screenshot` | **Six** — select folded into `browser_type`, scroll dropped (Playwright auto-scrolls on click), back and screenshot deferred | Bundles cap at six members, and each tool schema is a permanent prompt cost |
+| Browser runs as a supervised daemon sidecar (D7) | **In-process**, owned by the agent, torn down on cleanup | The sidecar registry is spec-and-health-endpoint driven for agent packages, not a generic process supervisor; `MAX_LIVE_SIDECARS` is 3 with two already claimed |
+| A `BrowserDriver` protocol behind which Playwright sits | **`PlaywrightDriver` used directly** | No second implementation yet; the protocol buys nothing until Phase 3 |
+
+Phase 2's origin-scoped skill grants (`browser:interact:<domain>`) did not land
+either. What did land is the confirmation gate: acting inside a session the
+browser context holds cookies for prompts every time, and is never offered an
+"always allow".
+
+## Recommendation
+
+Build the capability in this order. The driver is the swappable part; the agent loop is the hard part.
+
+1. **Put every driver behind one interface** (~12 methods). Nothing above it knows which engine is underneath.
+2. **Ship Playwright first** as the reference implementation — behind an optional `[browser]` extra, never a core dependency. It buys mature auto-waiting, a real selector engine, and `storage_state` persistence, which is weeks of work to reimplement badly. Use it to prove the *loop*.
+3. **Then replace it with a native CDP driver** once the observation format and action vocabulary are frozen.
+
+The case for step 3 being genuinely cheap, and why this is not premature:
+
+- **Zero new Python dependencies.** `aiohttp` is already in `install_requires`; CDP is JSON over one WebSocket.
+- **Zero new browser download for desktop users.** `electron@^44` is already a build dependency of the Agent UI and the app ships packaged via `electron-builder` — Chromium is already on disk, and `webContents.debugger` *is* CDP. On Windows, Edge is preinstalled and takes `--remote-debugging-port`.
+- **It buys the UX.** A GAIA-owned window can be watched, paused and taken over by the user mid-task. That matters enormously for login, and Playwright's window is not ours to render.
+
+That last point is why this is not just NIH: the 200 MB download conflicts with GAIA's edge positioning, and the login flow *needs* a window the user can grab.
+
+## Login
+
+**GAIA never types the password.** The model does not see, store, or submit credentials — this is non-negotiable and it is also the only design that survives MFA.
+
+The flow mirrors what OAuth already does in connectors:
+
+1. Agent hits a login wall and stops.
+2. GAIA opens a **visible** browser window on the login page and hands the user the keyboard.
+3. User authenticates however they like — password manager, passkey, MFA, SSO.
+4. GAIA detects success, captures **session state only** (cookies + `localStorage`), and persists it encrypted, scoped to that origin.
+5. Later runs restore the session; expiry sends the user back to step 2.
+
+### Where the session blob lives
+
+Not in the keyring. This is a concrete constraint, not a preference: Windows Credential Manager caps entries at ~1280 characters, a cookie jar runs to tens of KB, and `connectors/mcp_server.py` writes secrets with a bare `keyring.set_password` — the chunking helpers that handle this (`_kr_set`/`_kr_get` in `connectors/store.py`) are private to that module. A storage-state blob down that path fails on Windows.
+
+Instead: **key in the keyring, ciphertext on disk.**
+
+```
+~/.gaia/browser/sessions/<origin-hash>.enc   0600, AES-GCM
+keyring: gaia.connections / browser-session-key   (32 bytes)
+```
+
+`cryptography` is already a core dependency. Non-secret metadata (origin, captured-at, last-used, expiry) goes in a sibling 0600 JSON file so listing what is stored never touches plaintext.
+
+There is no prior art for this in connectors — `ConnectorSpec.type` is `Literal["oauth_pkce", "mcp_server"]`, with no cookie/session type. Adding a third type is a possible follow-up; it should not block this.
+
+## Architecture
+
+<Note>
+Planned, and **not** what shipped — the browser runs in-process. See
+[What actually shipped](#what-actually-shipped).
+</Note>
+
+The browser runs as a **supervised sidecar**, not in-process. It is a long-lived, crash-prone, memory-hungry process — exactly what `src/gaia/daemon/sidecars/` exists to babysit, and `tests/fixtures/toy_sidecar.py` proves a non-agent process satisfies the contract in ~75 lines.
+
+```
+Agent (BrowserUseToolsMixin)
+  └── HTTP, JSON only ──> browser sidecar  (127.0.0.1:<ephemeral>, bearer token)
+                             ├── /health  /version          (supervision contract)
+                             ├── /v1/browser/...            (relay path prefix)
+                             └── WebSocket ──> Chromium     (CDP, stays inside)
+```
+
+Three constraints from the existing supervisor shape this:
+
+- **The daemon relay has no WebSocket route.** `RELAY_METHODS` is HTTP verbs only. So CDP must terminate *inside* the sidecar and never cross the relay — which is the right layering anyway. The sidecar exposes a small JSON API; the socket to Chromium is its private business.
+- **The relay hardcodes `/v1/<agent_id>/`**, so the sidecar serves `/v1/browser/`.
+- **`MAX_LIVE_SIDECARS = 3`, with no eviction, and `email` + `gaia` already claim two.** A browser sidecar is the third and last slot. Either raise the cap or add idle eviction — flagged below as a blocker, not a detail.
+
+Sidecar specs live in a static `builtin_specs()` table, so registering `browser` is a core code change. Launch secret, 0600 secret-file delivery, Host/Origin allowlisting and tree-kill reaping all come free from `src/gaia/sidecar/caller_auth.py` and `sidecars/manager.py`.
+
+## Tool surface
+
+Nine tools, registered as `KNOWN_TOOLS["browser_use"]` alongside the existing lightweight `browser` mixin — which stays. Most web reading should keep going through `fetch_page`, because it is 200 ms and free.
+
+<Note>
+Planned surface. Six shipped — see [What actually shipped](#what-actually-shipped)
+and the [guide](/guides/browser-use) for the real table.
+</Note>
+
+| Tool | Gated |
+|---|---|
+| `browser_open(url)` | no |
+| `browser_snapshot()` — filtered a11y tree with stable refs | no |
+| `browser_click(ref)` | **yes**, when the session is authenticated |
+| `browser_type(ref, text)` | **yes**, when the session is authenticated |
+| `browser_select(ref, value)` | **yes**, when the session is authenticated |
+| `browser_scroll(direction)` | no |
+| `browser_back()` | no |
+| `browser_login(url)` — hand off to the user | **always** |
+| `browser_screenshot()` — VLM fallback only | no |
+
+Observation format is the load-bearing decision. A snapshot returns interactive elements only, each with a stable `ref` the model cites back — never raw HTML, never coordinates.
+
+The token saving this assumed turned out to be smaller than planned — measured, a dense page is ~1,040 tokens of elements and ~2,000 with page text, which is a screenshot's ballpark rather than an order below it. The decisive advantage is grounding: a ref resolves to an exact element where a coordinate is a guess.
+
+## Security
+
+Two risks, and the second is the serious one.
+
+**Credentials.** Covered above: the model never sees them. The visible-window handoff is the whole mechanism.
+
+**Prompt injection with an authenticated session attached.** This is materially worse than anything GAIA's browser tools face today. A page can contain text aimed at the model, and the agent can now click "Transfer" while logged into the user's account. Read-only fetching has no equivalent failure.
+
+Mitigations, all of which reuse existing machinery rather than inventing a parallel one:
+
+- **Page content is data, never instructions.** `Agent.turn_content_provenance` already exists precisely to stop fetched content writing itself into standing instructions; browser observations must be marked the same way.
+- **Read/act asymmetry.** Navigating and snapshotting are ungated. Any state-changing action *on an authenticated origin* goes through the production gate — `CONFIRMATION_REQUIRED_TOOLS` on the agent class plus `OutputHandler.confirm_tool_execution`. Not `@govern`: `src/gaia/governance/` has zero production adopters and only fires for agents that mix in `GovernedAgentMixin` with an adapter, which nothing does.
+- **Scoped "always allow".** `tool_grants.GrantScope` already keys session grants on the *invocation* rather than the tool name. A browser scope rule must key on origin — `browser_click:github.com` — so approving one click never hands over every site for the session.
+- **Origin allowlist per skill**, using the grammar skills already speak: `browser:interact:github.com`, `browser:session:github.com`, alongside the existing `network:read:*.brave.com` and `shell:execute:gh`.
+- **No CAPTCHA solving, ever.** A CAPTCHA is a hand-off to the user, same as login.
+
+## Phases
+
+<Steps>
+  <Step title="Phase 0 — measure (1 week, blocking)">
+    Everything above rests on one 2026-08-18 reading that has not been retaken. On real Ryzen AI hardware, measure: prefill tokens for a filtered a11y snapshot vs. a screenshot on both Gemma-4-E4B and Qwen3-VL-4B; end-to-end per-step latency; and Qwen3-VL's click-grounding accuracy on a fixed page set.
+
+    **Exit:** a table that either confirms text-first or overturns it. If vision grounding lands above ~90% and the token gap is under 2×, revisit — do not ship the assumption.
+  </Step>
+  <Step title="Phase 1 — driver interface + Playwright, no auth">
+    The `BrowserDriver` protocol, the sidecar spec, the snapshot format, and the 6 ungated tools. Optional `[browser]` extra. No login, no credentials.
+
+    **Exit:** the agent completes a multi-step read-only task on a client-rendered page that `fetch_page` cannot read today.
+  </Step>
+  <Step title="Phase 2 — login and sessions">
+    Visible-window handoff, encrypted session persistence, the permission grammar, and the gate on authenticated actions.
+
+    **Exit:** user logs into a real site once; a later run restores the session unattended; a state-changing click prompts for confirmation and denies cleanly when refused.
+  </Step>
+  <Step title="Phase 3 — native CDP driver">
+    Swap Playwright for the aiohttp CDP driver against Electron's Chromium, behind the same interface. Playwright stays supported for CI and non-desktop installs.
+
+    **Exit:** Phase 1 and 2 suites pass unmodified against both drivers; desktop install adds no browser download.
+  </Step>
+  <Step title="Phase 4 — record and replay">
+    Trajectory capture, deterministic replay, divergence detection falling back to the LLM.
+
+    **Exit:** a `price-watch` run against a login-walled retailer completes with zero LLM calls on the second run.
+  </Step>
+</Steps>
+
+## Open questions
+
+- **`MAX_LIVE_SIDECARS = 3` with no eviction.** A browser takes the last slot. Raise the cap or add idle eviction — needs a decision before Phase 1.
+- **Where the visible window comes from in Phase 2, given Playwright lands first.** Playwright's own window is the pragmatic answer; the Electron window is the good one. Possible argument for pulling Phase 3 forward.
+- **Headless-server installs.** Login is inherently interactive. Probable answer: capture the session on a desktop machine and import it.
+- **Bot detection.** Out of scope to defeat. When a site blocks automation the tool must say so plainly rather than escalate — GAIA does not ship evasion.
+- **Whether session state becomes a third `ConnectorSpec.type`** or stays browser-local. Non-blocking.
+
+## Decisions log
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1' | Revisit [Browser Tools](/spec/browser-tools) D1 — a browser engine is now in scope | D1 traded away JS rendering and was right to. It also traded away *login*, which is the actual gap |
+| D2 | Keep `fetch_page`; add browser use alongside | 200 ms and free beats 3 s and heavy for most reading |
+| D3 | Text-first (a11y tree), vision as fallback | 2.6 s per 1,000 prompt tokens, and DOM refs are exact where 4B coordinate grounding guesses |
+| D4 | Driver behind an interface; Playwright first, native CDP after | The loop is the hard part; the driver is swappable. De-risk in that order |
+| D5 | Playwright as an optional extra, never core | 200 MB contradicts the edge/AI-PC positioning |
+| D6 | Native driver targets Electron's Chromium via CDP | `electron@^44` and `aiohttp` already ship — zero new dependencies, zero new download |
+| D7 | Browser runs as a daemon sidecar; CDP never crosses the relay | The relay is HTTP-only; the supervisor already handles crash, reap and auth |
+| D8 | The model never handles credentials | MFA, passkeys and SSO all work; nothing to leak |
+| D9 | Session blob encrypted on disk, key in keyring | Windows Credential Manager's ~1280-char cap makes the keyring-only path fail |
+| D10 | Gate on state-change × authenticated origin, via the `CONFIRMATION_HOOKS` union | `governance/` has no production adopters. Shipped as a per-call hook rather than a static name set, so the decision can depend on session state and travels with the mixin |
+| D11 | Replay, not a faster driver, is where the speedup lives | The model is 80–95% of wall clock. The only large win is not calling it |
+| D12 | No CAPTCHA solving, no bot-detection evasion | Hand off to the user; fail loudly |
+
+## Related
+
+- [Browser Tools spec](/spec/browser-tools) — the lightweight fetcher this extends
+- [Agent latency study](https://github.com/amd/gaia/blob/main/docs/plans/gaia-agent-latency.md) — source of the 387 tok/s prefill figure
+- [CUA plan](/plans/cua) — desktop control; adjacent, deliberately separate
+- [Connectors](/plans/connectors) — OAuth, which beats browser login wherever it exists
+- [Security model](/plans/security-model)

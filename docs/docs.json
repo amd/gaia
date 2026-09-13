@@ -88,6 +88,7 @@
                       "guides/gaia",
                       "guides/ai-providers",
                       "guides/chat",
+              "guides/browser-use",
                       "guides/talk",
                       "guides/transcription"
                     ]
@@ -328,6 +329,7 @@
             "group": "Command Line",
             "pages": [
               "reference/cli",
+              "reference/tui-dev",
               "reference/features"
             ]
           },
@@ -424,6 +426,7 @@
           {
             "group": "Infrastructure",
             "pages": [
+              "plans/browser-use",
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",

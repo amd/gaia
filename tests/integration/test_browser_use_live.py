@@ -1,0 +1,577 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Live-Chromium tests for the browser-use driver.
+
+Everything here drives a real browser against a local HTML file — no network,
+so the suite is deterministic and safe in CI. What it proves is exactly what a
+mock cannot: that the injected snapshot script runs in a real page, that refs
+resolve back to real elements, and that Playwright's thread-affinity does not
+bite when each caller arrives on a different thread.
+
+Skipped when the ``[browser]`` extra is not installed.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+
+import pytest
+
+from gaia.browser import driver as browser_driver
+from gaia.browser.errors import BrowserError, ElementNotFound, LoginTimedOut
+from gaia.browser.snapshot import render
+
+pytestmark = pytest.mark.skipif(
+    not browser_driver.installed(), reason="playwright not installed ([browser] extra)"
+)
+
+PAGE = """<!doctype html><title>Fixture</title><body>
+<label for="nm">Full name</label><input id="nm" type="text">
+<select id="sz" aria-label="Size"><option>Small</option><option>Large</option></select>
+<input type="password" id="pw" aria-label="Password" value="hunter2">
+<input type="checkbox" id="ck" checked aria-label="Subscribe">
+<button id="bt" disabled>Nope</button>
+<div style="display:none"><a href="#h1">DISPLAYNONE</a></div>
+<div aria-hidden="true"><a href="#h2">ARIAHIDDEN</a></div>
+<a id="go" href="#arrived">Go now</a>
+</body>"""
+
+
+@pytest.fixture(scope="module")
+def page_url(tmp_path_factory):
+    p = tmp_path_factory.mktemp("browser") / "fixture.html"
+    p.write_text(PAGE, encoding="utf-8")
+    return p.as_uri()
+
+
+@pytest.fixture(scope="module")
+def driver():
+    d = browser_driver.PlaywrightDriver(headless=True)
+    d.start()
+    yield d
+    d.close()
+
+
+def _by_role(snap, role):
+    return [e for e in snap["elements"] if e["role"] == role]
+
+
+def test_snapshot_finds_the_visible_controls(driver, page_url):
+    snap = driver.goto(page_url)
+    assert snap["title"] == "Fixture"
+    roles = {e["role"] for e in snap["elements"]}
+    assert {"textbox", "select", "password", "checkbox", "button", "link"} <= roles
+
+
+def test_hidden_and_aria_hidden_elements_are_left_out(driver, page_url):
+    """aria-hidden is inherited, so an element inside a hidden container is out.
+
+    Distinct sentinel names on purpose: "aria-hidden link" contains "hidden
+    link", so a substring assertion could pass while the bug was live.
+    """
+    snap = driver.goto(page_url)
+    names = " ".join(e["name"] for e in snap["elements"])
+    assert "DISPLAYNONE" not in names
+    assert "ARIAHIDDEN" not in names
+
+
+def test_page_text_is_not_capped_at_the_element_name_length(driver, nav_url):
+    """Page text and element names have separate caps.
+
+    Regression: both went through one helper that sliced to MAX_NAME_CHARS, so
+    a snapshot returned 120 characters of page text no matter how long the page
+    was — 120 of 63,000 on a Wikipedia article. Every existing test passed,
+    because they all read the title or a page shorter than the cap.
+    """
+    from gaia.browser.snapshot import MAX_NAME_CHARS
+
+    body = "word " * 400  # ~2000 chars, far past the name cap
+    snap = driver.goto(nav_url)
+    driver._submit(
+        lambda: driver._page.evaluate(
+            "(t) => { document.body.insertAdjacentHTML('beforeend',"
+            "'<p>' + t + '</p>'); }",
+            body,
+        )
+    )
+    snap = driver.snapshot()
+    assert (
+        len(snap["text"]) > MAX_NAME_CHARS * 2
+    ), f"page text is {len(snap['text'])} chars — still capped at the name length"
+
+
+def test_element_names_are_still_capped(driver, nav_url):
+    """The name cap must survive the page-text fix."""
+    from gaia.browser.snapshot import MAX_NAME_CHARS
+
+    driver.goto(nav_url)
+    driver._submit(
+        lambda: driver._page.evaluate(
+            "() => { const a = document.createElement('a');"
+            " a.href = '#x'; a.textContent = 'n'.repeat(500);"
+            " document.body.appendChild(a); }"
+        )
+    )
+    snap = driver.snapshot()
+    assert all(len(e["name"]) <= MAX_NAME_CHARS for e in snap["elements"])
+
+
+def test_label_and_aria_label_become_the_name(driver, page_url):
+    snap = driver.goto(page_url)
+    assert _by_role(snap, "textbox")[0]["name"] == "Full name"
+    assert _by_role(snap, "select")[0]["name"] == "Size"
+
+
+def test_a_password_value_never_reaches_the_model(driver, page_url):
+    """The one field whose contents must not enter the context window."""
+    snap = driver.goto(page_url)
+    assert "hunter2" not in render(snap)
+    assert all("hunter2" not in str(e.get("value", "")) for e in snap["elements"])
+
+
+def test_disabled_and_checked_state_are_reported(driver, page_url):
+    snap = driver.goto(page_url)
+    assert _by_role(snap, "button")[0]["disabled"] is True
+    assert _by_role(snap, "checkbox")[0]["checked"] is True
+
+
+def test_clicking_a_ref_navigates(driver, page_url):
+    snap = driver.goto(page_url)
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "Go now")
+    after = driver.click(ref)
+    assert after["url"].endswith("#arrived")
+
+
+def test_typing_fills_the_field(driver, page_url):
+    snap = driver.goto(page_url)
+    ref = _by_role(snap, "textbox")[0]["ref"]
+    after = driver.type_text(ref, "Ada Lovelace")
+    assert _by_role(after, "textbox")[0]["value"] == "Ada Lovelace"
+
+
+def test_typing_into_a_select_picks_that_option(driver, page_url):
+    """``<select>`` is routed to select_option rather than fill."""
+    snap = driver.goto(page_url)
+    ref = _by_role(snap, "select")[0]["ref"]
+    after = driver.type_text(ref, "Large")
+    assert _by_role(after, "select")[0]["value"] == "Large"
+
+
+def test_a_stale_ref_is_an_actionable_error(driver, page_url):
+    driver.goto(page_url)
+    with pytest.raises(ElementNotFound, match="browser_snapshot"):
+        driver.click("e9999")
+
+
+def test_refs_are_reissued_on_every_snapshot(driver, page_url):
+    """Refs are snapshot-scoped; a previous page's stamps must not survive."""
+    driver.goto(page_url)
+    driver.goto("about:blank")
+    with pytest.raises(ElementNotFound):
+        driver.click("e1")
+
+
+def test_calls_from_many_threads_all_work(driver, page_url):
+    """The reason the driver is thread-confined at all.
+
+    Every agent tool body runs on a fresh daemon thread, so a driver that only
+    worked from its creating thread would fail on the second tool call.
+    """
+    driver.goto(page_url)
+    results, errors = [], []
+
+    def _worker():
+        try:
+            results.append(len(driver.snapshot()["elements"]))
+        except BaseException as e:  # noqa: BLE001 — reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=_worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, f"threaded snapshot failed: {errors}"
+    assert len(results) == 6
+    assert len(set(results)) == 1, "same page returned different element counts"
+
+
+def test_the_browser_survives_being_reused(driver, page_url):
+    """A persistent browser is the whole performance argument."""
+    for _ in range(3):
+        assert driver.goto(page_url)["title"] == "Fixture"
+
+
+def test_storage_state_is_retrievable(driver, page_url):
+    """browser_login persists whatever this returns, so it must be callable.
+
+    Regression guard: the reader was briefly named for the same attribute the
+    constructor sets, so the instance attribute shadowed the method.
+    """
+    driver.goto(page_url)
+    state = driver.storage_state()
+    assert isinstance(state, dict)
+    assert "cookies" in state
+
+
+def test_current_url_reports_the_open_page(driver, page_url):
+    driver.goto(page_url)
+    assert driver.current_url().startswith("file://")
+
+
+# ------------------------------------------------------- login inference
+
+# Served over real HTTP, not file:// — browsers refuse cookies on a file
+# origin, so a file-served fixture cannot reproduce the false positive at all
+# and the test would pass against the very bug it is meant to catch.
+EMAIL_FIRST = """<!doctype html><title>Sign in</title><body>
+<h1>Sign in</h1>
+<input id="email" type="email" placeholder="Email">
+<button id="next">Next</button>
+<script>
+  // What every real email-first page does: no password field until step two,
+  // and cookies that keep arriving after the page has settled (analytics
+  // beacons, a lazily-issued session id). The delayed one is the important
+  // half — a cookie already present when the wait begins is in the baseline
+  // and can never look "new", so an immediate-only fixture cannot reproduce
+  // the false positive.
+  document.cookie = "csrf=abc123; path=/";
+  setTimeout(() => { document.cookie = "analytics=xyz789; path=/"; }, 1500);
+  document.getElementById('next').onclick = () => {
+    document.body.innerHTML =
+      '<input id="pw" type="password" placeholder="Password">' +
+      '<button id="go">Sign in</button>';
+  };
+</script>
+</body>"""
+
+
+@pytest.fixture(scope="module")
+def http_login_url(tmp_path_factory):
+    """Serve the email-first fixture on loopback so cookies actually apply."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("loginsrv")
+    (root / "signin.html").write_text(EMAIL_FIRST, encoding="utf-8")
+
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(root)
+    )
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/signin.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_cookie_really_is_set_on_the_fixture(driver, http_login_url):
+    """Guards the guard.
+
+    If the fixture stopped setting a cookie, the regression test below would
+    pass against the old buggy heuristic too — which is exactly how the first
+    version of it was worthless.
+    """
+    driver.goto(http_login_url)
+    names = {c.get("name") for c in driver.cookies()}
+    assert "csrf" in names
+
+
+def test_step_one_of_an_email_first_flow_is_not_mistaken_for_success(
+    driver, http_login_url
+):
+    """The regression this heuristic exists for.
+
+    Google and Microsoft show no password field on step one and set cookies
+    immediately. "No password visible + a new cookie" called that a completed
+    sign-in about a second in, and saved a logged-out session.
+    """
+    with pytest.raises(LoginTimedOut):
+        driver.wait_for_login(http_login_url, timeout_s=8, poll_s=0.5)
+
+
+def test_nothing_is_concluded_inside_the_minimum_dwell(driver, page_url):
+    """A page with no password field at all must still wait out the dwell."""
+    t0 = time.monotonic()
+    with pytest.raises(LoginTimedOut):
+        driver.wait_for_login(page_url, timeout_s=2, poll_s=0.25)
+    assert time.monotonic() - t0 >= 1.5
+
+
+# --------------------------------------------------- navigation settling
+
+
+NAV_FORM = """<!doctype html><title>Search</title><body>
+<form action="/landed.html" method="get">
+  <input id="q" name="q" type="text" aria-label="Query">
+</form>
+<a id="stay" href="#nowhere">Goes nowhere</a>
+</body>"""
+
+NAV_LANDED = """<!doctype html><title>Landed</title><body><h1>Landed</h1></body>"""
+
+
+@pytest.fixture(scope="module")
+def nav_url(tmp_path_factory):
+    """A form that navigates on Enter, served over HTTP."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("navsrv")
+    (root / "search.html").write_text(NAV_FORM, encoding="utf-8")
+    (root / "landed.html").write_text(NAV_LANDED, encoding="utf-8")
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(root)
+    )
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/search.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_submitting_returns_the_page_it_navigated_to(driver, nav_url):
+    """The snapshot must describe the NEW document, not the one left behind.
+
+    Regression: Enter submitted correctly but the snapshot was taken before the
+    navigation committed, so the tool reported the old URL and handed the model
+    refs that were already gone. It looked to the agent like nothing happened.
+    """
+    snap = driver.goto(nav_url)
+    ref = next(e["ref"] for e in snap["elements"] if e["role"] == "textbox")
+    after = driver.type_text(ref, "hello", press_enter=True)
+    assert after["title"] == "Landed", f"still on {after['url']}"
+    assert "landed.html" in after["url"]
+    assert "q=hello" in after["url"]
+
+
+def test_an_action_that_navigates_nowhere_stays_fast(driver, nav_url):
+    """The settle window is paid in full by non-navigating actions, so cap it."""
+    driver.goto(nav_url)
+    snap = driver.snapshot()
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "Goes nowhere")
+    t0 = time.monotonic()
+    driver.click(ref)
+    assert time.monotonic() - t0 < 8.0
+
+
+# ------------------------------------------------- navigation screening
+
+
+@pytest.fixture(scope="module")
+def internal_url():
+    """Stands in for an internal service that ANSWERS.
+
+    An unroutable address (169.254.x) is blocked by never connecting at all, so
+    it cannot show whether the screening works — the test would pass with no
+    screening in place. The dangerous case is a private host that responds: a
+    metadata endpoint or an admin panel, whose body is what would become model
+    context.
+    """
+    import functools
+    import http.server
+    import socketserver
+    import tempfile
+    import threading as _threading
+
+    root = tempfile.mkdtemp()
+    with open(f"{root}/index.html", "w", encoding="utf-8") as fh:
+        fh.write("<h1>INTERNAL-SECRET-BODY</h1>")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    srv = socketserver.TCPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=root)
+    )
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.fixture(scope="module")
+def ssrf_url(tmp_path_factory, internal_url):
+    """A page that links to, and redirects to, a blocked internal address."""
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("ssrf")
+    (root / "index.html").write_text(
+        f'<a id="meta" href="{internal_url}/index.html">internal</a>',
+        encoding="utf-8",
+    )
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — stdlib naming
+            if self.path.startswith("/redir"):
+                self.send_response(302)
+                self.send_header("Location", f"{internal_url}/index.html")
+                self.end_headers()
+                return
+            super().do_GET()
+
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    handler = functools.partial(Handler, directory=str(root))
+    srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.fixture(scope="module")
+def guarded_driver(ssrf_url, internal_url):
+    """A driver that allows the fixture host but refuses the internal one."""
+
+    def allow(url):
+        return url.startswith(ssrf_url)
+
+    d = browser_driver.PlaywrightDriver(headless=True, allow_navigation=allow)
+    d.start()
+    yield d
+    d.close()
+
+
+def test_a_clicked_link_to_a_blocked_address_is_refused(guarded_driver, ssrf_url):
+    """Screening browser_open's URL only covers the first hop.
+
+    The agent clicking a link is a navigation the entry-point check never sees,
+    and the page body would come back into the model's context either way.
+    """
+    snap = guarded_driver.goto(f"{ssrf_url}/index.html")
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "internal")
+    try:
+        after = guarded_driver.click(ref)
+    except BrowserError:
+        return  # refused outright is also a pass
+    assert "INTERNAL-SECRET-BODY" not in (
+        after.get("text") or ""
+    ), "the internal page's body reached the model"
+
+
+def test_a_redirect_to_a_blocked_address_never_returns_its_body(
+    guarded_driver, ssrf_url
+):
+    """The server, not the agent, chooses where a 302 goes.
+
+    Playwright follows a server-side redirect inside the network stack without
+    re-entering the route handler, so the request IS made. What must not happen
+    is the response becoming model context.
+    """
+    with pytest.raises(BrowserError) as excinfo:
+        guarded_driver.goto(f"{ssrf_url}/redir")
+    assert "INTERNAL-SECRET-BODY" not in str(excinfo.value)
+
+
+def test_an_allowed_navigation_still_works(guarded_driver, ssrf_url):
+    """The guard must not block the ordinary case."""
+    snap = guarded_driver.goto(f"{ssrf_url}/index.html")
+    assert "index.html" in snap["url"]
+
+
+# ------------------------------------------------------- popups & disabled
+
+
+POPUP_OPENER = """<!doctype html><title>Report Index</title><body>
+<a id="open" href="popup_target.html" target="_blank">Open the Q4 report</a>
+<button id="off" disabled>Locked</button>
+</body>"""
+POPUP_TARGET = """<!doctype html><title>Q4 Report</title><body>
+<h1>Q4 Report</h1><p>The audited figure is POPUP-VALUE-8817.</p></body>"""
+
+
+@pytest.fixture(scope="module")
+def popup_url(tmp_path_factory):
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("popup")
+    (root / "index.html").write_text(POPUP_OPENER, encoding="utf-8")
+    (root / "popup_target.html").write_text(POPUP_TARGET, encoding="utf-8")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    srv = socketserver.TCPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=str(root))
+    )
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/index.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_target_blank_click_follows_the_popup(driver, popup_url):
+    """The driver must describe the tab that opened, not the opener.
+
+    Two bugs lived here. The context "page" event fires after the click has
+    already returned, so the swap has to be synchronous — and the first
+    synchronous attempt still failed, because `time.sleep` on the worker thread
+    starves Playwright's own event loop and the popup page object is never
+    created at all. It looked exactly like the click did nothing.
+    """
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if "Q4" in e["name"])
+    after = driver.click(ref)
+    assert after["title"] == "Q4 Report", f"still describing {after['title']!r}"
+    assert "POPUP-VALUE-8817" in (after.get("text") or "")
+
+
+def test_clicking_a_disabled_control_fails_fast(driver, popup_url):
+    """A disabled control never becomes actionable.
+
+    Playwright would wait out the full 30s timeout before saying so; a live
+    agent run burned exactly that to learn the button was greyed out.
+    """
+    import time as _t
+
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if e.get("disabled"))
+    t0 = _t.monotonic()
+    with pytest.raises(BrowserError, match="disabled"):
+        driver.click(ref)
+    assert _t.monotonic() - t0 < 8.0, "took the full actionability timeout"
+
+
+def test_a_stale_popup_is_not_adopted_by_a_later_click(driver, popup_url, nav_url):
+    """Adopt only a tab THIS action opened.
+
+    Taking "the last page in the context" meant a popup left open by an earlier
+    action was handed to every later click. A live run clicked "Delete account
+    permanently" and got back a report page opened two tests earlier — the tool
+    reported success against a page it had never navigated to.
+    """
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if "Q4" in e["name"])
+    assert driver.click(ref)["title"] == "Q4 Report"  # popup left open
+
+    snap = driver.goto(nav_url)
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "Goes nowhere")
+    after = driver.click(ref)
+    assert after["title"] != "Q4 Report", "a stale popup was adopted"
+    assert "search.html" in after["url"]
