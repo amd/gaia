@@ -286,13 +286,22 @@ class PlaywrightDriver:
             if loc.count() == 0:
                 raise ElementNotFound(ref)
             prev_url = self._page.url
+            pages_before = self._open_pages()
             try:
+                # A disabled control never becomes actionable, so Playwright
+                # would wait out the entire timeout before saying so. Ask first:
+                # 30 seconds to learn "the button is greyed out" is 30 seconds
+                # the agent could have spent on the thing that does work.
+                if not loc.first.is_enabled(timeout=2_000):
+                    raise InteractionFailed(ref, "click", "the element is disabled")
                 # Playwright auto-waits for actionability and scrolls into view,
                 # which is most of what makes a hand-rolled driver flaky.
                 loc.first.click(timeout=self._nav_timeout_ms)
+            except InteractionFailed:
+                raise
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
                 raise InteractionFailed(ref, "click", str(e).split("\n")[0]) from e
-            self._settle_after_action(prev_url)
+            self._settle_after_action(prev_url, pages_before)
             self._assert_landed_somewhere_allowed(self._page.url)
             return self._snapshot()
 
@@ -310,6 +319,7 @@ class PlaywrightDriver:
                 raise ElementNotFound(ref)
             target = loc.first
             prev_url = self._page.url
+            pages_before = self._open_pages()
             tag = (target.evaluate("(el) => el.tagName.toLowerCase()") or "").strip()
             try:
                 if tag == "select":
@@ -334,7 +344,7 @@ class PlaywrightDriver:
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
                 action = "select an option in" if tag == "select" else "type into"
                 raise InteractionFailed(ref, action, str(e).split("\n")[0]) from e
-            self._settle_after_action(prev_url)
+            self._settle_after_action(prev_url, pages_before)
             self._assert_landed_somewhere_allowed(self._page.url)
             return self._snapshot()
 
@@ -518,10 +528,6 @@ class PlaywrightDriver:
             route.continue_()
 
         self._context.route("**/*", _guard)
-        # A popup or target=_blank is a page the driver would otherwise never
-        # look at: the model sees "nothing happened" and retries, and the
-        # popup's origin never reaches the confirmation gate.
-        self._context.on("page", self._adopt_page)
 
     def _fetch_screened(self, route, request) -> None:
         """Resolve a navigation one hop at a time, screening every Location."""
@@ -544,18 +550,6 @@ class PlaywrightDriver:
                 route.abort("blockedbyclient")
                 return
         raise BrowserError(f"Too many redirects from {request.url}")
-
-    def _adopt_page(self, page) -> None:
-        """Make a newly opened tab the one the driver describes."""
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=10_000)
-        except Exception as e:  # noqa: BLE001 — describe it anyway
-            logger.debug("Popup did not settle: %s", e)
-        try:
-            logger.info("Following popup to %s", page.url)
-            self._page = page
-        except Exception as e:  # noqa: BLE001 — keep the old page rather than crash
-            logger.warning("Could not adopt popup: %s", e)
 
     def _assert_landed_somewhere_allowed(self, requested: str) -> None:
         """Refuse to hand back a page that ended up off the public internet.
@@ -586,7 +580,54 @@ class PlaywrightDriver:
             logger.debug("Could not blank a blocked page: %s", e)
         raise NavigationBlocked(requested, landed)
 
-    def _settle_after_action(self, prev_url: str) -> None:
+    def _open_pages(self) -> list:
+        """Live pages in the context, newest last."""
+        try:
+            return [p for p in self._context.pages if not p.is_closed()]
+        except Exception:  # noqa: BLE001 — context going away
+            return []
+
+    def _adopt_newest_page(self, before: Optional[list] = None) -> None:
+        """Switch to a tab THIS action opened, before snapshotting.
+
+        The context "page" event fires asynchronously — by the time it lands,
+        the click has already returned and the snapshot has already described
+        the opener. So the swap has to happen here, synchronously, in the same
+        call the model is waiting on.
+
+        ``before`` is the page list from just before the action, and it is
+        load-bearing: adopting "the last page in the context" instead meant a
+        popup left open by an EARLIER action got adopted by every later click.
+        A live run clicked "Delete account permanently" and was handed a
+        report page opened two tests previously — the tool reported success
+        against a page it had never navigated to.
+        """
+        # Give the popup a beat to materialise — but pump Playwright's loop
+        # rather than sleeping on it. time.sleep() on this thread starves the
+        # sync API's own event loop, so the new page object is never created
+        # and target=_blank looks like it did nothing at all.
+        known = set(map(id, before if before is not None else self._open_pages()))
+        try:
+            for _ in range(10):
+                if [p for p in self._open_pages() if id(p) not in known]:
+                    break
+                self._page.wait_for_timeout(100)
+        except Exception:  # noqa: BLE001 — nothing to adopt
+            return
+        fresh = [p for p in self._open_pages() if id(p) not in known]
+        if not fresh or fresh[-1] is self._page:
+            return
+        newest = fresh[-1]
+        try:
+            newest.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception as e:  # noqa: BLE001 — describe it anyway
+            logger.debug("Popup did not settle: %s", e)
+        logger.info("Following popup to %s", newest.url)
+        self._page = newest
+
+    def _settle_after_action(
+        self, prev_url: str, pages_before: Optional[list] = None
+    ) -> None:
         """Settle after a click/keypress that *might* navigate.
 
         An action can start a navigation that has not committed by the time the
@@ -601,6 +642,8 @@ class PlaywrightDriver:
         """
         import time as _time
 
+        self._adopt_newest_page(pages_before)
+
         deadline = _time.monotonic() + NAV_SETTLE_S
         while _time.monotonic() < deadline:
             try:
@@ -608,7 +651,10 @@ class PlaywrightDriver:
                     break
             except Exception:  # noqa: BLE001 — mid-swap; try again
                 pass
-            _time.sleep(0.05)
+            try:
+                self._page.wait_for_timeout(50)
+            except Exception:  # noqa: BLE001 — page swapped under us
+                _time.sleep(0.05)
 
         try:
             self._page.wait_for_load_state("domcontentloaded", timeout=10_000)

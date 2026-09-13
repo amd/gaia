@@ -487,3 +487,91 @@ def test_an_allowed_navigation_still_works(guarded_driver, ssrf_url):
     """The guard must not block the ordinary case."""
     snap = guarded_driver.goto(f"{ssrf_url}/index.html")
     assert "index.html" in snap["url"]
+
+
+# ------------------------------------------------------- popups & disabled
+
+
+POPUP_OPENER = """<!doctype html><title>Report Index</title><body>
+<a id="open" href="popup_target.html" target="_blank">Open the Q4 report</a>
+<button id="off" disabled>Locked</button>
+</body>"""
+POPUP_TARGET = """<!doctype html><title>Q4 Report</title><body>
+<h1>Q4 Report</h1><p>The audited figure is POPUP-VALUE-8817.</p></body>"""
+
+
+@pytest.fixture(scope="module")
+def popup_url(tmp_path_factory):
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("popup")
+    (root / "index.html").write_text(POPUP_OPENER, encoding="utf-8")
+    (root / "popup_target.html").write_text(POPUP_TARGET, encoding="utf-8")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    srv = socketserver.TCPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=str(root))
+    )
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/index.html"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_target_blank_click_follows_the_popup(driver, popup_url):
+    """The driver must describe the tab that opened, not the opener.
+
+    Two bugs lived here. The context "page" event fires after the click has
+    already returned, so the swap has to be synchronous — and the first
+    synchronous attempt still failed, because `time.sleep` on the worker thread
+    starves Playwright's own event loop and the popup page object is never
+    created at all. It looked exactly like the click did nothing.
+    """
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if "Q4" in e["name"])
+    after = driver.click(ref)
+    assert after["title"] == "Q4 Report", f"still describing {after['title']!r}"
+    assert "POPUP-VALUE-8817" in (after.get("text") or "")
+
+
+def test_clicking_a_disabled_control_fails_fast(driver, popup_url):
+    """A disabled control never becomes actionable.
+
+    Playwright would wait out the full 30s timeout before saying so; a live
+    agent run burned exactly that to learn the button was greyed out.
+    """
+    import time as _t
+
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if e.get("disabled"))
+    t0 = _t.monotonic()
+    with pytest.raises(BrowserError, match="disabled"):
+        driver.click(ref)
+    assert _t.monotonic() - t0 < 8.0, "took the full actionability timeout"
+
+
+def test_a_stale_popup_is_not_adopted_by_a_later_click(driver, popup_url, nav_url):
+    """Adopt only a tab THIS action opened.
+
+    Taking "the last page in the context" meant a popup left open by an earlier
+    action was handed to every later click. A live run clicked "Delete account
+    permanently" and got back a report page opened two tests earlier — the tool
+    reported success against a page it had never navigated to.
+    """
+    snap = driver.goto(popup_url)
+    ref = next(e["ref"] for e in snap["elements"] if "Q4" in e["name"])
+    assert driver.click(ref)["title"] == "Q4 Report"  # popup left open
+
+    snap = driver.goto(nav_url)
+    ref = next(e["ref"] for e in snap["elements"] if e["name"] == "Goes nowhere")
+    after = driver.click(ref)
+    assert after["title"] != "Q4 Report", "a stale popup was adopted"
+    assert "search.html" in after["url"]
