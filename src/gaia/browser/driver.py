@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
+import re
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
@@ -52,6 +53,9 @@ DEFAULT_NAV_TIMEOUT_MS = 30_000
 #: Short: it is paid in full by every action that navigates nowhere, and the
 #: model's own step costs tens of seconds either way.
 NAV_SETTLE_S = 1.5
+
+#: How long to let a script-driven redirect fire before describing the page.
+SCRIPT_REDIRECT_S = 1.5
 
 #: Redirect hops followed (and screened) before giving up.
 MAX_REDIRECT_HOPS = 10
@@ -112,6 +116,10 @@ class PlaywrightDriver:
         self._last_blocked: Optional[str] = None
         #: Bumped per snapshot so refs from an older page cannot resolve.
         self._generation = 0
+        #: ref -> frame that issued it, for refs inside an iframe.
+        self._frames_by_ref: Dict[str, Any] = {}
+        #: Last native dialog seen, surfaced once in the next snapshot.
+        self._pending_dialog: Optional[str] = None
 
         self._jobs: "queue.Queue[Any]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -197,6 +205,7 @@ class PlaywrightDriver:
             self._context.set_default_timeout(self._nav_timeout_ms)
             self._install_navigation_guard()
             self._page = self._context.new_page()
+            self._context.on("dialog", self._on_dialog)
 
             logger.info(
                 "Browser started (headless=%s, session=%s)",
@@ -271,6 +280,7 @@ class PlaywrightDriver:
                 if self._last_blocked:
                     raise NavigationBlocked(url, self._last_blocked) from e
                 raise NavigationFailed(url, str(e).split("\n")[0]) from e
+            self._await_script_redirect()
             self._assert_landed_somewhere_allowed(url)
             self._settle()
             return self._snapshot()
@@ -281,10 +291,10 @@ class PlaywrightDriver:
         return self._submit(self._snapshot)
 
     def click(self, ref: str) -> Dict[str, Any]:
-        selector = ref_selector(ref)
+        ref_selector(ref)  # validate before touching the page
 
         def _click() -> Dict[str, Any]:
-            loc = self._page.locator(selector)
+            loc = self._locator_for(ref)
             if loc.count() == 0:
                 raise ElementNotFound(ref)
             prev_url = self._page.url
@@ -302,7 +312,14 @@ class PlaywrightDriver:
             except InteractionFailed:
                 raise
             except Exception as e:  # noqa: BLE001 — re-raised with the ref
-                raise InteractionFailed(ref, "click", str(e).split("\n")[0]) from e
+                detail = str(e).split("\n")[0]
+                blocker = self._covering_element(ref)
+                if blocker:
+                    detail = (
+                        f"it is covered by {blocker}. Dismiss or close that "
+                        "first, then click again"
+                    )
+                raise InteractionFailed(ref, "click", detail) from e
             self._settle_after_action(prev_url, pages_before)
             self._assert_landed_somewhere_allowed(self._page.url)
             return self._snapshot()
@@ -313,10 +330,10 @@ class PlaywrightDriver:
         self, ref: str, text: str, *, press_enter: bool = False
     ) -> Dict[str, Any]:
         """Fill a text field, or pick an option when the target is a ``<select>``."""
-        selector = ref_selector(ref)
+        ref_selector(ref)  # validate before touching the page
 
         def _type() -> Dict[str, Any]:
-            loc = self._page.locator(selector)
+            loc = self._locator_for(ref)
             if loc.count() == 0:
                 raise ElementNotFound(ref)
             target = loc.first
@@ -638,6 +655,47 @@ class PlaywrightDriver:
             logger.debug("Could not blank a blocked page: %s", e)
         raise NavigationBlocked(requested, landed)
 
+    def _on_dialog(self, dialog) -> None:
+        """Record a native dialog and dismiss it.
+
+        Playwright auto-dismisses ``confirm()`` when nothing is listening, so
+        the call returns false and the branch the user asked for quietly does
+        not run — a live probe clicked "Archive record" and the page reported
+        KEPT. Dismissing is still the right default (accepting would be taking
+        the irreversible choice on the user's behalf), but it must be VISIBLE:
+        the message is carried into the next snapshot so the model can say a
+        confirmation appeared and was declined.
+        """
+        try:
+            self._pending_dialog = f"{dialog.type}: {dialog.message}"
+            logger.info("Dismissed a %s dialog: %s", dialog.type, dialog.message)
+            dialog.dismiss()
+        except Exception as e:  # noqa: BLE001 — dialog already gone
+            logger.debug("Dialog handling: %s", e)
+
+    def _covering_element(self, ref: str) -> Optional[str]:
+        """What sits on top of ``ref``, if anything.
+
+        Playwright reports a covered control as a plain actionability timeout,
+        which tells the model nothing it can act on. A cookie wall or a modal
+        is the single most common reason a click will not land, and naming it
+        turns a dead end into an obvious next step.
+        """
+        try:
+            return self._locator_for(ref).evaluate(r"""(el) => {
+                    const r = el.getBoundingClientRect();
+                    const top = document.elementFromPoint(
+                        r.left + r.width / 2, r.top + r.height / 2);
+                    if (!top || top === el || el.contains(top)) return null;
+                    const label = (top.innerText || '').replace(/\s+/g, ' ')
+                        .trim().slice(0, 60);
+                    return label
+                        ? `"${label}"`
+                        : `a <${top.tagName.toLowerCase()}> overlay`;
+                }""")
+        except Exception:  # noqa: BLE001 — diagnosis is best-effort
+            return None
+
     def _open_pages(self) -> list:
         """Live pages in the context, newest last."""
         try:
@@ -718,7 +776,25 @@ class PlaywrightDriver:
             self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
         except Exception:  # noqa: BLE001 — already loaded, or never navigated
             pass
+        self._await_script_redirect()
         self._settle()
+
+    def _await_script_redirect(self) -> None:
+        """Give a ``setTimeout``-driven redirect a chance to fire.
+
+        An interstitial that forwards itself a moment later is common on login
+        and tracking hops. Returning the interstitial hands the model a page
+        that says "Redirecting…" and nothing else, which reads as a dead end.
+        """
+        try:
+            before = self._page.url
+            for _ in range(int(SCRIPT_REDIRECT_S * 10)):
+                self._page.wait_for_timeout(100)
+                if self._page.url != before:
+                    self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                    return
+        except Exception as e:  # noqa: BLE001 — nothing to wait for
+            logger.debug("Redirect wait: %s", e)
 
     def _settle(self) -> None:
         """Give client-side rendering a beat to finish.
@@ -733,8 +809,52 @@ class PlaywrightDriver:
             pass
 
     def _snapshot(self) -> Dict[str, Any]:
+        """Describe the page, including anything inside same-origin iframes.
+
+        Support portals, payment fields and embedded widgets live in iframes,
+        and a document-level query cannot see into one — such a page came back
+        with zero elements, so the agent reported there was nothing on it.
+
+        Each frame is snapshotted in its own context and merged. A ref records
+        which frame issued it (``g4f2e7``) so the click can be routed back to
+        the same frame; the main frame keeps the plain ``g4e7`` form.
+        """
         self._generation += 1
-        return self._page.evaluate(_SNAPSHOT_JS, snapshot_args(self._generation))
+        gen = self._generation
+        snap = self._page.evaluate(_SNAPSHOT_JS, snapshot_args(gen))
+        if self._pending_dialog:
+            snap["dialog"] = self._pending_dialog
+            self._pending_dialog = None
+        self._frames_by_ref = {}
+
+        frames = [f for f in self._page.frames if f is not self._page.main_frame]
+        for index, frame in enumerate(frames, 1):
+            try:
+                sub = frame.evaluate(_SNAPSHOT_JS, snapshot_args(gen))
+            except Exception as e:  # noqa: BLE001 — cross-origin or detached
+                logger.debug("Frame %s not readable: %s", index, e)
+                continue
+            for el in sub.get("elements") or []:
+                # g4e3 -> g4f1e3, so the click knows which frame to look in.
+                el["ref"] = el["ref"].replace(f"g{gen}e", f"g{gen}f{index}e", 1)
+                self._frames_by_ref[el["ref"]] = frame
+                snap["elements"].append(el)
+            if sub.get("text"):
+                snap["text"] = (snap.get("text") or "") + "\n" + sub["text"]
+            snap.setdefault("tables", []).extend(sub.get("tables") or [])
+        return snap
+
+    def _locator_for(self, ref: str):
+        """Locator for ``ref``, in whichever frame issued it.
+
+        The frame number lives only in the ref we hand the model — inside the
+        frame the attribute is still the plain ``g4e7`` the script stamped, so
+        it has to come back off before the selector is built.
+        """
+        ref_selector(ref)  # validate the caller-supplied form
+        frame = (getattr(self, "_frames_by_ref", None) or {}).get(ref)
+        in_page = re.sub(r"^g(\d+)f\d+e(\d+)$", r"g\1e\2", ref)
+        return (frame or self._page).locator(ref_selector(in_page))
 
 
 def installed() -> bool:

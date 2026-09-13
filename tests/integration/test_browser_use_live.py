@@ -575,3 +575,139 @@ def test_a_stale_popup_is_not_adopted_by_a_later_click(driver, popup_url, nav_ur
     after = driver.click(ref)
     assert after["title"] != "Q4 Report", "a stale popup was adopted"
     assert "search.html" in after["url"]
+
+
+# ------------------------------------------------ hard real-world shapes
+
+
+HARD_PAGES = {
+    "iframe.html": (
+        "<!doctype html><title>Portal</title><body><h1>Support portal</h1>"
+        '<iframe src="inner.html" width=400 height=200></iframe></body>'
+    ),
+    "inner.html": (
+        "<!doctype html><title>inner</title><body>"
+        "<label for=t>Ticket ID</label><input id=t>"
+        "<button onclick=\"out.textContent='IFRAME-OK '+t.value\">Submit ticket</button>"
+        "<p id=out></p></body>"
+    ),
+    "shadow.html": (
+        "<!doctype html><title>Panel</title><body><h1>Device panel</h1><div id=h></div>"
+        '<script>h.attachShadow({mode:"open"}).innerHTML='
+        '"<button id=b>Reboot device</button>"</script></body>'
+    ),
+    "dupe.html": (
+        "<!doctype html><title>Accounts</title><body>"
+        "<div>Account A balance $10<button>Select</button></div>"
+        "<div>Account B balance $20<button>Select</button></div></body>"
+    ),
+    "overlay.html": (
+        "<!doctype html><title>Settings</title><body>"
+        "<button id=real>Save settings</button>"
+        '<div style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50">'
+        "<span>Cookie wall</span></div></body>"
+    ),
+    "hop.html": (
+        "<!doctype html><title>Redirecting</title><body><p>Redirecting…</p>"
+        '<script>setTimeout(()=>location="final.html",700)</script></body>'
+    ),
+    "final.html": (
+        "<!doctype html><title>Arrived</title><body><h1>Arrived</h1>"
+        "<p>Code: CHAIN-5560</p></body>"
+    ),
+    "dialog.html": (
+        "<!doctype html><title>Archive</title><body>"
+        "<button onclick=\"out.textContent=confirm('Archive?')?'ARCHIVED':'KEPT'\">"
+        "Archive record</button><p id=out></p></body>"
+    ),
+}
+
+
+@pytest.fixture(scope="module")
+def hard_url(tmp_path_factory):
+    import functools
+    import http.server
+    import socketserver
+    import threading as _threading
+
+    root = tmp_path_factory.mktemp("hard")
+    for name, body in HARD_PAGES.items():
+        (root / name).write_text(body, encoding="utf-8")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102 — quiet
+            pass
+
+    srv = socketserver.TCPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=str(root))
+    )
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_controls_inside_an_iframe_are_reachable(driver, hard_url):
+    """Support portals and payment fields live in iframes.
+
+    A document-level query cannot see into one, so such a page came back with
+    zero elements and the agent reported there was nothing on it.
+    """
+    snap = driver.goto(f"{hard_url}/iframe.html")
+    box = [e for e in snap["elements"] if e["role"] == "textbox"]
+    assert box, "iframe contents are invisible"
+    after = driver.type_text(box[0]["ref"], "TKT-1")
+    btn = next(e for e in after["elements"] if "Submit" in e["name"])
+    assert "IFRAME-OK TKT-1" in (driver.click(btn["ref"]).get("text") or "")
+
+
+def test_controls_inside_a_shadow_root_are_reachable(driver, hard_url):
+    """A web component's controls live in its shadow tree."""
+    snap = driver.goto(f"{hard_url}/shadow.html")
+    assert any("Reboot" in e["name"] for e in snap["elements"])
+
+
+def test_repeated_labels_carry_enough_context_to_tell_apart(driver, hard_url):
+    """Two buttons both labelled "Select" are otherwise indistinguishable."""
+    snap = driver.goto(f"{hard_url}/dupe.html")
+    sel = [e for e in snap["elements"] if e["name"] == "Select"]
+    assert len(sel) == 2
+    contexts = [e.get("context", "") for e in sel]
+    assert any("Account A" in c for c in contexts)
+    assert any("Account B" in c for c in contexts)
+
+
+def test_a_covered_control_says_what_is_covering_it(driver, hard_url):
+    """Playwright reports a covered control as a bare actionability timeout.
+
+    A cookie wall is the most common reason a click will not land; naming it
+    turns a dead end into an obvious next step.
+    """
+    snap = driver.goto(f"{hard_url}/overlay.html")
+    ref = next(e["ref"] for e in snap["elements"] if "Save" in e["name"])
+    with pytest.raises(BrowserError, match="covered by"):
+        driver.click(ref)
+
+
+def test_a_script_driven_redirect_is_waited_out(driver, hard_url):
+    """Returning the interstitial hands the model a page that says nothing."""
+    snap = driver.goto(f"{hard_url}/hop.html")
+    assert snap["title"] == "Arrived", f"stopped on {snap['title']!r}"
+    assert "CHAIN-5560" in (snap.get("text") or "")
+
+
+def test_a_native_dialog_is_reported_not_silently_declined(driver, hard_url):
+    """Playwright auto-dismisses confirm(), so the branch quietly does not run.
+
+    A live probe clicked "Archive record" and the page reported KEPT with no
+    indication why. Dismissing stays the default — accepting would take the
+    irreversible choice for the user — but it has to be visible.
+    """
+    snap = driver.goto(f"{hard_url}/dialog.html")
+    ref = next(e["ref"] for e in snap["elements"] if "Archive" in e["name"])
+    after = driver.click(ref)
+    assert after.get("dialog"), "the dialog was dismissed with no trace"
+    assert "Archive?" in after["dialog"]
+    assert "declined" in render(after)

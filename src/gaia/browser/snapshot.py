@@ -129,18 +129,37 @@ _SNAPSHOT_JS = """
     return 'clickable';
   };
 
+  // Collect across shadow roots too. A web component's controls live inside
+  // its shadow tree, where querySelectorAll on the document cannot see them —
+  // a device panel built that way returned zero elements, so the agent
+  // reported a page with nothing on it.
+  const collect = (root, out) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.matches(SELECTOR)) out.push(el);
+      if (el.shadowRoot) collect(el.shadowRoot, out);
+    }
+    return out;
+  };
+
   // Clear refs from any previous snapshot so stale ids never resolve.
   document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
 
   const out = [];
   let truncated = false;
   let n = 0;
-  for (const el of document.querySelectorAll(SELECTOR)) {
+  for (const el of collect(document, [])) {
     if (!visible(el)) continue;
     if (out.length >= maxElements) { truncated = true; break; }
     const ref = 'g' + gen + 'e' + (++n);
     el.setAttribute(attr, ref);
     const rec = { ref, role: roleOf(el), name: nameOf(el) };
+    // Three buttons all labelled "Select" are indistinguishable to the model.
+    // Carry the row's own text so it can tell which account it is choosing.
+    const holder = el.closest('li,tr,[role=row],[role=listitem],div');
+    if (holder) {
+      const around = squash(holder.innerText || '');
+      if (around && around !== rec.name && around.length <= 160) rec.context = around;
+    }
     if (el.disabled) rec.disabled = true;
     if (el.checked) rec.checked = true;
     const tag = el.tagName.toLowerCase();
@@ -209,14 +228,16 @@ def snapshot_args(generation: int = 0) -> Dict[str, Any]:
     }
 
 
-#: A ref carries the snapshot that issued it: ``g4e12`` is element 12 of
+#: A ref carries the snapshot that issued it, and the frame when it came from
+#: an iframe: ``g4e12`` is element 12 of snapshot 4, ``g4f2e12`` the same from
+#: frame 2. ``g4e12`` is element 12 of
 #: snapshot 4. Without the generation, every page numbers its elements from e1,
 #: so a ref held over from the previous page silently resolves to a DIFFERENT
 #: element — a live run clicked "e2" three times expecting one control and
 #: bounced between two pages, because e2 meant "Back to shop" on one and
 #: "Widget B" on the other. Scoping the ref turns that into an honest "not on
 #: the page any more", which the model already knows how to recover from.
-_REF_RE = re.compile(r"^g\d+e\d+$")
+_REF_RE = re.compile(r"^g\d+(?:f\d+)?e\d+$")
 
 
 def ref_selector(ref: str) -> str:
@@ -243,6 +264,13 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
         "",
     ]
 
+    if snap.get("dialog"):
+        lines.insert(
+            2,
+            f"A browser dialog appeared and was declined — {snap['dialog']}. "
+            "Nothing was confirmed; say so rather than assuming the action ran.",
+        )
+
     elements = snap.get("elements") or []
     if elements:
         lines.append(f"Interactive elements ({len(elements)}):")
@@ -258,6 +286,8 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
                 bits.append(f"(options: {opts})")
             if el.get("checked"):
                 bits.append("(checked)")
+            if el.get("context"):
+                bits.append(f"— in: {el['context']}")
             if el.get("disabled"):
                 bits.append("(disabled)")
             lines.append(" ".join(bits))
