@@ -37,7 +37,7 @@ var paletteCommands = []paletteCommand{
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
-	{"/cost", "What this session has spent: time, steps, tool calls, tokens, dollars"},
+	{"/cost", "What this session has spent; /cost help for rates"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the
