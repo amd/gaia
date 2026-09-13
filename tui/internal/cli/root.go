@@ -26,8 +26,11 @@ import (
 // (see init) — old scripts and docs keep working, help lists one flag.
 var dev bool
 
-// bypassPermissions starts agents with confirmation prompts off: every gated
-// tool — shell commands, file writes — runs without asking.
+// bypassPermissions backs --full-access: the agent runs every gated tool —
+// shell commands, file writes — without asking.
+//
+// The identifier still says bypass; the user-facing name is "full access"
+// everywhere. Renaming the internals is a separate mechanical pass.
 //
 // Off unless passed, and only for this launch. Nothing persists it, so there
 // is no way to land in this mode without having typed it, and the TUI carries
@@ -196,10 +199,17 @@ func init() {
 	if err := rootCmd.PersistentFlags().MarkHidden("debug"); err != nil {
 		panic(err) // only fails on a flag name that was never registered
 	}
-	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
+	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "full-access", false,
 		"subprocess agents only: run every tool without asking for confirmation — the agent acts fully "+
 			"autonomously. Off by default; the TUI shows a persistent warning "+
-			"while it is on, and /bypass off turns it off mid-session")
+			"while it is on, and /full-access off turns it off mid-session")
+	// Old name, kept working for scripts and CI that already pass it. Same
+	// variable, hidden from help so there is one name to learn.
+	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
+		"deprecated alias for --full-access")
+	if err := rootCmd.PersistentFlags().MarkHidden("bypass-permissions"); err != nil {
+		panic(err) // only fails on a flag name that was never registered
+	}
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
 		"run the agent against Anthropic's Claude API instead of the local Lemonade "+
 			"backend — your conversation is sent to Anthropic, not processed on this "+

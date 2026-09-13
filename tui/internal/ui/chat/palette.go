@@ -33,7 +33,7 @@ var paletteCommands = []paletteCommand{
 	{"/help", "Show the keyboard shortcuts and commands panel"},
 	{"/clear", "Clear this conversation"},
 	{"/memory", "View this agent's memory"},
-	{"/bypass", "Run every tool without asking first — shows a warning before it turns on"},
+	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},

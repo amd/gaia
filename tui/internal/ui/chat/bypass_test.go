@@ -223,7 +223,7 @@ func TestTurningBypassOnIsDeliberate(t *testing.T) {
 		t.Errorf("nothing should have reached the agent yet: %v", c.bypassCalls)
 	}
 	explained := m.messages[len(m.messages)-1].Content
-	for _, want := range []string{"every tool", "/bypass confirm"} {
+	for _, want := range []string{"every tool", "/full-access confirm"} {
 		if !strings.Contains(explained, want) {
 			t.Errorf("the warning must contain %q, got: %q", want, explained)
 		}
@@ -259,22 +259,22 @@ func TestBypassBannerIsOnEveryFrame(t *testing.T) {
 	m = updated.(ChatModel)
 
 	view := m.View()
-	if !strings.Contains(view, "BYPASS PERMISSIONS") {
-		t.Fatalf("no bypass banner:\n%s", view)
+	if !strings.Contains(view, "FULL ACCESS") {
+		t.Fatalf("no full-access banner:\n%s", view)
 	}
-	if !strings.Contains(view, "/bypass off") {
+	if !strings.Contains(view, "/full-access off") {
 		t.Errorf("the banner must say how to stop:\n%s", view)
 	}
 
 	// Scrolled away from the tail, the banner is still there.
 	m.followTail = false
 	m.viewport.GotoTop()
-	if !strings.Contains(m.View(), "BYPASS PERMISSIONS") {
+	if !strings.Contains(m.View(), "FULL ACCESS") {
 		t.Error("the banner must not be scrollable out of view")
 	}
 
 	// And the always-drawn status row carries it too.
-	if !strings.Contains(fitHints(m.statusHints(), m.hintBudget()), "/bypass off") {
+	if !strings.Contains(fitHints(m.statusHints(), m.hintBudget()), "/full-access off") {
 		t.Error("the status bar must carry the way out of bypass")
 	}
 }
@@ -291,7 +291,7 @@ func TestTurningBypassOffIsOneStep(t *testing.T) {
 	if len(c.bypassCalls) != 1 || c.bypassCalls[0] {
 		t.Errorf("the agent was not told to stop bypassing: %v", c.bypassCalls)
 	}
-	if strings.Contains(m.View(), "BYPASS PERMISSIONS —") {
+	if strings.Contains(m.View(), "FULL ACCESS —") {
 		t.Error("the banner must go the instant bypass is off")
 	}
 }
@@ -337,16 +337,20 @@ func TestLaunchFlagShowsTheBannerImmediately(t *testing.T) {
 	m.width, m.height = 100, 30
 
 	if !m.bypassPermissions {
-		t.Fatal("--bypass-permissions must be reflected at launch")
+		t.Fatal("--full-access must be reflected at launch")
 	}
-	if !strings.Contains(m.View(), "BYPASS PERMISSIONS") {
+	if !strings.Contains(m.View(), "FULL ACCESS") {
 		t.Error("the banner must be up from the very first frame")
 	}
 }
 
-// The /bypass forms never reach the agent as a question.
+// The full-access forms never reach the agent as a question — in either the
+// current spelling or the legacy /bypass one, which is still accepted.
 func TestBypassCommandsAreNeverSentAsQueries(t *testing.T) {
-	for _, cmd := range []string{"/bypass", "/bypass on", "/bypass off", "/bypass confirm"} {
+	for _, cmd := range []string{
+		"/full-access", "/full-access on", "/full-access off", "/full-access confirm",
+		"/bypass", "/bypass on", "/bypass off", "/bypass confirm",
+	} {
 		if !isBypassCommand(cmd) {
 			t.Errorf("%q must be recognised as a local command", cmd)
 		}

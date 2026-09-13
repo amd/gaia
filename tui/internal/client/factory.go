@@ -46,6 +46,10 @@ type ForAgentOptions struct {
 // BypassPermissionsFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
 // SubprocessClient.BypassAtLaunch scans argv for exactly this string.
+// The flag passed to the AGENT CHILD, deliberately still the old spelling.
+// The sidecar ships and versions separately from this TUI, so a newer TUI can
+// be paired with an older agent; renaming it here would break that pairing.
+// The user-facing flag is --full-access (see cli.root).
 const BypassPermissionsFlag = "--bypass-permissions"
 
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's

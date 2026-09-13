@@ -1210,16 +1210,27 @@ def test_the_parser_accepts_the_spellings_the_go_side_pins():
 
     assert args.use_claude is True
     assert args.claude_model == "claude-opus-5"
-    assert args.bypass_permissions is True
+    assert args.full_access is True
     assert args.json_events is True
     assert args.dev is True
+
+
+@pytest.mark.parametrize("spelling", ["--full-access", "--bypass-permissions"])
+def test_either_full_access_spelling_sets_the_same_flag(spelling):
+    """The TUI and this agent version independently, so both must be accepted.
+
+    --bypass-permissions is what every shipped TUI passes; --full-access is the
+    name the user sees. A newer agent paired with an older TUI still has to
+    understand the flag it is actually given.
+    """
+    assert stdio.build_parser().parse_args([spelling]).full_access is True
 
 
 def test_the_parser_defaults_to_local_and_prompting():
     args = stdio.build_parser().parse_args([])
 
     assert args.use_claude is False
-    assert args.bypass_permissions is False, "permissions must never default off"
+    assert args.full_access is False, "permissions must never default off"
     assert args.claude_model is None
     assert args.model is None
 

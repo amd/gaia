@@ -1164,7 +1164,12 @@ def build_parser() -> "argparse.ArgumentParser":
         "errors only.",
     )
     parser.add_argument(
+        # --bypass-permissions is what every shipped TUI passes and stays the
+        # wire name; --full-access is the name the user sees. Both set the same
+        # dest, so either spelling works whichever side is newer.
+        "--full-access",
         "--bypass-permissions",
+        dest="full_access",
         action="store_true",
         help="Start with confirmation prompts OFF: every gated tool runs "
         "without asking. Off unless passed, and the host can toggle it at any "
@@ -1180,7 +1185,7 @@ def main(argv: Optional[list] = None) -> int:
     out = sys.stdout
     _configure_logging(out, dev=args.dev)
 
-    state = PermissionState(bypass=args.bypass_permissions)
+    state = PermissionState(bypass=args.full_access)
 
     # Built ONCE, before the first query, and kept for the life of the process.
     # A failure here is fatal and must say so on the turn the user actually

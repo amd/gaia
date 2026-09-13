@@ -66,7 +66,7 @@ func (m ChatModel) statusHints() []hint {
 	// The banner is the primary indicator; this is the belt to its braces, on
 	// the one row that is always drawn.
 	if m.bypassPermissions {
-		hints = append(hints, hint{text: "/bypass off", rank: rankBypass})
+		hints = append(hints, hint{text: "/full-access off", rank: rankBypass})
 	}
 
 	if m.dev && m.totalSteps > 0 {

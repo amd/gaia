@@ -1461,28 +1461,29 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/memory":
 		return m.startMemoryFetch()
 
-	case "/bypass":
+	// /bypass is the previous name for the same mode, still accepted.
+	case "/full-access", "/bypass":
 		if m.bypassPermissions {
 			return m.setBypass(false)
 		}
 		return m.armBypass()
 
-	case "/bypass on":
+	case "/full-access on", "/bypass on":
 		if m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already ON."), nil
+			return m.bypassNote("Full access is already ON."), nil
 		}
 		return m.armBypass()
 
-	case "/bypass confirm":
+	case "/full-access confirm", "/bypass confirm":
 		if !m.bypassArmed {
-			return m.bypassNote("Nothing to confirm. Type /bypass first — it " +
+			return m.bypassNote("Nothing to confirm. Type /full-access first — it " +
 				"explains what you would be turning on."), nil
 		}
 		return m.setBypass(true)
 
-	case "/bypass off":
+	case "/full-access off", "/bypass off":
 		if !m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already off."), nil
+			return m.bypassNote("Full access is already off."), nil
 		}
 		return m.setBypass(false)
 

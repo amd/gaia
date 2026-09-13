@@ -13,28 +13,34 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
-// Bypass-permissions mode: the agent runs every confirmation-gated tool —
-// shell commands, file writes — without asking.
+// Full-access mode: the agent runs every confirmation-gated tool — shell
+// commands, file writes — without asking.
+//
+// Named "bypass permissions" internally and "full access" to the user: the
+// mode is something people deliberately turn on for a working session, and a
+// name that sounds like defeating a safeguard reads as something you should
+// not do. /bypass still works as an alias.
 //
 // Three rules shape the whole implementation:
 //
 //  1. OFF on a fresh launch, always. It is the zero value of a bool, restored
 //     from nothing, so there is no path that turns it on without someone asking
 //     for it on this launch.
-//  2. Turning it ON is deliberate: /bypass states what it means and does NOT
-//     enable anything; a second, explicit /bypass confirm does. Turning it OFF
-//     is one command and never gated — the safe direction is never slowed down.
+//  2. Turning it ON is deliberate: /full-access states what it means and does
+//     NOT enable anything; a second, explicit /full-access confirm does.
+//     Turning it OFF is one command and never gated — the safe direction is
+//     never slowed down.
 //  3. While it is on, the UI says so on every single frame, in a band that
 //     cannot be scrolled away. A line in scrollback does not qualify: scrollback
 //     scrolls, and the whole requirement is that the user always knows the agent
 //     is acting without them.
 
 const (
-	bypassBannerText = "BYPASS PERMISSIONS — the agent runs every tool " +
-		"without asking. /bypass off to stop."
+	bypassBannerText = "FULL ACCESS — the agent runs every tool " +
+		"without asking. /full-access off to stop."
 	// Shown when the terminal is too narrow for the sentence. Still says the
 	// two things that matter: what is on, and that it is dangerous.
-	bypassBannerShort = "BYPASS PERMISSIONS ON"
+	bypassBannerShort = "FULL ACCESS ON"
 )
 
 // Coloured text, not a filled band. A full-width red bar across every frame is
@@ -70,10 +76,10 @@ func (m ChatModel) armBypass() (tea.Model, tea.Cmd) {
 	m.bypassArmed = true
 	m.messages = append(m.messages, Message{
 		Role: RoleStatus,
-		Content: "[!] Bypass permissions would let " + m.agentName +
+		Content: "[!] Full access would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
-			"    Type /bypass confirm to turn it on, or /bypass off at any " +
+			"    Type /full-access confirm to turn it on, or /full-access off at any " +
 			"time to turn it back off.",
 	})
 	m.updateViewport()
@@ -112,13 +118,13 @@ func (m ChatModel) setBypass(enabled bool) (tea.Model, tea.Cmd) {
 	if enabled {
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
-			Content: "[!] BYPASS PERMISSIONS IS ON. " + m.agentName +
-				" will run tools without asking until you type /bypass off.",
+			Content: "[!] FULL ACCESS IS ON. " + m.agentName +
+				" will run tools without asking until you type /full-access off.",
 		})
 	} else {
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
-			Content: "[✓] Bypass permissions off — you will be asked again before gated tools run.",
+			Content: "[✓] Full access off — you will be asked again before gated tools run.",
 		})
 	}
 	m.updateViewport()
@@ -134,7 +140,7 @@ func (m ChatModel) bypassNote(text string) ChatModel {
 	return m
 }
 
-// applyLaunchBypass reflects a --bypass-permissions launch flag into the model.
+// applyLaunchBypass reflects a --full-access launch flag into the model.
 //
 // The flag reaches the AGENT through its own argv; this only makes the UI tell
 // the truth about it from the first frame. Without it the banner would appear
@@ -146,8 +152,8 @@ func (m ChatModel) applyLaunchBypass() ChatModel {
 		m.bypassPermissions = true
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
-			Content: "[!] Launched with --bypass-permissions: " + m.agentName +
-				" runs tools without asking. Type /bypass off to turn it off.",
+			Content: "[!] Launched with --full-access: " + m.agentName +
+				" runs tools without asking. Type /full-access off to turn it off.",
 		})
 	}
 	return m
@@ -155,14 +161,18 @@ func (m ChatModel) applyLaunchBypass() ChatModel {
 
 // bypassHelpLine documents the command wherever the TUI lists what it can do.
 func bypassHelpLine() string {
-	return "/bypass — let the agent run tools without asking (off by default)"
+	return "/full-access — let the agent run tools without asking (off by default)"
 }
 
-// isBypassCommand reports whether a composed line is one of the /bypass forms,
-// so the composer never sends it to the agent as a question.
+// isBypassCommand reports whether a composed line is one of the full-access
+// forms, so the composer never sends it to the agent as a question.
+//
+// /bypass is the old name and still works; both spellings are recognised so a
+// user who learned the first one is never told their command does not exist.
 func isBypassCommand(query string) bool {
 	switch strings.TrimSpace(query) {
-	case "/bypass", "/bypass on", "/bypass off", "/bypass confirm":
+	case "/full-access", "/full-access on", "/full-access off", "/full-access confirm",
+		"/bypass", "/bypass on", "/bypass off", "/bypass confirm":
 		return true
 	}
 	return false
