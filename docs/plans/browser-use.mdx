@@ -287,6 +287,24 @@ declined to invent a serial number for a required field, recognised a 429 and
 did not retry against the stated cooldown, and converted `$1.209,50` from
 de-DE notation correctly.
 
+### Round 3 — the shapes real sites actually use
+
+Probed directly rather than through the model, which took seconds instead of
+minutes and found more. Two were total blind spots; three returned confident
+wrong answers, which is worse than failing.
+
+| Shape | Before | After |
+|---|---|---|
+| **iframe** | 0 elements — a support portal read as an empty page | controls reachable, form filed end to end |
+| **shadow DOM** | 0 elements; then controls listed but the serial beside them missing | both controls and text |
+| **3 identical "Select" buttons** | indistinguishable | each carries its row — "Account B" |
+| **covered control** | 30s timeout, generic message | names the blocker; GLM read it, clicked Close, retried, saved |
+| **script redirect** | returned the "Redirecting…" interstitial | lands on the final page |
+| **native `confirm()`** | auto-dismissed silently — clicking Archive reported KEPT | dialog surfaced; the answer explains it was declined |
+
+The covered-control case is the one worth noting: a better error message was
+enough for the model to recover on its own, with no new tool.
+
 ### Known limits of this record
 
 One model, one run each, on one machine — nothing here generalises to the
