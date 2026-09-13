@@ -840,6 +840,7 @@ class TestChatAgentEditFileGuardrails:
             new_content="GAIA",
         )
         assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
         assert target.read_text() == "Hello, GAIA!"
 
     def test_edit_python_file_rejects_invalid_syntax(
@@ -860,6 +861,24 @@ class TestChatAgentEditFileGuardrails:
         assert result["status"] == "error"
         assert "syntax" in result["error"].lower()
         assert target.read_text() == original
+
+    def test_edit_python_file_can_repair_existing_syntax_error(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify an invalid Python file can be repaired incrementally."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "broken.py"
+        target.write_text("def main(:\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="def main(:",
+            new_content="def main():",
+        )
+
+        assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
+        assert target.read_text() == "def main():\n    print('hello')\n"
 
     def test_edit_python_file_accepts_valid_syntax(
         self, mixin_and_registry, tmp_path
