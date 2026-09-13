@@ -36,6 +36,12 @@ MAX_NAME_CHARS = 120
 #: the name cap on purpose — see the two helpers in the injected script.
 MAX_TEXT_CHARS = 4000
 
+#: Table extraction limits. A data table is worth its tokens; a page of them is
+#: not, and a 200-row table would swamp the step on its own.
+MAX_TABLES = 3
+MAX_TABLE_ROWS = 30
+MAX_TABLE_COLS = 12
+
 
 # Collects interactive elements, stamps a ref on each, returns compact records.
 #
@@ -44,7 +50,8 @@ MAX_TEXT_CHARS = 4000
 # way a user's eye would.
 _SNAPSHOT_JS = """
 (args) => {
-  const { attr, maxElements, maxNameChars, maxTextChars } = args;
+  const { attr, maxElements, maxNameChars, maxTextChars,
+          maxTables, maxTableRows, maxTableCols } = args;
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea',
     '[role=button]', '[role=link]', '[role=checkbox]', '[role=radio]',
@@ -155,9 +162,28 @@ _SNAPSHOT_JS = """
     out.push(rec);
   }
 
+  // Tables, kept as a grid. Flattening a forecast or price table into prose
+  // destroys the row/column association the numbers only mean anything inside
+  // — which is exactly where a model starts inventing values. `fetch_page`
+  // has had an extract="tables" mode all along; a live browser should not be
+  // worse at the thing it was opened for.
+  const tables = [];
+  for (const t of document.querySelectorAll('table')) {
+    if (!visible(t)) continue;
+    const rows = [];
+    for (const r of [...t.rows].slice(0, maxTableRows)) {
+      const cells = [...r.cells].slice(0, maxTableCols).map((c) => clean(c.innerText));
+      if (cells.some((c) => c)) rows.push(cells);
+    }
+    // Two rows is the floor for a data table; one row is usually layout.
+    if (rows.length >= 2) tables.push(rows);
+    if (tables.length >= maxTables) break;
+  }
+
   return {
     url: location.href,
     title: document.title || '',
+    tables,
     elements: out,
     truncated,
     // Readable page text, capped. Gives the model page content without a
@@ -175,6 +201,9 @@ def snapshot_args() -> Dict[str, Any]:
         "maxElements": MAX_ELEMENTS,
         "maxNameChars": MAX_NAME_CHARS,
         "maxTextChars": MAX_TEXT_CHARS,
+        "maxTables": MAX_TABLES,
+        "maxTableRows": MAX_TABLE_ROWS,
+        "maxTableCols": MAX_TABLE_COLS,
     }
 
 
@@ -225,6 +254,13 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
 
     if snap.get("truncated"):
         lines.append(f"  ... truncated at {MAX_ELEMENTS} elements — the page has more.")
+
+    for i, rows in enumerate(snap.get("tables") or [], 1):
+        lines.extend(["", f"Table {i} ({len(rows)} rows):"])
+        for row in rows:
+            lines.append("  " + " | ".join(row))
+        if len(rows) >= 30:
+            lines.append("  ... more rows not shown")
 
     if include_text and snap.get("text"):
         lines.extend(["", "Page text:", snap["text"]])

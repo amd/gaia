@@ -25,6 +25,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.browser.errors import (
+    BrowserError,
     BrowserLaunchFailed,
     BrowserNotInstalled,
     BrowserNotStarted,
@@ -51,6 +52,9 @@ DEFAULT_NAV_TIMEOUT_MS = 30_000
 #: Short: it is paid in full by every action that navigates nowhere, and the
 #: model's own step costs tens of seconds either way.
 NAV_SETTLE_S = 1.5
+
+#: Redirect hops followed (and screened) before giving up.
+MAX_REDIRECT_HOPS = 10
 
 #: How long a user gets to finish signing in before browser_login gives up.
 DEFAULT_LOGIN_TIMEOUT_S = 300.0
@@ -489,20 +493,69 @@ class PlaywrightDriver:
 
         def _guard(route, request):
             try:
-                if (
+                is_nav = (
                     request.resource_type == "document"
                     and request.is_navigation_request()
-                ):
-                    if not self._allow_navigation(request.url):
-                        logger.warning("Blocked navigation to %s", request.url)
-                        self._last_blocked = request.url
-                        route.abort("blockedbyclient")
-                        return
+                )
+                if not is_nav:
+                    route.continue_()
+                    return
+
+                if not self._allow_navigation(request.url):
+                    logger.warning("Blocked navigation to %s", request.url)
+                    self._last_blocked = request.url
+                    route.abort("blockedbyclient")
+                    return
+
+                # Follow the redirect chain by hand, screening every hop. Left
+                # to the network stack, the guard never sees the destination —
+                # a public URL could 302 to a private one and the request would
+                # already be made before anything could object.
+                self._fetch_screened(route, request)
+                return
             except Exception as e:  # noqa: BLE001 — never wedge the page on a guard bug
                 logger.error("Navigation guard error for %s: %s", request.url, e)
             route.continue_()
 
         self._context.route("**/*", _guard)
+        # A popup or target=_blank is a page the driver would otherwise never
+        # look at: the model sees "nothing happened" and retries, and the
+        # popup's origin never reaches the confirmation gate.
+        self._context.on("page", self._adopt_page)
+
+    def _fetch_screened(self, route, request) -> None:
+        """Resolve a navigation one hop at a time, screening every Location."""
+        from urllib.parse import urljoin
+
+        url = request.url
+        for _ in range(MAX_REDIRECT_HOPS):
+            response = route.fetch(url=url, max_redirects=0)
+            if response.status not in (301, 302, 303, 307, 308):
+                route.fulfill(response=response)
+                return
+            location = (response.headers or {}).get("location")
+            if not location:
+                route.fulfill(response=response)
+                return
+            url = urljoin(url, location)
+            if not self._allow_navigation(url):
+                logger.warning("Blocked redirect to %s", url)
+                self._last_blocked = url
+                route.abort("blockedbyclient")
+                return
+        raise BrowserError(f"Too many redirects from {request.url}")
+
+    def _adopt_page(self, page) -> None:
+        """Make a newly opened tab the one the driver describes."""
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception as e:  # noqa: BLE001 — describe it anyway
+            logger.debug("Popup did not settle: %s", e)
+        try:
+            logger.info("Following popup to %s", page.url)
+            self._page = page
+        except Exception as e:  # noqa: BLE001 — keep the old page rather than crash
+            logger.warning("Could not adopt popup: %s", e)
 
     def _assert_landed_somewhere_allowed(self, requested: str) -> None:
         """Refuse to hand back a page that ended up off the public internet.
