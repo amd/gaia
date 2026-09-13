@@ -5117,9 +5117,10 @@ if __name__ == "__main__":
             for chunk in client.chat_completions(
                 model=DEFAULT_MODEL_NAME, messages=messages, stream=True, timeout=30
             ):
-                if "choices" in chunk and chunk["choices"][0].get("delta", {}).get(
-                    "content"
-                ):
+                # The last chunk carries usage and no choices.
+                if not chunk.get("choices"):
+                    continue
+                if chunk["choices"][0].get("delta", {}).get("content"):
                     print(chunk["choices"][0]["delta"]["content"], end="", flush=True)
         except Exception as e:
             print(f"Streaming chat completion failed: {e}")
