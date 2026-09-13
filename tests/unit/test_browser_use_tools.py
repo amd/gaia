@@ -22,9 +22,23 @@ from gaia.browser.snapshot import REF_ATTR, ref_selector, render
 # --------------------------------------------------------------------- refs
 
 
-@pytest.mark.parametrize("ref", ["e1", "e12", "e999"])
+@pytest.mark.parametrize("ref", ["g1e1", "g4e12", "g99e999"])
 def test_ref_selector_accepts_generated_refs(ref):
     assert ref_selector(ref) == f'[{REF_ATTR}="{ref}"]'
+
+
+def test_a_ref_carries_the_snapshot_that_issued_it():
+    """Staleness must fail, not silently hit a different element.
+
+    Every page numbers its elements from e1. A live run clicked "e2" three
+    times expecting one control and bounced between two pages, because e2 was
+    "Back to shop" on one and "Widget B" on the other.
+    """
+    import re as _re
+
+    assert _re.match(r"^g\d+e\d+$", "g4e12")
+    with pytest.raises(ValueError):
+        ref_selector("e12")
 
 
 @pytest.mark.parametrize(
@@ -35,11 +49,17 @@ def test_ref_selector_accepts_generated_refs(ref):
         "e",
         "1",
         "e1x",
+        # Unscoped refs are rejected now: every page numbers from e1, so an
+        # unscoped ref from the previous page would resolve to a different
+        # element instead of failing.
+        "e1",
+        "g1",
+        "ge1",
         # The reason this is a whitelist and not an escape: a ref is
         # interpolated into a CSS selector, so model-supplied text must never
         # reach it.
-        'e1"] , [href^="http',
-        "e1']",
+        'g1e1"] , [href^="http',
+        "g1e1']",
     ],
 )
 def test_ref_selector_rejects_anything_else(bad):
@@ -55,7 +75,7 @@ def _snap(**over):
         "url": "https://example.com/",
         "title": "Example",
         "elements": [
-            {"ref": "e1", "role": "link", "name": "Learn more"},
+            {"ref": "g1e1", "role": "link", "name": "Learn more"},
             {"ref": "e2", "role": "textbox", "name": "Search", "value": "amd"},
             {
                 "ref": "e3",
@@ -453,18 +473,18 @@ def test_an_irreversible_click_is_gated_with_no_session_at_all():
     session state and the fixture had no session.
     """
     a = _Agent()
-    a._browser_last_elements = {"e1": "Send transfer now"}
-    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e1"}) is True
+    a._browser_last_elements = {"g1e1": "Send transfer now"}
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "g1e1"}) is True
 
 
 def test_a_harmless_click_on_the_same_page_is_not_gated():
     a = _Agent()
-    a._browser_last_elements = {"e1": "Send transfer now", "e2": "Back to account"}
-    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e2"}) is False
+    a._browser_last_elements = {"g1e1": "Send transfer now", "g1e2": "Back to account"}
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "g1e2"}) is False
 
 
 def test_an_unknown_ref_falls_through_to_session_rules():
     """A ref with no remembered label cannot be judged on its text."""
     a = _Agent()
     a._browser_last_elements = {}
-    assert a.browser_call_needs_confirmation("browser_click", {"ref": "e9"}) is False
+    assert a.browser_call_needs_confirmation("browser_click", {"ref": "g1e9"}) is False

@@ -19,6 +19,7 @@ The ref is stamped onto the element as ``data-gaia-ref`` so the follow-up
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 
 #: Attribute stamped on each snapshotted element; also the click selector.
@@ -50,7 +51,7 @@ MAX_TABLE_COLS = 12
 # way a user's eye would.
 _SNAPSHOT_JS = """
 (args) => {
-  const { attr, maxElements, maxNameChars, maxTextChars,
+  const { attr, gen, maxElements, maxNameChars, maxTextChars,
           maxTables, maxTableRows, maxTableCols } = args;
   const SELECTOR = [
     'a[href]', 'button', 'input', 'select', 'textarea',
@@ -137,7 +138,7 @@ _SNAPSHOT_JS = """
   for (const el of document.querySelectorAll(SELECTOR)) {
     if (!visible(el)) continue;
     if (out.length >= maxElements) { truncated = true; break; }
-    const ref = 'e' + (++n);
+    const ref = 'g' + gen + 'e' + (++n);
     el.setAttribute(attr, ref);
     const rec = { ref, role: roleOf(el), name: nameOf(el) };
     if (el.disabled) rec.disabled = true;
@@ -194,10 +195,11 @@ _SNAPSHOT_JS = """
 """
 
 
-def snapshot_args() -> Dict[str, Any]:
+def snapshot_args(generation: int = 0) -> Dict[str, Any]:
     """Arguments passed into :data:`_SNAPSHOT_JS`."""
     return {
         "attr": REF_ATTR,
+        "gen": generation,
         "maxElements": MAX_ELEMENTS,
         "maxNameChars": MAX_NAME_CHARS,
         "maxTextChars": MAX_TEXT_CHARS,
@@ -207,14 +209,24 @@ def snapshot_args() -> Dict[str, Any]:
     }
 
 
+#: A ref carries the snapshot that issued it: ``g4e12`` is element 12 of
+#: snapshot 4. Without the generation, every page numbers its elements from e1,
+#: so a ref held over from the previous page silently resolves to a DIFFERENT
+#: element — a live run clicked "e2" three times expecting one control and
+#: bounced between two pages, because e2 meant "Back to shop" on one and
+#: "Widget B" on the other. Scoping the ref turns that into an honest "not on
+#: the page any more", which the model already knows how to recover from.
+_REF_RE = re.compile(r"^g\d+e\d+$")
+
+
 def ref_selector(ref: str) -> str:
     """CSS selector addressing the element stamped with ``ref``."""
-    # Refs are generated in-page as e<digits>; reject anything else rather than
-    # interpolate caller-supplied text into a selector.
-    if not ref or not ref.startswith("e") or not ref[1:].isdigit():
+    # Whitelist, not escaping: this is interpolated into a CSS selector, so
+    # model-supplied text must never reach it.
+    if not ref or not _REF_RE.match(ref):
         raise ValueError(
-            f"Invalid element ref {ref!r}. Refs look like 'e12' and come from "
-            "browser_snapshot()."
+            f"Invalid element ref {ref!r}. Refs look like 'g4e12' and come "
+            "from browser_snapshot()."
         )
     return f'[{REF_ATTR}="{ref}"]'
 

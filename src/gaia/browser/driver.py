@@ -110,6 +110,8 @@ class PlaywrightDriver:
         #: URL the guard most recently refused. Read when a navigation fails so
         #: the caller is told it was blocked, not that the site was slow.
         self._last_blocked: Optional[str] = None
+        #: Bumped per snapshot so refs from an older page cannot resolve.
+        self._generation = 0
 
         self._jobs: "queue.Queue[Any]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -731,7 +733,8 @@ class PlaywrightDriver:
             pass
 
     def _snapshot(self) -> Dict[str, Any]:
-        return self._page.evaluate(_SNAPSHOT_JS, snapshot_args())
+        self._generation += 1
+        return self._page.evaluate(_SNAPSHOT_JS, snapshot_args(self._generation))
 
 
 def installed() -> bool:

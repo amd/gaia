@@ -161,7 +161,7 @@ def test_typing_into_a_select_picks_that_option(driver, page_url):
 def test_a_stale_ref_is_an_actionable_error(driver, page_url):
     driver.goto(page_url)
     with pytest.raises(ElementNotFound, match="browser_snapshot"):
-        driver.click("e9999")
+        driver.click("g1e9999")
 
 
 def test_refs_are_reissued_on_every_snapshot(driver, page_url):
@@ -169,7 +169,7 @@ def test_refs_are_reissued_on_every_snapshot(driver, page_url):
     driver.goto(page_url)
     driver.goto("about:blank")
     with pytest.raises(ElementNotFound):
-        driver.click("e1")
+        driver.click("g1e1")
 
 
 def test_calls_from_many_threads_all_work(driver, page_url):
