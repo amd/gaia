@@ -49,11 +49,55 @@ class GaiaConfig:
             (``gaia chat`` / ``gaia llm`` / ``gaia prompt``). ``None`` means
             "fall back to each command's built-in default". An explicit
             ``--model`` flag always wins over this value.
+        full_access: Start every session with confirmation prompts off, so the
+            agent runs gated tools without asking. Opt-in and OFF by default.
+
+            This is the ONLY thing that turns full access on without someone
+            asking for it on that launch, which is why it lives here and
+            nowhere else: ``~/.gaia/config.json`` is the user's own file. A
+            project-local ``.env`` or a checked-in config must never be able to
+            switch off another person's confirmation prompts. The TUI still
+            shows its banner on every frame while it is on.
     """
 
     profile: str = "chat"
     default_device: str = "gpu"
     default_model: Optional[str] = None
+    full_access: bool = False
+
+    #: Strings accepted for a boolean field, and what each means. Anything
+    #: else raises — "false" silently meaning True is the exact accident this
+    #: table exists to prevent, and it would turn confirmation prompts OFF.
+    _BOOL_WORDS = {
+        "true": True,
+        "yes": True,
+        "on": True,
+        "1": True,
+        "false": False,
+        "no": False,
+        "off": False,
+        "0": False,
+    }
+
+    @classmethod
+    def _coerce(cls, key: str, value: Any) -> Any:
+        """Convert a raw value to the type the field declares.
+
+        The CLI hands every value through as a string, so a ``bool`` field
+        given ``"false"`` would otherwise be stored truthy and read back as
+        enabled.
+        """
+        declared = {f.name: f.type for f in fields(cls)}.get(key)
+        is_bool = declared is bool or declared == "bool"
+        if not is_bool or isinstance(value, bool):
+            return value
+        word = str(value).strip().lower()
+        if word not in cls._BOOL_WORDS:
+            raise GaiaConfigError(
+                f"Config key '{key}' is a true/false setting, but got {value!r}. "
+                f"Use one of: {', '.join(sorted(cls._BOOL_WORDS))}."
+            )
+        return cls._BOOL_WORDS[word]
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -105,7 +149,9 @@ class GaiaConfig:
             )
 
         known = set(cls.field_names())
-        kwargs = {k: v for k, v in data.items() if k in known}
+        # Coerce on the way in too: config.json is hand-editable, and
+        # "full_access": "no" must not read back as enabled.
+        kwargs = {k: cls._coerce(k, v) for k, v in data.items() if k in known}
         return cls(**kwargs)
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -131,13 +177,13 @@ class GaiaConfig:
         return getattr(self, key)
 
     def set(self, key: str, value: str) -> None:
-        """Set a config field, raising on an unknown key."""
+        """Set a config field, raising on an unknown key or an unusable value."""
         if key not in self.field_names():
             raise GaiaConfigError(
                 f"Unknown config key '{key}'. "
                 f"Valid keys: {', '.join(self.field_names())}."
             )
-        setattr(self, key, value)
+        setattr(self, key, self._coerce(key, value))
 
     def resolve_model(
         self, cli_value: Optional[str], builtin_default: Optional[str]

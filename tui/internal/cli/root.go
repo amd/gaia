@@ -13,6 +13,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
 // dev is developer mode: rich in-TUI output (per-turn timings, step and turn
@@ -167,7 +168,18 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 		defer closeTrace(trace)
-		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg(), trace)
+		// The saved preference is the default; an explicit flag overrides it
+		// in either direction. That is what makes --full-access=false a
+		// per-launch opt-out for someone who normally runs with it on —
+		// without it, a saved preference could only be escaped by editing the
+		// config file.
+		fullAccess := preflight.ReadFullAccess().Enabled
+		if cmd.Flags().Changed("full-access") {
+			fullAccess = bypassPermissions
+		} else if cmd.Flags().Changed("bypass-permissions") {
+			fullAccess = bypassPermissions
+		}
+		return ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, useClaude, claudeModelArg(), trace)
 	},
 }
 

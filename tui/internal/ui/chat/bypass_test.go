@@ -4,6 +4,9 @@
 package chat
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -415,3 +418,119 @@ var errPermissionChannelGone = errTest("the permission channel is gone")
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// The persisted preference: /full-access always | never
+// ---------------------------------------------------------------------------
+
+func configAt(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("GAIA_CONFIG_FILE", path)
+	return path
+}
+
+func savedFullAccess(t *testing.T, path string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no config written: %v", err)
+	}
+	var doc struct {
+		FullAccess bool `json:"full_access"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("config is not valid JSON: %v", err)
+	}
+	return doc.FullAccess
+}
+
+// Saving the preference must not be a back door around being told what the
+// mode does — it still arms, and still needs the explicit confirm.
+func TestAlwaysSavesButStillAsksBeforeTurningOn(t *testing.T) {
+	path := configAt(t)
+	c := &permissionClient{}
+	m := NewChatModel(c, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access always")
+	m = updated.(ChatModel)
+
+	if !savedFullAccess(t, path) {
+		t.Error("the preference must be saved")
+	}
+	if m.bypassPermissions {
+		t.Error("saving a preference must not skip the confirmation step")
+	}
+	if len(c.bypassCalls) != 0 {
+		t.Errorf("nothing should have reached the agent yet: %v", c.bypassCalls)
+	}
+
+	updated, _ = m.submit("/full-access confirm")
+	if !updated.(ChatModel).bypassPermissions {
+		t.Error("confirm after always must turn it on")
+	}
+}
+
+func TestNeverClearsThePreference(t *testing.T) {
+	path := configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access always")
+	updated, _ = updated.(ChatModel).submit("/full-access never")
+
+	if savedFullAccess(t, path) {
+		t.Error("never must clear the saved preference")
+	}
+}
+
+// "never" is about future launches; "off" is about this one. One command must
+// not quietly do the other's job.
+func TestNeverLeavesTheCurrentSessionAloneAndSaysSo(t *testing.T) {
+	configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access")
+	updated, _ = updated.(ChatModel).submit("/full-access confirm")
+	m = updated.(ChatModel)
+	if !m.bypassPermissions {
+		t.Fatal("precondition: full access should be on")
+	}
+
+	updated, _ = m.submit("/full-access never")
+	m = updated.(ChatModel)
+
+	if !m.bypassPermissions {
+		t.Error("never must not turn the running session off")
+	}
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "/full-access off") {
+		t.Errorf("it must say how to stop it NOW, got: %q", last)
+	}
+}
+
+// A save that cannot happen must be reported, never assumed.
+func TestAFailedSaveIsReported(t *testing.T) {
+	dir := t.TempDir()
+	// A directory where the config file should be: writing there always fails.
+	t.Setenv("GAIA_CONFIG_FILE", dir)
+
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	updated, _ := m.submit("/full-access always")
+	m = updated.(ChatModel)
+
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "Could not save") {
+		t.Errorf("a failed save must say so, got: %q", last)
+	}
+}
+
+func TestTheTurnOnPromptMentionsMakingItPermanent(t *testing.T) {
+	configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	updated, _ := m.submit("/full-access")
+
+	explained := updated.(ChatModel).messages[len(updated.(ChatModel).messages)-1].Content
+	if !strings.Contains(explained, "/full-access always") {
+		t.Errorf("the prompt is where you learn it can be permanent, got: %q", explained)
+	}
+}

@@ -1487,6 +1487,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		}
 		return m.setBypass(false)
 
+	case "/full-access always":
+		return m.setFullAccessDefault(true)
+
+	case "/full-access never":
+		return m.setFullAccessDefault(false)
+
 	case "/setup":
 		if m.agentID != setupAgentID {
 			return m.statusNote(m.agentName + " does not have a local setup step."), nil

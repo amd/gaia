@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -80,7 +81,8 @@ func (m ChatModel) armBypass() (tea.Model, tea.Cmd) {
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
 			"    Type /full-access confirm to turn it on, or /full-access off at any " +
-			"time to turn it back off.",
+			"time to turn it back off.\n" +
+			"    /full-access always keeps it on for every future session too.",
 	})
 	m.updateViewport()
 	return m, nil
@@ -140,28 +142,42 @@ func (m ChatModel) bypassNote(text string) ChatModel {
 	return m
 }
 
-// applyLaunchBypass reflects a --full-access launch flag into the model.
+// applyLaunchBypass reflects a full-access launch into the model.
 //
 // The flag reaches the AGENT through its own argv; this only makes the UI tell
 // the truth about it from the first frame. Without it the banner would appear
 // only after the first manual toggle, which is the exact failure the banner
 // exists to prevent.
+//
+// It also names WHICH source turned it on. A persisted preference is the one
+// that can be on without anybody asking for it today, so "why is this on?"
+// has to be answerable from the transcript — and the answer has to name the
+// command that makes it stop, which differs by source.
 func (m ChatModel) applyLaunchBypass() ChatModel {
 	type launchBypasser interface{ BypassAtLaunch() bool }
-	if b, ok := m.client.(launchBypasser); ok && b.BypassAtLaunch() {
-		m.bypassPermissions = true
-		m.messages = append(m.messages, Message{
-			Role: RoleStatus,
-			Content: "[!] Launched with --full-access: " + m.agentName +
-				" runs tools without asking. Type /full-access off to turn it off.",
-		})
+	b, ok := m.client.(launchBypasser)
+	if !ok || !b.BypassAtLaunch() {
+		return m
 	}
+	m.bypassPermissions = true
+
+	reason := "Launched with --full-access"
+	undo := "Type /full-access off to turn it off for this session."
+	if preflight.ReadFullAccess().Enabled {
+		reason = "Full access is ON for every session (full_access in your GAIA config)"
+		undo = "Type /full-access off for this session, or /full-access never to stop it coming back."
+	}
+	m.messages = append(m.messages, Message{
+		Role:    RoleStatus,
+		Content: "[!] " + reason + ": " + m.agentName + " runs tools without asking.\n    " + undo,
+	})
 	return m
 }
 
 // bypassHelpLine documents the command wherever the TUI lists what it can do.
 func bypassHelpLine() string {
-	return "/full-access — let the agent run tools without asking (off by default)"
+	return "/full-access — let the agent run tools without asking (off by default);\n" +
+		"              add `always` to keep it on for every session, `never` to stop"
 }
 
 // isBypassCommand reports whether a composed line is one of the full-access
@@ -172,8 +188,37 @@ func bypassHelpLine() string {
 func isBypassCommand(query string) bool {
 	switch strings.TrimSpace(query) {
 	case "/full-access", "/full-access on", "/full-access off", "/full-access confirm",
+		"/full-access always", "/full-access never",
 		"/bypass", "/bypass on", "/bypass off", "/bypass confirm":
 		return true
 	}
 	return false
+}
+
+// setFullAccessDefault persists the preference so it survives this session.
+//
+// Turning it ON also turns it on NOW (the user asked for the mode, not just a
+// line in a file). Turning it OFF only clears the preference and leaves the
+// session alone: /full-access off is the command for "stop now", and quietly
+// doing both would make one command mean two things.
+func (m ChatModel) setFullAccessDefault(enabled bool) (tea.Model, tea.Cmd) {
+	path, err := preflight.WriteFullAccess(enabled)
+	if err != nil {
+		return m.bypassNote("Could not save the setting: " + err.Error()), nil
+	}
+	if !enabled {
+		note := "[✓] Full access will NOT come back on the next launch (saved in " + path + ")."
+		if m.bypassPermissions {
+			note += "\n    It is still on for THIS session — /full-access off to stop it now."
+		}
+		return m.bypassNote(note), nil
+	}
+	if m.bypassPermissions {
+		return m.bypassNote("[✓] Full access saved as the default for every session (" + path + ")."), nil
+	}
+	// Not on yet: the same two-step confirmation any other turn-on goes
+	// through. Saving the preference must not be a way to skip being told
+	// what the mode does.
+	saved := m.bypassNote("[✓] Saved as the default for every session (" + path + ").")
+	return saved.armBypass()
 }
