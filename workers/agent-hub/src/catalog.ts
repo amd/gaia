@@ -148,7 +148,14 @@ function parseScorecardVersion(markdown: string | null): string | undefined {
   if (!match) return undefined;
   try {
     const fm = parseYaml(match[1]) as Record<string, unknown> | null;
-    const agentBlock = fm && typeof fm === "object" ? (fm.agent as Record<string, unknown> | undefined) : undefined;
+    if (!fm || typeof fm !== "object") return undefined;
+    // A carry-forward card (patch release reusing a prior eval) stamps
+    // `agent.version` with the release version and keeps the version the
+    // eval actually ran at in `inherited_from`. Prefer that when set, or the
+    // caption would claim a carried-forward score was freshly measured.
+    const inherited = fm.inherited_from;
+    if (typeof inherited === "string" && inherited.length > 0) return inherited;
+    const agentBlock = fm.agent as Record<string, unknown> | undefined;
     const version = agentBlock?.version;
     return typeof version === "string" && version.length > 0 ? version : undefined;
   } catch {
