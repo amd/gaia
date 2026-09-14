@@ -86,14 +86,16 @@ class TestKeyResolution:
         for name in API_KEY_ENV_VARS:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setattr(
-            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring")
+            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring"
+        )
         assert resolve_fireworks_api_key() == "from-keyring"
 
     def test_environment_beats_the_stored_key(self, monkeypatch):
         """A key set for this run must not be overridden by an old stored one."""
         monkeypatch.setenv(API_KEY_ENV_VARS[0], "from-env")
         monkeypatch.setattr(
-            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring")
+            "gaia.connectors.store.peek_secret", lambda _name: "from-keyring"
+        )
         assert resolve_fireworks_api_key() == "from-env"
 
     def test_missing_key_names_what_to_set(self, no_env):
