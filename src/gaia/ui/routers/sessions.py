@@ -14,7 +14,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .._chat_helpers import evict_session_agent, resolve_device_model
-from ..database import SESSION_DEFAULT_MODEL, ChatDatabase, is_placeholder_title
+from ..database import (
+    SESSION_DEFAULT_MODEL,
+    ChatDatabase,
+    is_placeholder_title,
+    resolved_default_model,
+)
 from ..dependencies import get_db
 from ..models import (
     AttachDocumentRequest,
@@ -182,7 +187,16 @@ async def update_session(
         resolved, _ = resolve_device_model(agent_type, request.device)
         if resolved:
             current_model = (existing or {}).get("model")
-            is_default_model = current_model in (None, SESSION_DEFAULT_MODEL)
+            # Also recognize the user's *configured* default (#3843) as "not
+            # pinned" — a session created via that config default must still
+            # auto-follow a device switch the same as one on the raw
+            # hard-coded floor; only a genuinely custom-picked model should
+            # block the rewrite below.
+            is_default_model = current_model in (
+                None,
+                SESSION_DEFAULT_MODEL,
+                resolved_default_model(),
+            )
             device_is_explicit = request.device != "gpu"
             if resolved != current_model and (is_default_model or device_is_explicit):
                 device_model = resolved

@@ -525,3 +525,28 @@ class TestSessionsRouterDeviceRewrite:
         body = resp.json()
         assert body["title"] == "Renamed"
         assert body["model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_switch_to_npu_rewrites_model_for_session_on_configured_default(
+        self, client, tmp_path, monkeypatch
+    ):
+        """#3843: a session created with no explicit model (so it landed on
+        the *configured* default_model, not the raw hard-coded one) must
+        still be recognized as "not pinned" here and follow a device switch
+        — only a genuinely custom-picked model should block the rewrite.
+        """
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        config_file = tmp_path / "config.json"
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+        GaiaConfig(default_model="agents-a1-q4-k-m").save()
+
+        created = client.post("/api/sessions", json={}).json()
+        assert created["model"] == "agents-a1-q4-k-m"
+
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "npu"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["device"] == "npu"
+        assert body["model"] == "gemma4-it-e2b-FLM"

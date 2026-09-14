@@ -16,13 +16,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.config import GaiaConfig
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 
-# Default model for new sessions — kept in sync with the SQL schema DEFAULT and
-# any code that reads session["model"] and falls back when the field is NULL.
+# Hard-coded floor for new sessions — kept in sync with the SQL schema DEFAULT
+# and any code that reads session["model"] and falls back when the field is
+# NULL. Not necessarily what a new session actually gets: resolved_default_model()
+# below checks ~/.gaia/config.json's default_model first (#3843) so a user's
+# configured default protects UI-created sessions the same way it already
+# protects `gaia` CLI commands (GaiaConfig.resolve_model). This literal is
+# the last-resort value when no config default is set, and remains the SQL
+# schema's own DEFAULT for any row a raw INSERT ever leaves NULL.
 SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
+
+
+def resolved_default_model() -> str:
+    """The model a new session gets when the caller doesn't specify one.
+
+    ~/.gaia/config.json's default_model wins when set (#3843 — previously
+    only `gaia` CLI commands honored it); otherwise SESSION_DEFAULT_MODEL.
+    Shared with routers/sessions.py's device-switch auto-rewrite guard so a
+    session sitting on a *configured* default is still recognized as "not
+    pinned to a custom model" there, the same as one sitting on the raw
+    hard-coded floor.
+    """
+    return GaiaConfig.load().resolve_model(None, SESSION_DEFAULT_MODEL)
+
 
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
@@ -376,7 +398,11 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or SESSION_DEFAULT_MODEL
+        # An explicit caller-supplied model always wins (unchanged). When one
+        # isn't supplied — a fresh "New Chat"/"New Task", or
+        # scheduler.create_session(), which never passes one — fall back
+        # through resolved_default_model() rather than the raw literal (#3843).
+        model = model or resolved_default_model()
         # A non-placeholder title at creation is an explicit caller choice —
         # pin it so the auto-retitler never overwrites it (#2165).
         title_is_custom = 0 if is_placeholder_title(title) else 1
