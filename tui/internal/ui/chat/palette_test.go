@@ -291,8 +291,13 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for _, cmd := range submitCommandLiterals(t) {
+		if strings.HasPrefix(cmd, "/bypass") {
+			// The retired name: answered with a rename notice and deliberately
+			// never offered, so it has no palette or help entry.
+			continue
+		}
 		base := cmd
-		if strings.HasPrefix(cmd, "/full-access") || strings.HasPrefix(cmd, "/bypass") {
+		if strings.HasPrefix(cmd, "/full-access") {
 			// on|confirm|off, in both the current and the legacy spelling, are
 			// distinct case values for the one command the palette offers.
 			base = "/full-access"

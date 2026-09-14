@@ -275,8 +275,8 @@ func (m *ChatModel) upsertSetupProgress(line string) {
 }
 
 // statusNote appends one status line and re-renders -- a small, generic
-// counterpart to bypassNote for callers (like /setup) that have nothing
-// bypass-specific about them.
+// counterpart to fullAccessNote for callers (like /setup) that have nothing
+// full-access-specific about them.
 func (m ChatModel) statusNote(text string) ChatModel {
 	m.messages = append(m.messages, Message{Role: RoleStatus, Content: text})
 	m.updateViewport()

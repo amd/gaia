@@ -965,9 +965,9 @@ class SSEOutputHandler(OutputHandler):
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
 
-        # Bypass and prior "always" grants are checked before anything is
+        # Full access and prior "always" grants are checked before anything is
         # emitted: neither has a question to ask, so putting a modal up would be
-        # theatre. Checked per call, so toggling bypass mid-run takes effect on
+        # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
@@ -976,8 +976,7 @@ class SSEOutputHandler(OutputHandler):
                     "type": "status",
                     "status": "warning",
                     "message": (
-                        f"Bypass permissions is ON — ran '{tool_name}' without "
-                        "asking."
+                        f"Full access is ON — ran '{tool_name}' without " "asking."
                     ),
                 }
             )

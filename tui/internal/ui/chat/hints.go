@@ -36,9 +36,9 @@ type hint struct {
 // without renumbering.
 const (
 	// How to stop the agent acting on its own. Outranks even the way out:
-	// while bypass is on, every frame the user cannot see this is a frame in
+	// while full access is on, every frame the user cannot see this is a frame in
 	// which tools are running unasked and they do not know how to stop it.
-	rankBypass = 110
+	rankFullAccess = 110
 	// How to get out. Survives to the last column: a user who cannot see this
 	// closes the terminal window.
 	rankEscape = 100
@@ -65,8 +65,8 @@ func (m ChatModel) statusHints() []hint {
 
 	// The banner is the primary indicator; this is the belt to its braces, on
 	// the one row that is always drawn.
-	if m.bypassPermissions {
-		hints = append(hints, hint{text: "/full-access off", rank: rankBypass})
+	if m.fullAccess {
+		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
 	}
 
 	if m.dev && m.totalSteps > 0 {

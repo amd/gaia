@@ -43,7 +43,7 @@ var paletteCommands = []paletteCommand{
 // command name plus the space that starts its argument.
 //
 // `/model` takes a free-form model id, so it cannot be a flat palette row the
-// way `/bypass on` could — one row per id at the top level would bury the
+// way `/full-access on` could — one row per id at the top level would bury the
 // real commands under a model list nobody was looking for. So the palette
 // gets a second level instead: `/model` stays one row, and typing the space
 // after it swaps the list for the ids. The set is closed and known at compile

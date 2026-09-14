@@ -44,11 +44,11 @@ func prepareTerminal() {
 //
 // If mockAgent is non-empty, agent binary paths are overridden with it for
 // testing. A non-nil ctrl starts the loopback control API against this very
-// program. bypassPermissions starts the agent with confirmation prompts off.
+// program. fullAccess starts the agent with confirmation prompts off.
 // useClaude/claudeModel run it against Anthropic's Claude API instead of the
 // local Lemonade backend. A non-nil trace records every agent event to a JSONL
 // file; the caller owns it and closes it after this returns.
-func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
+func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
@@ -60,11 +60,13 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, bypassPermis
 		return fmt.Errorf("the catalog has no %q entry, so there is nothing to launch. "+
 			"Report this with GAIA diagnostics", catalog.FlagshipID)
 	}
-	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+	fullAccess, notice, err := launchFullAccess(*agent, fullAccess, fullAccessSaved)
+	if err != nil {
 		return err
 	}
 	m := root.NewFlagshipModel(*agent, dev).
-		WithBypassPermissions(bypassPermissions).
+		WithFullAccess(fullAccess).
+		WithFullAccessNotice(notice).
 		WithClaude(useClaude, claudeModel).
 		WithTrace(trace).
 		WithLocalPreflight(preflight.LocalOptions{
@@ -209,7 +211,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // that overrode the binary for one entry point and not the other let a test
 // spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
@@ -222,7 +224,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		return 1, fmt.Errorf("no agent %q in the catalog. %s", agentID, knownIDs(cat))
 	}
 
-	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+	if err := client.CheckFullAccessSupported(*agent, fullAccess); err != nil {
 		return 1, err
 	}
 
@@ -279,11 +281,11 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 			Logf:  logf,
 			// A one-shot has nobody at the keyboard; only the interactive chat
 			// can answer a question, so it must not claim it can.
-			Interactive:       false,
-			BypassPermissions: bypassPermissions,
-			UseClaude:         useClaude,
-			ClaudeModel:       claudeModel,
-			Trace:             trace,
+			Interactive: false,
+			FullAccess:  fullAccess,
+			UseClaude:   useClaude,
+			ClaudeModel: claudeModel,
+			Trace:       trace,
 		})
 		if err != nil {
 			return 1, err
@@ -302,7 +304,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// none, and email in particular went straight to chat and reported a
 	// missing daemon as a failed first message.
 	m := root.NewFlagshipModel(*agent, dev).
-		WithBypassPermissions(bypassPermissions).
+		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
 		WithModel(model).
 		WithTrace(trace)
@@ -338,4 +340,23 @@ func orDefault(value, fallback string) string {
 func agentNameFromPath(path string) string {
 	name := filepath.Base(path)
 	return strings.TrimSuffix(name, ".exe")
+}
+
+// launchFullAccess decides whether this launch runs with full access, and what
+// to tell the user when a saved preference could not be honoured.
+//
+// The explicit flag is refused on a transport that cannot carry it. A saved
+// preference is a default, not a demand: it is set aside for this launch and
+// explained, never allowed to stop the TUI opening over a flag nobody typed.
+func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string, error) {
+	if fullAccess && saved && client.CheckFullAccessSupported(agent, true) != nil {
+		return false, "[!] Full access is saved as your default, but " + agent.Name +
+			" runs through the GAIA background service, which does not support it yet. " +
+			"Confirmation prompts are ON for this session.\n" +
+			"    /full-access never clears the saved setting.", nil
+	}
+	if err := client.CheckFullAccessSupported(agent, fullAccess); err != nil {
+		return false, "", err
+	}
+	return fullAccess, "", nil
 }

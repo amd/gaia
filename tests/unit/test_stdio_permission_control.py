@@ -93,7 +93,7 @@ class TestControlLinesAreNotQueries:
         assert parse_control(line) is None
 
     def test_control_key_is_the_discriminator(self):
-        parsed = parse_control('{"gaia_control":"bypass","enabled":true}')
+        parsed = parse_control('{"gaia_control":"full_access","enabled":true}')
         assert parsed is not None and parsed["enabled"] is True
 
 
@@ -195,13 +195,13 @@ class TestYesNoAlways:
         assert "decision=False" in final_answer(second)
 
 
-class TestBypassMode:
+class TestFullAccessMode:
     def test_off_by_default(self):
-        assert PermissionState().bypass is False
+        assert PermissionState().full_access is False
 
     def test_on_runs_gated_tools_without_asking(self):
         state = PermissionState()
-        state.set_bypass(True)
+        state.set_full_access(True)
         events = drive(state, [])
         assert not events_of(events, "needs_confirmation")
         assert "decision=True" in final_answer(events)
@@ -209,22 +209,24 @@ class TestBypassMode:
     def test_on_still_says_what_it_ran(self):
         """Silent autonomy is the thing being avoided, not the goal."""
         state = PermissionState()
-        state.set_bypass(True)
+        state.set_full_access(True)
         events = drive(state, [])
         warnings = [
-            e for e in events_of(events, "status") if "Bypass" in str(e.get("message"))
+            e
+            for e in events_of(events, "status")
+            if "Full access" in str(e.get("message"))
         ]
         assert warnings and "run_shell_command" in warnings[0]["message"]
 
     def test_off_restores_prompting_immediately(self):
-        state = PermissionState(bypass=True)
-        state.set_bypass(False)
+        state = PermissionState(full_access=True)
+        state.set_full_access(False)
         events = drive(state, ["deny"])
         assert events_of(events, "needs_confirmation")
         assert "decision=False" in final_answer(events)
 
     def test_launch_flag_is_honoured(self):
-        assert PermissionState(bypass=True).bypass is True
+        assert PermissionState(full_access=True).full_access is True
 
 
 class TestFailClosed:
@@ -275,7 +277,7 @@ class TestFailClosed:
     def test_an_unknown_verb_is_ignored(self):
         state = PermissionState()
         apply_control({"gaia_control": "reboot_the_planet"}, state)
-        assert state.bypass is False
+        assert state.full_access is False
 
     def test_a_turn_with_no_control_channel_cannot_be_approved(self, monkeypatch):
         """No state means no responder, so the gate must not open by default."""
@@ -408,8 +410,8 @@ class TestStdinClosingEndsAParkedTurn:
     def test_the_cancel_verb_ends_the_turn_and_keeps_session_state(self):
         """The host's Esc stops the turn in-process instead of killing the agent.
 
-        Killing it lost the loaded skills, "always" grants, history and the
-        bypass mode; a cooperative cancel has to end the turn through its one
+        Killing it lost the loaded skills, "always" grants, history and full
+        access; a cooperative cancel has to end the turn through its one
         terminal event and leave all of that where it was.
         """
 
@@ -429,7 +431,7 @@ class TestStdinClosingEndsAParkedTurn:
                     time.sleep(0.02)
                 return {"status": "success", "result": "finished"}
 
-        state = PermissionState(bypass=True)
+        state = PermissionState(full_access=True)
         agent = SlowAgent()
         out = io.StringIO()
 
@@ -452,7 +454,9 @@ class TestStdinClosingEndsAParkedTurn:
         assert (
             len(terminals) == 1
         ), "a cancelled turn still ends with ONE terminal event"
-        assert state.bypass is True, "cancelling must not touch the permission mode"
+        assert (
+            state.full_access is True
+        ), "cancelling must not touch the permission mode"
 
     def test_cancel_with_no_turn_running_is_ignored(self):
         # A cancel that loses the race with the turn's own end is ordinary.

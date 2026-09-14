@@ -19,14 +19,14 @@ import (
 )
 
 // permissionClient is a transport that CAN answer a live permission prompt and
-// toggle bypass — what the flagship agent's stdio control channel provides.
+// toggle full access — what the flagship agent's stdio control channel provides.
 type permissionClient struct {
 	nullClient
-	decisions    []client.PermissionDecision
-	confirmIDs   []string
-	bypassCalls  []bool
-	launchBypass bool
-	err          error
+	decisions        []client.PermissionDecision
+	confirmIDs       []string
+	fullAccessCalls  []bool
+	launchFullAccess bool
+	err              error
 }
 
 func (c *permissionClient) RespondToolPermission(confirmID string, d client.PermissionDecision) error {
@@ -38,15 +38,15 @@ func (c *permissionClient) RespondToolPermission(confirmID string, d client.Perm
 	return nil
 }
 
-func (c *permissionClient) SetBypassPermissions(enabled bool) error {
+func (c *permissionClient) SetFullAccess(enabled bool) error {
 	if c.err != nil {
 		return c.err
 	}
-	c.bypassCalls = append(c.bypassCalls, enabled)
+	c.fullAccessCalls = append(c.fullAccessCalls, enabled)
 	return nil
 }
 
-func (c *permissionClient) BypassAtLaunch() bool { return c.launchBypass }
+func (c *permissionClient) FullAccessAtLaunch() bool { return c.launchFullAccess }
 
 func liveModel(t *testing.T) (ChatModel, *permissionClient) {
 	t.Helper()
@@ -201,29 +201,29 @@ func TestAFailedDecisionDeliveryIsSurfaced(t *testing.T) {
 	}
 }
 
-// --- bypass mode -----------------------------------------------------------
+// --- full access mode -----------------------------------------------------------
 
-func TestBypassIsOffOnAFreshModel(t *testing.T) {
+func TestFullAccessIsOffOnAFreshModel(t *testing.T) {
 	m, _ := liveModel(t)
-	if m.bypassPermissions {
-		t.Fatal("bypass must be off on a fresh launch")
+	if m.fullAccess {
+		t.Fatal("full access must be off on a fresh launch")
 	}
-	if strings.Contains(m.View(), "BYPASS") {
-		t.Error("no banner may show when bypass is off")
+	if strings.Contains(m.View(), "FULL ACCESS") {
+		t.Error("no banner may show when full access is off")
 	}
 }
 
 // Turning it ON takes two deliberate steps; the first one only explains.
-func TestTurningBypassOnIsDeliberate(t *testing.T) {
+func TestTurningFullAccessOnIsDeliberate(t *testing.T) {
 	m, c := liveModel(t)
 
-	updated, _ := m.submit("/bypass")
+	updated, _ := m.submit("/full-access")
 	m = updated.(ChatModel)
-	if m.bypassPermissions {
-		t.Fatal("/bypass alone must not enable anything")
+	if m.fullAccess {
+		t.Fatal("/full-access alone must not enable anything")
 	}
-	if len(c.bypassCalls) != 0 {
-		t.Errorf("nothing should have reached the agent yet: %v", c.bypassCalls)
+	if len(c.fullAccessCalls) != 0 {
+		t.Errorf("nothing should have reached the agent yet: %v", c.fullAccessCalls)
 	}
 	explained := m.messages[len(m.messages)-1].Content
 	for _, want := range []string{"every tool", "/full-access confirm"} {
@@ -232,33 +232,33 @@ func TestTurningBypassOnIsDeliberate(t *testing.T) {
 		}
 	}
 
-	updated, _ = m.submit("/bypass confirm")
+	updated, _ = m.submit("/full-access confirm")
 	m = updated.(ChatModel)
-	if !m.bypassPermissions {
-		t.Fatal("/bypass confirm must enable bypass")
+	if !m.fullAccess {
+		t.Fatal("/full-access confirm must enable full access")
 	}
-	if len(c.bypassCalls) != 1 || !c.bypassCalls[0] {
-		t.Errorf("the agent was not told to bypass: %v", c.bypassCalls)
+	if len(c.fullAccessCalls) != 1 || !c.fullAccessCalls[0] {
+		t.Errorf("the agent was not told to turn on full access: %v", c.fullAccessCalls)
 	}
 }
 
 // Confirming out of the blue must not work — the warning is the point.
-func TestBypassConfirmWithoutTheWarningDoesNothing(t *testing.T) {
+func TestFullAccessConfirmWithoutTheWarningDoesNothing(t *testing.T) {
 	m, c := liveModel(t)
-	updated, _ := m.submit("/bypass confirm")
+	updated, _ := m.submit("/full-access confirm")
 	m = updated.(ChatModel)
-	if m.bypassPermissions || len(c.bypassCalls) != 0 {
-		t.Error("an unprompted /bypass confirm must not enable bypass")
+	if m.fullAccess || len(c.fullAccessCalls) != 0 {
+		t.Error("an unprompted /full-access confirm must not enable full access")
 	}
 }
 
 // While it is on, every frame says so — and the banner lives outside the
 // viewport, so scrolling cannot take it away.
-func TestBypassBannerIsOnEveryFrame(t *testing.T) {
+func TestFullAccessBannerIsOnEveryFrame(t *testing.T) {
 	m, _ := liveModel(t)
-	updated, _ := m.submit("/bypass")
+	updated, _ := m.submit("/full-access")
 	m = updated.(ChatModel)
-	updated, _ = m.submit("/bypass confirm")
+	updated, _ = m.submit("/full-access confirm")
 	m = updated.(ChatModel)
 
 	view := m.View()
@@ -278,40 +278,40 @@ func TestBypassBannerIsOnEveryFrame(t *testing.T) {
 
 	// And the always-drawn status row carries it too.
 	if !strings.Contains(fitHints(m.statusHints(), m.hintBudget()), "/full-access off") {
-		t.Error("the status bar must carry the way out of bypass")
+		t.Error("the status bar must carry the way out of full access")
 	}
 }
 
-func TestTurningBypassOffIsOneStep(t *testing.T) {
+func TestTurningFullAccessOffIsOneStep(t *testing.T) {
 	m, c := liveModel(t)
-	m.bypassPermissions = true
+	m.fullAccess = true
 
-	updated, _ := m.submit("/bypass")
+	updated, _ := m.submit("/full-access")
 	m = updated.(ChatModel)
-	if m.bypassPermissions {
-		t.Fatal("/bypass while on must turn it off immediately")
+	if m.fullAccess {
+		t.Fatal("/full-access while on must turn it off immediately")
 	}
-	if len(c.bypassCalls) != 1 || c.bypassCalls[0] {
-		t.Errorf("the agent was not told to stop bypassing: %v", c.bypassCalls)
+	if len(c.fullAccessCalls) != 1 || c.fullAccessCalls[0] {
+		t.Errorf("the agent was not told to stop bypassing: %v", c.fullAccessCalls)
 	}
 	if strings.Contains(m.View(), "FULL ACCESS —") {
-		t.Error("the banner must go the instant bypass is off")
+		t.Error("the banner must go the instant full access is off")
 	}
 }
 
 // A transport that cannot carry the toggle must not leave a banner claiming an
 // autonomy the agent is not actually in.
-func TestBypassIsNotClaimedWhenTheAgentCannotBeTold(t *testing.T) {
+func TestFullAccessIsNotClaimedWhenTheAgentCannotBeTold(t *testing.T) {
 	m, c := liveModel(t)
 	c.err = errPermissionChannelGone
 
-	updated, _ := m.submit("/bypass")
+	updated, _ := m.submit("/full-access")
 	m = updated.(ChatModel)
-	updated, _ = m.submit("/bypass confirm")
+	updated, _ = m.submit("/full-access confirm")
 	m = updated.(ChatModel)
 
-	if m.bypassPermissions {
-		t.Fatal("bypass must not be claimed locally when the agent was never told")
+	if m.fullAccess {
+		t.Fatal("full access must not be claimed locally when the agent was never told")
 	}
 	last := m.messages[len(m.messages)-1]
 	if last.Role != RoleError {
@@ -320,26 +320,26 @@ func TestBypassIsNotClaimedWhenTheAgentCannotBeTold(t *testing.T) {
 }
 
 // A transport with no control channel at all says so rather than pretending.
-func TestBypassOnATransportWithoutAChannel(t *testing.T) {
+func TestFullAccessOnATransportWithoutAChannel(t *testing.T) {
 	m, _ := newTestModel(t)
-	updated, _ := m.submit("/bypass")
+	updated, _ := m.submit("/full-access")
 	m = updated.(ChatModel)
-	updated, _ = m.submit("/bypass confirm")
+	updated, _ = m.submit("/full-access confirm")
 	m = updated.(ChatModel)
 
-	if m.bypassPermissions {
-		t.Fatal("a transport with no control channel cannot enter bypass")
+	if m.fullAccess {
+		t.Fatal("a transport with no control channel cannot enter full access")
 	}
 }
 
 // The launch flag shows the banner from the first frame, not only after a
 // manual toggle.
 func TestLaunchFlagShowsTheBannerImmediately(t *testing.T) {
-	c := &permissionClient{launchBypass: true}
+	c := &permissionClient{launchFullAccess: true}
 	m := NewChatModel(c, "gaia", "", false)
 	m.width, m.height = 100, 30
 
-	if !m.bypassPermissions {
+	if !m.fullAccess {
 		t.Fatal("--full-access must be reflected at launch")
 	}
 	if !strings.Contains(m.View(), "FULL ACCESS") {
@@ -348,18 +348,19 @@ func TestLaunchFlagShowsTheBannerImmediately(t *testing.T) {
 }
 
 // The full-access forms never reach the agent as a question — in either the
-// current spelling or the legacy /bypass one, which is still accepted.
-func TestBypassCommandsAreNeverSentAsQueries(t *testing.T) {
+// current spelling or the retired /bypass one, which gets a rename notice.
+func TestFullAccessCommandsAreNeverSentAsQueries(t *testing.T) {
 	for _, cmd := range []string{
 		"/full-access", "/full-access on", "/full-access off", "/full-access confirm",
+		"/full-access always", "/full-access never",
 		"/bypass", "/bypass on", "/bypass off", "/bypass confirm",
 	} {
-		if !isBypassCommand(cmd) {
+		if !isFullAccessCommand(cmd) {
 			t.Errorf("%q must be recognised as a local command", cmd)
 		}
 	}
-	if isBypassCommand("what does /bypass do") {
-		t.Error("a question about bypass is still a question")
+	if isFullAccessCommand("what does /full-access do") {
+		t.Error("a question about full access is still a question")
 	}
 }
 
@@ -458,15 +459,15 @@ func TestAlwaysSavesButStillAsksBeforeTurningOn(t *testing.T) {
 	if !savedFullAccess(t, path) {
 		t.Error("the preference must be saved")
 	}
-	if m.bypassPermissions {
+	if m.fullAccess {
 		t.Error("saving a preference must not skip the confirmation step")
 	}
-	if len(c.bypassCalls) != 0 {
-		t.Errorf("nothing should have reached the agent yet: %v", c.bypassCalls)
+	if len(c.fullAccessCalls) != 0 {
+		t.Errorf("nothing should have reached the agent yet: %v", c.fullAccessCalls)
 	}
 
 	updated, _ = m.submit("/full-access confirm")
-	if !updated.(ChatModel).bypassPermissions {
+	if !updated.(ChatModel).fullAccess {
 		t.Error("confirm after always must turn it on")
 	}
 }
@@ -492,14 +493,14 @@ func TestNeverLeavesTheCurrentSessionAloneAndSaysSo(t *testing.T) {
 	updated, _ := m.submit("/full-access")
 	updated, _ = updated.(ChatModel).submit("/full-access confirm")
 	m = updated.(ChatModel)
-	if !m.bypassPermissions {
+	if !m.fullAccess {
 		t.Fatal("precondition: full access should be on")
 	}
 
 	updated, _ = m.submit("/full-access never")
 	m = updated.(ChatModel)
 
-	if !m.bypassPermissions {
+	if !m.fullAccess {
 		t.Error("never must not turn the running session off")
 	}
 	last := m.messages[len(m.messages)-1].Content
@@ -532,5 +533,27 @@ func TestTheTurnOnPromptMentionsMakingItPermanent(t *testing.T) {
 	explained := updated.(ChatModel).messages[len(updated.(ChatModel).messages)-1].Content
 	if !strings.Contains(explained, "/full-access always") {
 		t.Errorf("the prompt is where you learn it can be permanent, got: %q", explained)
+	}
+}
+
+func TestTheRetiredBypassCommandPointsAtTheNewName(t *testing.T) {
+	c := &permissionClient{}
+	m := NewChatModel(c, "gaia", "", false)
+	for _, cmd := range []string{"/bypass", "/bypass on", "/bypass confirm", "/bypass off"} {
+		updated, _ := m.submit(cmd)
+		got := updated.(ChatModel)
+		if got.fullAccess || len(c.fullAccessCalls) != 0 {
+			t.Fatalf("%q must not change the mode", cmd)
+		}
+		if last := got.messages[len(got.messages)-1].Content; !strings.Contains(last, "/full-access") {
+			t.Errorf("%q must name the new command, got %q", cmd, last)
+		}
+	}
+}
+
+func TestASavedPreferenceNoticeReachesTheTranscript(t *testing.T) {
+	m := NewChatModel(&permissionClient{}, "gaia", "", false).WithNotice("[!] prompts are ON")
+	if last := m.messages[len(m.messages)-1].Content; last != "[!] prompts are ON" {
+		t.Errorf("notice not shown: %q", last)
 	}
 }
