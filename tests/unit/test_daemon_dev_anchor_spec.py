@@ -208,12 +208,13 @@ def test_resolve_caller_dev_src_dir_explicit_absolute_path_bypasses_git(
 
     monkeypatch.setattr(spec_module.subprocess, "run", _forbidden_run)
 
-    (tmp_path / "b").mkdir(parents=True)
-    given = tmp_path / "a" / ".." / "b"
+    shaped = tmp_path / "b" / "hub" / "agents" / "toy-dev" / "python"
+    shaped.mkdir(parents=True)
+    given = tmp_path / "a" / ".." / "b" / "hub" / "agents" / "toy-dev" / "python"
     result = spec_module.resolve_caller_dev_src_dir(
         "toy-dev", explicit=str(given), cwd=tmp_path
     )
-    assert result == (tmp_path / "b").resolve()
+    assert result == shaped.resolve()
 
 
 def test_resolve_caller_dev_src_dir_explicit_wins_over_cwd_git_resolution(
@@ -227,12 +228,47 @@ def test_resolve_caller_dev_src_dir_explicit_wins_over_cwd_git_resolution(
 
     monkeypatch.setattr(spec_module.subprocess, "run", _forbidden_run)
 
-    explicit_dir = tmp_path / "explicit-checkout"
-    explicit_dir.mkdir()
+    explicit_dir = (
+        tmp_path / "explicit-checkout" / "hub" / "agents" / "toy-dev" / "python"
+    )
+    explicit_dir.mkdir(parents=True)
     result = spec_module.resolve_caller_dev_src_dir(
         "toy-dev", explicit=str(explicit_dir), cwd=tmp_path / "unrelated"
     )
     assert result == explicit_dir.resolve()
+
+
+def test_resolve_caller_dev_src_dir_rejects_repo_root_naming_corrected_path(tmp_path):
+    """issue #2742: a repo root passed as --dev-src-dir must be rejected client
+    side, naming the exact hub/agents/<id>/python path the caller should pass
+    instead -- never the daemon-side "restart remedy" wording."""
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
+
+    repo_root = tmp_path / "gaia"
+    repo_root.mkdir()
+
+    with pytest.raises(DevSrcDirResolutionError) as excinfo:
+        resolve_caller_dev_src_dir("email", explicit=str(repo_root), cwd=tmp_path)
+
+    message = str(excinfo.value)
+    assert "restart remedy" not in message
+    expected_corrected = repo_root.resolve() / "hub" / "agents" / "email" / "python"
+    assert str(expected_corrected) in message
+    assert str(repo_root.resolve()) in message
+
+
+def test_resolve_caller_dev_src_dir_rejects_unrelated_shape(tmp_path):
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
+
+    unrelated = tmp_path / "some" / "unrelated" / "dir"
+    unrelated.mkdir(parents=True)
+
+    with pytest.raises(DevSrcDirResolutionError) as excinfo:
+        resolve_caller_dev_src_dir("email", explicit=str(unrelated), cwd=tmp_path)
+
+    assert "restart remedy" not in str(excinfo.value)
 
 
 def test_resolve_caller_dev_src_dir_git_toplevel_joins_agent_dev_src_dir(
