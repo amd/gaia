@@ -1456,9 +1456,8 @@ async function installBackend(opts = {}) {
     "--python",
     GAIA_PYTHON_BIN,
   ];
-  // Linux/macOS: use CPU-only PyTorch to avoid huge CUDA wheels.
-  // Skip when installing from a local wheel — PyPI index not needed.
-  if (!IS_WINDOWS && !localWheel) {
+  // A local GAIA wheel still downloads PyTorch and its transitive dependencies.
+  if (!IS_WINDOWS) {
     pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
   }
 
