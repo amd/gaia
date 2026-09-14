@@ -995,9 +995,12 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 }
 
 // TestGaiaDaemonStartInstalledButUnresolvable guards the other half of #2539:
-// someone who already has GAIA installed (a venv whose bin dir isn't on this
-// process's PATH, or a machine with a prior `gaia init`) must not be told to
-// (re)install it — the curl/pip remediation is actively wrong advice there.
+// someone whose GAIA is installed but merely off PATH (a venv whose bin dir
+// this process didn't inherit) must not be told to reinstall — the curl/pip
+// remediation is actively wrong advice there.
+//
+// The two subtests pull in opposite directions on purpose, which is the point
+// of #3853: only a real executable on disk earns the PATH-only message.
 func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
 	t.Run("active venv missing from PATH", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
@@ -1035,7 +1038,11 @@ func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
 		}
 	})
 
-	t.Run("prior gaia init leaves ~/.gaia/config.json", func(t *testing.T) {
+	// config.json outlives `pip uninstall` and every `gaia uninstall` short of
+	// `--purge`, so on its own it does NOT prove a runnable install. Treating it
+	// as proof stranded the user who really did need to reinstall with nothing
+	// but a PATH tip (#3853).
+	t.Run("leftover ~/.gaia/config.json still offers reinstall", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
 		t.Setenv("VIRTUAL_ENV", "")
 		home := t.TempDir()
@@ -1050,16 +1057,27 @@ func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		if ev := findInstalledButUnresolvable(); ev.runnable {
+			t.Errorf("leftover config proves nothing is runnable, got %#v", ev)
+		}
+
 		_, err := gaiaDaemonStart(context.Background())
 		if err == nil {
 			t.Fatal("expected an error with `gaia` absent from PATH")
 		}
 		msg := err.Error()
-		if strings.Contains(msg, "curl -fsSL") {
-			t.Errorf("someone with a prior `gaia init` should not be told to reinstall:\n%s", msg)
-		}
 		if !strings.Contains(msg, "config.json") {
 			t.Errorf("message should name the config file it found as evidence:\n%s", msg)
+		}
+		// A way back to a working install, and the PATH tip for the user whose
+		// binary is merely in another shell. Both, because we cannot tell which.
+		for _, want := range []string{"curl -fsSL", "pip install amd-gaia", "PATH"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("message must offer a way forward containing %q:\n%s", want, msg)
+			}
+		}
+		if strings.Contains(msg, "GAIA appears to be installed") {
+			t.Errorf("weak evidence must not be stated as a working install:\n%s", msg)
 		}
 	})
 }
