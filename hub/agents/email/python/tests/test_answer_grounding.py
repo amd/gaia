@@ -285,6 +285,30 @@ class TestFindUngroundedSuccessClaim:
     def test_no_false_positive_on_non_completion_language(self, phrase):
         assert find_ungrounded_success_claim(phrase, []) is None
 
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            # Honest negatives/conditionals that wear completion-shaped
+            # grammar ("has been", "created a draft") but negate or defer
+            # it -- the guard must not eat these truthful replies just
+            # because the bare words appear. Regression cases for a review
+            # finding on #2914's PR: two of the noun-anchored patterns
+            # matched on word presence alone, with no requirement that the
+            # agent be asserting completion.
+            "I haven't created a draft yet — what tone do you want?",
+            "Nothing has been added to your calendar.",
+            "Once added to your calendar, you'll get a reminder.",
+            "No draft has been created yet, want one?",
+            "I haven't created an event yet.",
+            "Nothing has been archived so far.",
+            "I have not created a draft.",
+        ],
+    )
+    def test_no_false_positive_on_negated_or_conditional_completion_language(
+        self, phrase
+    ):
+        assert find_ungrounded_success_claim(phrase, []) is None
+
     def test_grounded_when_a_tool_actually_ran_this_turn(self):
         convo = [_tool_entry("archive_message", {"archived": True})]
         assert (

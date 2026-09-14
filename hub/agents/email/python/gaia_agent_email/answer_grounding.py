@@ -112,17 +112,30 @@ _MUTATION_VERB = (
     r"|deleted|label(?:l)?ed|quarantined|unquarantined|restored|sent"
     r"|forwarded|scheduled|snoozed|draft(?:ed)?|cancel(?:l)?ed|rsvp(?:'d|ed)?"
 )
+# A quantifier/negator immediately before a completion-shaped claim flips it
+# from "this happened" to "this did NOT happen" -- e.g. "Nothing has been
+# archived" or "No draft has been created yet" read exactly like a completion
+# claim to a shape-only match, but they are the honest negative the guard
+# must never eat. Contractions ("haven't", "wasn't", "isn't") are excluded
+# for free by _COMPLETION_LEAD's own shape: each auxiliary alternative
+# requires a literal run of whitespace right after it (e.g. ``have\s+``), and
+# "n't" attaches with no space, so the auxiliary match itself already fails
+# there. This guard only needs to catch the separate-word quantifiers that
+# precede a still-intact "has been / was / is now" shape.
+_NEGATION_GUARD = r"(?<!\bnothing\s)(?<!\bnone\s)(?<!\bno\s)(?<!\bnever\s)(?<!\bnot\s)"
 _SUCCESS_CLAIM_RE = re.compile(
-    rf"\b(?:{_COMPLETION_LEAD})(?:{_MUTATION_VERB})\b"
-    rf"|\bmoved\s+to\s+(?:trash|the\s+\S+\s+label)\b"
-    # Draft creation: the model narrates the noun ("a draft") rather than a
-    # completion-lead verb, so this needs its own past-tense-anchored shape.
-    rf"|\b(?:the\s+)?draft\s+(?:has\s+been|was|is\s+now)\s+"
-    rf"(?:successfully\s+)?(?:created|saved|ready)\b"
-    rf"|\bcreated\s+(?:a|the|your)\s+draft\b"
-    # Calendar mutations: same "narrates the noun" shape as drafts above.
-    rf"|\bcreated\s+(?:a|an|the|your)\s+event\b"
-    rf"|\badded\s+(?:it|that|the\s+event)?\s*to\s+(?:your\s+|the\s+)?calendar\b",
+    rf"\b{_NEGATION_GUARD}(?:{_COMPLETION_LEAD})(?:{_MUTATION_VERB})\b"
+    rf"|\b{_NEGATION_GUARD}moved\s+to\s+(?:trash|the\s+\S+\s+label)\b"
+    # Draft/event creation: the model narrates the noun ("a draft", "the
+    # event") rather than a completion-lead verb, so these need their own
+    # shape -- but still anchored to _COMPLETION_LEAD (not just tense) so an
+    # honest negative like "I haven't created a draft yet" can't match on
+    # the bare words alone.
+    rf"|\b{_NEGATION_GUARD}draft\s+(?:{_COMPLETION_LEAD})(?:created|saved|ready)\b"
+    rf"|\b{_NEGATION_GUARD}(?:{_COMPLETION_LEAD})created\s+(?:a|the|your)\s+draft\b"
+    rf"|\b{_NEGATION_GUARD}(?:{_COMPLETION_LEAD})created\s+(?:a|an|the|your)\s+event\b"
+    rf"|\b{_NEGATION_GUARD}(?:{_COMPLETION_LEAD})added\s+(?:it|that|the\s+event)?"
+    rf"\s*to\s+(?:your\s+|the\s+)?calendar\b",
     re.IGNORECASE,
 )
 
