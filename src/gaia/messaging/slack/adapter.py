@@ -33,8 +33,9 @@ Three further rules, each load-bearing:
 from __future__ import annotations
 
 import os
-import tempfile
+import re
 import threading
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
@@ -48,7 +49,6 @@ from gaia.messaging.bridge import (
     StreamThrottle,
     Turn,
 )
-from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = get_logger(__name__)
 
@@ -106,6 +106,49 @@ _ACTION_DECISIONS = {
 }
 
 
+#: Refusal text for more than one allowed member. The bridge drives ONE agent
+#: process with one conversation history and one set of "always" grants, so a
+#: second member would read the first's history and inherit their approvals.
+MULTI_USER_ERROR = (
+    "Slack adapter refused to start: more than one allowed user.\n"
+    "\n"
+    "This bridge drives a single agent with a single conversation, so every "
+    "allowed member would share one history — anyone could ask what the "
+    "others asked or read — and one set of 'Always allow' approvals.\n"
+    "Pass exactly one Slack member ID:\n"
+    "\n"
+    "  gaia slack start --allowed-users U024BE7LH\n"
+    "\n"
+    "Docs: https://amd-gaia.ai/docs/guides/slack"
+)
+
+#: Tools whose ``tool_call`` args name the file they write. The canonical
+#: ``tool_result`` carries only a summary, so the path is taken from the call.
+WRITE_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+    }
+)
+
+#: Seconds an approval prompt waits before it is denied. The agent itself waits
+#: forever, and it is the bridge's only agent, so an unanswered prompt would
+#: otherwise block every later message.
+CONFIRM_TIMEOUT_SECONDS = 600
+
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def inbox_dir() -> Path:
+    """Where files shared over Slack are saved for the agent to read."""
+    base = os.environ.get("GAIA_CONFIG_DIR")
+    root = Path(base) if base else Path.home() / ".gaia"
+    return root / "slack" / "inbox"
+
+
 class SlackAllowlistError(ValueError):
     """The adapter was asked to run without an allowlist.
 
@@ -133,6 +176,9 @@ class ReplyTarget:
     tools: List[str] = field(default_factory=list)
     #: Files already uploaded this turn, so a re-reported path is not sent twice.
     uploaded: Set[str] = field(default_factory=set)
+    #: Path the most recent write tool was asked to write, uploaded when its
+    #: result arrives.
+    pending_upload: str = ""
 
 
 def _truncate(text: str) -> str:
@@ -200,6 +246,7 @@ class SlackAdapter:
         deny_gated_tools: bool = False,
         channel_factory: Optional[Callable[..., AgentChannel]] = None,
         web_client: Any = None,
+        confirm_timeout: float = CONFIRM_TIMEOUT_SECONDS,
     ) -> None:
         # Refused here rather than in start(): an adapter that should serve
         # nobody must never exist, so no later caller can reach a permissive one.
@@ -213,11 +260,14 @@ class SlackAdapter:
                 f"{type(allowed_users).__name__}. Pass {{'U024BE7LH'}}, not "
                 "'U024BE7LH'."
             )
+        if len(allowed_users) > 1:
+            raise SlackAllowlistError(MULTI_USER_ERROR)
         self.bot_token = bot_token
         self.app_token = app_token
         self.allowed_users = set(allowed_users)
         self.team_id = team_id
         self.deny_gated_tools = deny_gated_tools
+        self.confirm_timeout = confirm_timeout
         # Default to the same scope the agent itself reads from, so a file the
         # user asked the agent to write can be handed back without extra setup.
         self.upload_roots = [
@@ -349,6 +399,11 @@ class SlackAdapter:
                 self._socket.close()
             except Exception as e:  # noqa: BLE001 - shutdown must not raise
                 log.debug("Slack socket already closed: %s", e)
+        with self._lock:
+            pending = list(self._confirmations.values())
+            self._confirmations.clear()
+        for *_, timer in pending:
+            timer.cancel()
         if self._channel is not None:
             self._channel.close()
 
@@ -454,14 +509,15 @@ class SlackAdapter:
         self._agent().submit(Turn(text=question, context=target, sender=user or ""))
 
     def _ingest_files(self, files: Sequence[Dict[str, Any]]) -> str:
-        """Download shared files and hand them to RAG or the VLM.
+        """Save shared files where the agent can read them, and say where.
 
-        Reuses the ingestion the Telegram adapter already uses, so a document
-        arriving over Slack lands in the same index as one added locally.
+        Indexing here would put the document in THIS process's RAG index, which
+        the agent child never sees — so the agent would be told a file was
+        indexed that it cannot find. The agent indexes or opens it itself.
         """
         notes: List[str] = []
         for meta in files:
-            name = meta.get("name") or meta.get("id") or "file"
+            name = str(meta.get("name") or meta.get("id") or "file")
             size = meta.get("size") or 0
             if size and size > MAX_DOWNLOAD_BYTES:
                 notes.append(f"[{name} skipped — larger than 100 MB]")
@@ -471,35 +527,29 @@ class SlackAdapter:
                 notes.append(f"[{name} skipped — Slack gave no download URL]")
                 continue
             try:
-                path = self._download(url, name)
+                path = self._download(url, name, str(meta.get("id") or ""))
             except Exception as e:  # noqa: BLE001 - one bad file must not kill the turn
                 log.warning("Could not download Slack file %s: %s", name, e)
                 notes.append(f"[{name} could not be downloaded]")
                 continue
-            mimetype = str(meta.get("mimetype") or "")
-            if mimetype.startswith("image/"):
-                result = ingest_image_to_vlm(path)
-                if result.get("status") == "success":
-                    excerpt = (result.get("text") or "").strip()
-                    notes.append(
-                        f"[image {name}: {excerpt[:400]}]"
-                        if excerpt
-                        else f"[image {name} processed]"
-                    )
-                else:
-                    notes.append(f"[image {name} — the vision model could not read it]")
-            else:
-                result = ingest_document_to_rag(path)
-                notes.append(
-                    f"[file indexed: {name}]"
-                    if result.get("success")
-                    else f"[file {name} — indexing failed]"
-                )
+            notes.append(
+                f"[the user shared {name}, saved at {path} — open or index it "
+                "before answering questions about it]"
+            )
         return " ".join(notes)
 
-    def _download(self, url: str, name: str) -> str:
-        """Fetch a private Slack file to a temp path using the bot token."""
+    def _download(self, url: str, name: str, file_id: str = "") -> Path:
+        """Fetch a private Slack file into the inbox using the bot token."""
         import requests
+
+        # Slack's filename is user-controlled: keep only a safe basename so a
+        # name like "../../.ssh/config" cannot write outside the inbox.
+        safe = _UNSAFE_NAME.sub("_", Path(name).name).lstrip(".") or "file"
+        prefix = _UNSAFE_NAME.sub("_", file_id) or uuid.uuid4().hex[:8]
+        folder = inbox_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        final = folder / f"{prefix}-{safe}"
+        partial = folder / f".partial-{uuid.uuid4().hex}"
 
         response = requests.get(
             url,
@@ -508,18 +558,20 @@ class SlackAdapter:
             stream=True,
         )
         response.raise_for_status()
-        suffix = Path(name).suffix
-        handle, path = tempfile.mkstemp(prefix="gaia_slack_", suffix=suffix)
         written = 0
-        with os.fdopen(handle, "wb") as fh:
-            for chunk in response.iter_content(chunk_size=65536):
-                written += len(chunk)
-                if written > MAX_DOWNLOAD_BYTES:
-                    raise ValueError(
-                        f"{name} exceeded the {MAX_DOWNLOAD_BYTES} byte download cap"
-                    )
-                fh.write(chunk)
-        return path
+        try:
+            with open(partial, "wb") as fh:
+                for chunk in response.iter_content(chunk_size=65536):
+                    written += len(chunk)
+                    if written > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(
+                            f"{name} exceeded the {MAX_DOWNLOAD_BYTES} byte download cap"
+                        )
+                    fh.write(chunk)
+            partial.replace(final)
+        finally:
+            partial.unlink(missing_ok=True)
+        return final
 
     def _handle_interactive(self, payload: Dict[str, Any]) -> None:
         """Answer a tool confirmation from a Block Kit button click."""
@@ -540,37 +592,50 @@ class SlackAdapter:
             if decision is None:
                 continue
             confirm_id = action.get("value") or ""
+            posted = self._take_confirmation(confirm_id)
+            if posted is None:
+                # Already answered, expired, or never ours. Sending it anyway
+                # could resolve a different prompt than the one clicked.
+                log.info("Ignored a click for confirmation %r: not pending", confirm_id)
+                continue
             audit.warning(
                 "Slack member %s answered %r for confirmation %s",
                 user,
                 decision,
-                confirm_id or "(none pending)",
+                confirm_id,
             )
-            self._agent().decide(decision, confirm_id or None)
-            self._settle_confirmation(confirm_id, decision, user)
+            self._agent().decide(decision, confirm_id)
+            channel, ts, label, _ = posted
+            verb = {
+                DECISION_ALLOW: "Allowed",
+                DECISION_ALWAYS: "Always allowed",
+                DECISION_DENY: "Denied",
+            }[decision]
+            self._edit(channel, ts, f"*{verb}* — {label}  (by <@{user}>)", blocks=[])
 
-    def _settle_confirmation(
-        self, confirm_id: str, decision: str, user: Optional[str]
-    ) -> None:
-        """Replace a confirmation's buttons with the decision that was made.
-
-        Without this the buttons stay live after the turn moved on, and a second
-        click looks like it did something when it did not.
-        """
+    def _take_confirmation(self, confirm_id: str) -> Optional[tuple]:
+        """Claim a pending prompt exactly once and stop its timeout."""
         with self._lock:
             posted = self._confirmations.pop(confirm_id, None)
-        if not posted:
+        if posted is not None:
+            posted[3].cancel()
+        return posted
+
+    def _expire_confirmation(self, confirm_id: str) -> None:
+        """Deny a prompt nobody answered, so the agent can move on."""
+        posted = self._take_confirmation(confirm_id)
+        if posted is None:
             return
-        channel, ts, action = posted
-        verb = {
-            DECISION_ALLOW: "Allowed",
-            DECISION_ALWAYS: "Always allowed",
-            DECISION_DENY: "Denied",
-        }[decision]
+        channel, ts, label, _ = posted
+        audit.warning(
+            "Denied %r: no answer within %ss", label, int(self.confirm_timeout)
+        )
+        self._agent().decide(DECISION_DENY, confirm_id)
         self._edit(
             channel,
             ts,
-            f"*{verb}* — {action}" + (f"  (by <@{user}>)" if user else ""),
+            f"*Denied — no answer within {int(self.confirm_timeout // 60)} "
+            f"minutes* — {label}",
             blocks=[],
         )
 
@@ -597,18 +662,22 @@ class SlackAdapter:
         etype = event.get("type")
         if etype == "token":
             if target.throttle is not None:
-                target.throttle.add(str(event.get("text") or event.get("token") or ""))
+                target.throttle.add(str(event.get("delta") or ""))
         elif etype == "status":
             # Only shown while nothing has streamed yet; once tokens arrive,
             # replacing the answer with a status line is a regression.
             if target.throttle is not None and not target.throttle.text:
                 self._update(target, f"_{event.get('message') or 'Working…'}_")
         elif etype == "tool_call":
-            self._note_tool(target, str(event.get("tool") or "a tool"))
+            tool = str(event.get("tool") or "a tool")
+            self._note_tool(target, tool)
+            self._remember_written_file(target, tool, event.get("args"))
         elif etype == "tool_result":
             self._maybe_upload(target, event)
         elif etype == "needs_confirmation":
             self._ask_confirmation(target, event)
+        elif etype == "needs_input":
+            self._refuse_question(target, event)
         elif etype == "final":
             self._finish(target, str(event.get("answer") or ""))
         elif etype == "error":
@@ -656,24 +725,64 @@ class SlackAdapter:
             thread_ts=target.thread_ts,
             blocks=blocks,
         )
-        if confirm_id and ts:
-            with self._lock:
-                self._confirmations[confirm_id] = (target.channel, ts, action)
+        if not ts or not confirm_id:
+            # Nobody can press a button that never posted, and the agent waits
+            # forever — deny rather than block every later message.
+            audit.warning("Denied %r: the approval prompt could not be shown", action)
+            self._agent().decide(DECISION_DENY, confirm_id or None)
+            return
+        timer = threading.Timer(
+            self.confirm_timeout, self._expire_confirmation, args=(confirm_id,)
+        )
+        timer.daemon = True
+        with self._lock:
+            self._confirmations[confirm_id] = (target.channel, ts, action, timer)
+        timer.start()
+
+    def _refuse_question(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
+        """Show a mid-run question and end the turn.
+
+        The agent's stdio wire has no way to deliver an answer, so waiting would
+        leave the turn parked for the question's whole timeout with nothing in
+        Slack. Cancelling keeps the conversation, so a reply continues it.
+        """
+        question = str(event.get("question") or "GAIA needs more information.")
+        lines = [f"*GAIA asked:* {question}"]
+        for option in event.get("options") or []:
+            if isinstance(option, dict):
+                lines.append(f"• {option.get('label') or option.get('value')}")
+        if event.get("sensitive"):
+            lines.append(
+                "_It asked for something sensitive — answer on the computer "
+                "running GAIA, not in Slack._"
+            )
+        else:
+            lines.append("_Reply with your answer and GAIA will continue from there._")
+        self._post(target.channel, "\n".join(lines), thread_ts=target.thread_ts)
+        self._agent().cancel()
+
+    def _remember_written_file(self, target: ReplyTarget, tool: str, args: Any) -> None:
+        """Note the path a file-writing tool was asked to write."""
+        if tool not in WRITE_TOOLS or not isinstance(args, dict):
+            return
+        raw = args.get("file_path") or args.get("path")
+        target.pending_upload = raw if isinstance(raw, str) else ""
 
     def _maybe_upload(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
-        """Send back a file the agent just wrote.
+        """Send back the file the preceding write tool produced.
 
-        Only paths the agent itself reported, only under an upload root, only
-        once per turn, and only within the size cap. Writing the file was
-        already approved through the confirmation gate, so handing back what the
-        user asked for needs no second prompt — but a path outside the roots is
-        refused, because that approval covered a write, not a transfer.
+        Only a path a write tool was called with, only after its result says it
+        did not fail, only under an upload root, only once per turn, and only
+        within the size cap. The write was approved through the confirmation
+        gate; a path outside the roots is still refused, because that approval
+        covered a write, not a transfer off the machine.
         """
-        data = event.get("data")
-        if not isinstance(data, dict):
+        raw = target.pending_upload
+        target.pending_upload = ""
+        if not raw:
             return
-        raw = data.get("file_path")
-        if not raw or not isinstance(raw, str):
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("success") is False:
             return
         try:
             path = Path(raw).expanduser().resolve()

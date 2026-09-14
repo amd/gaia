@@ -12,6 +12,7 @@ import time
 import pytest
 
 from gaia.messaging.bridge import (
+    CONTROL_CANCEL,
     CONTROL_KEY,
     CONTROL_TOOL_DECISION,
     DECISION_ALLOW,
@@ -160,7 +161,7 @@ def test_events_reach_the_adapter_with_their_turn(channel):
     turn = Turn(text="hi", context={"channel": "D1"})
     ch.submit(turn)
     assert _wait_for(lambda: proc.stdin.lines)
-    proc.stdout.emit({"type": "token", "text": "he"})
+    proc.stdout.emit({"type": "token", "delta": "he"})
     proc.stdout.emit({"type": "final", "answer": "hello"})
     assert _wait_for(lambda: len(seen) == 2)
     assert [e["type"] for e, _ in seen] == ["token", "final"]
@@ -207,7 +208,7 @@ def test_a_crashed_child_still_terminates_the_turn(channel):
     ch, proc, seen = channel
     ch.submit(Turn(text="hi"))
     assert _wait_for(lambda: proc.stdin.lines)
-    proc.stdout.emit({"type": "token", "text": "partial"})
+    proc.stdout.emit({"type": "token", "delta": "partial"})
     proc.stdout.eof()
     assert _wait_for(lambda: any(e["type"] == "error" for e, _ in seen))
     detail = [e for e, _ in seen if e["type"] == "error"][0]["detail"]
@@ -338,3 +339,10 @@ def test_throttle_skips_an_edit_that_would_change_nothing():
     throttle.finish()
     throttle.finish()
     assert flushed == ["a"]
+
+
+def test_cancel_sends_the_stop_verb(channel):
+    """Used when the agent asks a question the bridge cannot answer."""
+    ch, proc, _ = channel
+    ch.cancel()
+    assert json.loads(proc.stdin.lines[-1]) == {CONTROL_KEY: CONTROL_CANCEL}

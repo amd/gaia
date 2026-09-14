@@ -50,6 +50,10 @@ QUERY_KEY = "gaia_query"
 #: Control verb answering the confirmation currently pending.
 CONTROL_TOOL_DECISION = "tool_decision"
 
+#: Control verb stopping the running turn while keeping the agent, its history
+#: and its grants. Contract with ``gaia_agent.stdio.CONTROL_CANCEL``.
+CONTROL_CANCEL = "cancel"
+
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
 DECISION_ALWAYS = "always"
@@ -313,6 +317,10 @@ class AgentChannel:
         if confirm_id:
             message["confirm_id"] = confirm_id
         self._write_line(json.dumps(message))
+
+    def cancel(self) -> None:
+        """Stop the running turn. The agent, its history and its grants survive."""
+        self._write_line(json.dumps({CONTROL_KEY: CONTROL_CANCEL}))
 
     # ------------------------------------------------------------------
     # Internals

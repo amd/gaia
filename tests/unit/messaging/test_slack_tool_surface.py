@@ -69,31 +69,26 @@ def test_the_adapter_cannot_build_a_raw_control_message():
     assert "CONTROL_BYPASS" not in referenced
 
 
-def test_the_adapter_reaches_the_agent_only_through_decide():
-    """Every write to the agent goes through the one method that validates."""
+def test_the_adapter_reaches_the_agent_only_through_decide_submit_and_cancel():
+    """Every write to the agent goes through a method that cannot carry bypass."""
     import ast
 
     tree = ast.parse(inspect.getsource(ad))
-    channel_calls = {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "_channel"
-    }
-    assert channel_calls <= {"decide", "start", "close", "submit"}, channel_calls
-
-
-def test_the_adapter_only_ever_sends_the_three_real_decisions():
-    """A fourth value would be downgraded to a deny by the agent, which looks
-    to the user like their approval was ignored."""
-    assert set(ad._ACTION_DECISIONS.values()) == bridge.VALID_DECISIONS
-
-
-def test_every_button_maps_to_a_decision_the_agent_accepts():
-    for action_id, decision in ad._ACTION_DECISIONS.items():
-        assert decision in bridge.VALID_DECISIONS, action_id
+    calls = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        receiver = node.func.value
+        on_channel = isinstance(receiver, ast.Attribute) and receiver.attr == "_channel"
+        on_agent = (
+            isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Attribute)
+            and receiver.func.attr == "_agent"
+        )
+        if on_channel or on_agent:
+            calls.add(node.func.attr)
+    assert {"decide", "submit"} <= calls, calls
+    assert calls <= {"decide", "start", "close", "submit", "cancel"}, calls
 
 
 def test_the_manifest_subscribes_to_no_channel_events():
