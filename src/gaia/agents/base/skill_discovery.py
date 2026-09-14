@@ -52,6 +52,22 @@ DISCOVERY_ENV = "GAIA_SKILL_DISCOVERY"
 DISCOVERY_THRESHOLD_ENV = "GAIA_SKILL_DISCOVERY_TAU"
 
 
+#: Cap on each shortlisted skill's description in the prompt note. A note rides
+#: on every matching turn, so it carries only the first clause — the part that
+#: says what the skill is for — not the whole description.
+SHORTLIST_DESCRIPTION_CHARS = 60
+
+
+def _one_line(text: Optional[str], limit: int = SHORTLIST_DESCRIPTION_CHARS) -> str:
+    """First clause of a skill description, flattened and capped for the note."""
+    flat = " ".join((text or "").split())
+    for sep in (" — ", " – ", ". ", "; "):
+        if sep in flat:
+            flat = flat.split(sep, 1)[0]
+    flat = flat.rstrip(".")
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
 def discovery_env_override() -> Optional[bool]:
     """Parse :data:`DISCOVERY_ENV`, or ``None`` when it is unset.
 
@@ -90,6 +106,8 @@ class DiscoveryResult:
     loaded: Optional[str] = None
     #: Names offered to the model to load itself.
     shortlist: Tuple[str, ...] = ()
+    #: One-line description per shortlisted skill, in ``shortlist`` order.
+    shortlist_descriptions: Tuple[str, ...] = ()
     #: ``(name, reason)`` when a confident match could not be loaded.
     failed: Optional[Tuple[str, str]] = None
     #: Tools the loaded skill declares but this agent does not have registered.
@@ -138,12 +156,20 @@ class DiscoveryResult:
             return note
         if self.shortlist:
             names = ", ".join(f"'{n}'" for n in self.shortlist)
-            return (
+            note = (
                 "==== SKILLS THAT MAY FIT ====\n"
                 f"{names} are installed and may match this request, but none was "
                 "a clear enough match to activate on its own. If one of them is "
                 "what the user means, call load_skill on it before answering."
             )
+            # A name alone does not say what a skill unlocks: models shortlisted
+            # 'github-triage' against a private repo never connected it to gh.
+            described = [
+                f"- '{n}': {d}"
+                for n, d in zip(self.shortlist, self.shortlist_descriptions)
+                if d
+            ]
+            return note + ("\n" + "\n".join(described) if described else "")
         return ""
 
 
@@ -292,7 +318,16 @@ class SkillDiscovery:
                 loaded=decision.load, unmet_tools=unmet, decision=decision
             )
 
-        return DiscoveryResult(shortlist=decision.shortlist, decision=decision)
+        candidates = self.candidates()
+        descriptions = tuple(
+            _one_line(getattr(candidates.get(name), "description", ""))
+            for name in decision.shortlist
+        )
+        return DiscoveryResult(
+            shortlist=decision.shortlist,
+            shortlist_descriptions=descriptions,
+            decision=decision,
+        )
 
     def _unmet_tools(self, skill: "Skill") -> Tuple[str, ...]:
         """Tools *skill* declares that this agent never registered.
