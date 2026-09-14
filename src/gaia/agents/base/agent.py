@@ -3545,6 +3545,19 @@ Do NOT wrap conversational replies in JSON.
         out by polling ``tools.tool_cancelled()``; without that the abandoned
         worker runs to completion and a retry puts a second copy of the same
         expensive job on the same hardware (#2600).
+
+        Log isolation: the worker's log calls stay attributed to it via
+        ``AbandonedWorkerLogFilter`` (``tools.py``), which any handler wired
+        onto ``tool_cancelled()``'s thread-local flag can use to drop its
+        records after this timeout fires -- so a zombie worker's later log
+        lines cannot land in an unrelated caller's log-capture window.
+        GAIA's own root handlers (``logger.py``) get this automatically.
+
+        Shared state: this bounds log output only. A tool body that has not
+        opted into ``raise_if_cancelled()`` can still write to a DB handle,
+        cache, or other shared state after the caller gives up -- there is no
+        general mechanism here to stop that, and there isn't one planned;
+        each such tool must poll the cancellation flag around its own writes.
         """
         from gaia.agents.base.tools import set_tool_cancel_event
 
