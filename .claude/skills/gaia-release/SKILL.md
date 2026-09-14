@@ -152,8 +152,8 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    ```bash
    # Generate the `- `<sha>` — <subject>` lines, escaping the two characters MDX
-   # treats as syntax. `\<` and `\{` render as literal `<` / `{` (verified against
-   # `mintlify broken-links`), and shas never contain them, so escaping the whole line
+   # treats as syntax. Escape `<` and `{` for MDX, then check parsing with
+   # `mintlify broken-links` and preview the rendered literals. Escaping the whole line
    # is safe. Subjects like "AMD <> SpecificAI" survive correctly.
    git log v<previous>..HEAD --pretty=format:'- `%h` — %s' \
      | sed -e 's/</\\</g' -e 's/{/\\{/g' > /tmp/changelog.txt
@@ -258,11 +258,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    ```
    Both must exit 0. Fix any errors before continuing. If either fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. `validate_release_notes.py` prints the first failing check (missing/renamed section, absent `compare/` link, tag mismatch) — read that line to localise the fix; it has no `--verbose` flag.
 
-   **`validate_release_notes.py` passing is not sufficient — it is not an MDX parser.** CI's
-   `validate` job additionally runs `mintlify broken-links` from `docs/`, and v0.22.0 failed it
-   after the notes passed the Python validator (see the escaping rule in step 3). Its error is
-   misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
-   docs.json navigation but the file does not exist` — the file exists, it just never parsed.
+   **`validate_release_notes.py` is not an MDX parser.** Run the installed
+   Mintlify CLI's `broken-links` command as well: it parses MDX and checks links,
+   and exits nonzero on malformed MDX. The current CLI has no `validate` command.
+   Read parser errors directly; a successful Python release-note check does not
+   establish that a page renders. Use `mintlify dev --no-open` for visual preview.
 
 ### Gate 1 — show the user the draft
 

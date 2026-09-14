@@ -89,8 +89,6 @@
                   {
                     "group": "Core Agents",
                     "pages": [
-                      "guides/gaia",
-                      "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
                       "guides/transcription"
@@ -157,7 +155,6 @@
                   {
                     "group": "Core Concepts",
                     "pages": [
-                      "sdk/core/agent-system",
                       "sdk/core/tools",
                       "sdk/core/console",
                       "sdk/patterns"
@@ -530,6 +527,162 @@
     {
       "source": "/spec/agent-hub-restructure",
       "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/plans/adaptive-skills",
+      "destination": "/spec/agent-skills"
+    },
+    {
+      "source": "/plans/agent-hub-ui",
+      "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/plans/agent-hub",
+      "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/plans/agent-ui-hub-publish",
+      "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/plans/agent-ui",
+      "destination": "/guides/agent-ui"
+    },
+    {
+      "source": "/plans/autonomy-engine",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/bash-agent",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/code-index-review",
+      "destination": "/guides/code-index"
+    },
+    {
+      "source": "/plans/connectors",
+      "destination": "/connectors/index"
+    },
+    {
+      "source": "/plans/cua",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/desktop-installer",
+      "destination": "/guides/install"
+    },
+    {
+      "source": "/plans/docker-containers",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/email-agent-packaging",
+      "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/plans/email-calendar-integration",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-full-autonomy",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/email-triage-agent",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/flagship-installer",
+      "destination": "/guides/terminal-hub"
+    },
+    {
+      "source": "/plans/image-agent",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/mcp-docs",
+      "destination": "/sdk/sdks/mcp"
+    },
+    {
+      "source": "/plans/messaging-integrations-plan",
+      "destination": "/guides/telegram-adapter"
+    },
+    {
+      "source": "/plans/oem-bundling",
+      "destination": "/deployment/shareable-build"
+    },
+    {
+      "source": "/plans/package-publishing",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/security-model",
+      "destination": "/sdk/security"
+    },
+    {
+      "source": "/plans/setup-wizard",
+      "destination": "/guides/terminal-hub"
+    },
+    {
+      "source": "/plans/skill-synthesis",
+      "destination": "/spec/agent-skills"
+    },
+    {
+      "source": "/plans/tool-loader",
+      "destination": "/sdk/core/agent-system"
+    },
+    {
+      "source": "/plans/transcription-skill",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/typescript-sdk",
+      "destination": "/index"
+    },
+    {
+      "source": "/plans/vision-sdk",
+      "destination": "/sdk/sdks/vlm"
+    },
+    {
+      "source": "/playbooks/chat-agent/part-1-getting-started",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/playbooks/chat-agent/part-2-advanced-features",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/playbooks/chat-agent/part-3-deployment",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/playbooks/custom-installer/index",
+      "destination": "/deployment/shareable-build"
+    },
+    {
+      "source": "/playbooks/custom-installer",
+      "destination": "/deployment/shareable-build"
+    },
+    {
+      "source": "/playbooks/hardware-advisor/index",
+      "destination": "/guides/hardware-advisor"
+    },
+    {
+      "source": "/playbooks/hardware-advisor",
+      "destination": "/guides/hardware-advisor"
+    },
+    {
+      "source": "/playbooks/index",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/roadmap",
+      "destination": "/index"
+    },
+    {
+      "source": "/spec/component-status",
+      "destination": "/sdk/index"
     }
   ]
 }

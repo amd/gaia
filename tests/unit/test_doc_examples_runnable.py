@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from gaia.agents.base import tools as tools_module
+from gaia.agents.registry import _accepted_init_params
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOC_PATH = REPO_ROOT / "docs" / "quickstart.mdx"
@@ -47,6 +48,17 @@ def test_quickstart_constructs_registers_and_runs():
         count_words = tools_module._TOOL_REGISTRY["count_words"]["function"]
         assert count_words("one  two\nthree") == {"count": 3}
         assert count_words("") == {"count": 0}
+
+        agent_class = namespace["CountAgent"]
+        kwargs = {"model_id": "test-model", "silent_mode": True, "session_id": "test"}
+        accepted = _accepted_init_params(agent_class)
+        filtered = (
+            kwargs
+            if accepted is None
+            else {key: value for key, value in kwargs.items() if key in accepted}
+        )
+        registered_agent = agent_class(**filtered)
+        assert registered_agent.model_id == "test-model"
 
     assert namespace["result"]["status"] == "success"
     assert namespace["result"]["result"].startswith("5")

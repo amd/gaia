@@ -103,6 +103,7 @@ jobs:
           # (the security-audit scorer); it lives in the [dev] extra, not [api].
           # responses is required by tests/unit/test_lemonade_error_classification.py
           # — same story as cvss: declared in [dev], and this job installs [api].
+          # Retain faiss-cpu/pypdf for RAG-backed agent tests; [api] omits [rag].
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf
