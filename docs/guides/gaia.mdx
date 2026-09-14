@@ -20,9 +20,8 @@ gaia-tui
 
 The native package includes the terminal and flagship agent executable. Follow the
 [Terminal guide](/guides/terminal-hub) for setup, keyboard controls, models, and
-permissions. The seeded flagship uses a persistent **stdio subprocess**; a Hub
-binary installation uses a daemon-supervised **HTTP sidecar** instead. These
-transports differ in model selection and approval support.
+permissions. Start with a file summary or a question about your project; the
+examples below show how to ask for specific results.
 
 Local inference uses Lemonade and defaults to `Gemma-4-E4B-it-GGUF`. The flagship
 manifest declares 8 GB minimum memory and Windows x64, Linux x64, and macOS Apple
@@ -35,17 +34,25 @@ exposed through Lemonade; those send conversation data to the provider. Retrieva
 memory, and code indexing still use Lemonade embeddings. See
 [AI providers](/guides/ai-providers).
 
-For source development, install the flagship package in your development environment:
+For source development, use the [checkout launch instructions](/reference/tui#run-the-flagship-from-your-checkout).
+`GAIA_GAIA_AGENT_MODE=dev` selects source mode for a daemon-backed sidecar; it does
+not change a stdio launch. `--dev` enables diagnostics, not source selection.
 
-```bash
-uv pip install -e hub/agents/gaia/python
-```
+## Try a task
 
-Build the TUI separately and ensure it discovers that environment's agent
-executable. `GAIA_GAIA_AGENT_MODE=dev` selects source mode for a daemon-backed
-sidecar; it does not change a stdio launch. `--dev` enables diagnostics, not source
-selection. See [TUI architecture and development](/reference/tui) for build commands,
-transport discovery, logs, and tests.
+Use a specific file or folder and describe the result you want. Replace these
+example paths with paths on your machine:
+
+| Task | Example request |
+| --- | --- |
+| Understand a document | “Summarize ~/Documents/report.pdf and identify the main assumptions.” |
+| Explore data | “Read ~/Documents/sales.csv and show total sales by region.” |
+| Find code | “Index ~/projects/my-app and find where configuration is loaded.” |
+| Save a preference | “Remember that I prefer concise answers.” |
+
+Check the returned evidence and tool results before relying on an answer. A tool
+may need a model, connector, or installed dependency; GAIA reports that requirement
+when it cannot complete the task.
 
 ## Capabilities
 
@@ -83,6 +90,10 @@ The built-in tools subject to confirmation policy include `write_file`, `edit_fi
 `run_shell_command`, `execute_python_file`, `notify_desktop`, `install_skill`, and
 `remove_skill`. The stdio terminal displays confirmations and returns your decision;
 bypass mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
+
+The native terminal normally starts a persistent **stdio subprocess**, which
+can ask for approval. A flagship installed as a Hub binary uses a
+daemon-supervised **HTTP sidecar** instead.
 
 <Warning>
 The HTTP sidecar refuses confirmation-gated actions: its query stream does not

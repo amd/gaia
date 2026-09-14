@@ -1,15 +1,15 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "GAIA SDK",
+  "name": "GAIA",
   "metadata": {
-    "og:site_name": "GAIA SDK",
-    "og:title": "Build AI PC agents",
-    "og:description": "Open-source Python & C++ SDK. Build free, private, AMD-accelerated AI PC agents.",
+    "og:site_name": "GAIA",
+    "og:title": "GAIA terminal and agent framework",
+    "og:description": "Use the GAIA terminal, run local or cloud inference, and extend the Python agent harness with tools and skills.",
     "og:image": "https://amd-gaia.ai/assets/logo/dark.png",
     "twitter:card": "summary_large_image",
-    "twitter:title": "Build AI PC agents",
-    "twitter:description": "Open-source Python & C++ SDK. Build free, private, AMD-accelerated AI PC agents.",
+    "twitter:title": "GAIA terminal and agent framework",
+    "twitter:description": "Use the GAIA terminal, run local or cloud inference, and extend the Python agent harness with tools and skills.",
     "twitter:image": "https://amd-gaia.ai/assets/logo/dark.png"
   },
   "colors": {
@@ -40,9 +40,17 @@
               "index",
               "guides/terminal-hub",
               "guides/gaia",
-              "guides/ai-providers",
+              "guides/ai-providers"
+            ]
+          },
+          {
+            "group": "Build and Extend",
+            "pages": [
               "quickstart",
+              "sdk/core/custom-agents",
               "sdk/core/agent-system",
+              "sdk/core/tools",
+              "sdk/core/console",
               "reference/tui"
             ]
           },
@@ -153,14 +161,6 @@
                 "pages": [
                   "sdk/index",
                   {
-                    "group": "Core Concepts",
-                    "pages": [
-                      "sdk/core/tools",
-                      "sdk/core/console",
-                      "sdk/patterns"
-                    ]
-                  },
-                  {
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
@@ -203,8 +203,7 @@
                       "sdk/configuration",
                       "sdk/testing",
                       "sdk/performance-analysis-plotter",
-                      "sdk/security",
-                      "sdk/best-practices"
+                      "sdk/security"
                     ]
                   },
                   {
@@ -683,6 +682,14 @@
     {
       "source": "/spec/component-status",
       "destination": "/sdk/index"
+    },
+    {
+      "source": "/sdk/best-practices",
+      "destination": "/sdk/core/custom-agents"
+    },
+    {
+      "source": "/sdk/patterns",
+      "destination": "/sdk/core/custom-agents"
     }
   ]
 }

@@ -17,6 +17,16 @@ loop, and reports progress through an output handler. Use it when you need to em
 an agent or extend its behavior. To operate the terminal application, start with
 [the TUI guide](/guides/terminal-hub).
 
+## Choose the right extension
+
+- To teach the flagship a workflow using existing tools, write a [skill](/guides/composing-skills).
+- To add a Python operation, register a [tool](/sdk/core/tools) or reuse a [tool mixin](/sdk/mixins/tool-mixins).
+- To control the prompt, tool set, or embedding in another application, subclass `Agent`. Start with the runnable [Python quickstart](/quickstart).
+- To display progress or collect approvals in another client, supply an [output handler](/sdk/core/console).
+
+The rest of this page describes the base class contract. Concrete agents and hosts
+can add persistence, setup, or capabilities beyond it.
+
 ## Runtime boundaries
 
 | Layer | Responsibility | Source |
@@ -34,6 +44,9 @@ Installing the core package does not make every hub agent's dependencies availab
 The TUI is a separate application; `AgentConsole` is the Python console renderer.
 
 ## Implementing an agent
+
+For a complete configurable subclass and tool checks, follow
+[Build a Python Agent](/sdk/core/custom-agents).
 
 `_register_tools()` is the only abstract method. `_get_system_prompt()` defaults to
 an empty string, and `_create_console()` already chooses a normal or silent console.

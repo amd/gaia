@@ -34,7 +34,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py) — `KNOWN_TOOLS`, `AgentRegistration`, `class_factory`, and the entry-point groups
 - [`hub/agents/hello-world/python/`](../../hub/agents/hello-world/python/) — the smallest complete hub package; copy its shape
 - [`docs/guides/hub-publishing.mdx`](../../docs/guides/hub-publishing.mdx) — packaging + publishing an agent
-- [`docs/sdk/patterns.mdx`](../../docs/sdk/patterns.mdx) — canonical copy-pasteable patterns
+- [`docs/sdk/core/custom-agents.mdx`](../../docs/sdk/core/custom-agents.mdx) — canonical copy-pasteable patterns
 
 **Moving an existing in-repo agent to a hub package instead of writing a new one?** Use the `porting-agent-to-hub` skill — it owns the PORT/MERGE/DISCARD verdict, the capability-truth audit, and the catalog→install→launch→use gate.
 

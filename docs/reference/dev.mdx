@@ -7,49 +7,22 @@ icon: "laptop-code"
   **Source Code:** [`src/gaia/`](https://github.com/amd/gaia/tree/main/src/gaia)
 </Info>
 
-<Badge text="development" color="orange" />
-
-**Table of Contents**
-- [Introduction](#introduction)
-- [Before You Start](#before-you-start)
-- [Setup and Installation](#setup-and-installation)
-- [Running GAIA](#running-gaia)
-- [Troubleshooting](#troubleshooting)
-- [Support](#support)
-
----
-
-## Introduction
-
-GAIA is an open-source framework that runs generative AI applications on AMD hardware. GAIA uses [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) via [Lemonade Server](https://lemonade-server.ai/) for running Large Language Models (LLMs).
-
-GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 300 series processors or above.
-
----
+Use this guide to install an editable Python checkout and run its checks. For the
+Go terminal client, continue with [TUI development](/reference/tui#build-and-test).
 
 ## Before You Start
 
-### System Requirements
+- **Git** and **uv** for the checkout and Python environment.
+- **Python 3.10+**; the instructions below use 3.12 for repository tooling.
+- **Go**, at the version declared in `tui/go.mod`, when changing the TUI.
+- A configured **model backend** for live agent queries. Local inference uses
+  Lemonade; cloud choices are described in [AI providers](/guides/ai-providers).
 
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
-| **RAM** | 16GB | 64GB |
-| **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
-| **Storage** | 20GB free | - |
-
-**Driver Requirements:**
-| Component | Minimum Version |
-|-----------|-----------------|
-| Radeon iGPU | `32.0.22029.1019` |
-| NPU | `32.0.203.314` |
-
-### Software Requirements
-
-- **Git** - For version control
-- **Lemonade Server** - Download from [lemonade-server.ai](https://lemonade-server.ai/)
-
----
+A Ryzen AI processor or NPU is not required to edit the harness, build the TUI,
+or run tests that mock inference. Hardware, drivers, model downloads, and memory
+requirements depend on the backend you test. Use [NPU setup](/guides/npu) only when
+working on that device path. Linux, Windows, and macOS development commands appear
+below; individual hardware integrations still need their target platform.
 
 ## Setup and Installation
 
@@ -62,7 +35,7 @@ GAIA uses [uv](https://docs.astral.sh/uv/), a fast Python package manager that h
 irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-**Linux:**
+**Linux / macOS:**
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -97,7 +70,7 @@ uv venv .venv --python 3.12
 .\.venv\Scripts\activate.bat
 ```
 
-**Linux:**
+**Linux / macOS:**
 ```bash
 source .venv/bin/activate
 ```
@@ -115,9 +88,9 @@ You should see `(.venv)` in your terminal prompt when activated.
 uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-**Windows:**
+**Windows / macOS:**
 ```bash
-# Windows - default PyTorch
+# Windows / macOS - default PyTorch
 uv pip install -e ".[dev]"
 ```
 
@@ -126,7 +99,7 @@ uv pip install -e ".[dev]"
 # Linux/WSL - CPU-only PyTorch (required, extras or not)
 uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Windows
+# Windows / macOS
 uv pip install -e ".[dev,talk,rag,ui]"
 ```
 
@@ -229,19 +202,11 @@ gaia chat
 
 > **Note:** GAIA automatically starts Lemonade Server when needed. For manual start: `lemonade-server serve`
 
-### Running Electron Applications
+### Run the terminal from source
 
-GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experience) app:
-
-**Windows:**
-```powershell
-.\src\gaia\apps\jira\webui\run.ps1
-```
-
-**Linux:**
-```bash
-./src/gaia/apps/jira/webui/run.sh
-```
+Follow [the TUI checkout launch instructions](/reference/tui#run-the-flagship-from-your-checkout)
+to build the Go client and run the flagship and chat packages from this checkout.
+An editable core install alone does not replace an installed agent executable.
 
 ### Agent UI Development
 
@@ -429,7 +394,7 @@ Set `GAIA_TURN_LOG` to a file path to turn on per-turn recording:
 
 ```bash
 export GAIA_TURN_LOG=~/.gaia/turns.jsonl
-gaia --dev
+gaia-tui --dev
 ```
 
 Each turn appends one JSON object (schema `gaia.turn/1`) with the fixed prefill
@@ -504,12 +469,10 @@ Report issues to `gaia@amd.com` or create an [issue on GitHub](https://github.co
 
 ---
 
-<small style="color: #666;">
+
 
 **License**
 
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 SPDX-License-Identifier: MIT
-
-</small>

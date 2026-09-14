@@ -645,6 +645,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Record skill lessons |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
@@ -710,7 +711,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 All docs are `.mdx` (Mintlify). [`docs/docs.json`](docs/docs.json) is the authoritative
 navigation — consult it rather than a hand-maintained copy here. Where things live:
 
-- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, email, talk, memory, install, custom-agent, hardware-advisor, npu.
+- **Guides** (`docs/guides/`) — one per feature: gaia, terminal-hub, agent-ui, email, talk, memory, install, hardware-advisor, npu.
 - **SDK** (`docs/sdk/`) — `core/` (agent-system, tools, console), `sdks/` (chat, agent-ui, rag, llm, vlm, audio), `infrastructure/` (mcp, api-server).
 - **Reference** (`docs/reference/`) — cli, dev, faq, troubleshooting, eval.
 - **Specs** (`docs/spec/`), **Deployment** (`docs/deployment/`), **Integrations** (`docs/integrations/`).

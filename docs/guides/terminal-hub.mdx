@@ -44,6 +44,20 @@ setup where supported. The focused row names the failure and its remedy.
 checking. An unverified result is not a successful check; consequential uncertainty,
 such as insufficient model context, can require an explicit Enter to proceed.
 
+## Try your first conversation
+
+Once chat opens, send a short request such as **“Explain what you can help me do.”**
+Then try a file task:
+
+1. Drag a text file from your home directory into the composer to insert its path.
+2. Add **“Summarize this file in three bullets”** and press Enter.
+3. Read the tool activity and answer. Follow up with **“Which part supports the second bullet?”**
+
+GAIA reads files through tools; inserting a path does not upload or attach the
+entire file by itself. File access is limited to allowed directories. Cloud
+inference can send retrieved file content to the chosen provider. See
+[flagship capabilities and file scope](/guides/gaia#permissions-and-file-scope).
+
 ## Choose inference
 
 Local chat uses Lemonade. Press `p` during setup or enter `/provider` in chat to
@@ -65,7 +79,7 @@ flagship subprocess; unsupported transports report the restriction.
 | `Esc` while streaming | Request cancellation; a second press forces a stop |
 | `Ctrl+C` while idle | Quit |
 | `Ctrl+C` while streaming | Request cancellation; a second press forces a stop |
-| Arrow keys, `PgUp` / `PgDn` | Scroll the conversation |
+| `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation |
 | `Home` / `End` with an empty composer | Jump to the top / bottom |
 | `Ctrl+V` | Paste text or save a clipboard image and insert its path |
 | `Ctrl+Y` | Copy the answer |
@@ -89,7 +103,7 @@ or select a row with the mouse. `/help` shows the full shortcuts.
 | Command | Action |
 | --- | --- |
 | `/help` | Show help |
-| `/clear` | Clear the current conversation |
+| `/clear` | Clear the visible transcript; see session behavior below |
 | `/memory` | Inspect agent memory |
 | `/setup` | Run flagship setup |
 | `/model` | List models; `/model <id>` requests a switch |
@@ -103,6 +117,17 @@ sessions. Permission bypass is off by default. A daemon-backed session rejects
 
 When a question appears, select an option with arrows, Tab, or its number and press
 Enter. Esc cancels the turn. Read the requested action before approving a tool.
+
+## Clear or start over
+
+`/clear` clears the screen. With the flagship subprocess, the agent still retains
+its recent conversation, loaded skills, and temporary grants. To start a new
+subprocess conversation, quit while idle and relaunch `gaia-tui`. Persistent
+memory remains available after relaunch.
+
+On a daemon-backed session, `/clear` also drops the client’s conversation context
+and session ID, so the next message starts a new session. Neither path deletes
+persistent memory. See [state and cancellation](/reference/tui#state-and-cancellation).
 
 ## Other agents and scripts
 

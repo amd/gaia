@@ -57,9 +57,18 @@ compact descriptions of displayed cards in that context so follow-up questions c
 refer to visible results. The server's retained session state is separate from the
 TUI transcript and the persistent memory store.
 
-Do not treat `/clear`, cancelling a turn, exiting the TUI, and deleting persistent
-memory as interchangeable. Inspect and manage durable facts through the
-[Memory guide](/guides/memory).
+The flagship stdio host carries the last **12 question/answer pairs** into the
+next turn. It does not replay previous tool calls and results. The visible
+transcript can therefore contain more detail than the model receives.
+
+| Action | Flagship subprocess | Daemon-backed session |
+| --- | --- | --- |
+| `/clear` | Clears the display only; child history, skills, and grants remain | Clears displayed and transmitted context, and drops the session ID |
+| First Esc during a turn | Requests cooperative cancellation | Requests cancellation through the client |
+| Quit and relaunch | Starts a new child with fresh in-memory state | Starts a new client conversation; daemon lifecycle is separate |
+
+None of these deletes persistent memory or undoes completed tool effects. Inspect
+and manage durable facts through the [Memory guide](/guides/memory).
 
 ## Model and permission options
 
@@ -128,5 +137,24 @@ Use [TUI control MCP](/guides/mcp/tui) to resize, read state, send input, and wa
 for conditions. Read the whole screen after each action. Plain-text captures do
 not establish color or styling correctness.
 
-For real agent work, install/build the correct agent separately and test the
-actual transport. A source-mode sidecar is not evidence for the published binary.
+## Run the flagship from your checkout
+
+After completing the [Python development setup](/reference/dev), run these commands
+from the repository root in the same activated environment:
+
+```bash
+uv pip install -e hub/agents/chat/python -e hub/agents/gaia/python
+make -C tui build
+gaia init
+scripts/dev/run-tui.sh --dev
+```
+
+The launcher puts the repository’s `gaia-agent` shim first on PATH and points
+`PYTHONPATH` at the core, chat, and flagship source trees. It uses `python` from
+your environment; set `GAIA_DEV_PYTHON` to an explicit interpreter path if needed.
+This prevents a frozen installed binary from hiding your Python edits.
+
+The catalog still chooses transport from installation metadata. If the flagship
+is installed as a Hub binary artifact, use its daemon source-mode instructions in
+the [flagship guide](/guides/gaia#install-and-launch). A source-mode sidecar is not
+evidence for the published binary; validate the transport you intend to ship.

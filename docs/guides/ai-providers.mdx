@@ -69,11 +69,8 @@ and loaded skills. A failed switch keeps the previous model. Selection applies t
 this running session; if the agent restarts, the TUI reports any reversion to its
 launch model.
 
-For development, build `tui/bin/gaia-tui` and launch the checkout with:
-
-```bash
-scripts/dev/run-tui.sh --dev --control
-```
+For development, follow [the checkout launch instructions](/reference/tui#run-the-flagship-from-your-checkout),
+then add `--control` to the launcher command.
 
 Use the control API to inspect screens and drive the same session. Developer mode
 shows agent progress and tool details; pasted credentials remain masked and input

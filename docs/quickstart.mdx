@@ -1,27 +1,19 @@
 ---
-title: "Quickstart"
-description: "Start terminal chat or run a minimal Python agent with a tool."
+title: "Python Agent Quickstart"
+description: "Create a Python agent, register a word-counting tool, and run your first query."
 icon: "rocket"
 ---
 
-## Use GAIA
+Build a Python agent whose tool counts words, then run one model-driven query.
+If you want to chat with the flagship instead, follow the [Terminal UI guide](/guides/terminal-hub).
 
-Install the terminal application using the [Terminal UI guide](/guides/terminal-hub),
-then run:
-
-```bash
-gaia-tui
-```
-
-The readiness screen identifies missing dependencies and offers supported setup
-steps. For cloud chat, use the provider picker described in [AI providers](/guides/ai-providers).
-For the browser or Electron application, see [Agent UI](/guides/agent-ui).
-
-## Build your first agent
+## 1. Prepare Python and the model
 
 Install Python 3.10+ and [uv](https://docs.astral.sh/uv/), then create an environment:
 
 ```bash
+mkdir gaia-count-agent
+cd gaia-count-agent
 uv venv
 uv pip install amd-gaia
 uv run gaia init
@@ -30,8 +22,11 @@ uv run gaia init
 `gaia init` sets up the local Lemonade backend and models. It can download several
 GB. The Python package and `gaia-tui` are separate installations.
 
-Save this as `count_agent.py`. `Agent` is abstract: implement `_register_tools` on your subclass and customize `_get_system_prompt`
-for its task.
+## 2. Create an agent with one tool
+
+Save this as `count_agent.py` in the directory you just created. The subclass
+registers a word-counting function and tells the model when to call it.
+`_register_tools()` is required; `_get_system_prompt()` supplies the instructions.
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -40,7 +35,10 @@ from gaia.agents.base.tools import tool
 
 class CountAgent(Agent):
     def _get_system_prompt(self) -> str:
-        return "Use count_words to count words in the user's text. Report its result."
+        return (
+            "Use count_words to count words in the user's text. "
+            "Report its result."
+        )
 
     def _register_tools(self):
         @tool
@@ -50,9 +48,13 @@ class CountAgent(Agent):
 
 
 agent = CountAgent()
-result = agent.process_query("Count the words in: GAIA runs on my computer")
+result = agent.process_query(
+    "Count the words in: GAIA runs on my computer"
+)
 print(result["result"])
 ```
+
+## 3. Run a query
 
 Run it with the local backend available:
 
@@ -60,9 +62,20 @@ Run it with the local backend available:
 uv run python count_agent.py
 ```
 
+The answer should report **5 words**; its phrasing can vary by model. You may also
+see progress and the console-rendered answer before the final `print`.
+
 The tool computes the count; the model chooses the tool call and writes the answer.
+If startup fails, resolve the prerequisite reported by `gaia init` in the same
+environment. If the turn fails, inspect `result["status"]` and
+`result["error_history"]` instead of treating any returned text as success.
 See the [agent harness](/sdk/core/agent-system) for the result contract, lifecycle,
 limits, and error handling, and [tools](/sdk/core/tools) for registration and permissions.
+
+## Next: customize the agent
+
+Follow [Build a Python Agent](/sdk/core/custom-agents) for constructor options,
+validated tools, output control, and a check that runs without inference.
 
 ## Work on the repository
 

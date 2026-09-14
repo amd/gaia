@@ -190,18 +190,17 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 
 class MyResearchAgent(CodeIndexToolsMixin, Agent):
-    def __init__(self, repo_path: str = "."):
-        super().__init__()
+    def __init__(self, repo_path: str = ".", **kwargs):
         self._init_code_index_state(repo_path=repo_path)
+        super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_code_index_tools()
 ```
 
 State is initialised lazily — calling `_init_code_index_state` is optional but recommended so the agent honours the repo path you intended.
 
-`CodeIndexToolsMixin` is also registered in `KNOWN_TOOLS["code_index"]` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) for dynamic composition when scaffolding agents — see the [custom-agent guide](/sdk/core/agent-system).
+`CodeIndexToolsMixin` is also registered in `KNOWN_TOOLS["code_index"]` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) for dynamic composition when scaffolding agents — see the [custom-agent guide](/sdk/core/custom-agents).
 
 ## Privacy and safety
 
