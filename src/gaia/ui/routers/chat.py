@@ -249,6 +249,49 @@ async def confirm_tool(request: ToolConfirmRequest):
     return {"status": "ok", "approved": request.approved}
 
 
+class UserInputRequest(BaseModel):
+    """Request body for answering a mid-run ``needs_input`` question."""
+
+    session_id: str
+    request_id: str
+    value: str
+
+
+@router.post("/api/chat/user-input")
+async def user_input(request: UserInputRequest):
+    """Answer a mid-run ``needs_input`` question from the agent (#2595).
+
+    The agent blocks server-side (today, an email-relay run parked in
+    ``SSEOutputHandler.resolve_relay_input()``) until this endpoint delivers
+    the answer. The frontend calls this when the user submits a NeedsInput
+    card's option or free-text answer.
+    """
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404,
+            detail="No active chat session found for this session ID",
+        )
+    try:
+        delivered = handler.resolve_relay_input(request.request_id, request.value)
+    except SidecarError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Could not deliver the answer: {exc}",
+        ) from exc
+    if not delivered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending question for this session (it may have already "
+            "timed out or been answered).",
+        )
+    return {"status": "ok", "request_id": request.request_id}
+
+
 class CancelStreamRequest(BaseModel):
     session_id: str
 
