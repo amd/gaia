@@ -110,11 +110,19 @@ _COMPLETION_LEAD = (
 _MUTATION_VERB = (
     r"archiv\w*|(?:un)?star\w*|marked\s+(?:as\s+)?(?:un)?read|trashed"
     r"|deleted|label(?:l)?ed|quarantined|unquarantined|restored|sent"
-    r"|forwarded|scheduled|snoozed"
+    r"|forwarded|scheduled|snoozed|draft(?:ed)?|cancel(?:l)?ed|rsvp(?:'d|ed)?"
 )
 _SUCCESS_CLAIM_RE = re.compile(
     rf"\b(?:{_COMPLETION_LEAD})(?:{_MUTATION_VERB})\b"
-    rf"|\bmoved\s+to\s+(?:trash|the\s+\S+\s+label)\b",
+    rf"|\bmoved\s+to\s+(?:trash|the\s+\S+\s+label)\b"
+    # Draft creation: the model narrates the noun ("a draft") rather than a
+    # completion-lead verb, so this needs its own past-tense-anchored shape.
+    rf"|\b(?:the\s+)?draft\s+(?:has\s+been|was|is\s+now)\s+"
+    rf"(?:successfully\s+)?(?:created|saved|ready)\b"
+    rf"|\bcreated\s+(?:a|the|your)\s+draft\b"
+    # Calendar mutations: same "narrates the noun" shape as drafts above.
+    rf"|\bcreated\s+(?:a|an|the|your)\s+event\b"
+    rf"|\badded\s+(?:it|that|the\s+event)?\s*to\s+(?:your\s+|the\s+)?calendar\b",
     re.IGNORECASE,
 )
 
