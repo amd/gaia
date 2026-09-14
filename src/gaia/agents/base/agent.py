@@ -112,6 +112,26 @@ CHUNK_TRUNCATION_SIZE = 2500
 DEFAULT_MAX_STEPS = 50
 
 
+def _skill_prompt_body(agent, skill) -> str:
+    """*skill*'s effective body, plus a note for any declared command missing here.
+
+    Rendered every turn so the substitute stays in front of the model however
+    the skill was loaded (the ``load_skill`` tool or a manifest).
+    """
+    body = effective_skill_body(agent, skill)
+    parsed_permissions = getattr(skill, "parsed_permissions", None)
+    if not callable(parsed_permissions):
+        return body
+
+    from gaia.skills import unavailable_binaries
+
+    missing = unavailable_binaries(parsed_permissions())
+    if not missing:
+        return body
+    notes = " ".join(policy.unavailable_note() for policy in missing)
+    return f"{body}\n\nOn this machine: {notes}"
+
+
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
 
@@ -2352,7 +2372,7 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                body = effective_skill_body(self, skill)
+                body = _skill_prompt_body(self, skill)
                 sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
@@ -2364,7 +2384,7 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body = effective_skill_body(self, skill)
+                    body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(

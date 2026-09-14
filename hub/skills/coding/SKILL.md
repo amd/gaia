@@ -2,7 +2,7 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.1.0
+version: 0.1.1
 metadata:
   gaia:
     security_tier: community
@@ -64,11 +64,20 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly:
+This skill grants `pytest` when it is installed on PATH. If so, run it directly:
 
 ```
 pytest -q tests/
 pytest -x -k discount tests/test_cart.py
+```
+
+pytest often lives only in the project's virtualenv, so it is not on PATH and the
+`pytest` command is refused. Then run the suite with `execute_python_file` and a
+script that calls `pytest.main`, which works wherever pytest is importable:
+
+```python
+import sys, pytest
+sys.exit(pytest.main(["-q", "tests/"]))
 ```
 
 The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody

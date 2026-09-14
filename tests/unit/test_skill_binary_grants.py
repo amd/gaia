@@ -384,12 +384,35 @@ class _Shell(ShellToolsMixin):
     """A bare mixin host — no path validator, no agent."""
 
 
-def test_a_policed_binary_is_refused_without_a_grant():
+def test_a_policed_binary_is_refused_without_a_grant(monkeypatch):
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
     assert error is not None
     assert "shell:execute:gh" in error["error"]
+
+
+def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeypatch):
+    """The coding skill can be loaded with pytest off PATH. Telling the model to
+    "load that skill first" then sends it into a reload that changes nothing."""
+    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
+
+    error = ShellToolsMixin._validate_command(
+        "pytest", ["pytest", "-q", "tests/"], "pytest -q tests/"
+    )
+    assert error is not None
+    assert "not installed here" in error["error"]
+    assert "load that skill first" not in error["error"]
+    assert BINARY_POLICIES["pytest"].substitute in error["error"]
+
+    error = ShellToolsMixin._validate_command(
+        "gh", ["gh", "issue", "list"], "gh issue list"
+    )
+    assert error is not None
+    assert BINARY_POLICIES["gh"].install_hint in error["error"]
 
 
 def test_a_granted_binary_passes_the_shell_gate():

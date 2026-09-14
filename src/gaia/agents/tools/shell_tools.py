@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from collections import deque
@@ -585,6 +586,17 @@ class ShellToolsMixin:
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
             if binary not in granted_binaries:
+                # Not installed is not "load the skill": reloading cannot fix it.
+                if shutil.which(policy.binary) is None:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"Command '{binary}' cannot run: "
+                            f"{policy.unavailable_note()}"
+                        ),
+                        "has_errors": True,
+                        "hint": "Do not retry this command or reload the skill.",
+                    }
                 return {
                     "status": "error",
                     "error": (

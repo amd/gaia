@@ -57,6 +57,7 @@ be ``"glab": BinaryPolicy(...)`` and nothing else.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -64,6 +65,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
+
+logger = logging.getLogger(__name__)
 
 #: A binary name is a bare executable, never a path — the grant resolves off
 #: ``PATH``, so neither a declared scope nor an invoked token may name a file the
@@ -209,6 +212,14 @@ class BinaryPolicy:
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
     positional: Subcommand | None = None
     substitute: str = ""
+
+    def unavailable_note(self) -> str:
+        """What the model is told when this binary is not on ``PATH``."""
+        return (
+            f"`{self.binary}` is not installed here (not on PATH), so a step that "
+            f"runs `{self.binary}` directly cannot run, and reloading a skill will "
+            f"not change that. {self.substitute or self.install_hint}"
+        )
 
     def __post_init__(self) -> None:
         if bool(self.subcommands) == bool(self.positional is not None):
@@ -636,6 +647,13 @@ def resolve_binary_policies(
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
         if require_installed and shutil.which(policy.binary) is None:
             if policy.substitute:
+                logger.warning(
+                    "Skill '%s' loaded without its '%s' grant: '%s' is not on "
+                    "PATH. The model is told to use the substitute instead.",
+                    skill_name,
+                    policy.binary,
+                    policy.binary,
+                )
                 continue
             raise SkillPermissionError(
                 f"Skill '{skill_name}' needs the '{policy.binary}' command, which "

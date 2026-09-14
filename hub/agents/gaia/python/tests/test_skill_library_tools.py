@@ -744,6 +744,8 @@ def test_load_surfaces_a_missing_command_that_has_a_substitute(session, monkeypa
     assert result["unavailable_commands"] == ["pytest"]
     assert "pytest.main" in result["warning"]
     assert "pytest" not in session.agent.granted_binaries.binaries()
+    # The tool reply scrolls away; the skill prompt is what the model keeps reading.
+    assert "pytest.main" in session.agent.get_skills_system_prompt()
 
 
 # ---------------------------------------------------------------------------
