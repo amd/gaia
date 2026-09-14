@@ -42,6 +42,18 @@ export interface ModelTier {
     default?: boolean;
 }
 
+/**
+ * An agent as the backend describes it.
+ *
+ * Every field here must be emitted by a real backend response — either
+ * ``GET /api/agents`` (``gaia.ui.models.AgentInfo``) or
+ * ``GET /api/agents/catalog`` (``gaia.hub.catalog.merge_with_registry``).
+ * Declaring one that nothing sends costs nothing at compile time and reads as
+ * ``undefined`` forever at runtime (#2970, #3842), so
+ * ``tests/unit/test_webui_agent_info_contract.py`` fails the build on any field
+ * no emitter produces. The one deliberate exception is ``version``, normalized
+ * client-side and listed in that test's allowlist.
+ */
 export interface AgentInfo {
     id: string;
     name: string;
@@ -117,8 +129,6 @@ export interface AgentInfo {
     installed_version?: string;
     /** Latest version offered by the catalog — set when newer than ``version``. */
     latest_version?: string;
-    /** Per-agent compatibility verdict from the backend's system check. */
-    compatibility?: AgentCompatibility;
     /** Download size of the agent package in bytes (Available cards). */
     download_size_bytes?: number;
     /**
@@ -141,8 +151,6 @@ export interface AgentInfo {
      * Hub shows a "Trust & Install" confirmation before sending ``trust_native``.
      */
     requires_trust?: boolean;
-    /** Optional remote avatar image URL from the catalog. */
-    avatar_url?: string;
     /** True when the publisher has deprecated this agent. */
     deprecated?: boolean;
     /** Public URL of the eval scorecard markdown; absent when none was published. */
@@ -157,19 +165,6 @@ export type AgentCardState =
     | 'available'
     | 'update_available'
     | 'installing';
-
-/**
- * Per-agent compatibility verdict (issue #1096/#1097).
- *
- * ``level`` drives the green/yellow/red indicator: ``compatible`` (green),
- * ``warning`` (yellow — runnable but a requirement is marginal), and
- * ``incompatible`` (red — Install is disabled). ``reasons`` explains any
- * non-green verdict for the tooltip.
- */
-export interface AgentCompatibility {
-    level: 'compatible' | 'warning' | 'incompatible';
-    reasons?: string[];
-}
 
 /**
  * Wire-level install state machine from the backend (issue #1096), distinct

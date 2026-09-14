@@ -5,7 +5,6 @@ import { describe, it, expect } from 'vitest';
 import {
     formatBytes,
     isInstalling,
-    compatLevel,
     mergeCatalogStatus,
     splitAvailable,
     countUpdates,
@@ -56,16 +55,6 @@ describe('isInstalling', () => {
         expect(isInstalling({ agent_id: 'x', state: 'failed', progress: 0 })).toBe(false);
         expect(isInstalling(undefined)).toBe(false);
         expect(isInstalling(null)).toBe(false);
-    });
-});
-
-describe('compatLevel', () => {
-    it('defaults to compatible when no verdict', () => {
-        expect(compatLevel(agent({ id: 'x' }))).toBe('compatible');
-    });
-
-    it('reads the catalog verdict', () => {
-        expect(compatLevel(agent({ id: 'x', compatibility: { level: 'incompatible' } }))).toBe('incompatible');
     });
 });
 
