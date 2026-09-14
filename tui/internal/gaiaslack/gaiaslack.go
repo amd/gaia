@@ -152,7 +152,7 @@ func Decline(ctx context.Context, never bool) error {
 // workspace name.
 //
 // The tokens go on the child's STDIN, never in argv: an argument is visible to
-// every other process on the machine through ``ps`` and lands in shell history.
+// every other process on the machine through “ps“ and lands in shell history.
 // That is also what lets the TUI collect them in its own panel rather than
 // suspending itself and handing the terminal to `gaia slack setup` — a
 // suspended TUI cannot be drawn, driven by the control API, or tested.

@@ -68,18 +68,18 @@ type fakeRelay struct {
 	// down its own read (#2901).
 	onCancelPost func()
 
-	mu          sync.Mutex
-	token       string
-	queries     []queryRequest
-	rawBodies   []string
-	cancelled   []string
-	confirmed   []confirmCall
-	decisions   []decisionCall
-	bypasses    []bypassCall
+	mu             sync.Mutex
+	token          string
+	queries        []queryRequest
+	rawBodies      []string
+	cancelled      []string
+	confirmed      []confirmCall
+	decisions      []decisionCall
+	bypasses       []bypassCall
 	decisionStatus int
 	bypassStatus   int
-	auths       []string
-	versionHits int
+	auths          []string
+	versionHits    int
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
