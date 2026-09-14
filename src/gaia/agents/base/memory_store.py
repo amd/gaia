@@ -202,8 +202,8 @@ def _bounded_args_json(args: dict | None) -> str | None:
     """Tool args as JSON that always parses and fits MAX_FTS_QUERY_LENGTH.
 
     Cutting the serialized text left every large write_file/edit_file call
-    stored as unparseable JSON, so skill synthesis lost its file edits. Long
-    string values are shortened instead, keeping short ones like file_path.
+    unreadable in tool history. Long values are shortened instead, keeping
+    short ones like file_path, and ``_truncated`` marks a partial result.
     """
     if not args:
         return None
@@ -211,10 +211,12 @@ def _bounded_args_json(args: dict | None) -> str | None:
     if len(text) <= MAX_FTS_QUERY_LENGTH:
         return text
     for limit in (200, 60, 0):
-        shrunk = {
-            k: (v[:limit] + "...") if isinstance(v, str) and len(v) > limit else v
-            for k, v in args.items()
-        }
+        shrunk: dict = {}
+        for k, v in args.items():
+            # Nested lists/dicts are shortened as their JSON text.
+            v_text = v if isinstance(v, str) else json.dumps(v, default=str)
+            shrunk[k] = v_text[:limit] + "..." if len(v_text) > limit else v
+        shrunk["_truncated"] = True
         text = json.dumps(shrunk, default=str)
         if len(text) <= MAX_FTS_QUERY_LENGTH:
             return text
