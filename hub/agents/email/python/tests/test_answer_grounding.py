@@ -245,6 +245,15 @@ class TestFindUngroundedSuccessClaim:
             "I have successfully archived all 3 messages.",
             "Both have been marked read.",
             "I have trashed that email.",
+            # #2914's exact repro: a fabricated draft-creation claim.
+            "The draft was successfully created.",
+            "I've created a draft for you.",
+            "I have drafted a reply to that message.",
+            "Draft is now saved.",
+            "The scheduled send has been cancelled.",
+            "I've RSVP'd yes to the meeting.",
+            "I have created an event on your calendar.",
+            "I've added it to your calendar.",
         ],
     )
     def test_detects_completion_claim_with_empty_tool_trace(self, phrase):
@@ -263,6 +272,14 @@ class TestFindUngroundedSuccessClaim:
             "No messages needed to be archived.",
             "Here's your inbox pre-scan — 5 actionable, 1 suggested archive.",
             "Let me know if you'd like me to star anything.",
+            # Non-fabricating "draft" mentions must not trip the guard --
+            # the guard is turn-scoped to completion claims, not the noun.
+            "Would you like me to draft a reply?",
+            "I can create a draft if you'd like.",
+            "Drafting a reply now, one moment.",
+            "Once created, the draft will appear in your Drafts folder.",
+            "Here's a draft summary of your inbox.",
+            "I can RSVP to that if you want.",
         ],
     )
     def test_no_false_positive_on_non_completion_language(self, phrase):
@@ -272,6 +289,23 @@ class TestFindUngroundedSuccessClaim:
         convo = [_tool_entry("archive_message", {"archived": True})]
         assert (
             find_ungrounded_success_claim("The message has been archived.", convo)
+            is None
+        )
+
+    def test_grounded_draft_claim_when_draft_reply_tool_actually_ran(self):
+        # The issue's own repro, but with the tool call present -- must NOT
+        # be flagged. Pins the narrow, non-fabricating half of the guard.
+        convo = [_tool_entry("draft_reply", {"draft_id": "d1"})]
+        assert (
+            find_ungrounded_success_claim(
+                "The draft has been successfully created.", convo
+            )
+            is None
+        )
+        assert (
+            find_ungrounded_success_claim(
+                "I have drafted a reply and it's ready in your Drafts folder.", convo
+            )
             is None
         )
 
