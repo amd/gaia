@@ -23,11 +23,11 @@ import json
 import time
 
 import pytest
-from onboarding_fakes import FakeAgent as _FakeAgent
-from onboarding_fakes import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob
+from onboarding_fakes import FakeAgent as _FakeAgent
+from onboarding_fakes import ScriptedConsole as _ScriptedConsole
 
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -429,11 +429,25 @@ def test_walkthrough_reauth_requests_the_full_union_not_just_mail(connectors):
 
 
 def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):
-    """The honest limit: the user still supplies their own client id + secret."""
+    """The honest limit: the user still supplies their own client id + secret
+    — now via the guided Cloud Console walkthrough (#2594), not an ad hoc ask.
+    """
     connectors["connection"] = None
     connectors["client_id"] = ""
     connectors["client_secret"] = ""
-    agent = _FakeAgent(answers=["google", "yes", "yes", "my-id", "my-secret"])
+    agent = _FakeAgent(
+        answers=[
+            "google",
+            "yes",
+            "done",
+            "done",
+            "done",
+            "done",
+            "done",
+            "my-id.apps.googleusercontent.com",
+            "my-secret",
+        ]
+    )
 
     def after(*_):
         connectors["connection"] = _connection()
@@ -448,21 +462,23 @@ def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):
     finally:
         grants.grant_agent = original
 
-    asked = _questions(agent)
-    explain = [a for a in asked if "OAuth client ID and secret" in a]
-    assert explain, asked
-    assert "cannot do for you" in explain[0]
-    assert "amd-gaia.ai" in explain[0], "the user is told where to go"
+    # The walkthrough's own steps are what explains this now — not a single
+    # ad hoc question — but the Cloud Console must still be named to the user.
+    assert any("console.cloud.google.com" in m for m in agent.console.info)
 
     # The secret is asked for with the sensitive flag, so the surface can mask it.
-    secret_q = [a for a in agent.console.asked if "client secret" in a["message"]]
+    secret_q = [
+        a
+        for a in agent.console.asked
+        if a["message"].startswith("Paste the value for: Copy the Client Secret")
+    ]
     assert secret_q and secret_q[0]["sensitive"] is True
     assert [a["sensitive"] for a in agent.console.asked if a is not secret_q[0]] == [
         False
     ] * (len(agent.console.asked) - 1)
 
     _, config = connectors["configured"][0]
-    assert config["client_id"] == "my-id"
+    assert config["client_id"] == "my-id.apps.googleusercontent.com"
     assert config["client_secret"] == "my-secret"
     assert out["data"]["changed"] is True
 
@@ -470,13 +486,12 @@ def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):
 def test_declining_the_client_credentials_changes_nothing(connectors):
     connectors["connection"] = None
     connectors["client_id"] = ""
-    agent = _FakeAgent(answers=["google", "yes", "no"])
+    agent = _FakeAgent(answers=["google", "no"])
 
     out = _run(agent)
 
     assert out["ok"] is True and out["data"]["declined"] is True
     assert connectors["configured"] == []
-    assert "amd-gaia.ai" in out["data"]["message"]
 
 
 def test_a_fix_that_did_not_fix_it_is_reported_as_failure(connectors):
@@ -503,14 +518,14 @@ def test_connected_but_grant_failed_is_reported_honestly_not_as_nothing_changed(
     connectors["connection"] = None
 
     async def failing_complete_authorization(flow_id):
-        raise GrantAfterConnectError(
-            "google", ms.AGENT_ID, reason="disk full"
-        )
+        raise GrantAfterConnectError("google", ms.AGENT_ID, reason="disk full")
 
     import gaia.connectors.flow as flow_mod
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(flow_mod, "complete_authorization", failing_complete_authorization)
+    monkeypatch.setattr(
+        flow_mod, "complete_authorization", failing_complete_authorization
+    )
     try:
         agent = _FakeAgent(answers=["google", "yes"])
         out = _run(agent)
@@ -635,9 +650,7 @@ def forwarded(monkeypatch):
     fc.reset()
 
 
-def test_forwarded_mode_reads_usability_from_the_forwarded_token(
-    connectors, forwarded
-):
+def test_forwarded_mode_reads_usability_from_the_forwarded_token(connectors, forwarded):
     """A keyring that looks healthy is NOT proof this process can use it.
 
     Probing the keyring here would call a mailbox usable that the sidecar
@@ -658,9 +671,7 @@ def test_forwarded_mode_reads_usability_from_the_forwarded_token(
     assert ms.inspect_provider("google")["state"] == ms.STATE_OK
 
 
-def test_forwarded_mode_reports_a_pending_handover_not_a_failure(
-    connectors, forwarded
-):
+def test_forwarded_mode_reports_a_pending_handover_not_a_failure(connectors, forwarded):
     """Connecting under the daemon succeeds even though the token lags behind."""
     connectors["connection"] = None
     agent = _FakeAgent(answers=["google", "yes"])
