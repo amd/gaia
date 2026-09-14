@@ -70,14 +70,27 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**218 commits** since v0.23.0:
+**230 commits** since v0.23.0:
 
 <details>
-<summary>Expand full changelog (218 commits)</summary>
+<summary>Expand full changelog (230 commits)</summary>
 
-- `192c39d03` — style: black
-- `44a9a6ede` — fix(agent): drop whole records from a JSON string, don't slice one
-- `bc2871849` — Merge remote-tracking branch 'origin/main' into pr3670
+- `40e0dd89d` — docs(reference): add a user guide for Claude Code session analytics (#3782)
+- `f90fa5aae` — fix(docs): stop misclassifying GitHub anti-abuse resets as broken links (#3800)
+- `87313af75` — fix(daemon): reject a repo-root --dev-src-dir with a corrected path (#3796)
+- `cad3363f7` — fix(agents): isolate log records from abandoned tool-timeout workers (#3795)
+- `43dbce921` — fix(connectors): forward_connection uses the shared scope resolver (#3792)
+- `0c301bae3` — fix(tui): abandon queued follow-up on second Esc, add stall nudge (#3798)
+- `99caeaaf7` — fix(email-agent): close draft/RSVP/event gap in fabricated-success guard (#3797)
+- `8eb53c6b7` — fix(tui): name the buckets behind email pre-scan's +N more (#3794)
+- `5597e6a57` — fix(connectors): turn on include_granted_scopes for Google OAuth (#3786)
+- `76a7cde29` — fix(webui): show agent version in Hub Details modal (#3784)
+- `1474b12e9` — fix(tests): assert no render card for pre_scan_inbox (#3785)
+- `70de05022` — fix(email-agent): assert SCHEMA_VERSION, not a hardcoded literal (#3787)
+- `ddfdcabea` — fix(tests): skip live release-asset test on transient network drops (#3788)
+- `4740ec97f` — fix(email): point README at gaia init instead of removed CLI (#3783)
+- `ff62b4d54` — fix(agent): strip whitespace from tool names before dispatch (#3744)
+- `f39ead7ad` — fix(agent_loop): stop spending hourly budget on idle no-op ticks (#3745)
 - `1a93f3e20` — fix: apply reviewed maintenance repairs for #3372 (#3713)
 - `fe863b5d9` — fix: apply reviewed maintenance repairs for #3613 (#3717)
 - `fa02dc063` — fix: apply reviewed maintenance repairs for #3375 (#3714)
@@ -129,7 +142,6 @@ Thanks to the community members who contributed to this release:
 - `d84f98474` — ci(eval): give the persistent Lemonade task the same launch env as every other start path (#3577)
 - `42377da7a` — fix(llm): don't let a non-LLM model's ctx_size leak into get_status() (#3595)
 - `e6a9efcf5` — Error when a named find_files folder is missing (#3580)
-- `b62eada91` — fix(agent): bound plain-string tool results with head and tail
 - `4d47ae9a9` — feat(agent): transcribe and summarize meeting recordings locally (#3597)
 - `cfc3d2959` — fix(email): don't treat a colon word inside a quoted phrase as an Outlook operator (#3619)
 - `e8f5bc898` — fix(mcp,telegram): resolve port 8765 collision across bridge, agent-ui, tui and telegram health (#3604)
@@ -293,7 +305,6 @@ Thanks to the community members who contributed to this release:
 - `225c69377` — test(init): stop init tests overwriting the real ~/.gaia/config.json (#2891)
 - `8ed5b783d` — fix(release): emit release notes as short bullets, not prose (#2967)
 - `1beb714f3` — release(agent-email): 0.6.0 (#2933)
-
 </details>
 
 Full Changelog: [v0.23.0...v0.24.0](https://github.com/amd/gaia/compare/v0.23.0...v0.24.0)

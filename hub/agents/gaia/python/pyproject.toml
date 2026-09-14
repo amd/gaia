@@ -14,10 +14,10 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 # Floors:
-# - amd-gaia>=0.23.1: 0.23.0's daemon has no `gaia` entry in builtin_specs(),
-#   so it resolves this agent and can then never supervise it (#2932). No such
-#   core is published yet, so this floor only resolves once 0.23.1 is cut —
-#   raise it in step with min_gaia_version, never ahead of a real release.
+# - amd-gaia>=0.24.0: 0.23.0's daemon has no `gaia` entry in builtin_specs(),
+#   so it resolves this agent and can then never supervise it (#2932). 0.24.0
+#   is the first tagged core that can — raise it in step with
+#   min_gaia_version, never ahead of a real release.
 # - gaia-agent-chat is a HARD dependency, not an extra: GaiaAgent subclasses
 #   ChatAgent to inherit the doc prompt profile, RAG discovery, and session
 #   persistence rather than forking them. Importing this package without it is
@@ -28,7 +28,7 @@ requires-python = ">=3.10"
 # import the class. RAG's real dependencies come from `gaia init` into the
 # active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.23.1",
+  "amd-gaia>=0.24.0",
   "gaia-agent-chat>=0.1.0",
 ]
 
