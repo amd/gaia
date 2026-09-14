@@ -213,9 +213,13 @@ def _classify_chat_exception(exc: BaseException):
     # losing the typed-class info.
     raw = str(exc)
     text = raw.lower()
-    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412.
-    if _re.search(r"cloud provider refused the request \(http 4(?:02|12)\)", text):
-        return LemonadeCloudAccountError()
+    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
+    # message itself is kept: it names the provider and where to add funds.
+    refused = _re.search(
+        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, _re.IGNORECASE
+    )
+    if refused:
+        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the

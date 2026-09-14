@@ -4379,6 +4379,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(msg)
         return None
 
+    def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
+        """The user's message when a cloud provider refused the account itself.
+
+        Out of funds or suspended: no retry can succeed, so the turn ends as an
+        error instead of an answer.
+        """
+        from gaia.llm.providers.lemonade import LemonadeCloudAccountError
+        from gaia.ui._chat_helpers import _classify_chat_exception
+
+        classified = _classify_chat_exception(exc)
+        if isinstance(classified, LemonadeCloudAccountError):
+            return classified.user_message
+        return None
+
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -5039,6 +5053,8 @@ Do NOT wrap conversational replies in JSON.
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
+        # A refused cloud account ends the turn with nothing to verify.
+        account_refused = False
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -5585,11 +5601,23 @@ Do NOT wrap conversational replies in JSON.
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
-                            final_answer = (
-                                f"Sorry, I ran into a problem while processing your request. "
-                                f"This might be a temporary issue — try again in a moment.\n\n"
-                                f"*Technical details: {str(e)}*"
+                            # Streaming is the TUI's path; it must surface the
+                            # same typed messages the non-streaming path does.
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
                             )
+                            if typed_msg is not None:
+                                final_answer = typed_msg
+                            else:
+                                final_answer = (
+                                    f"Sorry, I ran into a problem while processing your request. "
+                                    f"This might be a temporary issue — try again in a moment.\n\n"
+                                    f"*Technical details: {str(e)}*"
+                                )
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -5740,7 +5768,13 @@ Do NOT wrap conversational replies in JSON.
                             # with the generic "try again in a moment" copy —
                             # that wrapper actively misleads users on
                             # non-retryable failures.
-                            typed_msg = self._extract_lemonade_user_message(e)
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
+                            )
                             if typed_msg is not None:
                                 final_answer = typed_msg
                             else:
@@ -7055,7 +7089,7 @@ Do NOT wrap conversational replies in JSON.
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
-        if not verification_scope_applied:
+        if not verification_scope_applied and not account_refused:
             final_answer = self._with_verification_scope(final_answer)
 
         # Return the result
