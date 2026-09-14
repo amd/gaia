@@ -44,6 +44,12 @@ public:
     explicit SessionStore(const std::string& dir);
 
     /// Save conversation history to a session file.
+    ///
+    /// Image parts are persisted when the caller supplies them. The agent's own
+    /// history is text-only by contract — Agent::processQuery strips image parts
+    /// at the end of every turn — so a session saved straight from it has no
+    /// images to reload. Persisting them across turns is still open (#3642).
+    ///
     /// @param id Session identifier (used as filename stem).
     /// @param history The conversation messages to persist.
     /// @throws std::runtime_error if the directory can't be created or file can't be written.
