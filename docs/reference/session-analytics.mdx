@@ -39,16 +39,21 @@ needs a way to run an LLM subagent (e.g. a Claude Code session), not an API key.
 Never redirect output into the repository. These tables are built from real
 transcripts — an untracked `tables.md` at the repo root is one `git add -A` away
 from being published. Everything below defaults to `~/.gaia/cache/factory/`
-(created automatically), which is already `.gitignore`d.
+(created automatically), which lives outside any repo so it can't get committed
+by accident. As a second safety net, this repo's `.gitignore` also blocks these
+four filenames at its own root, in case you forget `$FACTORY` and redirect bare.
 
-<Info>
-  Examples use bash. On Windows PowerShell, replace `~` with `$HOME` and quote
-  paths with backslashes as usual.
-</Info>
-
+**macOS/Linux/WSL/Git Bash:**
 ```bash
 FACTORY=~/.gaia/cache/factory
 ```
+
+**Windows (PowerShell):**
+```powershell
+$FACTORY = "$HOME\.gaia\cache\factory"
+```
+
+Every command below is identical either way — just keep using `$FACTORY`.
 
 <Steps>
   <Step title="Extract — deterministic, no LLM, no network">
@@ -122,7 +127,12 @@ run Claude Code.
 
 ## Classifying intent
 
-`scan` produces `intents.jsonl` but assigns no use-case label. To add one:
+*Optional — the reports above already work without this; it only adds a
+"by use case" breakdown.*
+
+`scan` produces `intents.jsonl` but assigns no use-case label. There's no
+script for this step — hand it to an AI assistant (e.g. ask Claude Code to
+follow the steps below), or do it yourself:
 
 1. Split the intents into batches of ~70.
 2. For each batch, have a subagent assign one use-case tag per session, returning
