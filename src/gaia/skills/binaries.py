@@ -196,6 +196,10 @@ class BinaryPolicy:
             ``<binary> [operands] [flags]`` with no subcommand step at all
             (``pytest tests/unit -k foo``, vs. ``gh issue list``). When set,
             every token in the invocation is validated against this one rule.
+        substitute: How a skill can still do its job when the binary is not on
+            ``PATH``. Empty (the default) means nothing substitutes, so the skill
+            is refused. Set means the skill loads without the grant and the
+            model is told this instead.
     """
 
     binary: str
@@ -204,6 +208,7 @@ class BinaryPolicy:
     subcommands: Mapping[str, Subcommand] = field(default_factory=dict)
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
     positional: Subcommand | None = None
+    substitute: str = ""
 
     def __post_init__(self) -> None:
         if bool(self.subcommands) == bool(self.positional is not None):
@@ -447,6 +452,13 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             "dependency: 'uv pip install -e \".[dev]\"'). Verify with "
             "'pytest --version'."
         ),
+        # pytest usually lives in a project's virtualenv, not on PATH, and the
+        # coding skill is still the right guide without the shortcut.
+        substitute=(
+            "Run the suite with execute_python_file and a script that calls "
+            "`import sys, pytest; sys.exit(pytest.main(['-q', 'tests/']))`, "
+            "which works wherever pytest is importable."
+        ),
         positional=Subcommand(
             path_operands=True,
             allowed_flags=frozenset(
@@ -612,8 +624,10 @@ def resolve_binary_policies(
 
     Raises:
         SkillPermissionError: the declared binary has no policy (so it cannot be
-            gated), or is not installed (so the skill would load with a silent
-            capability gap — the exact failure this bridge exists to prevent).
+            gated), or is not installed and nothing substitutes for it (so the
+            skill would load with a silent capability gap). A missing binary
+            that has a ``substitute`` is left out of the result instead; see
+            :func:`unavailable_binaries`.
     """
     refuse_unpoliced_binaries(permissions, skill_name=skill_name)
 
@@ -621,6 +635,8 @@ def resolve_binary_policies(
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
         if require_installed and shutil.which(policy.binary) is None:
+            if policy.substitute:
+                continue
             raise SkillPermissionError(
                 f"Skill '{skill_name}' needs the '{policy.binary}' command, which "
                 f"is not on PATH. {policy.summary} {policy.install_hint} "
@@ -631,6 +647,25 @@ def resolve_binary_policies(
         if policy not in policies:
             policies.append(policy)
     return policies
+
+
+def unavailable_binaries(permissions: Sequence["Permission"]) -> list[BinaryPolicy]:
+    """Declared binaries that are not on ``PATH`` but have a substitute.
+
+    The skill loaded without them; the model must be told, or it follows the
+    skill's own instructions into a command that cannot run.
+    """
+    missing: list[BinaryPolicy] = []
+    for permission in binary_permissions(permissions):
+        policy = BINARY_POLICIES.get((permission.scope or "").lower())
+        if (
+            policy is not None
+            and policy.substitute
+            and shutil.which(policy.binary) is None
+            and policy not in missing
+        ):
+            missing.append(policy)
+    return missing
 
 
 # ---------------------------------------------------------------------------

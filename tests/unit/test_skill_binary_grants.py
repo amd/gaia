@@ -144,6 +144,29 @@ def test_a_missing_binary_fails_loudly_and_names_how_to_install_it(monkeypatch):
     assert BINARY_POLICIES["gh"].install_hint in message
 
 
+def test_a_missing_binary_with_a_substitute_does_not_refuse_the_skill(monkeypatch):
+    """pytest usually lives in a project's virtualenv, not on PATH. Refusing the
+    whole coding skill for it blocked 42 of 48 loads in one benchmark run."""
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert resolve_binary_policies(permissions, skill_name="coding") == []
+    assert [p.binary for p in unavailable_binaries(permissions)] == ["pytest"]
+    assert BINARY_POLICIES["pytest"].substitute
+    assert not BINARY_POLICIES["gh"].substitute, "gh has no substitute, so it refuses"
+
+
+def test_an_installed_binary_is_never_reported_unavailable(monkeypatch):
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr(
+        "gaia.skills.binaries.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert unavailable_binaries(permissions) == []
+
+
 def test_a_present_binary_resolves(monkeypatch):
     monkeypatch.setattr(
         "gaia.skills.binaries.shutil.which", lambda name: f"/usr/bin/{name}"

@@ -555,6 +555,18 @@ class SkillLibraryToolsMixin:
                     "instructions that use them cannot run — say so instead of "
                     "improvising a substitute."
                 )
+
+            from gaia.skills.binaries import unavailable_binaries
+
+            missing = unavailable_binaries(skill.parsed_permissions())
+            if missing:
+                payload["unavailable_commands"] = [p.binary for p in missing]
+                notes = " ".join(
+                    f"'{p.binary}' is not on PATH, so this skill's `{p.binary}` "
+                    f"steps cannot run as written. {p.substitute}"
+                    for p in missing
+                )
+                payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
             return payload
 
         @tool

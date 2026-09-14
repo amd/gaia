@@ -143,6 +143,17 @@ def library(tmp_path_factory):
     )
     _write_skill(
         bundled,
+        "needs-pytest",
+        _skill_markdown(
+            "needs-pytest",
+            description="A coding recipe that runs the project's test suite.",
+            marker="ZZ-NEEDS-PYTEST-BODY-MARKER-ZZ",
+            tier="community",
+            permissions=("shell:execute:pytest",),
+        ),
+    )
+    _write_skill(
+        bundled,
         "shell-runner",
         _skill_markdown(
             "shell-runner",
@@ -721,6 +732,18 @@ def test_load_surfaces_a_tools_required_gap(session):
     assert result["unmet_tools_required"] == ["launch_the_missiles"]
     assert "launch_the_missiles" in result["warning"]
     assert NEEDS_TOOLS_MARKER in session.agent.system_prompt
+
+
+def test_load_surfaces_a_missing_command_that_has_a_substitute(session, monkeypatch):
+    """pytest off PATH (the virtualenv case) loads the skill and says what to do
+    instead, rather than refusing it or granting a command that cannot run."""
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    result = call(session, "load_skill", name="needs-pytest")
+
+    assert result["status"] == "success"
+    assert result["unavailable_commands"] == ["pytest"]
+    assert "pytest.main" in result["warning"]
+    assert "pytest" not in session.agent.granted_binaries.binaries()
 
 
 # ---------------------------------------------------------------------------
