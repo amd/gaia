@@ -40,6 +40,7 @@ from gaia.agents.base.verification import (
     strip_verification_scope,
     verification_check_label,
 )
+from gaia.llm.lemonade_client import _cloud_request_error
 
 _SANDBOX_SHELL = "sandbox_shell_for_verification_scope_test"
 
@@ -391,6 +392,29 @@ def test_generic_llm_error_path_carries_the_statement(agent):
         result = agent.process_query("hello", max_steps=3)
     assert "unexpected problem" in result["result"]
     assert "unverified" in _scope_line(result["result"])
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a_refused_cloud_account_ends_the_turn_as_an_error(agent, streaming):
+    """Out of funds: the user gets where to add funds, as an error, with no
+    "try again" advice and no "unverified" footer. Streaming is the TUI's path,
+    which used to skip the typed message entirely."""
+    refused = RuntimeError(
+        f"Error in send_messages: {_cloud_request_error(412, 'fireworks')}"
+    )
+    agent.streaming = streaming
+    chat = _stub_chat(agent, refused)
+    chat.send_messages_stream = MagicMock(side_effect=refused)
+    agent.console.print_error = MagicMock()
+    with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
+        result = agent.process_query("hello", max_steps=3)
+
+    answer = result["result"]
+    assert answer.startswith("Fireworks AI refused the request (HTTP 412)")
+    assert "https://fireworks.ai/account/billing" in answer
+    assert "temporary" not in answer
+    assert VERIFICATION_SCOPE_PREFIX not in answer
+    agent.console.print_error.assert_any_call(answer)
 
 
 def test_parse_give_up_path_carries_the_statement(agent):
