@@ -43,17 +43,16 @@ from being published. Everything below defaults to `~/.gaia/cache/factory/`
 by accident. As a second safety net, this repo's `.gitignore` also blocks these
 four filenames at its own root, in case you forget `$FACTORY` and redirect bare.
 
-**macOS/Linux/WSL/Git Bash:**
 ```bash
 FACTORY=~/.gaia/cache/factory
 ```
 
-**Windows (PowerShell):**
-```powershell
-$FACTORY = "$HOME\.gaia\cache\factory"
-```
-
-Every command below is identical either way — just keep using `$FACTORY`.
+<Info>
+  On Windows, run these in **Git Bash** (installed alongside Git for Windows),
+  not PowerShell. This output has em dashes and other non-ASCII characters;
+  PowerShell's console encoding silently corrupts them on redirect (`>`),
+  while Git Bash writes clean UTF-8 like macOS/Linux.
+</Info>
 
 <Steps>
   <Step title="Extract — deterministic, no LLM, no network">
