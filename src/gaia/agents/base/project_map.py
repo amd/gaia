@@ -474,7 +474,7 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
 
     cwd = Path.cwd().resolve()
     home = Path.home().resolve()
-    for ancestor in [cwd, *list(cwd.parents)[: _MAX_ASCEND - 1]]:
+    for ancestor in [cwd, *list(cwd.parents)[:_MAX_ASCEND]]:
         if ancestor == home or ancestor == ancestor.parent:
             break
         if not is_code_repository(ancestor):
