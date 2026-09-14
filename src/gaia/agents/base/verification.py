@@ -77,12 +77,35 @@ _SCOPE_LINE_RE = re.compile(
 )
 
 
-def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
+def verification_check_label(
+    tool_name: str, tool_args: Any, result: Any = None
+) -> Optional[str]:
     """Short label when this call is a verification check, else ``None``.
 
     ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
     """
     name = (tool_name or "").strip()
+    if name == "execute_python_file" and isinstance(result, dict):
+        if not check_was_executed(result) or type(result.get("return_code")) is not int:
+            return None
+        output = "\n".join(
+            value
+            for key in ("stdout", "stderr")
+            if isinstance((value := result.get(key)), str)
+        )
+        if re.search(
+            r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
+            r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$",
+            output,
+        ):
+            return "pytest"
+        if re.search(
+            r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
+            r"(?:OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$",
+            output,
+        ):
+            return "unittest"
+        return None
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):
