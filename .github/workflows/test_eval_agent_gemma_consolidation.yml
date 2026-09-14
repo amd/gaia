@@ -73,6 +73,14 @@
 # cannot be mistaken for a complete one. `enforce: true` restores blocking for
 # both.
 #
+# ONE EXCEPTION, AND IT IS ABOUT BLAME, NOT CONVENIENCE: when the RAG embedder
+# will not load on the runner at all (#3016, EMBEDDER_OK=false), rag_quality and
+# context_retention warn instead of failing. Every other non-measurement says
+# something about the PR under test; #3016 says only that this SoC cannot serve
+# the embedder for ANY commit, so failing on it made the gate permanently red
+# and unread. Nothing else is softened — tool_selection's own non-measurements
+# still fail. Remove the exception when #3016 closes. See the gate step below.
+#
 # TIME REGRESSIONS ARE NOT COMPARABLE TO THIS BASELINE. `--compare` folds a >2x
 # per-scenario wall-clock delta into the same exit 2 as a quality regression, but
 # the committed baseline was captured against a REMOTE Lemonade over ngrok
@@ -204,6 +212,11 @@ permissions:
 env:
   BASELINE_DIR: tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914
   BACKEND_URL: http://127.0.0.1:4200
+  # This runner's home is C:\Windows\System32\config\systemprofile and the
+  # checkout is not under it, so without this every scenario carrying a
+  # `setup.index_documents` block 403s and scores as a failure (#3585).
+  # Declares the checkout's corpus, nothing wider.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
   # in — workflow_dispatch is not offered until this file is on the default
   # branch, so without this there is no way to enforce pre-merge. Reads the PR

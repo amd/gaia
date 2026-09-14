@@ -11,7 +11,7 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.file_edit import (
@@ -19,6 +19,27 @@ from gaia.agents.tools.file_edit import (
     record_read,
     record_write,
 )
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
+    """Run a post-write display step and report, never raise (#3676).
+
+    The bytes are on disk before any of these run, so a failure here is a
+    display failure, not a failed edit. Letting it reach the tool's ``except``
+    turned a completed write into ``{"status": "error"}``, and the model then
+    told the user the file was untouched.
+    """
+    if console is None:
+        return None
+    try:
+        show(console)
+        return None
+    except Exception as e:
+        logger.warning("Could not display the change (the write succeeded): %s", e)
+        return f"the file was written; displaying the change failed: {e}"
 
 
 class FunctionLookupError(Exception):
@@ -802,11 +823,18 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
+            """Create a text file, or replace one wholesale, without validation.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, size limits, backup creation, and audit logging.
+            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
+            .js), configuration (.yml, .json, .toml), plain text.
+
+            Prefer edit_file when changing PART of a file that already exists —
+            this replaces the whole thing. Use write_python_file instead only
+            when you want the write REFUSED if the content is not valid Python.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, size limits, backup
+            creation, and audit logging.
 
             Args:
                 file_path: Path where to write the file
@@ -854,16 +882,20 @@ class FileIOToolsMixin:
                 record_write(str(path), content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if content.strip():
-                        console.print_prompt(
-                            content,
-                            title=f"✏️ write_file → {path}",
-                        )
-                    else:
-                        console.print_info(
+                if content.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_prompt(
+                            content, title=f"✏️ write_file → {path}"
+                        ),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
                             f"write_file: {path} was created but no content was written."
-                        )
+                        ),
+                    )
 
                 # Audit successful write
                 if path_validator is not None:
@@ -882,6 +914,8 @@ class FileIOToolsMixin:
                 }
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -896,11 +930,19 @@ class FileIOToolsMixin:
             new_content: str,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Edit any file by replacing old content with new content (no syntax validation).
+            """Change part of a text file in place, without rewriting the rest.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, backup creation, and audit logging.
+            The default way to edit anything: documentation (.md, .mdx, .rst),
+            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
+            .toml), plain text. Prefer it over rewriting a file with write_file,
+            and over shelling out to sed or a here-doc.
+
+            Use edit_python_file instead only when you want the edit REFUSED if
+            it would break Python syntax.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, backup creation, and audit
+            logging.
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
@@ -1001,11 +1043,18 @@ class FileIOToolsMixin:
                 record_write(str(path), updated_content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if diff.strip():
-                        console.print_diff(diff, os.path.basename(str(path)))
-                    else:
-                        console.print_info(f"edit_file: No changes were made to {path}")
+                if diff.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_diff(diff, os.path.basename(str(path))),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
+                            f"edit_file: No changes were made to {path}"
+                        ),
+                    )
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -1030,6 +1079,8 @@ class FileIOToolsMixin:
                 }
                 if backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)

@@ -2865,14 +2865,11 @@ class MemoryMixin(ProceduralMemoryMixin):
               time_from : ISO 8601 date lower bound (e.g. '2026-01-01')
               time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
 
-            At least one parameter required."""
+            All optional; a bare recall() lists recent non-sensitive rows."""
             _recall_t0 = time.perf_counter()
-            if not any([query, category, domain, context, entity, time_from, time_to]):
-                return {
-                    "status": "error",
-                    "message": "Provide at least one of: query, category, domain, context, entity, time_from, time_to",
-                }
-
+            unfiltered = not any(
+                [query, category, domain, context, entity, time_from, time_to]
+            )
             # Adaptive top_k based on query complexity
             if limit <= 0:
                 if query:
@@ -2979,9 +2976,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                     filtered.append(item)
                 results = filtered[offset : offset + limit]
             else:
+                # ``context=""`` is an equality filter matching nothing.
+                # A filterless browse is the probe a greeting makes, and on a
+                # cloud session what it returns leaves the machine — so it
+                # alone holds back sensitive rows; any filter brings them back.
                 _db_t0 = time.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
-                    context=context, limit=limit, offset=offset
+                    context=context or None,
+                    sensitive=False if unfiltered else None,
+                    limit=limit,
+                    offset=offset,
                 )
                 logger.debug(
                     "recall: get_all_knowledge took %.1fms",

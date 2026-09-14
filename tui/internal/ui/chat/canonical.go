@@ -97,10 +97,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 
 	case event.CanonicalTokenEvent:
-		if !m.firstToken {
-			m.firstToken = true
-			m.ttft = time.Since(m.queryStart)
-		}
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
@@ -200,11 +196,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
-		// Server-reported ttft fallback for turns where no token ever
-		// streamed client-side (e.g. non-streaming tool-calling requests).
-		if !m.firstToken && usage.TTFT > 0 {
-			m.ttft = time.Duration(usage.TTFT * float64(time.Second))
-		}
+		// ttft is the BACKEND's own measurement or nothing — see
+		// CanonicalUsage. The client used to stamp it when the first token
+		// reached the screen, which on a multi-step turn is the time the agent
+		// took to finish deciding, not the model's latency: an 11-step turn
+		// printed "2208.3s · ttft 2206.8s".
+		ttft := time.Duration(usage.TTFT * float64(time.Second))
 		// `answer` is the contract's authoritative field (§4), so it wins over the
 		// streamed tokens rather than the other way round — otherwise the view and
 		// the transcript pushed back as `context` could disagree. The buffered
@@ -223,7 +220,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Content:   content,
 				Rendered:  components.RenderMarkdown(content),
 				Duration:  time.Since(m.queryStart),
-				TTFT:      m.ttft,
+				TTFT:      ttft,
+				TokPerS:   usage.TokPerS,
 				Steps:     usage.Steps,
 				ToolsUsed: usage.ToolsUsed,
 				Tokens:    usage.Tokens,

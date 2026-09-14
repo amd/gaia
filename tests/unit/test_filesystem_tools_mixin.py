@@ -681,10 +681,64 @@ class TestFindFiles:
         ]
         self.agent._fs_index = mock_index
 
-        result = self.find(query="indexed", search_type="name", scope="cwd")
+        result = self.find(query="indexed", search_type="name", scope=str(tmp_path))
         assert "indexed.txt" in result
         assert "index" in result.lower()
         mock_index.query_files.assert_called_once()
+
+    def test_index_hits_outside_scope_are_dropped(self, tmp_path):
+        """An index row outside the caller's scope is not reported."""
+        _populate_directory(tmp_path)
+        scoped = tmp_path / "subdir"
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "elsewhere.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="nested", search_type="name", scope=str(scoped))
+        assert "elsewhere.txt" not in result
+        # Falls through to the filesystem search of the scoped directory.
+        assert "nested.txt" in result
+
+    def test_index_hits_inside_scope_are_kept(self, tmp_path):
+        """An index row nested under the caller's scope still counts."""
+        scoped = tmp_path / "subdir"
+        scoped.mkdir()
+        nested = scoped / "deeper"
+        nested.mkdir()
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(nested / "report.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="report", search_type="name", scope=str(scoped))
+        assert "report.txt" in result
+        assert "index" in result.lower()
+
+    def test_unbounded_scope_keeps_every_index_hit(self, tmp_path):
+        """'smart' reaches indexed directories, so nothing is filtered out."""
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="indexed", search_type="name", scope="smart")
+        assert "indexed.txt" in result
 
     def test_find_missing_scope_errors_before_index(self, tmp_path):
         """A missing caller scope errors even when the index could answer."""
