@@ -4,7 +4,7 @@
  * /query integration test (#2097): startSidecar spawns the REAL Python sidecar
  * (dev mode — packaging/server.py with the scripted fake-agent seam from
  * test/fixtures/query_test_server.py), then drives the typed client end-to-end
- * over real HTTP: the 2.4 version handshake, the bearer gate, the canonical
+ * over real HTTP: the SCHEMA_VERSION handshake, the bearer gate, the canonical
  * status -> tool_call -> tool_result -> final sequence, and mid-run cancel.
  *
  * Needs a Python interpreter that can import the email agent's deps (fastapi,
@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { HttpError } from "../src/errors.js";
 import { startSidecar, shutdown, type Sidecar } from "../src/lifecycle.js";
-import type { QueryEvent } from "../src/types.js";
+import { SCHEMA_VERSION, type QueryEvent } from "../src/types.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..", "..", "..");
@@ -71,8 +71,8 @@ describe.skipIf(!python)("query() against the real sidecar (dev mode)", () => {
     fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${python}" "${FIXTURE}" "$@"\n`, {
       mode: 0o755,
     });
-    // verifyVersion defaults ON: this IS the 2.4-handshake acceptance — the
-    // client (SCHEMA_VERSION 2.4) must accept the sidecar's reported apiVersion.
+    // verifyVersion defaults ON: this IS the SCHEMA_VERSION-handshake acceptance —
+    // the client must accept the sidecar's reported apiVersion.
     sidecar = await startSidecar({
       binaryPath: wrapper,
       port: PORT,
@@ -85,9 +85,9 @@ describe.skipIf(!python)("query() against the real sidecar (dev mode)", () => {
     if (wrapperDir) fs.rmSync(wrapperDir, { recursive: true, force: true });
   });
 
-  it("reports apiVersion 2.4 (the handshake already accepted it at startup)", async () => {
+  it("reports the current apiVersion (the handshake already accepted it at startup)", async () => {
     const v = await sidecar.client.version();
-    expect(v.apiVersion).toBe("2.14");
+    expect(v.apiVersion).toBe(SCHEMA_VERSION);
   });
 
   it("streams the canonical status -> tool_call -> tool_result -> final sequence", async () => {
