@@ -63,6 +63,13 @@ class GoogleOAuthProvider:
     provider_id: str = "google"
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
+    # Google's token-revocation endpoint (RFC 7009-alike; takes either an
+    # access or refresh token as ``token=``). Its presence is what
+    # ``flow.revoke_provider_token`` uses to decide whether a real
+    # provider-side revoke is even possible for this provider (#2591) —
+    # never assume every provider has one (Microsoft does not; see
+    # ``MicrosoftOAuthProvider.revoke_url``).
+    revoke_url: str | None = "https://oauth2.googleapis.com/revoke"
     default_scopes: Sequence[str] = (
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
