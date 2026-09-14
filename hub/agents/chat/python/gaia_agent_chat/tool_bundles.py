@@ -177,10 +177,11 @@ DOC_BUNDLES = [
 # ``query_documents`` -- that answer "what is in this file / what do my
 # documents say" without a round trip, and the two file-edit tools. Editing is
 # always on because semantic selection cannot rank it: on explicit edit
-# requests the edit tools lost the dynamic slots to unrelated bundles (#3752). Everything else, shell and the web
-# included, is a bundle: it arrives when the turn asks for it. Both entry
-# points are bundle members too, so a file-shaped or document-shaped turn pulls
-# their whole cohort in with them.
+# requests the edit tools lost the dynamic slots to unrelated bundles (#3752).
+# Everything else, shell and the web included, is a bundle: it arrives when the
+# turn asks for it. ``query_documents`` is a bundle member too, so a
+# document-shaped turn pulls its whole cohort in with it; the ``file_edit``
+# cohort is now entirely CORE.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
