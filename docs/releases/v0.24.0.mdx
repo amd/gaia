@@ -1,33 +1,34 @@
 ---
 title: "v0.24.0"
-description: "The flagship agent draws images, summarizes meetings, and orients itself before acting; one command now actually installs and runs it; and a file-read tool that could escape the --allowed-paths sandbox is fixed."
+description: "The flagship agent draws images, summarizes meetings, and orients itself before acting; one command now actually installs and runs it; and an attached document can no longer widen the agent's read access to its whole parent directory."
 ---
 
 # GAIA v0.24.0 Release Notes
 
 ## Breaking Changes
 
-- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship separately; the capability is now the flagship agent's tool surface, driven by a `SKILL.md` in `hub/skills/`. Installing or launching one of these by id now fails — use `gaia hub install gaia --trust` and load the matching skill instead. (PR [#2995](https://github.com/amd/gaia/pull/2995))
+- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship separately; the capability is now a `SKILL.md` in `hub/skills/` on the flagship agent. Installing or launching one of these by id now fails — use `gaia hub install gaia --trust` and load the matching skill instead. (PR [#2995](https://github.com/amd/gaia/pull/2995))
+- **The TUI control API dropped its hub-browser fields** — `view` is now `splash | preflight | chat`, and `hub_tab`, `hub_tab_index`, `selected_agent_id`, `visible_agent_ids`, `filtering`, and `can_return_to_hub` are gone from `/status` and `/wait`; a new `blocker` field names what's stopping a launch. Anyone driving the TUI over the control API needs to update. (PR [#3120](https://github.com/amd/gaia/pull/3120))
 
 ## What's New
 
-- **`gaia hub install gaia --trust` actually installs and runs the flagship agent** — the daemon had no entry to run it as a sidecar, the one-line installers didn't ship its binary, and `gaia init` set up a different agent than the one the terminal UI opens. All three are fixed, and downloading GAIA now gives a real double-clickable installer instead of a raw binary telling you to go find `cmd.exe`. (PRs [#3031](https://github.com/amd/gaia/pull/3031), [#3146](https://github.com/amd/gaia/pull/3146), [#3330](https://github.com/amd/gaia/pull/3330), [#3125](https://github.com/amd/gaia/pull/3125), [#3120](https://github.com/amd/gaia/pull/3120))
+- **`gaia hub install gaia --trust` actually installs and runs the flagship agent** — the daemon had no entry to run it as a sidecar, the one-line installers didn't ship its binary, and `gaia init` set up a different agent than the terminal UI opens. All three are fixed, and downloading GAIA now gives a real installer instead of a raw binary telling you to find `cmd.exe`. (PRs [#3031](https://github.com/amd/gaia/pull/3031), [#3146](https://github.com/amd/gaia/pull/3146), [#3330](https://github.com/amd/gaia/pull/3330), [#3125](https://github.com/amd/gaia/pull/3125), [#3120](https://github.com/amd/gaia/pull/3120))
 
-- **The agent draws pictures, summarizes meetings, and orients itself first** — "draw me a red bicycle" now reaches the image tools instead of producing nothing; pointing it at a recording (`summarize this meeting: standup.mp4`) returns a speaker-attributed transcript plus a brief with decisions and action items; and every task starts with a short scan of the project's shape instead of guessing paths from scratch. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3597](https://github.com/amd/gaia/pull/3597), [#3405](https://github.com/amd/gaia/pull/3405))
+- **The agent draws pictures, summarizes meetings, and orients itself first** — "draw me a red bicycle" now reaches the image tools; pointing it at a recording (`summarize this meeting: standup.mp4`) returns a speaker-attributed transcript with decisions and action items; and every task starts with a short scan of the project's shape instead of guessing paths from scratch. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3597](https://github.com/amd/gaia/pull/3597), [#3405](https://github.com/amd/gaia/pull/3405))
 
-- **Skills load themselves, and corrections stick** — an installed skill like `github-triage` is now matched to your question automatically instead of requiring you to name it, and a correction you give the agent is learned into memory instead of requiring a hand-edit of the shipped `SKILL.md`. (PRs [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
+- **Skills load themselves, and corrections stick** — an installed skill like `github-triage` is now matched to your question automatically instead of requiring you to name it, and a correction is learned into memory instead of requiring a hand-edit of the shipped `SKILL.md`. (PRs [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
 
-- **Every answer states whether it was checked** — the agent now ends each turn with one line naming what it ran and what passed, instead of reporting success in the same tone whether or not anything was verified; `--trace` in the TUI records every tool call and result in order, so a wrong answer can be replayed and diagnosed instead of just re-described. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
+- **Every answer states whether it was checked** — the agent now ends each turn with one line naming what it ran and what passed, instead of reporting success in the same tone regardless of what was verified; `--trace` in the TUI records every tool call and result, so a wrong answer can be replayed and diagnosed. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
 
-- **The TUI takes the mouse** — the wheel scrolls, a printed link is clickable, and a double click copies the message under it (`Ctrl+T` hands back native drag-select); a wide terminal now draws to its actual width instead of wrapping at 80 columns; and you can point the TUI at a local, Fireworks, or AMD Gateway model through Lemonade. (PRs [#3699](https://github.com/amd/gaia/pull/3699), [#3006](https://github.com/amd/gaia/pull/3006), [#3672](https://github.com/amd/gaia/pull/3672))
+- **The TUI takes the mouse** — the wheel scrolls, a printed link is clickable, a double click copies the message under it; a wide terminal draws to its actual width instead of wrapping at 80 columns; and you can point the TUI at a local, Fireworks, or AMD Gateway model through Lemonade. (PRs [#3699](https://github.com/amd/gaia/pull/3699), [#3006](https://github.com/amd/gaia/pull/3006), [#3672](https://github.com/amd/gaia/pull/3672))
 
-- **Run Lemonade without the machine-wide installer** — `gaia lemonade embedded start` downloads, verifies, and runs GAIA's own private Lemonade Server behind a generated API key, so getting a model serving no longer needs admin rights or a shared tray app. (PR [#3121](https://github.com/amd/gaia/pull/3121))
+- **Run Lemonade without the machine-wide installer** — `gaia lemonade embedded start` downloads, verifies, and runs GAIA's own private Lemonade Server; no admin rights or shared tray app needed. (PR [#3121](https://github.com/amd/gaia/pull/3121))
 
 This release runs against Lemonade Server 11.8.1.
 
 ## Security
 
-- **A file-read tool could escape the `--allowed-paths` sandbox (CWE-284)** — `write_file` enforced the sandbox boundary, but `read_file` checked no boundary at all, so a file outside `--allowed-paths` could be read even though writing to it was refused. Both read tools now enforce the same boundary as writes, and reads refuse credential-shaped files even inside an allowed folder. (PR [#3594](https://github.com/amd/gaia/pull/3594))
+- **Attaching a document could silently widen the agent's read scope to its whole parent directory** — attach one file from your home folder and the agent could read everything else under it. The grant is now the file itself. Reads also gained a credential denylist (`.env`, SSH/AWS/GPG keys refuse even inside an allowed folder), and writes now refuse shell rc files, PowerShell profiles, autostart entries, and git hooks. (PR [#3594](https://github.com/amd/gaia/pull/3594))
 - Also hardened: a `.bak` backup file could be imported as if it were the module it backed up (PR [#3748](https://github.com/amd/gaia/pull/3748)), and a PowerShell sink could execute untrusted text instead of only displaying it (PR [#3359](https://github.com/amd/gaia/pull/3359)).
 
 ## Bug Fixes
@@ -39,14 +40,14 @@ A selection of the user-visible fixes this release — the full list is in the c
 - **The npm sidecar no longer attaches to a foreign server** (PR [#3078](https://github.com/amd/gaia/pull/3078)) — it now verifies the server it finds is actually its own before using it.
 - **A turn parked on a confirmation prompt no longer hangs when stdin closes** (PR [#3080](https://github.com/amd/gaia/pull/3080)) — the agent ends the turn instead of waiting forever.
 - **Telegram's background polling survives** (PR [#3272](https://github.com/amd/gaia/pull/3272)) — the adapter no longer silently stops receiving messages.
-- **Uninstalling GAIA removes the embedded Lemonade runtime it installed** (PR [#3277](https://github.com/amd/gaia/pull/3277)) — `gaia uninstall` no longer leaves it behind.
+- **`gaia uninstall --purge` removes the embedded Lemonade runtime it installed** (PR [#3277](https://github.com/amd/gaia/pull/3277)) — previously a full purge left `~/.gaia/lemonade` behind entirely; a live embedded daemon must be stopped first.
 - **Outlook and Gmail search operators translate correctly for the email agent** (PRs [#3042](https://github.com/amd/gaia/pull/3042), [#3562](https://github.com/amd/gaia/pull/3562), [#3619](https://github.com/amd/gaia/pull/3619)) — a query that used to fail silently or match the wrong messages against Outlook's Graph API now works or fails loudly.
 - **RAG indexing honors a document's actual success flag** (PR [#3678](https://github.com/amd/gaia/pull/3678)) — a failed index no longer gets reported as indexed at every call site that checked it.
 - **Claude tool-call history survives across turns** (PR [#3410](https://github.com/amd/gaia/pull/3410)) — a multi-turn tool conversation no longer loses earlier tool results.
 - **An ambiguous edit is refused instead of silently changing the first match** (PR [#3396](https://github.com/amd/gaia/pull/3396)) — `edit_file` asks for a more specific match rather than guessing which occurrence you meant.
 - **A port collision between the MCP bridge, Agent UI, TUI, and Telegram is resolved** (PR [#3604](https://github.com/amd/gaia/pull/3604)) — the four no longer fight over the same default port.
 - **Telegram reports unsupported media types instead of failing silently** (PR [#3263](https://github.com/amd/gaia/pull/3263)).
-- **`GET /health` reports real component status** (PR [#2601](https://github.com/amd/gaia/pull/2601)) — it used to report `ok` even when the Lemonade backend couldn't serve requests; it now reports LLM and RAG status too.
+- **`GET /health` reports real component status** (PR [#2601](https://github.com/amd/gaia/pull/2601)) — it used to report `ok` even with a dead Lemonade backend; it now reports LLM and RAG status too.
 
 ## Contributors
 
