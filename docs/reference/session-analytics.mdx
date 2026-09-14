@@ -28,28 +28,32 @@ use case.
 
 ## Prerequisites
 
-None beyond a standard GAIA dev install (`uv pip install -e ".[dev]"`) — the
-`gaia.factory` package ships with the core wheel. The optional intent-classification
-step needs a way to run an LLM subagent (a Claude Code session), not an API key.
+If you can already run `gaia` commands in this repo, you're set — the harvest
+scripts need nothing beyond the base install (no `[dev]`, `[eval]`, or other
+extras). If not, follow the [Dev Guide](/reference/dev) first
+(`uv venv && uv pip install -e .`). The optional intent-classification step
+needs a way to run an LLM subagent (e.g. a Claude Code session), not an API key.
 
 ## Quick start
 
 Never redirect output into the repository. These tables are built from real
 transcripts — an untracked `tables.md` at the repo root is one `git add -A` away
-from being published. Everything below writes to `~/.gaia/cache/factory/`, which
-is already `.gitignore`d.
+from being published. Everything below defaults to `~/.gaia/cache/factory/`
+(created automatically), which is already `.gitignore`d.
+
+<Info>
+  Examples use bash. On Windows PowerShell, replace `~` with `$HOME` and quote
+  paths with backslashes as usual.
+</Info>
+
+```bash
+FACTORY=~/.gaia/cache/factory
+```
 
 <Steps>
-  <Step title="Set up the output directory">
-    ```bash
-    FACTORY=~/.gaia/cache/factory
-    mkdir -p "$FACTORY"
-    ```
-  </Step>
-
   <Step title="Extract — deterministic, no LLM, no network">
     Roughly linear in transcript count. Writes `traces.jsonl`, `intents.jsonl`, and
-    `stats.json` into `~/.gaia/cache/factory/` by default.
+    `stats.json` into `$FACTORY`.
 
     ```bash
     python -m gaia.factory.harvest.scan
@@ -61,7 +65,7 @@ is already `.gitignore`d.
     python -m gaia.factory.harvest.report > "$FACTORY/tables.md"
     ```
 
-    With use-case labels (see [Classifying intent](#classifying-intent) below):
+    With use-case labels, once you've done [Classifying intent](#classifying-intent) below:
 
     ```bash
     python -m gaia.factory.harvest.report --labels "$FACTORY/labels.txt" > "$FACTORY/tables.md"
@@ -71,6 +75,12 @@ is already `.gitignore`d.
   <Step title="Context — per-request prompt size and local KV-cache memory">
     Re-reads the raw transcripts, because `scan`/`report` aggregate per session and
     that hides how large any single request got.
+
+    ```bash
+    python -m gaia.factory.harvest.context > "$FACTORY/context.md"
+    ```
+
+    With use-case labels:
 
     ```bash
     python -m gaia.factory.harvest.context --labels "$FACTORY/labels.txt" > "$FACTORY/context.md"
@@ -86,9 +96,18 @@ is already `.gitignore`d.
   </Step>
 </Steps>
 
-All four accept `--root` (transcripts elsewhere) and `--out` / `--cache`; `context`
-and `savings` also take `--projects` if the raw transcripts are not under
-`~/.claude/projects`.
+No transcripts yet? `scan` fails loudly and tells you which directory it searched
+instead of silently reporting zero — that's expected on a machine that has never
+run Claude Code.
+
+### Flags
+
+| Script | Extra flags |
+|---|---|
+| `scan` | `--root` (transcripts elsewhere), `--out` (default `$FACTORY`) |
+| `report` | `--cache` (default `$FACTORY`), `--labels` |
+| `context` | `--cache`, `--projects` (raw transcripts, if not under `~/.claude/projects`), `--labels` |
+| `savings` | `--cache`, `--projects` |
 
 ## Output files
 
@@ -96,7 +115,7 @@ and `savings` also take `--projects` if the raw transcripts are not under
 |---|---|
 | `traces.jsonl` | One normalized trace per session: ordered steps, outcomes, tokens, subagents |
 | `intents.jsonl` | One line per session: goal, title, steps, turns, tokens, cost, duration |
-| `stats.json` | Every aggregate, including the `effectiveness` and `error_profile` blocks |
+| `stats.json` | Every aggregate, including `effectiveness` (which nests `error_profile`, corrections, thrash, and more) |
 | `tables.md` | Human-readable tables rendered from `stats.json` (your redirect target) |
 | `context.md` | Per-request prompt-size and KV-cache figures |
 | `savings.md` | Token/dollar savings estimates per proposed fix |
@@ -106,11 +125,11 @@ and `savings` also take `--projects` if the raw transcripts are not under
 `scan` produces `intents.jsonl` but assigns no use-case label. To add one:
 
 1. Split the intents into batches of ~70.
-2. For each batch, have a subagent assign one primary use-case plus up to two
-   secondary tags, returning strict JSON. Use the **same taxonomy** across every
-   batch (e.g. `pr_lifecycle`, `code_review`, `doc_audit`, `feature_impl`,
-   `ci_debug`, `security_fix`, `research`), extended only where the corpus demands it.
-3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`
+2. For each batch, have a subagent assign one use-case tag per session, returning
+   strict JSON. Use the **same taxonomy** across every batch (e.g. `pr_lifecycle`,
+   `code_review`, `doc_audit`, `feature_impl`, `ci_debug`, `security_fix`,
+   `research`), extended only where the corpus demands it.
+3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <use-case>`, one per line
    — it carries session-id prefixes, so it stays in the cache directory, never in a repo.
 4. Re-run `report --labels "$FACTORY/labels.txt"` (and `context` the same way).
 
