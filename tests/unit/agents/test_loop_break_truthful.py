@@ -113,7 +113,7 @@ def test_loop_break_on_repeated_success_does_not_claim_completion(agent):
     )
     assert "Task completed" not in summary
     assert "query_documents" in summary and "4" in summary
-    assert "not finished" in summary
+    assert "can't confirm" in summary
 
 
 def test_loop_break_with_empty_step_results_does_not_claim_completion(agent):
