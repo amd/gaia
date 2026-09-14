@@ -476,8 +476,8 @@ export function isNpmSidecar(agent: Agent): boolean {
  *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
  *    and npm as the embed option — no broken `pip install` (there's no wheel)
  *    and no unverified source build.
- *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
- *    source build (language-driven, the long-standing default).
+ *  - Otherwise: the GAIA app install and a source build. Implementation
+ *    language does not prove that a package was published to PyPI.
  */
 export function installMethods(agent: Agent): InstallMethod[] {
   // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
@@ -545,14 +545,6 @@ export function installMethods(agent: Agent): InstallMethod[] {
       note: "Recommended — installs into your GAIA app and registers the agent automatically.",
     },
   ];
-  if (agent.language === "python") {
-    methods.push({
-      key: "pip",
-      label: "pip",
-      command: `pip install gaia-agent-${agent.id}`,
-      note: "Python package from PyPI. Discovered via the gaia.agent entry-point group.",
-    });
-  }
   methods.push({
     key: "source",
     label: "Source",
