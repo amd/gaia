@@ -987,15 +987,20 @@ class _CancelParkFakeAgent:
         return {"answer": "Completed."}
 
 
-# --- (a) Pre-scan happy path -- THE key render-map proof --------------------
+# --- (a) Pre-scan happy path -- the triage reply is the single view --------
+#
+# ``pre_scan_inbox`` deliberately draws NO render card (sse_translation.py's
+# ``_RENDER_TOOL_TO_LANG`` comment): a card landing mid-turn duplicated the
+# model's own triage answer, so the user saw two overlapping views of one
+# inbox. The tool_result still carries the raw data (refs resolve from it),
+# but the triage text in the terminal ``final`` event is the only rendered
+# view.
 
 
 class TestPreScanCardSurvivesRealPipeline:
     pytestmark = pytestmark_integration
 
-    def test_raw_query_stream_carries_the_render_card(
-        self, live_email_app, monkeypatch
-    ):
+    def test_raw_query_stream_carries_no_render_card(self, live_email_app, monkeypatch):
         from gaia_agent_email import query_routes
 
         from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
@@ -1012,11 +1017,15 @@ class TestPreScanCardSurvivesRealPipeline:
         assert len(tool_results) == 1
         tr = tool_results[0]
         assert tr["tool"] == "pre_scan_inbox"
-        assert tr["render"] == "email_pre_scan"
+        assert "render" not in tr
         assert tr["data"]["kind"] == "email_pre_scan"
         assert tr["data"]["actionable"][0]["message_id"] == "m1"
 
-    def test_relay_query_carries_the_render_card(self, live_email_app, monkeypatch):
+        finals = [e for e in events if e.get("type") == "final"]
+        assert len(finals) == 1
+        assert finals[0]["answer"] == "Here's your inbox pre-scan."
+
+    def test_relay_query_carries_no_render_card(self, live_email_app, monkeypatch):
         from gaia_agent_email import query_routes
 
         from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
@@ -1029,8 +1038,12 @@ class TestPreScanCardSurvivesRealPipeline:
         tool_results = [e for e in handler.events if e.get("type") == "tool_result"]
         assert len(tool_results) == 1
         tr = tool_results[0]
-        assert tr["render"] == "email_pre_scan"
+        assert "render" not in tr
         assert tr["data"]["kind"] == "email_pre_scan"
+
+        answers = [e for e in handler.events if e.get("type") == "answer"]
+        assert len(answers) == 1
+        assert answers[0]["content"] == "Here's your inbox pre-scan."
 
 
 # --- (b) Send-class confirmation --------------------------------------------
