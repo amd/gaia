@@ -604,9 +604,7 @@ class TestStringResults:
             for i in range(400)
         ]
 
-        result = agent._handle_large_tool_result(
-            "search_code", json.dumps(records), []
-        )
+        result = agent._handle_large_tool_result("search_code", json.dumps(records), [])
 
         # A str in stays a str out: the tool's declared result type is part of
         # its contract with whatever reads it next.
