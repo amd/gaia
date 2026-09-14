@@ -213,4 +213,44 @@ describe("eval scorecard in catalog", () => {
     expect(entry.latest_version).toBe("0.2.0");
     expect(entry.eval_score_version).toBe("0.1.0");
   });
+
+  it("prefers inherited_from over agent.version for a carry-forward scorecard (#2965)", async () => {
+    // A patch release that reuses a prior eval's numbers (release_scorecard.py's
+    // carry_forward()) stamps agent.version with the RELEASE version and keeps
+    // the version the eval actually measured in inherited_from. Reading only
+    // agent.version would caption a carried-forward score as freshly measured.
+    const carryForwardScorecard = [
+      "---",
+      "schema_version: 1",
+      "agent:",
+      "  name: Test Agent",
+      "  version: 0.2.0", // release version — NOT what was measured
+      "inherited_from: 0.1.0", // version the eval actually ran at
+      "aggregate:",
+      "  name: weighted_accuracy",
+      "  value: 87.5",
+      "generated_at: '2026-06-26T00:00:00Z'",
+      "---",
+      "# Test Agent — Eval Scorecard v0.2.0 (carried forward from v0.1.0)",
+      "",
+      "**Aggregate score: 87.5** (out of 100)",
+    ].join("\n");
+
+    const env = makeEnv();
+    await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.2.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.2.0-py3-none-any.whl",
+        evalScorecard: carryForwardScorecard,
+      }),
+      env as never
+    );
+
+    const res = await worker.fetch(get("/index.json"), env as never);
+    const entry = ((await res.json()) as any).agents[0];
+    expect(entry.latest_version).toBe("0.2.0");
+    expect(entry.eval_score_version).toBe("0.1.0");
+  });
 });
