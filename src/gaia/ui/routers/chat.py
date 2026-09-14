@@ -261,10 +261,12 @@ class UserInputRequest(BaseModel):
 async def user_input(request: UserInputRequest):
     """Answer a mid-run ``needs_input`` question from the agent (#2595).
 
-    The agent blocks server-side (today, an email-relay run parked in
-    ``SSEOutputHandler.resolve_relay_input()``) until this endpoint delivers
-    the answer. The frontend calls this when the user submits a NeedsInput
-    card's option or free-text answer.
+    Two run shapes can be waiting on this: an in-process agent blocked in
+    ``SSEOutputHandler.request_user_input_blocking()`` (resolved via
+    ``resolve_user_input``), or an email-relay run blocked on the sidecar's
+    own ``/query`` loop (resolved via ``resolve_relay_input``, which posts to
+    the sidecar). Tried in that order; a session with neither pending is a
+    404, never a silent no-op accept.
     """
     from gaia.ui.email_sidecar.errors import SidecarError
 
@@ -276,13 +278,15 @@ async def user_input(request: UserInputRequest):
             status_code=404,
             detail="No active chat session found for this session ID",
         )
-    try:
-        delivered = handler.resolve_relay_input(request.request_id, request.value)
-    except SidecarError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Could not deliver the answer: {exc}",
-        ) from exc
+    delivered = handler.resolve_user_input(request.request_id, request.value)
+    if not delivered:
+        try:
+            delivered = handler.resolve_relay_input(request.request_id, request.value)
+        except SidecarError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not deliver the answer: {exc}",
+            ) from exc
     if not delivered:
         raise HTTPException(
             status_code=404,

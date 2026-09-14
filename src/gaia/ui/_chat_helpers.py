@@ -1181,6 +1181,24 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _canonicalize_user_input_request(event: dict) -> dict:
+    """Translate a raw ``user_input_request`` event (emitted by
+    ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
+    wire shape (#2595) — the same shape the email-relay path produces via
+    ``CanonicalTranslator``, so the frontend's NeedsInputCard renders either
+    source identically.
+    """
+    return {
+        "type": "needs_input",
+        "request_id": str(event.get("request_id") or ""),
+        "question": str(event.get("message") or ""),
+        "options": event.get("options") or [],
+        "allow_free_text": bool(event.get("allow_free_text", True)),
+        "sensitive": bool(event.get("sensitive", False)),
+        "timeout_seconds": event.get("timeout_seconds"),
+    }
+
+
 # Remediation copy for a turn that produced no answer at all — reserved for a
 # genuine backend failure, never a deliberate cancel or an intentionally-empty
 # final (see _empty_answer_outcome).
@@ -2534,6 +2552,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     if (event.get("decision") or "BLOCK").upper() == "BLOCK":
                         _persist_policy_block_if_needed()
+                elif event_type == "user_input_request":
+                    event = _canonicalize_user_input_request(event)
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.
