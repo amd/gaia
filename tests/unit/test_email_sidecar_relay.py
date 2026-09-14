@@ -987,20 +987,17 @@ class _CancelParkFakeAgent:
         return {"answer": "Completed."}
 
 
-# --- (a) Pre-scan happy path -- the triage reply is the single view --------
-#
-# ``pre_scan_inbox`` deliberately draws NO render card (sse_translation.py's
-# ``_RENDER_TOOL_TO_LANG`` comment): a card landing mid-turn duplicated the
-# model's own triage answer, so the user saw two overlapping views of one
-# inbox. The tool_result still carries the raw data (refs resolve from it),
-# but the triage text in the terminal ``final`` event is the only rendered
-# view.
+# --- (a) Pre-scan happy path -- no render card is the intended design ------
 
 
-class TestPreScanCardSurvivesRealPipeline:
+class TestPreScanOmitsRenderCardByDesign:
+    # Why: sse_translation.py's ``_RENDER_TOOL_TO_LANG`` comment — pre_scan_inbox
+    # deliberately has no entry there.
     pytestmark = pytestmark_integration
 
-    def test_raw_query_stream_carries_no_render_card(self, live_email_app, monkeypatch):
+    def test_raw_query_stream_omits_render_card_by_design(
+        self, live_email_app, monkeypatch
+    ):
         from gaia_agent_email import query_routes
 
         from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
@@ -1025,7 +1022,7 @@ class TestPreScanCardSurvivesRealPipeline:
         assert len(finals) == 1
         assert finals[0]["answer"] == "Here's your inbox pre-scan."
 
-    def test_relay_query_carries_no_render_card(self, live_email_app, monkeypatch):
+    def test_relay_query_omits_render_card_by_design(self, live_email_app, monkeypatch):
         from gaia_agent_email import query_routes
 
         from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
