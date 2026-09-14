@@ -40,6 +40,20 @@ type bulkSummary struct {
 	FilterTests []string `json:"filter_tests"`
 }
 
+// preScanTotals mirrors read_tools.py's pre-needs_you-view category totals
+// (the same urgent/actionable/needs_review buckets needs_you is itself built
+// from, per _build_needs_you_view's own docstring). #2827: this is what
+// turns a bare "+N more" into a statement of what those messages actually
+// are -- it describes the composition needs_you draws from, not a precise
+// per-item classification of exactly which rows the card had no room for.
+type preScanTotals struct {
+	Urgent            int `json:"urgent"`
+	Actionable        int `json:"actionable"`
+	Informational     int `json:"informational"`
+	SuggestedArchives int `json:"suggested_archives"`
+	NeedsReview       int `json:"needs_review"`
+}
+
 type preScanPreferences struct {
 	PrioritySenders    []string          `json:"priority_senders"`
 	LowPrioritySenders []string          `json:"low_priority_senders"`
@@ -62,6 +76,8 @@ type emailPreScan struct {
 	NeedsYou           []needsYouItem      `json:"needs_you"`
 	NeedsYouTotal      int                 `json:"needs_you_total"`
 	Bulk               *bulkSummary        `json:"bulk"`
+	Totals             *preScanTotals      `json:"totals"`
+	InformationalCount int                 `json:"informational_count"`
 }
 
 // maxCardRows bounds the card's interior. 22 interior rows plus two borders is
@@ -271,7 +287,11 @@ func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (
 		p.needsYouRow(b, p.NeedsYou[i], showMailbox, keepDetail[i])
 	}
 	if extra := p.NeedsYouTotal - show; extra > 0 {
-		b.add(rationaleIndent + "+" + itoa(extra) + " more")
+		line := rationaleIndent + "+" + itoa(extra) + " more"
+		if breakdown := p.bucketBreakdownLine(); breakdown != "" {
+			line += " (" + breakdown + ")"
+		}
+		b.add(line)
 	}
 
 	if len(shownFooter) > 0 {
@@ -598,6 +618,35 @@ func (p emailPreScan) needsYouCountLabel(show int) string {
 		return itoa(show) + " of " + itoa(p.NeedsYouTotal)
 	}
 	return itoa(show)
+}
+
+// bucketBreakdownLine names what the hidden "+N more" tail is drawn from,
+// using the totals/informational_count the server already computes (#2827)
+// rather than reviving the four-bucket card #2743 replaced. needs_you is a
+// VIEW built over these same urgent/actionable/needs_review buckets (plus
+// waiting-on-you/action-item rows totals doesn't carry), so this describes
+// the composition, not an exact per-row classification of which items were
+// cut for space -- honest and cheap (no new LLM call, just fields already on
+// the wire) beats a precise count nothing on the client can actually derive.
+func (p emailPreScan) bucketBreakdownLine() string {
+	if p.Totals == nil {
+		return ""
+	}
+	var parts []string
+	add := func(n int, noun string) {
+		if n > 0 {
+			parts = append(parts, itoa(n)+" "+noun)
+		}
+	}
+	add(p.Totals.Urgent, "urgent")
+	add(p.Totals.Actionable, "actionable")
+	add(p.Totals.NeedsReview, "needs review")
+	add(p.InformationalCount, "informational")
+	add(p.Totals.SuggestedArchives, "suggested archive")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ")
 }
 
 // bulkLine states the filtered remainder AND what QUESTION was asked of it
