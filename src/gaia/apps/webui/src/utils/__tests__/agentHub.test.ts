@@ -7,6 +7,7 @@ import {
     isInstalling,
     compatLevel,
     mergeCatalogStatus,
+    normalizeCatalogVersions,
     splitAvailable,
     countUpdates,
     installedTabLabel,
@@ -69,7 +70,58 @@ describe('compatLevel', () => {
     });
 });
 
+describe('normalizeCatalogVersions', () => {
+    // The wire shape GET /api/agents/catalog really sends for an installed hub
+    // agent: installed_version + latest_version, and no `version` key (#2970).
+    it('fills version from the wire installed_version', () => {
+        const [email] = normalizeCatalogVersions([
+            agent({ id: 'email', status: 'installed', installed_version: '0.6.0', latest_version: '0.6.0' }),
+        ]);
+        expect(email.version).toBe('0.6.0');
+    });
+
+    it('keeps the installed version when an update is offered', () => {
+        const [email] = normalizeCatalogVersions([
+            agent({ id: 'email', status: 'update_available', installed_version: '0.6.0', latest_version: '0.7.0' }),
+        ]);
+        expect(email.version).toBe('0.6.0');
+        expect(email.latest_version).toBe('0.7.0');
+    });
+
+    it('falls back to the offered version for a not-installed agent', () => {
+        const [weather] = normalizeCatalogVersions([
+            agent({ id: 'weather', status: 'available', latest_version: '1.2.0' }),
+        ]);
+        expect(weather.version).toBe('1.2.0');
+    });
+
+    it('leaves version undefined when the catalog knows no version', () => {
+        const [chat] = normalizeCatalogVersions([agent({ id: 'chat', status: 'installed' })]);
+        expect(chat.version).toBeUndefined();
+    });
+});
+
 describe('mergeCatalogStatus', () => {
+    it('carries the wire installed_version onto installed agents', () => {
+        const installed = [agent({ id: 'email' })];
+        const catalog = normalizeCatalogVersions([
+            agent({ id: 'email', status: 'installed', installed_version: '0.6.0', latest_version: '0.6.0' }),
+        ]);
+        const merged = mergeCatalogStatus(installed, catalog);
+        expect(merged[0].version).toBe('0.6.0');
+        expect(merged[0].status).toBe('installed');
+    });
+
+    it('flags an update from the wire shape without a version key', () => {
+        const installed = [agent({ id: 'email' })];
+        const catalog = normalizeCatalogVersions([
+            agent({ id: 'email', status: 'update_available', installed_version: '0.6.0', latest_version: '0.7.0' }),
+        ]);
+        const merged = mergeCatalogStatus(installed, catalog);
+        expect(merged[0].version).toBe('0.6.0');
+        expect(merged[0].status).toBe('update_available');
+    });
+
     it('marks installed agents with a newer catalog version as update_available', () => {
         const installed = [agent({ id: 'chat', version: '0.1.0' })];
         const catalog = [agent({ id: 'chat', status: 'update_available', version: '0.1.0', latest_version: '0.2.0' })];

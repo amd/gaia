@@ -10,7 +10,7 @@ import { TrustGateDialog } from './TrustGateDialog';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { mergeCatalogStatus } from '../utils/agentHub';
+import { mergeCatalogStatus, normalizeCatalogVersions } from '../utils/agentHub';
 import { LANES, groupIntoLanes, filterCatalog, trustGateFor, type TrustGate } from '../utils/hubLanes';
 import './AgentHub.css';
 import './HubPage.css';
@@ -68,7 +68,7 @@ export function HubPage({ agents, activeAgentId, onSelect, onStartChat, onCreate
         setError(null);
         try {
             const res = await api.listCatalog();
-            setCatalog(res.agents || []);
+            setCatalog(normalizeCatalogVersions(res.agents || []));
             setOffline(!!res.offline);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Could not load the agent catalog.';

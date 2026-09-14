@@ -52,6 +52,21 @@ export function compatLabel(level: 'compatible' | 'warning' | 'incompatible'): s
 }
 
 /**
+ * Fill in ``version`` from the catalog wire fields (#2970). ``GET
+ * /api/agents/catalog`` sends ``installed_version`` / ``latest_version`` and
+ * never ``version``, so cards and the details modal — which all read
+ * ``version`` — showed nothing until this ran. Not-yet-installed entries fall
+ * back to the offered ``latest_version``; the Available cards hide the badge
+ * anyway, and the details modal should name the version it would install.
+ */
+export function normalizeCatalogVersions(catalog: AgentInfo[]): AgentInfo[] {
+    return catalog.map((a) => ({
+        ...a,
+        version: a.version ?? a.installed_version ?? a.latest_version,
+    }));
+}
+
+/**
  * Merge catalog entries into the locally-registered agent list so installed
  * cards can show versions and update badges. Matches by id; when the catalog
  * marks an agent ``update_available`` (or reports a newer ``latest_version``),
