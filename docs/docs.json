@@ -345,6 +345,7 @@
                   "eval"
                 ]
               },
+              "reference/session-analytics",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
