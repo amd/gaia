@@ -232,6 +232,8 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                 if e2.code == 403:
                     return "warning", f"HTTP {e2.code} (may require auth)"
                 return "broken", f"HTTP {e2.code}"
+            except (ConnectionError, TimeoutError) as e2:
+                return "warning", f"connection dropped on GET fallback: {e2}"
             except Exception as e2:
                 return "broken", str(e2)
         if e.code == 429:
@@ -255,6 +257,10 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
         return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"
+    except ConnectionError as e:
+        # http.client.RemoteDisconnected arrives unwrapped - see do_open(). A
+        # dropped connection is a network blip, not proof the link is dead.
+        return "warning", f"connection dropped: {e} (transient network failure)"
     except Exception as e:
         return "broken", str(e)
 
