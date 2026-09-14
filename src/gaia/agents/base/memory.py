@@ -428,12 +428,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 this id, so a model with a different dim works without changes.
 
         Does not raise when the embedding service is unreachable: it logs a
-        warning and degrades to a memory-disabled session (``memory_store`` is
+        warning and degrades to a memory-disabled session (``_memory_store`` is
         ``None``), so an agent still starts on a machine without Lemonade.
         ``GAIA_MEMORY_DISABLED=1`` skips init the same way — used by security
         tests and CI environments that instantiate agents without memory.
-        Callers that need a live store must check ``memory_store is None`` and
-        fail with an actionable message.
+        Accessing ``memory_store`` while disabled raises RuntimeError. Unset
+        ``GAIA_MEMORY_DISABLED`` and reinitialize after the embedding service
+        is available to enable memory.
         """
         # Explicit opt-out for environments that don't need memory (security
         # tests, lint-time imports, etc.).  This is NOT a silent fallback —
@@ -893,8 +894,10 @@ class MemoryMixin(ProceduralMemoryMixin):
     @property
     def memory_store(self):
         """Access the MemoryStore instance."""
-        if not hasattr(self, "_memory_store"):
-            raise RuntimeError("MemoryMixin not initialized. Call init_memory() first.")
+        if getattr(self, "_memory_store", None) is None:
+            raise RuntimeError(
+                "MemoryMixin not initialized or memory is disabled. Unset GAIA_MEMORY_DISABLED and call init_memory() with an available embedding service."
+            )
         return self._memory_store
 
     @property
@@ -904,7 +907,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         Raises RuntimeError if accessed before init_memory() is called.
         """
         if not hasattr(self, "_memory_session_id"):
-            raise RuntimeError("MemoryMixin not initialized. Call init_memory() first.")
+            raise RuntimeError(
+                "MemoryMixin not initialized or memory is disabled. Unset GAIA_MEMORY_DISABLED and call init_memory() with an available embedding service."
+            )
         return self._memory_session_id
 
     @property
@@ -2112,14 +2117,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
         """
-        if not hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is None:
             return ""
 
-        try:
-            return self._build_stable_memory_prompt()
-        except Exception as e:
-            logger.warning("[MemoryMixin] failed to build stable memory prompt: %s", e)
-            return ""
+        return self._build_stable_memory_prompt()
 
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
@@ -2437,7 +2438,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Log to tool_history before re-raising
             try:
-                if hasattr(self, "_memory_store") and not getattr(
+                if getattr(self, "_memory_store", None) is not None and not getattr(
                     self, "_incognito", False
                 ):
                     self._memory_store.log_tool_call(
@@ -2450,8 +2451,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         duration_ms=duration_ms,
                     )
                     self._auto_store_error(tool_name, error_msg)
-            except Exception:
-                pass
+            except Exception as log_error:
+                logger.warning(
+                    "[MemoryMixin] failed to record tool exception: %s", log_error
+                )
             raise
 
         # Truncate result summary
@@ -3236,7 +3239,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Generates new session ID and applies confidence decay.
         """
-        if hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is not None:
             self._memory_store.apply_confidence_decay()
             self._memory_session_id = str(uuid4())
             # A new session reopens the reminder window; anything still due

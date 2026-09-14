@@ -5110,3 +5110,51 @@ class TestReminderSurfacingIsBounded:
         assert "Fernbrook" in first
         assert "Current time:" in first
         assert "Fernbrook" not in host.get_memory_dynamic_context()
+
+
+@pytest.mark.parametrize("initialized", [False, True])
+def test_disabled_memory_prompt_and_reset_are_quiet(initialized, caplog):
+    host = MemoryMixin()
+    if initialized:
+        host._memory_store = None
+    host._memory_session_id = "unchanged"
+    assert host.get_memory_system_prompt() == ""
+    assert host.get_memory_dynamic_context() == ""
+    host.reset_memory_session()
+    assert host._memory_session_id == "unchanged"
+    assert not caplog.records
+    with pytest.raises(RuntimeError, match="not initialized or memory is disabled"):
+        _ = host.memory_store
+
+
+def test_enabled_memory_prompt_failure_surfaces():
+    host = MemoryMixin()
+    host._memory_store = object()
+    host._build_stable_memory_prompt = MagicMock(
+        side_effect=ValueError("invalid stored content")
+    )
+    with pytest.raises(ValueError, match="invalid stored content"):
+        host.get_memory_system_prompt()
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_failed_tool_keeps_original_error_when_memory_unavailable(disabled, caplog):
+    class RaisingAgent:
+        def _execute_tool(self, tool_name, tool_args):
+            raise ValueError("original tool failure")
+
+    class Host(MemoryMixin, RaisingAgent):
+        pass
+
+    host = Host()
+    host._memory_session_id = "test-session"
+    host._memory_store = None if disabled else MagicMock()
+    if not disabled:
+        host._memory_store.log_tool_call.side_effect = OSError("database unavailable")
+    with pytest.raises(ValueError, match="original tool failure"):
+        host._execute_tool("read_file", {})
+    if disabled:
+        assert not caplog.records
+    else:
+        assert "failed to record tool exception" in caplog.text
+        assert "database unavailable" in caplog.text
