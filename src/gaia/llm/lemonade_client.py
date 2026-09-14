@@ -289,6 +289,13 @@ def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) 
             NPU_CTX_SIZE,
         )
         ctx = NPU_CTX_SIZE
+    if override and ctx < DEFAULT_CONTEXT_SIZE:
+        get_logger(__name__).warning(
+            "GAIA_CTX_SIZE=%d is below the recommended %d tokens; agent prompts "
+            "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
+            ctx,
+            DEFAULT_CONTEXT_SIZE,
+        )
     return ctx
 
 
@@ -4280,7 +4287,7 @@ class LemonadeClient:
             if health.get("status") == "ok":
                 return True
         except Exception as exc:
-            get_logger(__name__).warning(
+            get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
             )
 
@@ -4530,7 +4537,7 @@ class LemonadeClient:
                         status.running = True
                         return status
                 except Exception as exc:
-                    get_logger(__name__).warning(
+                    get_logger(__name__).debug(
                         "Lemonade startup health probe failed: %s", exc
                     )
                 time.sleep(2)

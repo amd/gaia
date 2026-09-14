@@ -7,12 +7,19 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from gaia.config import GaiaConfig
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
     _prompt_user_for_delete,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(monkeypatch):
+    monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
 
 
 class TestEnsureModelLoaded:
