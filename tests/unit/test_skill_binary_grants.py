@@ -369,6 +369,43 @@ def test_a_policed_binary_is_refused_without_a_grant():
     assert "shell:execute:gh" in error["error"]
 
 
+class _Manager:
+    """Just enough SkillManager for a refusal to look up who grants a CLI."""
+
+    def __init__(self, skills):
+        self._skills = skills
+
+    def discover(self):
+        return self._skills
+
+
+def test_a_refusal_names_the_installed_skill_that_grants_the_binary():
+    """Without the name the model has no route, and most gave up (#3764)."""
+    from gaia.skills.format import parse_skill
+
+    triage = parse_skill(
+        "---\nname: github-triage\ndescription: Triage GitHub work.\n"
+        "metadata:\n  gaia:\n    security_tier: community\n"
+        "    permissions:\n      - shell:execute:gh\n---\nBody.\n"
+    )
+    error = ShellToolsMixin._validate_command(
+        "gh",
+        ["gh", "issue", "list"],
+        "gh issue list",
+        skill_manager=_Manager({"github-triage": triage}),
+    )
+    assert error is not None
+    assert "load_skill with 'github-triage'" in error["error"]
+
+
+def test_a_refusal_with_no_granting_skill_points_at_the_hub():
+    error = ShellToolsMixin._validate_command(
+        "gh", ["gh", "issue", "list"], "gh issue list", skill_manager=_Manager({})
+    )
+    assert error is not None
+    assert "search_skill_hub" in error["error"]
+
+
 def test_a_granted_binary_passes_the_shell_gate():
     error = ShellToolsMixin._validate_command(
         "gh",

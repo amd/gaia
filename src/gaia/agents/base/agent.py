@@ -708,16 +708,11 @@ class Agent(abc.ABC):
     #: skill name -> ids of the deltas currently applied to it.
     _overlaid_skills: Optional[Dict[str, List[str]]] = None
 
-    #: Proactive skill discovery: matches the user's turn against skills that
-    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
-    #: has to know a skill's name. ``None`` (the default) leaves every existing
-    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
-    #: See :mod:`gaia.agents.base.skill_discovery`.
-    _skill_discovery: Optional[Any] = None
-
-    #: This turn's discovery note, rendered by
-    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
-    _skill_discovery_result: Optional[Any] = None
+    #: List every installed skill in the system prompt so the model can load one
+    #: when the work fits. ``False`` (the default) keeps every other agent's
+    #: composed prompt byte-identical; GaiaAgent turns it on.
+    #: See :mod:`gaia.agents.base.skill_catalog`.
+    _skill_catalog_enabled: bool = False
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1516,76 +1511,25 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
-    def _discover_skills_for_turn(self, user_input: str) -> None:
-        """Match this turn against installed-but-unloaded skills and act on it.
+    def get_skill_catalog_system_prompt(self) -> str:
+        """Sourcing rule + one line per installed skill, for agents that opt in.
 
-        No-op unless a subclass built a
-        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
-        agent's composed prompt stays byte-identical.
-
-        Runs BEFORE :meth:`_refresh_active_tool_filter` so tools the loaded skill
-        registers are visible on the same turn, and BEFORE
-        :meth:`_refresh_active_skill_filter` so the skill is in ``loaded_skills``
-        when the body filter is computed. Pinned via :meth:`_pin_skill_body` so
-        that filter cannot immediately hide the body of the skill it just decided
-        the turn was about.
+        Auto-discovered by :meth:`_get_mixin_prompts`. It depends only on what is
+        installed, so it stays in the static, cached head of the prompt.
         """
-        discovery = self._skill_discovery
-        if discovery is None:
-            return
-
-        previous = self._skill_discovery_result
-        query = self._build_skill_discovery_query(user_input)
-        result = discovery.run(
-            query, loaded=self.loaded_skills, load_fn=self.load_skill
-        )
-        self._skill_discovery_result = result
-        if result.loaded:
-            self._pin_skill_body(result.loaded)
-
-        # Rebuild whenever the note changed, INCLUDING after a successful load.
-        # ``load_skill`` rebuilds too, but it runs before the line above, so the
-        # prompt it composed still carries the *previous* turn's note — the
-        # "SKILL ACTIVATED" line would be missing on exactly the turns that
-        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
-        # when the body filter changes, so it cannot be relied on to fix this.
-        before = previous.prompt_fragment() if previous is not None else ""
-        if result.prompt_fragment() != before:
-            self.rebuild_system_prompt()
-
-    def _build_skill_discovery_query(self, user_input: str) -> str:
-        """The text discovery matches on — previous + current user message.
-
-        Reuses ChatAgent's tool-selection query when the agent has one, so a
-        follow-up ("and the one before that?") still carries the prior turn's
-        subject instead of matching on four pronouns.
-        """
-        builder = getattr(self, "_build_tool_selection_query", None)
-        if callable(builder):
-            return builder(user_input)
-        return user_input
-
-    def get_skill_discovery_system_prompt(self) -> str:
-        """Sourcing rule + this turn's discovery note.
-
-        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
-        without discovery enabled, so no existing prompt changes.
-        """
-        if self._skill_discovery is None:
+        if not self._skill_catalog_enabled:
             return ""
-        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+        from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        result = self._skill_discovery_result
-        note = result.prompt_fragment() if result is not None else ""
-        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+        catalog = render_catalog(self.skill_manager.discover())
+        return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
 
-        Unlike :meth:`_note_skill_active` this works before any filter exists —
-        proactive discovery runs before the first refresh of a session, and
-        without the pin the very next selection could hide the body of the skill
-        that was just loaded *because* this turn needed it.
+        Unlike :meth:`_note_skill_active` this works before any filter exists,
+        so the next selection cannot hide the body of a skill that was just
+        loaded *because* this turn needed it.
         """
         # getattr throughout: test stubs copy these methods onto a plain class
         # without inheriting the class attributes they read.
@@ -4962,12 +4906,6 @@ Do NOT wrap conversational replies in JSON.
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
-
-        # Proactive skill discovery: a skill the user never named can become
-        # loaded here, registering its tools — so it must run BEFORE the tool
-        # filter, or those tools are invisible on the very turn that loaded the
-        # skill, and before the body filter for the same reason.
-        self._discover_skills_for_turn(user_input)
 
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
