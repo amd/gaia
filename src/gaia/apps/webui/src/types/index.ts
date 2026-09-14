@@ -106,8 +106,15 @@ export interface AgentInfo {
      * flight. Undefined for local-only agents (treated as ``installed``).
      */
     status?: AgentCardState;
-    /** Installed version (semver), when known. */
+    /**
+     * Installed version (semver), when known. The catalog wire payload never
+     * sends this key directly — it sends ``installed_version`` (below). This
+     * field is populated client-side by ``mergeCatalogStatus`` so components
+     * have one place to read "the version to display".
+     */
     version?: string;
+    /** Installed version as reported by ``GET /api/agents/catalog`` (raw wire field). */
+    installed_version?: string;
     /** Latest version offered by the catalog — set when newer than ``version``. */
     latest_version?: string;
     /** Per-agent compatibility verdict from the backend's system check. */
