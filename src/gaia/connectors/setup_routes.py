@@ -9,9 +9,10 @@ source of truth for what the walkthrough says, step by step, so the content
 lives in ONE place — not duplicated across the OAuth-not-configured error
 message, a docs page, and an agent prompt that could each drift.
 
-**Outlook only.** This is a deliberate scope cut (#2590 adversarial review):
-``google_personal`` and every other route earn their own PR. ``ROUTES`` has
-exactly one entry.
+**Outlook, and a personal Gmail route (#2594, "the Google half of #2590").**
+``google_workspace`` (Internal consent screen, the account-kind interview)
+and ``microsoft_work`` still earn their own PR — see #2594's remaining scope.
+``ROUTES`` has two entries.
 
 No ``resolve_route`` / interview function here — the provider alone selects
 the route (``ROUTES[provider]``), because the only question that decides it
@@ -65,6 +66,11 @@ class Step:
     #: walkthrough driver both filter these out; the CLI-facing rendering
     #: (``sign_in="loopback"``, the default) keeps them.
     loopback_only: bool = False
+    #: True for a credential step whose value must never be echoed in
+    #: cleartext (a client secret) — threaded through to ``ask(...,
+    #: sensitive=True)`` by the walkthrough driver. Microsoft's route has
+    #: nothing to hide (a public-client Application ID); Google's does.
+    sensitive: bool = False
     faq: Tuple[QA, ...] = ()
 
 
@@ -228,9 +234,141 @@ MS_PERSONAL = SetupRoute(
     ),
 )
 
-#: Provider id -> its guided walkthrough. Outlook only in this PR — see the
-#: module docstring for why the other routes are out of scope.
-ROUTES: Dict[str, SetupRoute] = {"microsoft": MS_PERSONAL}
+# ---------------------------------------------------------------------------
+# Google — personal Gmail only (#2594, "the Google half of #2590")
+# ---------------------------------------------------------------------------
+# ``providers.google.OAuthClientNotConfiguredError``'s ``console_steps`` is
+# derived from this route via ``render_console_steps`` (see
+# ``providers/google.py``), same as Microsoft — the module docstring's #2116
+# "one source of truth" guard applies here too.
+#
+# Unlike Microsoft, Google has no device-code flow for a personal (non-
+# Workspace) client and requires a client secret even for a Desktop-app
+# (PKCE) client — so this route is loopback-only (no ``loopback_only`` steps
+# to drop) and its secret step is ``sensitive=True``.
+
+GOOGLE_PERSONAL = SetupRoute(
+    id="google_personal",
+    provider="google",
+    steps=(
+        Step(
+            id="project",
+            title="Create or pick a project",
+            instruction=(
+                "Create or pick a project at https://console.cloud.google.com"
+            ),
+            verifiable=False,
+        ),
+        Step(
+            id="enable_api",
+            title="Enable the Gmail API",
+            instruction=(
+                "Enable the Gmail API for that project (APIs & Services -> "
+                "Enabled APIs & services -> + Enable APIs and services)"
+            ),
+            verifiable=False,
+            faq=(
+                QA(
+                    question_hints=("why enable", "what does this do", "gmail api"),
+                    answer=(
+                        "Google's console lets you create an OAuth client "
+                        "before enabling any API for it — skip this step and "
+                        "sign-in itself succeeds, but every Gmail call fails "
+                        "afterward. Enabling it now avoids a confusing "
+                        "failure later."
+                    ),
+                ),
+            ),
+        ),
+        Step(
+            id="consent_screen",
+            title="Configure the OAuth consent screen",
+            instruction=(
+                "Configure the OAuth consent screen: choose 'External', and "
+                "add your own Google account under 'Test users'"
+            ),
+            verifiable=False,
+            faq=(
+                QA(
+                    question_hints=(
+                        "test user",
+                        "testing",
+                        "100 user",
+                        "unverified",
+                    ),
+                    answer=(
+                        "A new consent screen starts in 'Testing' mode, which "
+                        "only lets signed-in test users through — that's why "
+                        "you add your own account. Google's app-verification "
+                        "review is for apps used by the public; it doesn't "
+                        "apply to a client only you sign in with."
+                    ),
+                ),
+            ),
+        ),
+        Step(
+            id="redirect_uri",
+            title="Add a redirect URI",
+            instruction=(
+                "Add a http://localhost redirect URI under the OAuth client's "
+                "'Authorized redirect URIs'"
+            ),
+            verifiable=False,
+        ),
+        Step(
+            id="create_client",
+            title="Create an OAuth client ID",
+            instruction=(
+                "Create an OAuth client ID of type 'Desktop app' — this gives "
+                "you a Client ID and Client Secret"
+            ),
+            verifiable=False,
+            faq=(
+                QA(
+                    question_hints=("application type", "web application", "desktop"),
+                    answer=(
+                        "Pick 'Desktop app', not 'Web application' — a Web "
+                        "client requires an exact pre-registered redirect URI "
+                        "and rejects GAIA's local sign-in port silently, which "
+                        "shows up later as a sign-in that never completes."
+                    ),
+                ),
+            ),
+        ),
+        Step(
+            id="client_id",
+            title="Copy the Client ID",
+            instruction=(
+                "Copy the Client ID (ends in .apps.googleusercontent.com)"
+            ),
+            verifiable=True,
+            collects_credential=True,
+        ),
+        Step(
+            id="client_secret",
+            title="Copy the Client Secret",
+            instruction="Copy the Client Secret shown next to it",
+            verifiable=False,
+            collects_credential=True,
+            sensitive=True,
+        ),
+    ),
+    faq=(
+        QA(
+            question_hints=("client secret", "why a secret", "secret"),
+            answer=(
+                "Yes — unlike Outlook, Google requires a client secret even "
+                "for this Desktop-app (PKCE) client type. GAIA stores it in "
+                "your OS keychain and never sends it anywhere but Google's "
+                "token endpoint."
+            ),
+        ),
+    ),
+)
+
+#: Provider id -> its guided walkthrough. See the module docstring for why
+#: ``google_workspace`` and ``microsoft_work`` are not here yet.
+ROUTES: Dict[str, SetupRoute] = {"microsoft": MS_PERSONAL, "google": GOOGLE_PERSONAL}
 
 #: Sign-in mechanisms ``render_console_steps`` and the walkthrough driver
 #: know how to filter for.
@@ -282,6 +420,7 @@ def render_console_steps(route: SetupRoute, *, sign_in: str = SIGN_IN_LOOPBACK) 
 
 __all__ = [
     "QA",
+    "GOOGLE_PERSONAL",
     "MS_PERSONAL",
     "ROUTES",
     "SIGN_IN_DEVICE_CODE",
