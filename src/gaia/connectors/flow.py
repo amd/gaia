@@ -55,7 +55,7 @@ from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
-from gaia.connectors.store import save_connection
+from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection, save_connection
 
 logger = logging.getLogger(__name__)
 
@@ -407,6 +407,72 @@ async def _teardown_flow(flow_id: str) -> None:
     except Exception as e:
         # Cleanup is best-effort — log and move on.
         logger.warning("flow: runner.cleanup failed for %s: %s", flow_id, e)
+
+
+async def revoke_provider_token(
+    provider_id: str, *, account_email: str = DEFAULT_ACCOUNT
+) -> Dict[str, Any]:
+    """
+    Attempt a provider-side OAuth revoke of the stored refresh token (#2591).
+
+    This is the honest half of "disconnect": callers (``oauth_pkce.disconnect``,
+    ``api.revoke_connection``) MUST NOT report a full revoke just because the
+    local keyring entry was deleted — that was the literal #2591 bug (GAIA
+    told the user it disconnected when it had only forgotten locally, leaving
+    the app's Google grant live). This function never raises for a revoke
+    failure and never deletes local state itself; it only reports what really
+    happened so the caller can act on the local delete regardless and report
+    the remote outcome truthfully:
+
+    - ``revoke_supported=False`` — the provider has no public revoke endpoint
+      (Microsoft's identity platform today; see
+      ``MicrosoftOAuthProvider.revoke_url``). The caller must say so, not
+      imply a revoke happened.
+    - ``revoke_supported=True, revoked_remotely=True`` — the provider's
+      revoke endpoint accepted the request (or there was no refresh token
+      stored to revoke in the first place).
+    - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
+      failed; ``revoke_error`` carries why. The provider-side grant is still
+      live and the caller must say so.
+    """
+    try:
+        provider = get_provider(provider_id)
+    except (ConnectorsError, KeyError):
+        # Unresolvable/unconfigured provider (e.g. a test double id, or a
+        # connector whose client credentials were never set up) — nothing
+        # to revoke against.
+        provider = None
+    revoke_url = getattr(provider, "revoke_url", None) if provider else None
+    result: Dict[str, Any] = {
+        "revoke_supported": bool(revoke_url),
+        "revoked_remotely": False,
+        "revoke_error": None,
+    }
+    if not revoke_url:
+        return result
+
+    blob = peek_connection(provider_id, account_email=account_email)
+    refresh_token = (blob or {}).get("refresh_token")
+    if not refresh_token:
+        # Nothing stored to revoke — there is no live grant to leave behind.
+        result["revoked_remotely"] = True
+        return result
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(revoke_url, data={"token": refresh_token})
+        if response.status_code not in (200, 204):
+            raise ConnectorsError(
+                f"{provider_id} revoke endpoint rejected the request "
+                f"(status {response.status_code}): {response.text[:300]}"
+            )
+        result["revoked_remotely"] = True
+    except Exception as exc:  # noqa: BLE001 — report honestly, don't block disconnect
+        result["revoke_error"] = str(exc)
+        logger.warning(
+            "flow: provider-side revoke failed provider=%s: %s", provider_id, exc
+        )
+    return result
 
 
 async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:

@@ -681,17 +681,40 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
     from gaia.connectors.handler import disconnect
 
     async def _run():
-        await disconnect(args.connector_id)
+        return await disconnect(args.connector_id)
 
     try:
-        asyncio.run(_run())
+        result = asyncio.run(_run())
     except KeyError:
         sys.stderr.write(
             f"gaia connectors disconnect: unknown connector {args.connector_id!r}\n"
         )
         return 1
 
-    sys.stdout.write(f"Disconnected {args.connector_id}.\n")
+    # #2591: report the provider-side revoke outcome honestly instead of a
+    # bare "Disconnected" that implies GAIA's app access was actually
+    # revoked when only the local keyring entry was cleared.
+    result = result or {}
+    if not result.get("revoke_supported"):
+        if "revoke_supported" in result:
+            sys.stdout.write(
+                f"Disconnected {args.connector_id} locally. This provider has "
+                "no API to revoke access remotely — remove GAIA from your "
+                "account's connected-apps page if you want to fully revoke "
+                "it.\n"
+            )
+        else:
+            sys.stdout.write(f"Disconnected {args.connector_id}.\n")
+    elif result.get("revoked_remotely"):
+        sys.stdout.write(
+            f"Disconnected {args.connector_id} (provider access revoked).\n"
+        )
+    else:
+        sys.stdout.write(
+            f"Disconnected {args.connector_id} locally, but the provider did "
+            f"not confirm the revoke ({result.get('revoke_error')}). It may "
+            "still show as connected in your account's app permissions.\n"
+        )
     return 0
 
 

@@ -476,10 +476,53 @@ def get_connection(provider: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def revoke_connection(provider: str) -> None:
-    """Remove the stored connection for ``provider``. Idempotent."""
+async def revoke_connection_async(provider: str) -> Dict[str, Any]:
+    """
+    Revoke ``provider``'s OAuth grant with the provider (when it exposes a
+    public revoke endpoint), then remove the local stored connection.
+    Idempotent.
+
+    Returns ``{"revoke_supported": bool, "revoked_remotely": bool,
+    "revoke_error": str | None}`` (see ``flow.revoke_provider_token``) —
+    never bare success for what was only a local keyring delete. Reporting
+    a full revoke when the provider-side grant is still live was the
+    literal #2591 bug this replaces. Call this directly from async code
+    already on an event loop; use ``revoke_connection`` (sync) otherwise.
+    """
+    from gaia.connectors.flow import revoke_provider_token
+
+    result = await revoke_provider_token(provider)
     delete_connection(provider)
-    logger.info("api: revoked connection provider=%s", provider)
+    logger.info(
+        "api: revoked connection provider=%s revoke_supported=%s "
+        "revoked_remotely=%s",
+        provider,
+        result["revoke_supported"],
+        result["revoked_remotely"],
+    )
+    return result
+
+
+def revoke_connection(provider: str) -> Dict[str, Any]:
+    """Synchronous wrapper around :func:`revoke_connection_async`.
+
+    Must NOT be called from a thread with a running asyncio event loop —
+    call ``await revoke_connection_async(...)`` directly from async code
+    instead (mirrors ``get_access_token_sync``'s guard).
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        raise RuntimeError(
+            "revoke_connection was called from a thread with a running "
+            "asyncio event loop. Call `await revoke_connection_async(...)` "
+            "directly from async code instead."
+        )
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(revoke_connection_async(provider))
 
 
 def import_forwarded_connection(
@@ -842,6 +885,7 @@ __all__ = [
     "resolve_declared_scopes",
     "revoke_agent_grant",
     "revoke_connection",
+    "revoke_connection_async",
     "start_authorization",
     "start_device_flow",
     "tripwire_check",
