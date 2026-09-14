@@ -134,13 +134,6 @@ DANGEROUS_FIND_ACTIONS = {
 TIER_CONFIRM = "confirm"
 TIER_REFUSE = "refuse"
 
-# Not a permission at all: the runner executes an argv list, never a shell, so
-# operators (``&&``, ``>``, ``;``) and unparseable quoting cannot run no matter
-# who approves them. Full access does NOT lift this — passing ``cat x && rm y``
-# through would execute ``cat x '&&' rm y`` and report success, which is a
-# silent wrong answer rather than a permitted one.
-TIER_UNSUPPORTED = "unsupported"
-
 
 def _blocked(tier: str, error: str, **extra) -> dict:
     """One blocked-command result, tagged with the tier that decided it."""
@@ -475,7 +468,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
-                    "tier": TIER_UNSUPPORTED,
+                    "tier": TIER_REFUSE,
                     "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
                     "has_errors": True,
                     "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
@@ -489,7 +482,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
-                    "tier": TIER_UNSUPPORTED,
+                    "tier": TIER_REFUSE,
                     "error": f"Invalid command syntax: {exc}",
                     "has_errors": True,
                 },
@@ -501,7 +494,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
-                    "tier": TIER_UNSUPPORTED,
+                    "tier": TIER_REFUSE,
                     "error": "Empty command",
                     "has_errors": True,
                 },
@@ -527,25 +520,17 @@ class ShellToolsMixin:
         """The refusal this call has already earned, before anyone is asked.
 
         Read by ``Agent._policy_refusal``, which runs *before* the confirmation
-        prompt. Only two things may stop a command here:
+        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
+        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
+        behind ``status``), or a shape the runner cannot execute at all.
 
-        ``TIER_REFUSE``
-            An escalation a yes/no cannot honestly describe — ``gh auth token``,
-            base64 PowerShell, ``git -c`` running a script behind ``status``.
-            Prompting for these trains the user to approve text that
-            misrepresents what will happen. Full access lifts them.
-        ``TIER_UNSUPPORTED``
-            Not a permission: the runner has no shell, so an operator or
-            unparseable quoting cannot execute whoever approves it. Full access
-            does NOT lift these — running them garbled and reporting success
-            would be a silent wrong answer.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
+        through to the prompt: refusing a command that would run on approval is
+        the dead end this tier removes. The exception is a run where only
+        ``GAIA_AUTO_APPROVE_TOOLS`` would approve it; see
+        :meth:`_approval_is_environment_only`.
 
-        Everything else — ``git commit``, ``npm test``, ``rm notes.txt`` — must
-        fall through to the prompt. Refusing a command that would run on
-        approval is the dead end this tier exists to remove, and is what left
-        the agent unable to do ordinary work with its user sitting right there.
-
-        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL:
@@ -556,11 +541,10 @@ class ShellToolsMixin:
         error, _ = self._validate_shell_command(command)
         if error is None:
             return None
-        tier = error.get("tier")
-        if tier == TIER_UNSUPPORTED:
-            pass  # never lifted, in either mode
-        elif tier != TIER_REFUSE or self.full_access_enabled():
-            return None
+        if error.get("tier") != TIER_REFUSE:
+            if not self._approval_is_environment_only():
+                return None
+            error = self._environment_only_refusal(error)
         logger.info(
             "Refusing %r before the confirmation prompt: %s",
             command,
@@ -568,21 +552,35 @@ class ShellToolsMixin:
         )
         return error
 
-    def full_access_enabled(self) -> bool:
-        """True when the user put this session in full-access mode.
+    def _approval_is_environment_only(self) -> bool:
+        """True when nothing but ``GAIA_AUTO_APPROVE_TOOLS`` would approve a prompt.
 
-        Full access is the one place blanket trust lives: opted into
-        deliberately (``--bypass-permissions`` / ``/bypass confirm``) and shown
-        on every frame while it is on. It means what it says — nothing is
-        refused, because a refusal list that blocks ``git -c`` while permitting
-        ``rm -rf ~`` protects nobody and only makes the mode dishonest.
-
-        Duck-typed on the console, which owns the answer for every host (CLI
-        prompt, Agent UI modal, unattended runner).
+        A host that opted in explicitly (the TUI's full access sets
+        ``auto_approve_gated_tools`` on the turn's handler) is a person deciding
+        for this session. The environment variable is a blanket pre-approval for
+        unattended runs, granted when commands outside the no-prompt list could
+        not be approved at all; it never agreed to widen what those runs execute.
         """
         console = getattr(self, "console", None)
-        enabled = getattr(console, "auto_approve_confirmations_enabled", None)
-        return bool(enabled()) if callable(enabled) else False
+        if bool(getattr(console, "auto_approve_gated_tools", False)):
+            return False
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return console_mod.auto_approve_env_enabled()
+
+    @staticmethod
+    def _environment_only_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unattended run."""
+        return {
+            **error,
+            "tier": TIER_REFUSE,
+            "hint": (
+                "This run approves prompts through GAIA_AUTO_APPROVE_TOOLS, which "
+                "does not extend to commands outside the no-prompt list. Run it "
+                "interactively to approve it, or turn on full access in the TUI."
+            ),
+        }
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -1033,8 +1031,6 @@ class ShellToolsMixin:
                         "hint": "Rate limiting prevents excessive command execution",
                     }
 
-                full_access = self.full_access_enabled()
-
                 # Validate working directory if specified
                 if working_directory:
                     if not os.path.exists(working_directory):
@@ -1054,7 +1050,7 @@ class ShellToolsMixin:
                         }
 
                     # Validate path is allowed
-                    if hasattr(self, "path_validator") and not full_access:
+                    if hasattr(self, "path_validator"):
                         if not self.path_validator.is_path_allowed(working_directory):
                             return {
                                 **NOT_EXECUTED,
@@ -1062,7 +1058,7 @@ class ShellToolsMixin:
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
                             }
-                    elif hasattr(self, "_is_path_allowed") and not full_access:
+                    elif hasattr(self, "_is_path_allowed"):
                         if not self._is_path_allowed(working_directory):
                             return {
                                 **NOT_EXECUTED,
@@ -1079,15 +1075,15 @@ class ShellToolsMixin:
                 # implementation with the pre-flight that runs before the
                 # confirmation prompt, so the two can never disagree.
                 #
-                # Only the REFUSE tier stops a command here. A CONFIRM-tier
-                # command has already been through ``Agent._execute_tool``'s
-                # gate — the same single funnel that has always gated
-                # ``write_file`` — so re-refusing it would undo the approval the
-                # user just gave. Full access skips the check outright.
+                # A CONFIRM-tier command has already been through
+                # ``Agent._execute_tool``'s gate (the same single funnel that has
+                # always gated ``write_file``), so it runs here unless the only
+                # approval was the environment opt-in.
+                env_only = self._approval_is_environment_only()
                 error, segments = self._validate_shell_command(command)
-                if error and error.get("tier") == TIER_UNSUPPORTED:
-                    return error
-                if error and not full_access and error.get("tier") == TIER_REFUSE:
+                if error and error.get("tier") != TIER_REFUSE and env_only:
+                    return self._environment_only_refusal(error)
+                if error and error.get("tier") == TIER_REFUSE:
                     return error
 
                 granted = skill_granted_binaries(self)
@@ -1100,7 +1096,7 @@ class ShellToolsMixin:
                 scanned = [
                     seg for seg in segments if not _is_granted_binary(seg[0], granted)
                 ]
-                if hasattr(self, "path_validator") and not full_access:
+                if hasattr(self, "path_validator"):
                     for arg in [a for seg in scanned for a in seg[1:]]:
                         candidate_path = arg
                         if arg.startswith("-"):
@@ -1166,7 +1162,7 @@ class ShellToolsMixin:
                         command if len(segments) == 1 else " ".join(seg),
                         granted_binaries=granted,
                     )
-                    if error and error.get("tier") == TIER_REFUSE and not full_access:
+                    if error and (error.get("tier") == TIER_REFUSE or env_only):
                         return error
 
                 # Log command execution (debug mode)
