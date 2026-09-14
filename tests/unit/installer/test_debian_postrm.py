@@ -5,11 +5,16 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-POSTRM = Path(__file__).resolve().parents[2] / "installer/debian/postrm"
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="Debian maintainer script requires a POSIX shell"
+)
+
+POSTRM = Path(__file__).resolve().parents[3] / "installer/debian/postrm"
 
 
 @pytest.mark.parametrize("action", ["purge", "remove", "upgrade"])
