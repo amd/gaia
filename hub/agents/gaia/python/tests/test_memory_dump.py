@@ -236,3 +236,18 @@ def test_dispatch_sends_a_normal_query_to_run_turn(store):
     stdio.dispatch_query(agent, "what do you remember about me?", out)
 
     assert agent.process_query_calls == ["what do you remember about me?"]
+
+
+def test_disabled_real_memory_mixin_reports_unavailable():
+    from gaia.agents.base.memory import (
+        MEMORY_UNAVAILABLE_DISABLED_BY_ENV,
+        MemoryMixin,
+    )
+
+    host = MemoryMixin()
+    host._memory_store = None
+    host._memory_unavailable_reason = MEMORY_UNAVAILABLE_DISABLED_BY_ENV
+    dump = build_memory_dump(host)
+    assert dump["available"] is False
+    assert "GAIA_MEMORY_DISABLED=1" in dump["reason"]
+    assert "items" not in dump

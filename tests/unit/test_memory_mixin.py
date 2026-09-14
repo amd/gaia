@@ -5123,8 +5123,11 @@ def test_disabled_memory_prompt_and_reset_are_quiet(initialized, caplog):
     host.reset_memory_session()
     assert host._memory_session_id == "unchanged"
     assert not caplog.records
-    with pytest.raises(RuntimeError, match="not initialized or memory is disabled"):
-        _ = host.memory_store
+    if initialized:
+        assert host.memory_store is None
+    else:
+        with pytest.raises(RuntimeError, match="not initialized"):
+            _ = host.memory_store
 
 
 def test_enabled_memory_prompt_failure_surfaces():
