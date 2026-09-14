@@ -51,8 +51,20 @@ CATALOG_HEADER = (
     "Installed skills. Each one carries instructions for a kind of work, and some "
     "unlock a CLI (such as gh) that is refused until the skill is loaded. When the "
     "work matches a skill, call load_skill with its name before doing that work — "
-    "also when you realise it partway through a task."
+    "also when you realise it partway through a task. A skill whose instructions "
+    "already appear under LOADED SKILLS is loaded; do not load it again."
 )
+
+#: Above every starter-pack description (longest 443), so the cap only bites on
+#: an outlier; the 1,024-char format limit would otherwise set the block's size.
+CATALOG_DESCRIPTION_CHARS = 480
+
+
+def _catalog_description(description: str) -> str:
+    text = " ".join((description or "").split())
+    if len(text) <= CATALOG_DESCRIPTION_CHARS:
+        return text
+    return text[:CATALOG_DESCRIPTION_CHARS].rstrip() + "…"
 
 
 def render_catalog(skills: Dict[str, "Skill"]) -> str:
@@ -62,7 +74,7 @@ def render_catalog(skills: Dict[str, "Skill"]) -> str:
     another host's skills for working on a repo, not answers to a user's request.
     """
     lines = [
-        f"- {skill.name}: {' '.join((skill.description or '').split())}"
+        f"- {skill.name}: {_catalog_description(skill.description)}"
         for skill in sorted(skills.values(), key=lambda s: s.name)
         if skill.root != ROOT_CLAUDE_IMPORT
     ]
@@ -86,6 +98,7 @@ def skills_granting(skills: Dict[str, "Skill"], binary: str) -> List[str]:
 
 
 __all__ = [
+    "CATALOG_DESCRIPTION_CHARS",
     "CATALOG_ENV",
     "CATALOG_HEADER",
     "GROUNDING_RULE",

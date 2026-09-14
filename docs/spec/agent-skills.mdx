@@ -253,16 +253,14 @@ A skill is loaded in three levels, mirroring the standard — long reference
 material costs nothing until it's actually needed:
 
 <Steps>
-<Step title="Metadata (matched outside the prompt)">
-`name` + `description` of every installed skill are indexed **in Python, not in
-the system prompt**. Each turn is scored against that index before the request is
-sent, and only the winner is injected — so a library of thirty skills costs zero
-resident tokens instead of thirty descriptions on every turn. See
-[Proactive discovery](#proactive-discovery).
+<Step title="Metadata (one line in the prompt)">
+`name` + `description` of every installed skill are listed in the system prompt,
+one line each — about a line per skill for the whole library, instead of any skill
+body sitting in the prompt on every turn. See [Skill catalogue](#skill-catalogue).
 </Step>
 <Step title="Body (on trigger)">
-When a skill is selected — by the pre-turn match, by the model calling
-`load_skill`, or by the user asking for it — the `SKILL.md` Markdown body is
+When a skill is selected — by the model calling `load_skill`, or by the user
+asking for it — the `SKILL.md` Markdown body is
 injected and the skill's declared `tools` are registered into the agent's tool
 registry. A loaded body does not stay resident forever: it collapses to a
 one-line menu entry on turns that no longer relate to it.
@@ -366,7 +364,10 @@ backlog", and the `gh` CLI.
 The list depends only on what is installed, so it is identical on every turn and
 stays in the cached head of the prompt. It costs about one line per skill (roughly
 1,000 tokens for the starter pack) plus a ~96-token sourcing rule: facts about live
-external state must come from a tool call, never from memory. Read-only
+external state must come from a tool call, never from memory. A description is
+cut at 480 characters in the list, so put the "use when" triggers early. A skill
+already under LOADED SKILLS stays listed, and the model is told not to load it
+again — dropping it would change the block from turn to turn. Read-only
 `.claude/skills` imports are loadable by name but not listed — they are another
 host's marketplace, written for working *on* a repo rather than answering a
 user's question.

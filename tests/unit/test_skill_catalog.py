@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from gaia.agents.base.skill_catalog import (
+    CATALOG_DESCRIPTION_CHARS,
     CATALOG_ENV,
     CATALOG_HEADER,
     GROUNDING_RULE,
@@ -60,10 +61,32 @@ def test_catalogue_is_identical_across_renders_so_it_stays_cached(starter_pack):
 
 
 def test_catalogue_cost_stays_bounded(starter_pack):
-    """About one line per skill. A description is capped at 1,024 characters, so
-    a jump here means a skill's description grew into documentation."""
+    """About one line per skill. A jump here means a skill's description grew
+    into documentation."""
     tokens = len(render_catalog(starter_pack)) // 4
     assert tokens < 2000, f"skill catalogue is ~{tokens} tokens"
+
+
+def test_starter_descriptions_fit_under_the_cap_so_none_are_cut(starter_pack):
+    longest = max(len(" ".join(s.description.split())) for s in starter_pack.values())
+    assert longest <= CATALOG_DESCRIPTION_CHARS
+
+
+def test_an_oversized_description_is_capped(tmp_path):
+    _write_skill(tmp_path, "verbose", "word " * 204)  # 1,020 chars, format-legal
+    skills = SkillManager(
+        user_skills_root=tmp_path, include_claude_roots=False
+    ).discover()
+
+    (line,) = [
+        ln for ln in render_catalog(skills).splitlines() if ln.startswith("- verbose:")
+    ]
+    assert line.endswith("…")
+    assert len(line) <= len("- verbose: ") + CATALOG_DESCRIPTION_CHARS + 1
+
+
+def test_header_says_not_to_reload_a_loaded_skill():
+    assert "LOADED SKILLS" in CATALOG_HEADER
 
 
 def test_claude_imports_are_loadable_but_not_listed(tmp_path):

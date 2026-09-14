@@ -406,6 +406,15 @@ def test_a_refusal_with_no_granting_skill_points_at_the_hub():
     assert "search_skill_hub" in error["error"]
 
 
+def test_a_refusal_without_a_skill_manager_does_not_claim_none_exists():
+    error = ShellToolsMixin._validate_command(
+        "gh", ["gh", "issue", "list"], "gh issue list"
+    )
+    assert error is not None
+    assert "No installed skill declares" not in error["error"]
+    assert "could be looked up here" in error["error"]
+
+
 def test_a_granted_binary_passes_the_shell_gate():
     error = ShellToolsMixin._validate_command(
         "gh",

@@ -597,13 +597,23 @@ class ShellToolsMixin:
                     if skill_manager is not None
                     else []
                 )
-                route = (
-                    f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
-                    "then run the command again."
-                    if granting
-                    else f"No installed skill declares 'shell:execute:{binary}'; "
-                    "search_skill_hub can find one."
-                )
+                if granting:
+                    route = (
+                        "Call load_skill with "
+                        f"{' or '.join(repr(n) for n in granting)}, "
+                        "then run the command again."
+                    )
+                elif skill_manager is not None:
+                    route = (
+                        f"No installed skill declares 'shell:execute:{binary}'; "
+                        "search_skill_hub can find one."
+                    )
+                else:
+                    route = (
+                        f"No skill that grants 'shell:execute:{binary}' could be "
+                        "looked up here; "
+                        "list_skills or search_skill_hub can find one."
+                    )
                 return {
                     "status": "error",
                     "error": (
