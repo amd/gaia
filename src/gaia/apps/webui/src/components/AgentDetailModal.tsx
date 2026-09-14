@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback } from 'react';
-import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2 } from 'lucide-react';
+import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2, Tag } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
 
@@ -40,6 +40,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
     const isNative = agent.source === 'native';
     const canStart = !isNative || isElectron;
     const DetailIcon = getAgentIcon(agent.icon);
+    const hasDetails = !!agent.version || models.length > 0 || toolsCount > 0 || agent.min_memory_gb != null;
 
     // Close on Escape
     const handleKey = useCallback((e: KeyboardEvent) => {
@@ -100,9 +101,19 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                     </div>
 
                     {/* Technical metadata */}
+                    {hasDetails && (
                     <div className="agent-detail-section">
                         <div className="agent-detail-section-title">Details</div>
                         <div className="agent-detail-meta-grid">
+                            {agent.version && (
+                                <div className="agent-detail-meta-item">
+                                    <Tag size={14} />
+                                    <div>
+                                        <div className="agent-detail-meta-label">Version</div>
+                                        <div className="agent-detail-meta-value">{agent.version}</div>
+                                    </div>
+                                </div>
+                            )}
                             {models.length > 0 && (
                                 <div className="agent-detail-meta-item">
                                     <Cpu size={14} />
@@ -141,6 +152,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                             )}
                         </div>
                     </div>
+                    )}
 
                     {/* Access rights */}
                     <div className="agent-detail-section">
