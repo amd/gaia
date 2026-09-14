@@ -591,6 +591,42 @@ class TestStringResults:
         assert wire["tool_call_id"] == "call-1"
         assert json.loads(wire["content"][0]["text"]) == result
 
+    def test_a_json_string_drops_whole_records_instead_of_slicing_one(self):
+        """Code search and index status return ``json.dumps(...)`` as a str.
+
+        Head-and-tail eliding leaves the model half a record at each end — the
+        mid-record corruption the structured path exists to avoid. Parsing
+        first sends it down that path, so every record the model sees is whole.
+        """
+        agent = make_agent(device="npu")
+        records = [
+            {"path": f"src/mod_{i}.py", "line": i, "snippet": "y" * 400}
+            for i in range(400)
+        ]
+
+        result = agent._handle_large_tool_result(
+            "search_code", json.dumps(records), []
+        )
+
+        # A str in stays a str out: the tool's declared result type is part of
+        # its contract with whatever reads it next.
+        assert isinstance(result, str)
+        items = json.loads(result)
+        assert len(items) < len(records), "nothing was dropped"
+        # Every surviving record is intact, and the tail marker discloses the loss.
+        assert all(set(i) >= {"path", "line", "snippet"} for i in items[:-1])
+        assert items[-1]["truncated"] is True
+        assert items[-1]["total"] == len(records)
+
+    def test_a_json_scalar_string_is_still_treated_as_prose(self):
+        """``"null"`` or a quoted word parses as JSON but has no records."""
+        agent = make_agent(device="npu")
+        text = '"' + "z" * 60000 + '"'
+
+        result = agent._handle_large_tool_result("read_file", text, [])
+
+        assert set(result) >= {"head", "tail", "omitted_chars"}
+
     @pytest.mark.parametrize("text", ["", "normal output", "λ" * 30000, '"' * 30000])
     def test_under_threshold_strings_are_byte_identical(self, text):
         agent = make_agent(device="npu")

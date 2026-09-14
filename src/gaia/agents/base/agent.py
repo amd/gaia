@@ -4195,6 +4195,28 @@ Do NOT wrap conversational replies in JSON.
             )
         return converted, None
 
+    @staticmethod
+    def _as_structured_payload(tool_result: Any) -> Optional[Any]:
+        """The dict/list to truncate item-by-item, or ``None`` for plain text.
+
+        A JSON object or array that arrived as a ``str`` counts: dropping whole
+        records from it keeps every surviving record parseable, where a
+        head-and-tail excerpt would cut one in half at each end.
+
+        A bare JSON scalar (``"null"``, a quoted word, a number) does not — it
+        carries no records to drop, and prose that happens to be a valid JSON
+        scalar should still read as prose.
+        """
+        if isinstance(tool_result, (dict, list)):
+            return tool_result
+        if not isinstance(tool_result, str):
+            return None
+        try:
+            parsed = json.loads(tool_result)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, (dict, list)) else None
+
     def _handle_large_tool_result(
         self,
         tool_name: str,
@@ -4231,16 +4253,27 @@ Do NOT wrap conversational replies in JSON.
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                if isinstance(tool_result, str):
+                # Some tools hand back json.dumps(...) as a str (code search,
+                # index status). Eliding those mid-record leaves the model half
+                # an entry at each end, so parse first and let the structured
+                # path drop whole items instead.
+                structured = self._as_structured_payload(tool_result)
+                if structured is None:
                     from gaia.agents.base.tool_output import elide_text
 
                     truncated_result = elide_text(tool_result, target)
                 else:
                     # Structured results must remain valid JSON for the model.
                     truncated_str = self._truncate_large_content(
-                        tool_result, max_chars=target, as_json=True
+                        structured, max_chars=target, as_json=True
                     )
                     truncated_result = json.loads(truncated_str)
+                    if isinstance(tool_result, str):
+                        # It arrived as text; hand text back so the tool's
+                        # declared result type does not change under the caller.
+                        truncated_result = json.dumps(
+                            truncated_result, ensure_ascii=False
+                        )
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
