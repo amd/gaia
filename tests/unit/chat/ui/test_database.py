@@ -34,51 +34,24 @@ class TestSessions:
         session = db.create_session(model="Qwen3-0.6B-GGUF")
         assert session["model"] == "Qwen3-0.6B-GGUF"
 
-    def test_create_session_default_model(self, db, tmp_path, monkeypatch):
-        """No explicit model, no configured default -> the hard-coded floor.
-
-        Isolates ~/.gaia/config.json (#3843) so this doesn't silently pick up
-        whatever default_model happens to be set on the machine running the
-        test suite.
-        """
-        from gaia import config as config_mod
-
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
-
+    def test_create_session_default_model(self, db):
+        """No explicit model, no configured default -> the hard-coded floor."""
         session = db.create_session()
         assert session["model"] == "Gemma-4-E4B-it-GGUF"
 
-    def test_create_session_uses_configured_default_model(
-        self, db, tmp_path, monkeypatch
-    ):
-        """#3843: a session created with no explicit model should honor
-        ~/.gaia/config.json's default_model, not silently fall through to
-        the hard-coded SESSION_DEFAULT_MODEL — previously that config value
-        only reached `gaia` CLI commands, never UI-created sessions.
-        """
-        from gaia import config as config_mod
+    def test_create_session_uses_configured_default_model(self, db):
+        """A configured default_model is honored when no model is given."""
         from gaia.config import GaiaConfig
 
-        config_file = tmp_path / "config.json"
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
         GaiaConfig(default_model="agents-a1-q4-k-m").save()
 
         session = db.create_session()
         assert session["model"] == "agents-a1-q4-k-m"
 
-    def test_create_session_explicit_model_wins_over_configured_default(
-        self, db, tmp_path, monkeypatch
-    ):
-        """An explicit model= argument still beats the configured default —
-        config.json only fills in when the caller supplies nothing (#3843)."""
-        from gaia import config as config_mod
+    def test_create_session_explicit_model_wins_over_configured_default(self, db):
+        """An explicit model= still beats a configured default_model."""
         from gaia.config import GaiaConfig
 
-        config_file = tmp_path / "config.json"
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
-        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
         GaiaConfig(default_model="agents-a1-q4-k-m").save()
 
         session = db.create_session(model="Qwen3-0.6B-GGUF")

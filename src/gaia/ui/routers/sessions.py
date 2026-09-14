@@ -13,6 +13,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from gaia.config import GaiaConfigError
+
 from .._chat_helpers import evict_session_agent, resolve_device_model
 from ..database import (
     SESSION_DEFAULT_MODEL,
@@ -104,6 +106,9 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         return session_to_response(session)
+    except GaiaConfigError as e:
+        logger.error("Failed to create session: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
@@ -177,9 +182,13 @@ async def update_session(
     # On a device switch, rewrite the session's model to that device's
     # registered model so the agent rebuilt after eviction loads the right
     # model and the model dropdown reflects reality. Only rewrite when the
-    # device model differs and the session isn't pinned to a non-default model
-    # on the default GPU device — mirrors the runtime guard in ``_chat_helpers``
-    # so an agent's own model isn't clobbered.
+    # device model differs and the session isn't pinned to a non-default
+    # model on the default GPU device. This "not pinned" test deliberately
+    # differs from _build_create_kwargs's own default check in
+    # _chat_helpers: a configured default_model counts as "not pinned" here
+    # (so it still follows a device switch) but as "session-explicit" there
+    # (so it still reaches the agent as model_id) — the two guards answer
+    # different questions about the same value on purpose.
     device_model = None
     if request.device is not None:
         existing = db.get_session(session_id)
@@ -187,15 +196,14 @@ async def update_session(
         resolved, _ = resolve_device_model(agent_type, request.device)
         if resolved:
             current_model = (existing or {}).get("model")
-            # Also recognize the user's *configured* default (#3843) as "not
-            # pinned" — a session created via that config default must still
-            # auto-follow a device switch the same as one on the raw
-            # hard-coded floor; only a genuinely custom-picked model should
-            # block the rewrite below.
+            try:
+                configured_default = resolved_default_model()
+            except GaiaConfigError as e:
+                raise HTTPException(status_code=500, detail=str(e))
             is_default_model = current_model in (
                 None,
                 SESSION_DEFAULT_MODEL,
-                resolved_default_model(),
+                configured_default,
             )
             device_is_explicit = request.device != "gpu"
             if resolved != current_model and (is_default_model or device_is_explicit):
