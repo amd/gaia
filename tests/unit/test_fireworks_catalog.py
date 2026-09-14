@@ -16,12 +16,16 @@ import json
 import pytest
 import requests
 
+from gaia.connectors.errors import ConnectorsError
 from gaia.llm.providers.fireworks import (
     API_KEY_ENV_VARS,
+    FIREWORKS_CONTROL_URL,
     FireworksError,
     FireworksModel,
+    fetch_library,
     fetch_models,
     missing_from_gateway,
+    needs_deployment,
     resolve_fireworks_api_key,
     search,
 )
@@ -98,6 +102,22 @@ class TestKeyResolution:
         )
         assert resolve_fireworks_api_key() == "from-env"
 
+    def test_an_unreadable_keyring_still_names_the_variable_to_set(
+        self, monkeypatch, no_env
+    ):
+        """No usable credential store must not hide the simple fix."""
+
+        def no_backend(_name):
+            raise ConnectorsError("Keyring get_password failed: no backend.")
+
+        monkeypatch.setattr("gaia.connectors.store.peek_secret", no_backend)
+        with pytest.raises(FireworksError) as e:
+            resolve_fireworks_api_key()
+        message = str(e.value)
+        assert API_KEY_ENV_VARS[0] in message
+        assert "no backend" in message, "the keyring problem must stay visible"
+        assert isinstance(e.value.__cause__, ConnectorsError)
+
     def test_missing_key_names_what_to_set(self, no_env):
         with pytest.raises(FireworksError) as e:
             fetch_models()
@@ -155,6 +175,108 @@ class TestFetching:
         )
         with pytest.raises(FireworksError, match="Unexpected catalogue shape"):
             fetch_models(api_key="k")
+
+
+def _library_entry(short, serverless):
+    return {
+        "name": f"accounts/fireworks/models/{short}",
+        "supportsServerless": serverless,
+        "state": "READY",
+    }
+
+
+class TestLibrary:
+    """The library is what exists; ``supportsServerless`` is what is callable."""
+
+    def test_parses_one_page(self, monkeypatch, no_env):
+        payload = {
+            "models": [
+                _library_entry("glm-5p3", True),
+                _library_entry("gemma-4-31b-it", False),
+                {"name": ""},
+                "not-a-model",
+            ]
+        }
+        monkeypatch.setattr(requests, "get", lambda *a, **k: _Response(200, payload))
+        library = fetch_library(api_key="k")
+        assert [m.short_name for m in library] == ["gemma-4-31b-it", "glm-5p3"]
+        assert library[0].serverless is False
+        assert library[1].serverless is True
+        assert library[1].state == "READY"
+
+    def test_follows_next_page_token(self, monkeypatch, no_env):
+        pages = {
+            None: {
+                "models": [_library_entry("glm-5p3", True)],
+                "nextPageToken": "p2",
+            },
+            "p2": {"models": [_library_entry("gemma-4-31b-it", False)]},
+        }
+        calls = []
+
+        def get(url, **kwargs):
+            token = kwargs["params"].get("pageToken")
+            calls.append((url, token))
+            return _Response(200, pages[token])
+
+        monkeypatch.setattr(requests, "get", get)
+        library = fetch_library(api_key="k")
+        assert [m.short_name for m in library] == ["gemma-4-31b-it", "glm-5p3"]
+        assert calls == [(FIREWORKS_CONTROL_URL, None), (FIREWORKS_CONTROL_URL, "p2")]
+
+    def test_a_model_without_serverless_needs_a_deployment(self, monkeypatch, no_env):
+        payload = {
+            "models": [
+                _library_entry("glm-5p3", True),
+                _library_entry("gemma-4-31b-it", False),
+                _library_entry("qwen3p8-27b", False),
+            ]
+        }
+        monkeypatch.setattr(requests, "get", lambda *a, **k: _Response(200, payload))
+        library = fetch_library(api_key="k")
+        assert [m.short_name for m in needs_deployment(library)] == [
+            "gemma-4-31b-it",
+            "qwen3p8-27b",
+        ]
+        assert [m.short_name for m in needs_deployment(library, "GEMMA")] == [
+            "gemma-4-31b-it"
+        ]
+
+    def test_a_repeated_page_token_raises_instead_of_looping(self, monkeypatch, no_env):
+        calls = []
+
+        def get(*a, **k):
+            calls.append(k["params"].get("pageToken"))
+            if len(calls) > 5:
+                pytest.fail("fetch_library kept paging on a repeated token")
+            return _Response(
+                200, {"models": [_library_entry("glm-5p3", True)], "nextPageToken": "x"}
+            )
+
+        monkeypatch.setattr(requests, "get", get)
+        with pytest.raises(FireworksError, match="repeated page token"):
+            fetch_library(api_key="k")
+        assert calls == [None, "x"]
+
+    def test_a_non_json_body_raises(self, monkeypatch, no_env):
+        monkeypatch.setattr(
+            requests, "get", lambda *a, **k: _Response(200, text="<html>")
+        )
+        with pytest.raises(FireworksError, match="non-JSON"):
+            fetch_library(api_key="k")
+
+    def test_a_non_object_payload_raises(self, monkeypatch, no_env):
+        monkeypatch.setattr(requests, "get", lambda *a, **k: _Response(200, ["x"]))
+        with pytest.raises(FireworksError, match="Unexpected library shape"):
+            fetch_library(api_key="k")
+
+    def test_an_http_error_carries_the_status_and_url(self, monkeypatch, no_env):
+        monkeypatch.setattr(
+            requests, "get", lambda *a, **k: _Response(403, text="forbidden")
+        )
+        with pytest.raises(FireworksError, match="403") as e:
+            fetch_library(api_key="k")
+        assert FIREWORKS_CONTROL_URL in str(e.value)
 
 
 class TestGapAgainstTheGateway:
