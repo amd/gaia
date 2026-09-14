@@ -287,9 +287,11 @@ func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (
 		p.needsYouRow(b, p.NeedsYou[i], showMailbox, keepDetail[i])
 	}
 	if extra := p.NeedsYouTotal - show; extra > 0 {
-		line := rationaleIndent + "+" + itoa(extra) + " more"
-		if breakdown := p.bucketBreakdownLine(); breakdown != "" {
-			line += " (" + breakdown + ")"
+		prefix := "+" + itoa(extra) + " more"
+		line := rationaleIndent + prefix
+		avail := b.inner() - visualLen(rationaleIndent) - visualLen(prefix) - visualLen(" ()")
+		if breakdown := p.bucketBreakdownLine(avail); breakdown != "" {
+			line = rationaleIndent + prefix + " (" + breakdown + ")"
 		}
 		b.add(line)
 	}
@@ -628,8 +630,12 @@ func (p emailPreScan) needsYouCountLabel(show int) string {
 // the composition, not an exact per-row classification of which items were
 // cut for space -- honest and cheap (no new LLM call, just fields already on
 // the wire) beats a precise count nothing on the client can actually derive.
-func (p emailPreScan) bucketBreakdownLine() string {
-	if p.Totals == nil {
+// maxLen bounds the line to what's left on the "+N more" row after its
+// prefix and parens; a narrow card cannot fit every bucket, so the
+// lowest-priority ones are dropped from the end (never mid-word) and a
+// trailing "…" marks a visible trim rather than a silent one.
+func (p emailPreScan) bucketBreakdownLine(maxLen int) string {
+	if p.Totals == nil || maxLen <= 0 {
 		return ""
 	}
 	var parts []string
@@ -646,7 +652,16 @@ func (p emailPreScan) bucketBreakdownLine() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " · ")
+	for n := len(parts); n > 0; n-- {
+		line := strings.Join(parts[:n], " · ")
+		if n < len(parts) {
+			line += " …"
+		}
+		if visualLen(line) <= maxLen {
+			return line
+		}
+	}
+	return ""
 }
 
 // bulkLine states the filtered remainder AND what QUESTION was asked of it

@@ -117,10 +117,13 @@ func TestPreScanCapsHitShowsNofM(t *testing.T) {
 // from the totals/informational_count the server already computes -- not a
 // bare "+N more" with no indication of content.
 func TestPreScanHiddenTailNamesBuckets(t *testing.T) {
-	out := Render("email_pre_scan", raw(t, capsHitPreScan), width80)
+	// Wide enough that every bucket fits on the "+N more" row without
+	// tripping the narrow-width trim -- that trim gets its own test below.
+	const wide = 120
+	out := Render("email_pre_scan", raw(t, capsHitPreScan), wide)
 	t.Logf("\n%s", plain(out))
 
-	assertWidth(t, out, width80)
+	assertWidth(t, out, wide)
 	assertContains(t, out,
 		"+35 more",
 		"30 urgent", "8 actionable", "2 needs review", "4 informational",
@@ -128,6 +131,19 @@ func TestPreScanHiddenTailNamesBuckets(t *testing.T) {
 	// suggested_archives is 0 in the fixture -- a zero bucket must not
 	// clutter the line with "0 suggested archive".
 	assertNotContains(t, out, "0 suggested archive")
+}
+
+// At a card width too narrow to fit every bucket, the lowest-priority ones
+// are dropped from the end -- never truncated mid-word -- and the drop is
+// marked with "…" rather than silently disappearing.
+func TestPreScanHiddenTailBreakdownTrimsAtNarrowWidth(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, capsHitPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out, "+35 more", "30 urgent", "8 actionable", "…")
+	// Never split a bucket's own text mid-word.
+	assertNotContains(t, out, "informatio…", "review…")
 }
 
 // A payload from a producer that predates #2827 (no `totals` field) must
