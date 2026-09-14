@@ -577,9 +577,7 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
                 ):
                     return None
                 load_seconds = (
-                    stats.get("model_load_seconds")
-                    if isinstance(stats, dict)
-                    else None
+                    stats.get("model_load_seconds") if isinstance(stats, dict) else None
                 )
                 if (
                     isinstance(load_seconds, (int, float))
