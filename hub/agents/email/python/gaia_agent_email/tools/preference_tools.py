@@ -225,22 +225,29 @@ def _local_part(email: str) -> str:
 
 
 def _find_ambiguous_senders(normalized: str, known: Set[str]) -> List[str]:
-    """Return other addresses in ``known`` whose local-part nearly matches.
+    """Return other addresses in ``known`` whose local-part nearly — but not
+    exactly — matches, i.e. a likely typo of the same mailbox.
 
     Skips an exact match to ``normalized`` itself (re-adding the same address
-    is a no-op, not an ambiguity). A match ratio >= ``_SENDER_AMBIGUITY_RATIO``
-    on the local part is what flags e.g. ``bob.smith`` vs. ``bob.smyth`` (a
-    plausible typo) while leaving unrelated addresses like ``john`` vs.
-    ``jane`` (ratio ~0.5) alone.
+    is a no-op, not an ambiguity). Also skips any ``other`` whose local part
+    is IDENTICAL to ``candidate_local``: an identical local part on a
+    different domain (``noreply@github.com`` vs. ``noreply@stripe.com``, or
+    one person's separate work/personal mailbox) is a distinct, deliberate
+    address, not a typo — the domain is what disambiguates it, and two
+    different addresses do not become one just because both use a common
+    mailbox name. A match ratio >= ``_SENDER_AMBIGUITY_RATIO`` on the local
+    part is what flags e.g. ``bob.smith`` vs. ``bob.smyth``, or the near-typo
+    ``tomasz.iniewicz`` vs. ``tomasz.testingiewicz`` (#2828's actual case,
+    also across different domains) — both share almost, but not all, of the
+    local part, which is the signal an exact-local-part match lacks.
     """
     candidate_local = _local_part(normalized)
     matches = [
         other
         for other in known
         if other != normalized
-        and difflib.SequenceMatcher(
-            None, candidate_local, _local_part(other)
-        ).ratio()
+        and _local_part(other) != candidate_local
+        and difflib.SequenceMatcher(None, candidate_local, _local_part(other)).ratio()
         >= _SENDER_AMBIGUITY_RATIO
     ]
     return sorted(matches)
@@ -430,7 +437,7 @@ class PreferenceToolsMixin:
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
-        def set_priority_sender(email: str) -> str:
+        def set_priority_sender(email: str, confirmed: bool = False) -> str:
             """Mark a sender as high-priority (#2632: never forces urgency).
 
             Senders flagged here are tagged ``preference_applied:
@@ -458,11 +465,18 @@ class PreferenceToolsMixin:
             (e.g. ``priya@x.com`` vs. an existing ``priyanka@x.com``), this
             fails loudly instead of silently applying to the wrong sender —
             the error names the address(es) it could not disambiguate from.
+            This is never permanent: ask the user to confirm the address is
+            what they meant, then retry the same call with ``confirmed=True``
+            to apply it despite the resemblance.
 
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
                     Headers like ``"Alice <alice@example.com>"`` are
                     rejected; pass the bare address only.
+                confirmed: Set True to apply ``email`` even though it closely
+                    resembles an already-configured address. Only set this
+                    after the user has explicitly confirmed ``email`` is the
+                    one they meant — never on a bare retry of the same call.
             """
             try:
                 normalized = _normalize_email(email)
@@ -475,12 +489,13 @@ class PreferenceToolsMixin:
                 _validate_session_preferences(prefs)
                 known = prefs["priority_senders"] | prefs["low_priority_senders"]
                 ambiguous = _find_ambiguous_senders(normalized, known)
-                if ambiguous:
+                if ambiguous and not confirmed:
                     return _envelope_err(
                         f"set_priority_sender: {normalized!r} closely resembles "
-                        f"already-configured address(es) {ambiguous} — refusing "
-                        "to guess which one was meant. Confirm the exact "
-                        "address with the user and retry."
+                        f"already-configured address(es) "
+                        f"{', '.join(ambiguous)} — refusing to guess which one "
+                        "was meant. Confirm the exact address with the user, "
+                        "then retry with confirmed=True to apply it anyway."
                     )
                 prefs["priority_senders"].add(normalized)
                 # If the same sender was previously low-priority, the new
@@ -564,7 +579,7 @@ class PreferenceToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def set_low_priority_sender(email: str) -> str:
+        def set_low_priority_sender(email: str, confirmed: bool = False) -> str:
             """Mark a sender as low-priority (#2666: never forces PROMOTIONAL).
 
             Senders flagged here are tagged ``preference_applied:
@@ -591,11 +606,18 @@ class PreferenceToolsMixin:
             (e.g. muting ``a@x.com`` when ``b@x.com``, a near-duplicate, is
             already on either sender list), this fails loudly instead of
             silently applying to the wrong sender — the error names the
-            address(es) it could not disambiguate from.
+            address(es) it could not disambiguate from. This is never
+            permanent: ask the user to confirm the address is what they
+            meant, then retry the same call with ``confirmed=True`` to apply
+            it despite the resemblance.
 
             Args:
                 email: A bare email address, e.g.
                     ``newsletter@stripe.com``.
+                confirmed: Set True to apply ``email`` even though it closely
+                    resembles an already-configured address. Only set this
+                    after the user has explicitly confirmed ``email`` is the
+                    one they meant — never on a bare retry of the same call.
             """
             try:
                 normalized = _normalize_email(email)
@@ -608,12 +630,13 @@ class PreferenceToolsMixin:
                 _validate_session_preferences(prefs)
                 known = prefs["priority_senders"] | prefs["low_priority_senders"]
                 ambiguous = _find_ambiguous_senders(normalized, known)
-                if ambiguous:
+                if ambiguous and not confirmed:
                     return _envelope_err(
                         f"set_low_priority_sender: {normalized!r} closely "
-                        f"resembles already-configured address(es) {ambiguous} "
-                        "— refusing to guess which one was meant. Confirm the "
-                        "exact address with the user and retry."
+                        f"resembles already-configured address(es) "
+                        f"{', '.join(ambiguous)} — refusing to guess which one "
+                        "was meant. Confirm the exact address with the user, "
+                        "then retry with confirmed=True to apply it anyway."
                     )
                 prefs["low_priority_senders"].add(normalized)
                 # Same conflict resolution as set_priority_sender —

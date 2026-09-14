@@ -105,9 +105,7 @@ class TestFindAmbiguousSendersHelper:
 
     def test_near_duplicate_local_part_is_ambiguous(self):
         known = {"tomasz.iniewicz@gmail.com"}
-        result = _find_ambiguous_senders(
-            "tomasz.testingiewicz@outlook.com", known
-        )
+        result = _find_ambiguous_senders("tomasz.testingiewicz@outlook.com", known)
         assert result == ["tomasz.iniewicz@gmail.com"]
 
     def test_unrelated_address_is_not_ambiguous(self):
@@ -121,6 +119,28 @@ class TestFindAmbiguousSendersHelper:
     def test_empty_known_set_is_never_ambiguous(self):
         assert _find_ambiguous_senders("anyone@example.com", set()) == []
 
+    def test_same_local_part_different_domain_is_not_ambiguous(self):
+        # #2828 over-block: two genuinely distinct services sharing a common
+        # mailbox convention (noreply@) must NOT collide just because the
+        # local part matches — the domain is what makes them different
+        # addresses.
+        known = {"noreply@github.com"}
+        assert _find_ambiguous_senders("noreply@stripe.com", known) == []
+
+    def test_second_mailbox_for_same_person_is_not_ambiguous(self):
+        known = {"john.smith@company.com"}
+        assert _find_ambiguous_senders("john.smith@gmail.com", known) == []
+
+    def test_near_typo_local_part_is_still_ambiguous_across_domains(self):
+        # The exact #2828 pair: different domains AND a near-but-not-exact
+        # local part — this must still be caught. What distinguishes it from
+        # the noreply@ case above is that the local parts are NOT identical
+        # (0.857 similarity, not 1.0), which is what a typo looks like.
+        known = {"tomasz.iniewicz@gmail.com"}
+        assert _find_ambiguous_senders("tomasz.testingiewicz@outlook.com", known) == [
+            "tomasz.iniewicz@gmail.com"
+        ]
+
 
 class TestSetLowPrioritySenderAmbiguity:
     """#2828 regression: address A explicitly named must land on A, and a
@@ -131,9 +151,7 @@ class TestSetLowPrioritySenderAmbiguity:
         agent = _build_agent(tmp_path)
         try:
             # B is already known (configured earlier, a prior turn).
-            b_result = _invoke(
-                "set_low_priority_sender", "tomasz.iniewicz@gmail.com"
-            )
+            b_result = _invoke("set_low_priority_sender", "tomasz.iniewicz@gmail.com")
             assert b_result["ok"] is True
 
             # Now the user explicitly names A, a near-duplicate of B.
@@ -148,12 +166,10 @@ class TestSetLowPrioritySenderAmbiguity:
 
             # A must NOT have been silently added to either list.
             prefs = agent._session_preferences
-            assert "tomasz.testingiewicz@outlook.com" not in prefs[
-                "low_priority_senders"
-            ]
-            assert "tomasz.testingiewicz@outlook.com" not in prefs[
-                "priority_senders"
-            ]
+            assert (
+                "tomasz.testingiewicz@outlook.com" not in prefs["low_priority_senders"]
+            )
+            assert "tomasz.testingiewicz@outlook.com" not in prefs["priority_senders"]
             # B — the address actually requested and stored — is untouched.
             assert "tomasz.iniewicz@gmail.com" in prefs["low_priority_senders"]
         finally:
@@ -163,9 +179,7 @@ class TestSetLowPrioritySenderAmbiguity:
         """No collision — a brand-new, unrelated address is stored as given."""
         agent = _build_agent(tmp_path)
         try:
-            result = _invoke(
-                "set_low_priority_sender", "newsletter@stripe.com"
-            )
+            result = _invoke("set_low_priority_sender", "newsletter@stripe.com")
             assert result["ok"] is True
             assert result["data"]["added"] == "newsletter@stripe.com"
             assert (
@@ -181,9 +195,7 @@ class TestSetLowPrioritySenderAmbiguity:
         agent = _build_agent(tmp_path)
         try:
             _invoke("set_low_priority_sender", "tomasz.iniewicz@gmail.com")
-            removal = _invoke(
-                "remove_low_priority_sender", "tomasz.iniewicz@gmail.com"
-            )
+            removal = _invoke("remove_low_priority_sender", "tomasz.iniewicz@gmail.com")
             assert removal["ok"] is True
             assert removal["data"]["removed"] is True
             assert (
@@ -205,6 +217,54 @@ class TestSetLowPrioritySenderAmbiguity:
             )
             assert result["ok"] is False
             assert "tomasz.iniewicz@gmail.com" in result["error"]
+        finally:
+            agent.close_db()
+
+    def test_legitimate_noreply_pair_from_different_services_is_applied(self, tmp_path):
+        # #2828 over-block regression: muting a second, unrelated service's
+        # noreply@ address must succeed — it is not the same sender as the
+        # first, just a common mailbox-naming convention.
+        agent = _build_agent(tmp_path)
+        try:
+            first = _invoke("set_low_priority_sender", "noreply@github.com")
+            assert first["ok"] is True
+
+            second = _invoke("set_low_priority_sender", "noreply@stripe.com")
+            assert second["ok"] is True, (
+                "a genuinely distinct address sharing a local part with an "
+                f"already-configured one must not be blocked. Got: {second}"
+            )
+            assert second["data"]["added"] == "noreply@stripe.com"
+            prefs = agent._session_preferences
+            assert "noreply@github.com" in prefs["low_priority_senders"]
+            assert "noreply@stripe.com" in prefs["low_priority_senders"]
+        finally:
+            agent.close_db()
+
+    def test_ambiguous_address_can_be_applied_with_confirmed_true(self, tmp_path):
+        # A false positive must have an escape: once the user has confirmed
+        # the address, the same call with confirmed=True applies it instead
+        # of being permanently stuck behind the guard.
+        agent = _build_agent(tmp_path)
+        try:
+            _invoke("set_low_priority_sender", "tomasz.iniewicz@gmail.com")
+            blocked = _invoke(
+                "set_low_priority_sender",
+                "tomasz.testingiewicz@outlook.com",
+            )
+            assert blocked["ok"] is False
+
+            confirmed = _invoke(
+                "set_low_priority_sender",
+                "tomasz.testingiewicz@outlook.com",
+                True,
+            )
+            assert confirmed["ok"] is True
+            assert confirmed["data"]["added"] == "tomasz.testingiewicz@outlook.com"
+            assert (
+                "tomasz.testingiewicz@outlook.com"
+                in agent._session_preferences["low_priority_senders"]
+            )
         finally:
             agent.close_db()
 
