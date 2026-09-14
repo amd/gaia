@@ -106,7 +106,8 @@ class AgentSDK:
                 else self.config.model
             ),
             base_url=self.config.base_url,
-            system_prompt=self.config.system_prompt,
+            # The SDK supplies per-request prompts, including runtime overrides.
+            system_prompt=None,
         )
 
         # Store conversation history
@@ -814,10 +815,6 @@ class AgentSDK:
             old_history = list(self.chat_history)
             new_maxlen = kwargs["max_history_length"] * 2
             self.chat_history = deque(old_history, maxlen=new_maxlen)
-
-        if "system_prompt" in kwargs:
-            # System prompt is handled through Prompts class, not directly
-            pass
 
         if "assistant_name" in kwargs:
             # Assistant name change affects history display but not underlying storage
