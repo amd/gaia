@@ -199,9 +199,35 @@ class TestPublicSurface:
         assert "refresh_token" not in google_row
         assert google_row["account_email"] == "alice@example.com"
 
+    @respx.mock
     def test_revoke_connection_via_public_api(self, seeded):
-        revoke_connection("google")
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        result = revoke_connection("google")
         assert list_connections() == []
+        # #2591: the public API must actually call Google's revoke endpoint,
+        # not just clear the local keyring entry.
+        assert revoke_route.called
+        assert result == {
+            "revoke_supported": True,
+            "revoked_remotely": True,
+            "revoke_error": None,
+        }
+
+    @respx.mock
+    def test_revoke_connection_reports_remote_failure_honestly(self, seeded):
+        # #2591: a failed provider-side revoke must never be reported as a
+        # full success — the connection is still cleared locally, but the
+        # caller must be told the remote grant may still be live.
+        respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        result = revoke_connection("google")
+        assert list_connections() == []
+        assert result["revoke_supported"] is True
+        assert result["revoked_remotely"] is False
+        assert result["revoke_error"]
 
     def test_microsoft_connection_visible_to_generic_api(self, monkeypatch, tmp_path):
         # Root-cause fix (#1603): a stored Microsoft connection with no google
