@@ -17,8 +17,12 @@ icon: "magnifying-glass-code"
 ## Installation
 
 ```bash
-uv pip install -e '.[rag]'
+uv pip install "amd-gaia[rag]"
 ```
+
+For an editable repository checkout, use `uv pip install -e ".[rag]"` instead.
+On Linux/WSL, add `--extra-index-url https://download.pytorch.org/whl/cpu`
+to the GAIA installation command to avoid CUDA packages.
 
 FAISS and numpy live under the `[rag]` extras. If they're missing the SDK raises:
 

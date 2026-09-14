@@ -204,3 +204,71 @@ def test_memory_subclasses_accept_base_options_without_live_memory(monkeypatch):
                 assert agent.memory_store is None
             checked.append(node.name)
     assert checked == ["MyAgent", "RememberBot", "WorkPersonalAgent", "TestAgent"]
+
+
+def test_mcp_example_implements_the_abstract_agent_contract():
+    import ast
+
+    import pytest
+
+    from gaia.agents.base.mcp_agent import MCPAgent
+
+    source = _python_examples("docs/sdk/infrastructure/mcp.mdx")[0]
+    classes = [
+        node for node in ast.parse(source).body if isinstance(node, ast.ClassDef)
+    ]
+    assert len(classes) == 1
+    namespace = {"MCPAgent": MCPAgent}
+    exec(
+        compile(ast.Module(body=classes, type_ignores=[]), "mcp.mdx", "exec"), namespace
+    )
+    with patch.dict(tools_module._TOOL_REGISTRY, {}, clear=True):
+        agent = namespace["WordCountMCPAgent"](skip_lemonade=True, silent_mode=True)
+        assert agent.execute_mcp_tool("count_words", {"text": "GAIA runs locally"}) == {
+            "count": 3
+        }
+        with pytest.raises(ValueError, match="Unknown tool"):
+            agent.execute_mcp_tool("missing", {})
+        with pytest.raises(ValueError, match="text must be a string"):
+            agent.execute_mcp_tool("count_words", {"text": 3})
+
+
+def test_chat_sdk_dataclass_reference_matches_current_defaults():
+    from dataclasses import dataclass, fields
+    from typing import Any, Dict, List, Optional
+
+    from gaia.chat.sdk import AgentConfig, AgentResponse
+
+    namespace = {
+        "dataclass": dataclass,
+        "Optional": Optional,
+        "List": List,
+        "Dict": Dict,
+        "Any": Any,
+    }
+    for source in _python_examples("docs/sdk/sdks/chat.mdx"):
+        if source.startswith("@dataclass"):
+            exec(source, namespace)
+    for actual in (AgentConfig, AgentResponse):
+        documented = namespace[actual.__name__]
+        assert {f.name: f.default for f in fields(documented)} == {
+            f.name: f.default for f in fields(actual)
+        }
+
+
+def test_chat_sdk_non_rag_examples_execute_with_a_mock_provider():
+    checked = 0
+    for source in _python_examples("docs/sdk/sdks/chat.mdx"):
+        if source.startswith("@dataclass") or "enable_rag(" in source:
+            continue  # RAG examples require document fixtures and embeddings.
+        with patch("gaia.chat.sdk.create_client") as create_client:
+            provider = create_client.return_value
+            provider.generate.side_effect = lambda *args, **kwargs: (
+                iter(["Example reply"]) if kwargs.get("stream") else "Example reply"
+            )
+            provider.chat.return_value = "Example reply"
+            provider.get_last_usage.return_value = None
+            exec(source, {})
+            assert provider.generate.called or provider.chat.called
+        checked += 1
+    assert checked == 8

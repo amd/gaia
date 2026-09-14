@@ -143,7 +143,9 @@ timeouts inside the tool as well.
 
 When the wait expires, the harness signals the worker's cancellation flag and
 returns a timeout error. Python cannot kill the thread: an abandoned tool may still
-finish or produce side effects. A retry may overlap it. Long-running tools should
+finish or produce side effects. A retry may overlap it. GAIA filters an abandoned
+worker's later log records from its own handlers, but that does not isolate the
+worker's writes to databases, files, or other shared state. Long-running tools should
 poll `tool_cancelled()` or call `raise_if_cancelled()` between stages; the latter
 raises `ToolCancelled`. These helpers observe the per-tool timeout signal, not a
 general guarantee that every UI stop has interrupted the tool body.

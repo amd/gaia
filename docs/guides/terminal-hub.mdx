@@ -86,6 +86,11 @@ flagship subprocess; unsupported transports report the restriction.
 | `Ctrl+B` | Copy the last code block |
 | `Ctrl+T` | Toggle terminal selection mode |
 
+The first stop request returns queued messages to the composer. A second stop
+abandons any follow-ups still queued and reports what was dropped. A queued
+follow-up that runs longer than three minutes shows a stop/recovery hint; the
+hint itself does not cancel it.
+
 A forced subprocess stop restarts the agent and loses in-memory skills and grants.
 It is different from cancelling a turn cooperatively. Persistent memory is separate
 from the current conversation; see [state and cancellation](/reference/tui#state-and-cancellation).

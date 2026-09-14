@@ -12,9 +12,19 @@ icon: "comments"
 **Import:** `from gaia.chat.sdk import AgentSDK, AgentConfig, SimpleChat, AgentSession, quick_chat`
 </Note>
 
-**See also:** [User Guide](/guides/chat) · [API Specification](/spec/agent-sdk)
+**See also:** [User Guide](/guides/chat) · [Agent harness](/sdk/core/agent-system)
 
 ---
+
+`AgentSDK` is the conversation/model client used by the [agent harness](/sdk/core/agent-system).
+It does not itself dispatch your `@tool` functions. Use `Agent` for a tool-using
+loop, or `AgentSDK` when your application owns the model conversation directly.
+All examples below require a configured backend unless they only inspect configuration.
+
+`send()` and `send_stream()` manage bounded in-memory chat history;
+`max_history_length` counts question/answer pairs. `send_messages()` and
+`send_messages_stream()` accept caller-owned message lists instead. Neither is a
+persistent memory database. Use [Memory SDK](/sdk/sdks/memory) for durable memory.
 
 ## Core Classes
 
@@ -35,7 +45,7 @@ class AgentConfig:
     use_claude: bool = False       # Use Claude API
     use_chatgpt: bool = False      # Use ChatGPT/OpenAI API
     use_local_llm: bool = True     # Use local LLM
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None # Lemonade server URL
     assistant_name: str = "gaia"
 ```
@@ -51,6 +61,7 @@ class AgentResponse:
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
     is_complete: bool = True  # False for streaming chunks
+    usage: Optional[Dict[str, Any]] = None  # Provider-reported token usage
 ```
 
 ### SimpleChat
@@ -115,12 +126,16 @@ print(response2.text)  # LLM remembers context
 
 # Check history
 history = chat.get_history()
-print(f"Conversation turns: {len(history)}")
+print(f"Conversation pairs: {chat.conversation_pairs}")
 
 chat.clear_history()
 ```
 
 ---
+
+`send(..., no_history=True)` bypasses stored chat history for that request.
+It does not disable enabled RAG. `get_history()` returns separate user/assistant
+entries; use `conversation_pairs` when counting completed exchanges.
 
 ## Streaming
 
@@ -206,20 +221,27 @@ print(f"Conversation pairs: {chat.conversation_pairs}")
 
 ## Chat with RAG
 
+Install `amd-gaia[rag]`, initialize Lemonade and embeddings with `gaia init`,
+and replace the sample PDF paths with files you own. Check indexing results
+before asking a document question; a failed index is not evidence that the
+model read the document.
+
 ```python
 from gaia.chat.sdk import AgentSDK
 
 chat = AgentSDK()
 
 # Enable RAG and index documents
-chat.enable_rag(documents=["manual.pdf", "guide.pdf"])
+if not chat.enable_rag(documents=["manual.pdf", "guide.pdf"]):
+    raise RuntimeError("One or more documents could not be indexed")
 
 # Chat with document context
 response = chat.send("What does the manual say about installation?")
 print(response.text)
 
 # Add more documents
-chat.add_document("troubleshooting.pdf")
+if not chat.add_document("troubleshooting.pdf"):
+    raise RuntimeError("Could not index troubleshooting.pdf")
 
 # Disable RAG when done
 chat.disable_rag()
@@ -232,12 +254,13 @@ from gaia.chat.sdk import AgentSDK
 
 chat = AgentSDK()
 
-chat.enable_rag(
+if not chat.enable_rag(
     documents=["doc1.pdf", "doc2.pdf"],
     chunk_size=600,      # Larger chunks for more context
     max_chunks=4,        # More chunks per query
     chunk_overlap=100    # Overlap for context preservation
-)
+):
+    raise RuntimeError("One or more documents could not be indexed")
 
 if chat.rag:
     status = chat.rag.get_status()
@@ -276,16 +299,17 @@ print(response.text)
 
 <CardGroup cols={2}>
   <Card title="Messaging" icon="message">
-    - `send(message: str) -> AgentResponse`
+    - `send(message: str, *, no_history=False, **kwargs) -> AgentResponse`
     - `send_stream(message: str)`
-    - `send_messages(messages, system_prompt) -> AgentResponse`
+    - `send_messages(messages, system_prompt=None, tools=None, **kwargs) -> AgentResponse`
+    - `send_messages_stream(messages, system_prompt=None, tools=None, **kwargs)`
   </Card>
 
   <Card title="History" icon="clock-rotate-left">
     - `get_history() -> List[str]`
     - `clear_history()`
     - `get_formatted_history() -> List[Dict]`
-    - `conversation_pairs` (property)
+    - `conversation_pairs`, `history_length` (properties)
   </Card>
 
   <Card title="RAG (Document Q&A)" icon="book">
@@ -296,9 +320,9 @@ print(response.text)
 
   <Card title="Configuration" icon="gear">
     - `update_config(**kwargs)`
+    - `get_system_prompt()`, `set_system_prompt(prompt)`
     - `get_stats() -> Dict`
     - `display_stats(stats=None)`
-    - `start_interactive_session()`
   </Card>
 </CardGroup>
 
@@ -352,7 +376,7 @@ print(response.text)
 - **[GAIA Chat Desktop](/guides/agent-ui)** — Desktop app with GUI and document Q&A
 - **[Agent UI SDK](./agent-ui)** — Python backend for the desktop application (FastAPI, SQLite, REST API)
 - **[LLM Client](./llm)** — Language model integration
-- **[API Specification](/spec/agent-sdk)** — Technical specification
+- **[Agent harness](/sdk/core/agent-system)** — Tool-using execution loop
 
 ---
 

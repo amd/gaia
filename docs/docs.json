@@ -311,6 +311,7 @@
                   "reference/eval-scorecard"
                 ]
               },
+              "reference/session-analytics",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -690,6 +691,10 @@
     {
       "source": "/sdk/patterns",
       "destination": "/sdk/core/custom-agents"
+    },
+    {
+      "source": "/spec/agent-sdk",
+      "destination": "/sdk/sdks/chat"
     }
   ]
 }

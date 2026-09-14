@@ -60,6 +60,9 @@ matching local HTTP server and port.
 Cloud routing requires Lemonade **11.8.1 or later** and is experimental upstream.
 An empty model list is reported as a discovery problem, not a successful connection.
 Check credentials, account model access, the gateway URL, and Lemonade's server log.
+A refused cloud account, such as an exhausted balance or suspended account, ends
+the turn with an account-specific error. Resolve that condition with the provider
+or select another configured provider; repeating the same request cannot fix it.
 
 ## Switching and validation
 

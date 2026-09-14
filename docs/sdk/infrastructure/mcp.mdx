@@ -1,134 +1,105 @@
 ---
-title: "MCP Integration"
+title: "Expose an Agent through MCP"
+description: "Implement an MCPAgent and serve its explicitly declared tools to an MCP client."
 ---
 
-<Info>
-  **Source Code:** [`src/gaia/mcp/`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/)
-</Info>
+Use `MCPAgent` when another application should call tools your agent exposes.
+To let an agent **consume** external MCP tools instead, use the
+[MCP client SDK](/sdk/sdks/mcp). These are opposite directions of integration.
 
-<Note>
-**Import:** `from gaia.agents.base.mcp_agent import MCPAgent`
-</Note>
----
+## Implement the three required methods
 
-<Badge text="development" color="orange" />
+`MCPAgent` inherits the abstract `_register_tools()` method from `Agent` and adds
+`get_mcp_tool_definitions()` and `execute_mcp_tool()`. Implement all three.
+This complete example provides one read-only MCP tool; it makes no model request.
 
-**Detailed Spec:** [spec/mcp-server](/spec/mcp-server)
+Save it as `word_count_mcp.py` in the Python environment from the
+[quickstart](/quickstart). Install the MCP extra:
 
-## 8.1 MCP Agent Base
-
-**Purpose:** Base class for Model Context Protocol compatible agents.
+```bash
+uv pip install "amd-gaia[mcp]"
+```
 
 ```python
 from gaia.agents.base.mcp_agent import MCPAgent
-from gaia.agents.base.tools import tool
-from typing import List, Dict
-
-class MyMCPAgent(MCPAgent):
-    """Agent compatible with MCP protocol."""
-
-    def get_mcp_tool_definitions(self) -> List[Dict]:
-        """Return MCP-formatted tool definitions."""
-        return [
-            {
-                "name": "search_database",
-                "description": "Search the database for records",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max results",
-                            "default": 10
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        ]
-
-    def execute_mcp_tool(self, tool_name: str, arguments: Dict) -> Dict:
-        """Execute an MCP tool call."""
-        if tool_name == "search_database":
-            query = arguments["query"]
-            limit = arguments.get("limit", 10)
-            # Your implementation
-            return {"results": [...], "count": 5}
-
-        return {"error": f"Unknown tool: {tool_name}"}
-
-    # Optional: Provide prompts
-    def get_mcp_prompts(self) -> List[Dict]:
-        return [
-            {
-                "name": "search_help",
-                "description": "Help with database searches",
-                "arguments": [
-                    {"name": "topic", "description": "What to search for"}
-                ]
-            }
-        ]
-
-    # Optional: Expose resources
-    def get_mcp_resources(self) -> List[Dict]:
-        return [
-            {
-                "uri": "database://schema",
-                "name": "Database Schema",
-                "description": "Current database schema",
-                "mimeType": "application/json"
-            }
-        ]
-```
-
----
-
-## 8.2 MCP Server
-
-**Import:** `from gaia.mcp.agent_mcp_server import AgentMCPServer`
-
-```python
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from my_package.agent import MyMCPAgent
 
-# Create MCP server for your agent
-server = AgentMCPServer(
-    agent_class=MyMCPAgent,
-    name="my-mcp-agent",
-    port=8080,
-    host="localhost",
-    verbose=True,
-    agent_params={"custom_param": "value"}
-)
 
-# Start server
-server.start()
+class WordCountMCPAgent(MCPAgent):
+    def _register_tools(self):
+        # This example exposes MCP tools, not model-dispatched tools.
+        return None
 
-# Now accessible via MCP protocol
-# VSCode, Claude Desktop, etc. can connect
+    def get_mcp_tool_definitions(self):
+        return [{
+            "name": "count_words",
+            "description": "Count whitespace-separated words in text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        }]
+
+    def execute_mcp_tool(self, tool_name, arguments):
+        if tool_name != "count_words":
+            raise ValueError(f"Unknown tool: {tool_name}")
+        text = arguments.get("text")
+        if not isinstance(text, str):
+            raise ValueError("text must be a string")
+        return {"count": len(text.split())}
+
+
+if __name__ == "__main__":
+    server = AgentMCPServer(
+        agent_class=WordCountMCPAgent,
+        host="127.0.0.1",
+        port=8080,
+        register_typed_tools=True,
+        agent_params={"skip_lemonade": True, "silent_mode": True},
+    )
+    server.start()
 ```
 
----
+```bash
+uv run python word_count_mcp.py
+```
 
-## Related Topics
+The default transport is Streamable HTTP. Configure your MCP client with
+`http://127.0.0.1:8080/mcp`, then call `count_words` with
+`{"text": "GAIA runs locally"}`; the tool result contains `{"count": 3}`.
+Stop the server with Ctrl+C. The host and port belong to this MCP server, not the
+TUI control API or Lemonade.
 
-- [Core Agent System](../core/agent-system) - Learn about the base Agent class
-- [API Server](./api-server) - OpenAI-compatible API
-- [Specialized Agents](/guides/gaia) - Pre-built agent implementations
-- [MCP Documentation](/integrations/mcp) - Full MCP integration guide
+## Understand the dispatch boundary
 
----
+`AgentMCPServer` constructs the agent and registers the definitions returned by
+`get_mcp_tool_definitions()`. With `register_typed_tools=True`, it derives typed
+MCP wrappers from the declared schemas. The default is `False`, preserving the
+older kwargs-envelope compatibility path.
 
-<small style="color: #666;">
+Incoming tool requests call `execute_mcp_tool()` directly. They do not run through
+`Agent.process_query()` or inherit its per-tool approval loop. Validate the
+arguments and authorization appropriate to the host before adding mutating tools.
+This example deliberately has no file, shell, or external-service operations.
 
-**License**
+Declaring optional prompts or resources on `MCPAgent` does not make
+`AgentMCPServer` publish them: its registration path currently registers tools.
+Keep the server integration aligned with the capabilities it actually exposes.
 
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+For stdio, the server also accepts `transport="stdio"`; host and port are ignored
+for that transport. Keep diagnostic output off stdout because stdout carries MCP
+messages. See the
+[server source](https://github.com/amd/gaia/blob/main/src/gaia/mcp/agent_mcp_server.py)
+for transport and wrapper behavior.
 
-SPDX-License-Identifier: MIT
+## Test before connecting a client
 
-</small>
+Import `WordCountMCPAgent` and construct it with `skip_lemonade=True`. Verify that
+`execute_mcp_tool("count_words", {"text": "GAIA runs locally"})` returns a count of
+3 and that unknown tools and non-string input fail. Then test discovery and a tool
+call through a real MCP client; direct Python calls alone do not validate the wire
+protocol.
+
+See [agent testing](/sdk/testing) and [MCP setup](/integrations/mcp) for related
+workflows.

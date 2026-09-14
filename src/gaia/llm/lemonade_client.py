@@ -718,7 +718,13 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
     return None
 
 
-def _cloud_request_error(status: Optional[int]) -> LemonadeClientError:
+#: Where a user adds funds, for cloud providers whose billing page is known.
+_CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
+
+
+def _cloud_request_error(
+    status: Optional[int], provider: Optional[str] = None
+) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies."""
     if status in {401, 403}:
         return LemonadeAuthError(
@@ -738,6 +744,20 @@ def _cloud_request_error(status: Optional[int]) -> LemonadeClientError:
             "Cloud rate limit reached (HTTP 429). Wait before retrying; "
             "check your provider's usage limits and account in the TUI "
             "provider settings."
+        )
+    if status in {402, 412}:
+        # Fireworks answers a suspended or over-limit account with 412.
+        name, billing = _CLOUD_BILLING.get(
+            provider or "",
+            (f"The {provider} provider" if provider else "The cloud provider", None),
+        )
+        where = f"at {billing}" if billing else "in your provider's billing console"
+        return LemonadeClientError(
+            f"{name} refused the request (HTTP {status}): the account may be "
+            "suspended, out of credit, or over its spending limit. Retrying will "
+            f"not help. Add funds or raise the limit {where}, then send your "
+            "message again, or switch to a local model in the TUI provider "
+            "settings to keep working now."
         )
     code = f" (HTTP {status})" if status is not None else ""
     return LemonadeClientError(
@@ -1984,7 +2004,9 @@ class LemonadeClient:
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
-                    raise _cloud_request_error(response.status_code)
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /chat/completions. "
                     "Verify LEMONADE_API_KEY is correct (currently "
@@ -1993,7 +2015,9 @@ class LemonadeClient:
 
             if response.status_code != 200:
                 if self.cloud_model_provider(model):
-                    raise _cloud_request_error(response.status_code)
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 error_msg = (
                     f"Error in chat completions "
                     f"(status {response.status_code}): {response.text}"
@@ -2227,7 +2251,9 @@ class LemonadeClient:
             )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
-                raise _cloud_request_error(_cloud_error_status(e)) from None
+                raise _cloud_request_error(
+                    _cloud_error_status(e), self.cloud_model_provider(model)
+                ) from None
             error_type = e.__class__.__name__
             error_msg = str(e)
             self.log.error(f"OpenAI {error_type}: {error_msg}")

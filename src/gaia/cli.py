@@ -2684,8 +2684,11 @@ Examples:
         default=None,
         help=(
             "Explicit dev-mode source directory (escape hatch for --mode dev "
-            "when this shell isn't inside a git work tree). Default: resolved "
-            "from this checkout via `git rev-parse --show-toplevel`."
+            "when this shell isn't inside a git work tree). Must be an "
+            "absolute path ending in hub/agents/<agent_id>/python (e.g. "
+            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "Default: resolved from this checkout via "
+            "`git rev-parse --show-toplevel`."
         ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(

@@ -9,7 +9,9 @@ If you want to chat with the flagship instead, follow the [Terminal UI guide](/g
 
 ## 1. Prepare Python and the model
 
-Install Python 3.10+ and [uv](https://docs.astral.sh/uv/), then create an environment:
+Install Python 3.10+ and [uv](https://docs.astral.sh/uv/), then create an environment. On Linux/WSL, append
+`--extra-index-url https://download.pytorch.org/whl/cpu` to the
+`uv pip install amd-gaia` command below to avoid downloading CUDA packages:
 
 ```bash
 mkdir gaia-count-agent
