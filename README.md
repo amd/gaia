@@ -26,7 +26,8 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 [![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple)](https://github.com/amd/gaia/releases/latest)
 [![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/amd/gaia/releases/latest)
 
-See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
+Start with the [Terminal UI guide](docs/guides/terminal-hub.mdx), then run `gaia-tui`.
+For the browser/Electron application, see [Agent UI](docs/guides/agent-ui.mdx).
 
 > **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
 
@@ -38,44 +39,25 @@ See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/i
 |---------|-------------|
 | **Local Inference** | Run models on your machine for sensitive workloads and air-gapped deployments |
 | **No Cloud Inference Fees** | Local models require no API subscription; optional cloud providers have their own pricing |
-| **Privacy-First** | HIPAA-compliant, GDPR-friendly—ideal for healthcare, finance, and enterprise |
+| **Privacy-First** | Local inference with explicit cloud-provider selection and tool permissions |
 | **Ryzen AI Optimized** | Hardware-accelerated inference using NPU + iGPU on AMD Ryzen AI processors |
 
 ---
 
-## Build Your First Agent
+## Build on the harness
 
-```python
-from gaia.agents.base.agent import Agent
-from gaia.agents.base.tools import tool
+The [quickstart](docs/quickstart.mdx) runs a small agent with a word-count tool.
+Use the [agent harness reference](docs/sdk/core/agent-system.mdx) for lifecycle,
+context, result handling, and extension points, and the
+[tool reference](docs/sdk/core/tools.mdx) for registration and permissions.
 
-class MyAgent(Agent):
-    """A simple agent with custom tools."""
-
-    def _get_system_prompt(self) -> str:
-        return "You are a helpful assistant."
-
-    def _register_tools(self):
-        @tool
-        def get_weather(city: str) -> dict:
-            """Get weather for a city."""
-            return {"city": city, "temperature": 72, "conditions": "Sunny"}
-
-agent = MyAgent()
-result = agent.process_query("What's the weather in Austin?")
-print(result)
-```
-
-**[See the full quickstart guide →](https://amd-gaia.ai/docs/quickstart)**
-
----
 
 ## Key Capabilities
 
 - **Agent Framework** — Base class with tool orchestration, state management, and error recovery
 - **Agent UI** — Privacy-first desktop app with chat, file browser, document indexing, and tool execution
 - **RAG System** — Document indexing and semantic search for Q&A over 50+ file formats
-- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
+- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
 - **MCP Integration** — Connect to any MCP server for external tool access
 - **Plugin System** — Distribute agents via PyPI with auto-discovery
@@ -113,13 +95,10 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 ## System Requirements
 
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| **Processor** | AMD Ryzen AI 300-series | AMD Ryzen AI Max+ 395 |
-| **OS** | Windows 11, Linux | - |
-| **RAM** | 16GB | 64GB |
+Requirements depend on the agent, model, and backend. See the
+[flagship guide](docs/guides/gaia.mdx) and
+[hardware advisor](docs/guides/hardware-advisor.mdx) for setup and device selection.
 
----
 
 ## Documentation
 
@@ -134,25 +113,6 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 See the full [Release Notes](https://amd-gaia.ai/docs/releases) on the documentation site, or browse [GitHub Releases](https://github.com/amd/gaia/releases).
 
-### Release Process
-
-To publish a new release (e.g. `v0.17.0`), create a release PR that updates these 3 files:
-
-| # | File | What to change |
-|---|------|----------------|
-| 1 | `src/gaia/version.py` | Set `__version__ = "0.17.0"` |
-| 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
-| 3 | `docs/docs.json` | **(a)** Add `"releases/v0.17.0"` to the Releases tab pages array, **(b)** update the navbar label to `"v0.17.0 · Lemonade X.Y.Z"` |
-
-Then merge and tag:
-
-```bash
-git tag v0.17.0 && git push origin v0.17.0
-```
-
-CI validates all three files are consistent with the tag before publishing to [GitHub Releases](https://github.com/amd/gaia/releases) and [PyPI](https://pypi.org/project/amd-gaia/).
-
----
 
 ## Contributing
 

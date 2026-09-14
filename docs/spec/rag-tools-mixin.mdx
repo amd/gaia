@@ -55,7 +55,7 @@ Nothing sets these for you — not the base `Agent` class, not `RAGToolsMixin`
 itself. `ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
 is the reference implementation: it sets all five before calling
 `super().__init__()`, because `_register_tools()` runs inside that call. The
-[custom agent guide](/guides/custom-agent) shows the same pattern for a
+[custom agent guide](/sdk/core/agent-system) shows the same pattern for a
 minimal example.
 
 This is enforced by convention today, not by the mixin — a host class that

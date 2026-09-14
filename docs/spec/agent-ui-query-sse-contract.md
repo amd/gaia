@@ -13,7 +13,6 @@
 >
 > **Tracks:** [#2015](https://github.com/amd/gaia/issues/2015) (this spec),
 > epic [#2014](https://github.com/amd/gaia/issues/2014) (Agent UI v2, Phase 0).
-> **Design source:** [`docs/plans/agent-ui-agent-capabilities-plan.md`](../plans/agent-ui-agent-capabilities-plan.md)
 > §0.1 (REST contract), §0.2 (SSE schema), §0.15 (contract evolution).
 > **First consumer:** [#2016](https://github.com/amd/gaia/issues/2016) implements
 > this contract as `POST /v1/email/query` on the email sidecar (contract bump
@@ -24,7 +23,7 @@
 ## 1. Scope and intent
 
 The loop→SSE seam already exists in-process:
-[`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py)
+[`src/gaia/ui/sse_handler.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py)
 (`SSEOutputHandler(OutputHandler)`) turns every agent-loop `console.print_*`
 call into a typed JSON event on a `queue.Queue` that a streaming endpoint drains.
 **But the handler emits its own vocabulary**
@@ -397,7 +396,7 @@ behaviour above and must be made deliberately.
 ## 6. Translation map — in-process handler → canonical contract
 
 This is the total mapping the v2 translation layer implements. **Source of
-truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
+truth:** [`src/gaia/ui/sse_handler.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py) on
 `main`. Every top-level `type` the handler emits appears below with an explicit
 **map / fold / drop** decision — nothing falls through.
 
@@ -493,9 +492,9 @@ doc that describes it" rule, #2016 must regenerate/update **together**:
 
 | Surface | File | Change |
 |---|---|---|
-| OpenAPI | [`hub/agents/email/python/openapi.email.json`](../../hub/agents/email/python/openapi.email.json) | Regenerate via `export_openapi.py` with the new `/query` route + this SSE contract referenced as the streaming response. |
+| OpenAPI | [`hub/agents/email/python/openapi.email.json`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/openapi.email.json) | Regenerate via `export_openapi.py` with the new `/query` route + this SSE contract referenced as the streaming response. |
 | OpenAPI generator | `hub/agents/email/python/gaia_agent_email/export_openapi.py` | Emit the `/query` path + `/query/{run_id}/cancel`. |
-| Human spec (HTML) | [`hub/agents/email/python/specification.html`](../../hub/agents/email/python/specification.html) via `gaia_agent_email/spec_html.py` | Document `/query`, the seven event types, and the request body. |
+| Human spec (HTML) | [`hub/agents/email/python/specification.html`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/specification.html) via `gaia_agent_email/spec_html.py` | Document `/query`, the seven event types, and the request body. |
 | Contract version | `gaia_agent_email/contract.py` (`SCHEMA_VERSION`) + `gaia_agent_email/version.py` (`API_VERSION`) | `2.3` → `2.4`. |
 | Route | `gaia_agent_email/api_routes.py` | New `/query` route wiring the agent loop through the translation layer (§6). |
 | Integrator docs | `hub/agents/email/npm/{SPEC.md, SKILL.md, README.md, CHANGELOG.md}` | Describe `/query`, the event vocabulary, and the 2.4 CHANGELOG entry. |

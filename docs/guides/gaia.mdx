@@ -1,141 +1,105 @@
 ---
 title: "GAIA Agent"
-description: "The flagship general-purpose agent — conversation, document Q&A, data analysis, and web research, with memory that persists and skills you can add."
+description: "Use the flagship agent for documents, data, web research, code, and persistent memory."
 icon: "sparkles"
 ---
 
-# GAIA — the flagship agent
-
-GAIA is the agent a new user meets first. One agent handles the everyday work you'd otherwise spread across four: talking things through, answering questions about your own documents, poking at a spreadsheet, and reading the web. It remembers across sessions, and every inference runs **locally** on your machine through Lemonade.
-
-<Note>
-  GAIA is built on top of the [Chat agent](/guides/chat) — same document Q&A prompt, same
-  RAG discovery, same session persistence. What it adds is *breadth*: the data, web, and
-  filesystem capabilities Chat leaves off by default, plus a home for add-on skills.
-</Note>
-
-## What it does
-
-- **Conversation with memory** — facts you tell it persist to an on-device store and come back in later sessions. It can also search your own past conversations.
-- **Document Q&A over your files** — index a file or a whole folder, then ask questions. PDF, Word, PowerPoint, and plain text; the prompt tells the agent to name which document each fact came from rather than blending sources.
-- **Data exploration** — load a CSV or Excel file into a local SQL scratchpad table and query it, so "which region grew fastest" becomes a real query rather than a guess from a truncated preview.
-- **Web research** — search the web, fetch and read pages, download files.
-- **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
-- **Images** — describe a local image or answer a question about it, using the local vision model. It can also *generate* one from a description with local Stable Diffusion; that swaps the resident model, so the reply after an image takes an extra moment while the chat model reloads.
-- **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
-
-## Requirements
-
-| | |
-|---|---|
-| Local model server | Lemonade **10.2.0** or newer, running |
-| Model | `Gemma-4-E4B-it-GGUF` (downloaded) |
-| RAM | 8 GB minimum |
-| Platforms | Windows x64, Linux x64, macOS Apple Silicon |
-
-Install Lemonade, download the model, and start the server:
-
-```bash
-gaia init
-```
-
-The agent runs local inference only: the sidecar's `/query` endpoint rejects any request naming a provider other than `lemonade` with **HTTP 400**.
+GAIA is the flagship general-purpose agent. It extends [ChatAgent](/guides/chat)
+with the full tool profile, skill management, code search, and image generation.
+The [agent harness](/sdk/core/agent-system) runs its reasoning and tools; the
+[terminal](/guides/terminal-hub) supplies the interactive interface.
 
 ## Install and launch
 
-<Tabs>
-  <Tab title="One command (npx)">
-    ```bash
-    npx @amd-gaia/gaia
-    ```
-
-    This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
-
-    `@amd-gaia/gaia` is published on the [Agent Hub](https://amd-gaia.ai/hub), and the [terminal UI](/guides/terminal-hub) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
-  </Tab>
-  <Tab title="From source">
-    Run the agent from your own checkout, so prompt and tool edits take effect without a freeze-and-publish cycle.
-
-    ```bash
-    uv pip install -e hub/agents/gaia/python    # once
-    GAIA_GAIA_AGENT_MODE=dev gaia-tui
-    ```
-
-    Set `GAIA_GAIA_AGENT_MODE=dev` on the TUI launch as well as on any manual
-    `gaia daemon start-agent gaia --mode dev` launch. The TUI sends its caller
-    checkout to the daemon, so both sides agree on the source tree. Dev mode
-    refuses loudly if a sidecar is already running from a different checkout;
-    check what's running with `gaia daemon agents` and stop it with `gaia daemon
-    stop-agent gaia`.
-
-    Installing the wheel also registers the agent under the id `gaia` in GAIA's agent registry, so anything that enumerates installed agents picks it up.
-  </Tab>
-</Tabs>
-
-### Check it's ready before you ask it anything
-
-`GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 10.2.0 floor, and confirms the model is downloaded. It never pulls or loads a model.
+Install the native terminal package from [GAIA downloads](https://amd-gaia.ai/#install),
+then launch:
 
 ```bash
-curl -s http://127.0.0.1:8141/v1/gaia/init
+gaia-tui
 ```
 
-It answers **200** when ready and **503** when not, with a `hint` naming the fix — Lemonade unreachable, Lemonade too old, or model not downloaded. Liveness alone is `GET /health`, which never touches the model server.
+The native package includes the terminal and flagship agent executable. Follow the
+[Terminal guide](/guides/terminal-hub) for setup, keyboard controls, models, and
+permissions. The seeded flagship uses a persistent **stdio subprocess**; a Hub
+binary installation uses a daemon-supervised **HTTP sidecar** instead. These
+transports differ in model selection and approval support.
 
-<Note>
-  A **401** here means the sidecar wants a caller token — `/v1/gaia/*` requires one, while
-  `/health` and `/version` don't. That's the normal state for the sidecar the daemon
-  spawns. See [Authenticating your requests](#authenticating-your-requests).
-</Note>
+Local inference uses Lemonade and defaults to `Gemma-4-E4B-it-GGUF`. The flagship
+manifest declares 8 GB minimum memory and Windows x64, Linux x64, and macOS Apple
+Silicon support. Run `gaia init` to set up the local backend and model.
 
-## Tool surface
+**Local inference is the default, not a guarantee that every operation stays on
+this machine.** Web research, downloads, and connectors contact external services.
+The stdio terminal also supports explicitly selected Claude and cloud models
+exposed through Lemonade; those send conversation data to the provider. Retrieval,
+memory, and code indexing still use Lemonade embeddings. See
+[AI providers](/guides/ai-providers).
 
-The default construction registers **71 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Grouped by what they're for:
+For source development, install the flagship package in your development environment:
 
-| Area | Tools |
-|---|---|
-| Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `search_indexed_chunks`, `list_indexed_documents`, `summarize_document`, `dump_document`, `rag_status`, `evaluate_retrieval` |
-| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file`, `search_file_content`, `list_files`, `list_recent_files`, `file_info`, `get_file_info`, `browse_directory`, `search_directory`, `tree`, `add_watch_directory`, `execute_python_file` |
+```bash
+uv pip install -e hub/agents/gaia/python
+```
+
+Build the TUI separately and ensure it discovers that environment's agent
+executable. `GAIA_GAIA_AGENT_MODE=dev` selects source mode for a daemon-backed
+sidecar; it does not change a stdio launch. `--dev` enables diagnostics, not source
+selection. See [TUI architecture and development](/reference/tui) for build commands,
+transport discovery, logs, and tests.
+
+## Capabilities
+
+The full registry includes the following tool groups. Dynamic selection sends a
+subset to the model on each call; `load_tools` can bring in additional groups
+mid-turn. The registered count is not the per-call prompt size.
+
+| Area | Main tools |
+| --- | --- |
+| Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `summarize_document`, `search_indexed_chunks` |
+| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file_content`, `browse_directory`, `tree` |
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
-| Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
+| Web | `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
-| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
+| Audio/video | `transcribe_media`, `refine_transcript` |
+| Desktop/system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
-| Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
+| Code | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools` |
 
-That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
+Document Q&A supports PDF, Word, PowerPoint, and text. Data tools query CSV/Excel
+content through a local SQL scratchpad. Audio tools save and refine transcripts;
+see [Transcription](/guides/transcription). Image generation uses local Stable
+Diffusion and can evict the resident chat model, requiring a reload afterward.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
+`run_shell_command` applies an allowlist and rate limit. An active skill grant
+can allow a named CLI under its command policy: covered read-only calls can run
+without another prompt, while confirmable writes still require approval. This
+is not unrestricted shell execution.
 
-**Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
+## Permissions and file scope
 
-### Tools that need your approval
-
-Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+The built-in tools subject to confirmation policy include `write_file`, `edit_file`,
+`run_shell_command`, `execute_python_file`, `notify_desktop`, `install_skill`, and
+`remove_skill`. The stdio terminal displays confirmations and returns your decision;
+bypass mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
 
 <Warning>
-  **Over the sidecar's `/query` stream, all seven are refused rather than prompted.** That
-  surface has no way to collect an approval, so instead of pretending to, the run stops
-  with a message saying which action it declined. If your workflow depends on the agent
-  writing files, drive it from a surface that can prompt you, or perform the write yourself.
+The HTTP sidecar refuses confirmation-gated actions: its query stream does not
+implement an approval/resume flow. This limitation does not apply to the stdio
+terminal's interactive approvals.
 </Warning>
 
-## File access scope
+Confirmation is not a gate on every local write. Indexing, memory updates,
+transcripts, and image generation can write state without one of these prompts.
 
-The agent's file, document, and data tools are confined to a set of allowed paths. **By default that set is your home directory.**
+File, document, and data tools default to the user's home directory as their
+allowed scope. Resolved-path checks reject paths outside it, including symlinks
+that escape the allowed roots. Additional denylists block reading common secrets
+and writing automatic-execution locations such as shell startup files and Git
+metadata. A rejected path produces an explicit error.
 
-That's the honest scope for a personal document agent — "ask questions about my files" means your files — and it is still a real boundary: system directories, program files, and other users' home directories fall outside it and are refused. The check runs against the *resolved* path, so a symlink pointing out of the allowed set doesn't get around it; you get an explicit `Access denied to path:` error naming both the requested and the resolved path.
-
-**The allowed set is not the whole story, and shouldn't be treated as one.** Two denylists apply *inside* it, because "in scope" and "safe" are different questions:
-
-- **Secrets are never read back.** `.env`, `id_rsa`, `credentials.json`, `.netrc`, any `.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` are refused on read even when they sit in an allowed directory — otherwise "summarise this folder" is a credential exfiltration primitive.
-- **Files that run on their own are never written.** Shell startup files (`.bashrc`, `.zshrc`, `.profile`), PowerShell profiles, `~/.config/autostart/*`, systemd user units, `LaunchAgents`, and anything inside a repo's `.git/` — hooks and config alike. Writing to one of those isn't editing a document, it's arranging for the agent's output to execute at your next login.
-
-Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
-
-To narrow the scope, construct the agent with an explicit list:
+Narrow the scope when embedding the agent:
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -143,101 +107,108 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 agent = GaiaAgent(config=GaiaAgentConfig(
     allowed_paths=["/home/me/Documents", "/home/me/projects"],
 ))
+try:
+    result = agent.process_query("List files in /home/me/Documents")
+finally:
+    agent.close()
 ```
 
-<Note>
-  In v0.1.1 this is a **construction-time** setting only — the packaged sidecar exposes no
-  flag or environment variable for it, so narrowing the scope means embedding the agent in
-  your own Python process.
-</Note>
+The packaged HTTP sidecar has no `allowed_paths` flag; scope is a construction-time
+configuration. The project root described below does not replace this boundary.
 
-## Memory
+## Memory, skills, and projects
 
-Memory is on by default and lives on-device. The agent writes facts you ask it to remember, recalls them in later sessions, and can search prior conversations. `forget` and `update_memory` let you correct or drop what it holds.
+Memory is enabled by default. Facts persist on-device; `forget` and `update_memory`
+let you remove or correct them. Conversation history, an agent's in-memory state,
+and durable memory are different stores. See [Memory](/guides/memory) for storage
+and controls.
 
-The mechanism, storage location, and how to disable it are covered in the [Memory guide](/guides/memory).
+`gaia-voice` is an always-on skill that sets expectations for honest answers and
+reporting actual tool results. The current manifest declares no skill sets, so
+leave `GAIA_SKILL_SET` unset; an unknown set fails at startup.
 
-## Skills
+**Installed skills can activate automatically.** Proactive discovery matches a
+turn to installed skills; it does not automatically install arbitrary Hub skills.
+Dynamic skill selection limits which loaded bodies enter the prompt on a given
+turn. Explicit `load_skill` and `unload_skill` remain available.
+`GAIA_SKILL_DISCOVERY=0` disables discovery; `GAIA_DYNAMIC_SKILLS=0` keeps loaded
+bodies active on every turn. See [Composing skills](/guides/composing-skills).
+`remember_skill_lesson` stages a correction; activating it requires the user's
+`gaia skill deltas --approve` action.
 
-[Agent Skills](/guides/composing-skills) are short playbooks an agent loads into its own prompt, grouped into named **skill sets** — exactly one set is active per launch. GAIA is built to host them: its own bundled skill directory is the highest-precedence discovery root, so a skill shipped with the agent wins over a same-named user copy.
+The [Project map](/guides/project-map) supplies repository context and can build a
+semantic code index at task start. Set `GAIA_PROJECT_ROOT` when the launch directory
+does not identify the repository, or configure `project_root` in Python.
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables automatic indexing. The root chooses where
+code search starts; `allowed_paths` defines where it may reach.
 
-**One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 676 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
+## HTTP sidecar
 
-**No skill *set* loads by default, and v0.1.1 declares none.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
-
-Once a release declares sets, you select one at launch:
-
-```bash
-GAIA_SKILL_SET=research   # environment
-```
-
-or in Python, which takes precedence over the environment:
-
-```python
-GaiaAgentConfig(skill_set="research")
-```
-
-A name that isn't a declared set **fails at startup** naming the valid sets — it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
-
-## Driving it over HTTP
-
-The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemon spawns, health-checks, and tree-kills. It binds `127.0.0.1:8141` by default and is never exposed on a LAN interface: it speaks for your documents and your memory.
+With `--serve`, the executable exposes a loopback HTTP service, normally supervised
+by the daemon. Its default port is 8141. The native stdio launch does not require
+this endpoint. The HTTP query route accepts only `provider: "lemonade"` or an
+omitted provider; other values receive **400**. That transport constraint should
+not be read as a guarantee that a model exposed by Lemonade is local.
 
 | Endpoint | Purpose |
-|---|---|
-| `GET /health` | Liveness. Never touches the model server. |
-| `GET /version` | The daemon's contract probe → `{apiVersion, agentVersion}`. |
-| `GET /v1/gaia/version` | The terminal UI's negotiation probe. |
-| `GET /v1/gaia/init` | Readiness preflight (see [above](#check-its-ready-before-you-ask-it-anything)). |
-| `POST /v1/gaia/query` | Run one turn. Streams Server-Sent Events. |
-| `POST /v1/gaia/query/{run_id}/cancel` | Cooperatively cancel a live run. |
-| `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
+| --- | --- |
+| `GET /health` | Liveness without contacting Lemonade |
+| `GET /version` | Daemon contract probe |
+| `GET /v1/gaia/version` | Client capability negotiation |
+| `GET /v1/gaia/init` | Readiness without pulling or loading a model |
+| `POST /v1/gaia/query` | One turn streamed as SSE |
+| `POST /v1/gaia/query/{run_id}/cancel` | Cooperative cancellation |
+| `POST /v1/gaia/query/{run_id}/respond` | Answer a pending user question |
 
-`/query` implements the shared canonical SSE contract (API version **2.12**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
+Readiness checks Lemonade reachability, its supported version floor, and model
+availability. It returns **200** when ready or **503** with a corrective hint.
 
-- **You mint the `run_id`**, not the server. Cancellation keys off it, so it has to exist before the request rather than arrive in the stream.
-- **Conversation context is pushed in the body**, never pulled. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
-- **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
-- **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
-- **Confirmation-gated tools end the run with a refusal** — see [Tools that need your approval](#tools-that-need-your-approval).
+### Authentication
 
-### Authenticating your requests
+The daemon supplies a per-session bearer token using
+`GAIA_GAIA_SIDECAR_TOKEN_FILE`, an owner-only token file. A manually launched
+sidecar can also accept `GAIA_GAIA_SIDECAR_TOKEN`. Authenticated requests send
+`Authorization: Bearer <token>`; invalid or missing credentials receive **401**.
+`/health`, `/version`, and `/v1/gaia/version` are exempt from token checks.
 
-Binding to loopback is not access control — this agent has shell and file tools, so an open port would let any page you visit drive it. Three checks guard the sidecar:
+Loopback Host validation and browser Origin checks apply independently. An invalid
+Host receives **400** and a non-loopback Origin receives **403**. With neither
+token variable supplied, manual development launches disable token checking with
+a log warning; Host and Origin checks remain active.
 
-- **A per-session bearer token.** Every `/v1/gaia/*` request must carry `Authorization: Bearer <token>`; without it you get **401**. The process that spawned the sidecar supplies the token, either as `GAIA_GAIA_SIDECAR_TOKEN_FILE` — a path to a `0600`, owner-only file, so the secret never sits in the environment — or directly as `GAIA_GAIA_SIDECAR_TOKEN`. When the GAIA daemon runs the agent, it mints the token and uses the file channel.
-- **A loopback `Host` allowlist.** A `Host` header that isn't `127.0.0.1`, `localhost`, or `::1` is **400** — this is what defeats DNS rebinding.
-- **Origin rejection.** A request carrying a non-loopback browser `Origin` is **403**. Non-browser clients send no `Origin` and are unaffected.
+### Requests and session lifetime
 
-`GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
+`query`, `run_id`, and `context` are required. Mint a UUID before each request so
+you can cancel immediately. Send `context: []` for a new conversation; later
+requests push the transcript slice in the body. A stable `session_id` retains the
+agent, indexed-document state, and loaded skills. Without it each request uses a
+temporary agent.
 
-If neither token variable is set, the sidecar starts with the token check off and says so loudly in its log; `Host` and `Origin` stay enforced. That's a **local development** convenience — a sidecar you started by hand — not something to build on. Full details, including how to supply a token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
+For a manually launched sidecar whose token you supplied:
+
+```bash
+curl -N http://127.0.0.1:8141/v1/gaia/query \
+  -H "Authorization: Bearer $GAIA_GAIA_SIDECAR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"Hello","run_id":"70f35976-37b5-4468-841e-e49fef658e38","context":[],"session_id":"example-session","can_answer_questions":false}'
+```
+
+Use a fresh run UUID next time. Set `can_answer_questions: false` when no caller
+can respond to a mid-run question. Every stream ends with exactly one `final` or
+`error`; idle streams send keepalive comments while tools are working.
+
+Only one turn may run per HTTP session. Concurrent turns or a changed model on an
+existing session receive **409**. Finish/cancel the active turn, or use a new
+session to change models. Idle expiry and capacity eviction can discard retained
+state; reclaiming an evicted session emits a warning. Durable memory is separate.
 
 ## Troubleshooting
 
-### "Local Lemonade Server is not reachable"
+- **Backend/model not ready:** run `gaia init`; HTTP clients can inspect `/v1/gaia/init` for the failing prerequisite.
+- **Access denied:** check the resolved path against `allowed_paths` and the secret/write denylists.
+- **Source changes have no effect:** inspect the discovered executable and transport; rebuilding the TUI does not rebuild the agent.
+- **A file write is refused over HTTP:** use the stdio terminal for interactive tool approval.
+- **Sidecar startup fails:** inspect `gaia daemon agents` and `~/.gaia/agents/gaia/logs/sidecar-<port>.log`.
 
-The model server isn't running. Run `gaia init` to install and start it, or point the agent at one you already have with `LEMONADE_BASE_URL`. `GET /v1/gaia/init` tells you which of the three preconditions failed (reachable / version / model present) rather than making you guess.
-
-### "The model … is not downloaded"
-
-```bash
-gaia download Gemma-4-E4B-it-GGUF
-```
-
-Then re-run the readiness check.
-
-### "Access denied to path"
-
-The file resolves outside the allowed paths — by default, outside your home directory. Move the file inside the scope, or construct the agent with an `allowed_paths` list that covers it (see [File access scope](#file-access-scope)).
-
-### The sidecar won't start
-
-The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<port>.log`. Check that file first; a failed start also surfaces the log tail in the error. `gaia daemon agents` shows id, mode, pid, port, and contract version for everything currently running.
-
-## Limitations (v0.1.1)
-
-- **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
-- **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all seven [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
-- **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.
+See [TUI debugging](/reference/tui#debugging) for subprocess logs, event traces,
+and the distinction between terminal state and daemon state.

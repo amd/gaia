@@ -715,21 +715,14 @@ navigation — consult it rather than a hand-maintained copy here. Where things 
 - **Reference** (`docs/reference/`) — cli, dev, faq, troubleshooting, eval.
 - **Specs** (`docs/spec/`), **Deployment** (`docs/deployment/`), **Integrations** (`docs/integrations/`).
 
-## Roadmap & Plans
+## Current Documentation and Planning
 
-The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)).
-Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
-set — Agent UI, setup-wizard, security-model, email/calendar, messaging, autonomy-engine,
-agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and more).
-Browse the directory rather than a partial list here.
-
-**Key architectural decisions (April 2026):**
-- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`) was kept as its base class — see [Agent Implementations](#agent-implementations)
-- Voice-first is P0 enabling technology (#702)
-- No context compaction — memory + RAG handles long conversations
-- Configuration dashboard + Observability dashboard as separate Agent UI panels
-- MCP servers primary for email/calendar (not browser automation)
-- Signal is Phase 1 messaging priority (privacy-first)
+The current documentation starts at [`docs/index.mdx`](docs/index.mdx), with the
+agent harness in [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx)
+and the terminal client in [`docs/reference/tui.mdx`](docs/reference/tui.mdx).
+Track proposed work in GitHub issues and milestones. Retired roadmaps and
+implementation plans remain available in Git history; do not treat them as current
+architecture or release commitments.
 
 ## Issue Response Guidelines
 

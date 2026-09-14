@@ -1,201 +1,32 @@
 ---
 title: "User Guides"
-description: "Learn how to use GAIA's pre-built agents and SDKs"
+description: "Use the flagship agent, terminal UI, and supported GAIA integrations."
 icon: "book"
 ---
 
-<Info>
-  **Looking to build your own agent?** Check out the [Playbooks](/playbooks) for step-by-step tutorials on building agents from scratch.
-</Info>
+## Core workflow
 
-User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide covers installation, configuration, and common usage patterns.
+| Task | Guide |
+| --- | --- |
+| Start terminal chat and learn the controls | [Terminal UI](/guides/terminal-hub) |
+| Work with documents, data, and files | [GAIA agent](/guides/gaia) |
+| Choose local or cloud inference | [AI providers](/guides/ai-providers) |
+| Inspect persistent memory | [Memory](/guides/memory) |
+| Add task instructions | [Skills](/guides/composing-skills) |
+| Work inside a code repository | [Project map](/guides/project-map) and [code index](/guides/code-index) |
+| Diagnose startup or a failed turn | [TUI architecture and troubleshooting](/reference/tui) |
 
-<Info>
-**Guides vs Playbooks**
+## Other supported surfaces
 
-- **User Guides** (this section): How to *use* pre-built agents — quick start, configuration, CLI commands
-- **[Playbooks](/playbooks)**: How to *build* agents — step-by-step tutorials explaining implementation details
-</Info>
+- [Agent UI](/guides/agent-ui): browser and Electron chat.
+- [Document Q&A](/guides/chat): the Chat agent and retrieval workflow.
+- [Email](/guides/email): the separately installed email sidecar.
+- [Voice](/guides/talk) and [transcription](/guides/transcription).
+- [Connectors](/connectors/index), [MCP](/sdk/sdks/mcp), and [Telegram](/guides/telegram-adapter).
+- [Hardware advisor](/guides/hardware-advisor) and [NPU setup](/guides/npu).
 
----
+## Develop
 
-## Setup & Hardware
-
-<CardGroup cols={2}>
-  <Card
-    title="Hardware Advisor"
-    icon="microchip"
-    href="/guides/hardware-advisor"
-  >
-    Determine what LLMs your system can run based on RAM, GPU, and NPU capabilities.
-  </Card>
-
-  <Card
-    title="NPU Acceleration"
-    icon="bolt"
-    href="/guides/npu"
-  >
-    Run GAIA agents on AMD Ryzen AI NPU for power-efficient local inference.
-  </Card>
-</CardGroup>
-
----
-
-## Core Agents
-
-<CardGroup cols={2}>
-  <Card
-    title="GAIA"
-    icon="sparkles"
-    href="/guides/gaia"
-  >
-    The flagship agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills.
-  </Card>
-
-  <Card
-    title="Document Q&A"
-    icon="message"
-    href="/guides/chat"
-  >
-    Build conversational AI with text chat, memory, and document Q&A (RAG).
-  </Card>
-
-  <Card
-    title="Voice Interaction"
-    icon="microphone"
-    href="/guides/talk"
-  >
-    Natural voice conversations using Whisper (ASR) and Kokoro (TTS).
-  </Card>
-</CardGroup>
-
----
-
-## Developer Tools
-
-<CardGroup cols={2}>
-  <Card
-    title="Code Index"
-    icon="magnifying-glass-code"
-    href="/guides/code-index"
-  >
-    Semantic search over your codebase using local AMD-accelerated embeddings.
-  </Card>
-</CardGroup>
-
----
-
-## Connected Agents
-
-<CardGroup cols={2}>
-  <Card
-    title="Email Triage"
-    icon="envelope"
-    href="/guides/email"
-  >
-    Read, organize, and reply to Gmail with email content processed locally.
-  </Card>
-
-  <Card
-    title="Telegram Adapter"
-    icon="paper-plane"
-    href="/guides/telegram-adapter"
-  >
-    Talk to GAIA from Telegram on any device, with per-user sessions.
-  </Card>
-</CardGroup>
-
----
-
-## Build & Extend
-
-<CardGroup cols={2}>
-  <Card
-    title="Custom Agents"
-    icon="wand-magic-sparkles"
-    href="/guides/custom-agent"
-  >
-    Create your own AI agents and add them to the GAIA Agent UI.
-  </Card>
-
-  <Card
-    title="Publishing to the Hub"
-    icon="upload"
-    href="/guides/hub-publishing"
-  >
-    Build, version, and publish a GAIA agent to the Agent Hub.
-  </Card>
-</CardGroup>
-
----
-
-## MCP Integration
-
-<CardGroup cols={2}>
-  <Card
-    title="MCP Client"
-    icon="plug"
-    href="/guides/mcp/client"
-  >
-    Connect your agent to any MCP server - filesystem, GitHub, databases, and hundreds more.
-  </Card>
-
-  <Card
-    title="Windows System Health"
-    icon="display"
-    href="/guides/mcp/windows-system-health"
-  >
-    Monitor Windows system health using MCP-powered diagnostics.
-  </Card>
-</CardGroup>
-
----
-
-## Choosing a Guide
-
-| If you want to... | Start here |
-|-------------------|------------|
-| Check what models your hardware can run | [Hardware Advisor](/guides/hardware-advisor) |
-| Do a bit of everything in one agent — including web research, data analysis, and coding via skills | [GAIA](/guides/gaia) |
-| Build a chatbot or document Q&A | [Document Q&A](/guides/chat) |
-| Add voice to your agent | [Voice Interaction](/guides/talk) |
-| Search your codebase semantically | [Code Index](/guides/code-index) |
-| Triage your Gmail inbox locally | [Email Triage](/guides/email) |
-| Chat with GAIA from your phone | [Telegram Adapter](/guides/telegram-adapter) |
-| Build and publish your own agent | [Custom Agents](/guides/custom-agent) |
-| Connect agents to external MCP tools | [MCP Client](/guides/mcp/client) |
-| Monitor Windows system health | [Windows System Health](/guides/mcp/windows-system-health) |
-
----
-
-## Next Steps
-
-<CardGroup cols={2}>
-  <Card title="Playbooks" icon="book-open" href="/playbooks">
-    Learn to build agents from scratch with step-by-step tutorials
-  </Card>
-
-  <Card title="SDK Reference" icon="book" href="/sdk">
-    Complete API documentation for all GAIA components
-  </Card>
-
-  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
-    Command-line tools for chat, voice, RAG, and more
-  </Card>
-
-  <Card title="FAQ" icon="circle-question" href="/reference/faq">
-    Common questions and troubleshooting
-  </Card>
-</CardGroup>
-
----
-
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+Start with the [quickstart](/quickstart), [agent harness](/sdk/core/agent-system),
+and [tool reference](/sdk/core/tools). See [Hub publishing](/guides/hub-publishing)
+for packaging and [evaluation](/guides/eval) for measuring agent behavior.

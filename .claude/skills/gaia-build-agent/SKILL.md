@@ -9,7 +9,7 @@ How to take an idea to a working, testable GAIA agent — a Python class that ru
 locally on AI PCs. This skill covers **build**; publishing is its sibling
 [`agent-hub-release`](../agent-hub-release/SKILL.md) skill and the author guide
 [`docs/guides/hub-publishing.mdx`](../../../docs/guides/hub-publishing.mdx). The
-full prose walkthrough is [`docs/guides/custom-agent.mdx`](../../../docs/guides/custom-agent.mdx).
+full prose walkthrough is [`docs/sdk/core/agent-system.mdx`](../../../docs/sdk/core/agent-system.mdx).
 
 > Read [`CLAUDE.md`](../../../CLAUDE.md) first — the "No Silent Fallbacks", code-reuse,
 > testing, and eval rules all apply to a new agent.
@@ -91,7 +91,7 @@ Once it runs and is documented (README/SPEC/SKILL per the doc-sync rule), ship i
 
 ## Reference
 
-- [`docs/guides/custom-agent.mdx`](../../../docs/guides/custom-agent.mdx) — the full build walkthrough.
+- [`docs/sdk/core/agent-system.mdx`](../../../docs/sdk/core/agent-system.mdx) — the full build walkthrough.
 - [`src/gaia/agents/base/`](../../../src/gaia/agents/base/) — `Agent`, `MCPAgent`, `ApiAgent`, `@tool`, console, errors.
 - [`src/gaia/agents/registry.py`](../../../src/gaia/agents/registry.py) — agent registry + `KNOWN_TOOLS`.
 - The `gaia-agent-builder` agent (`.claude/agents/`) — a specialist for this work.

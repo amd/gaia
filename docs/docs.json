@@ -37,7 +37,13 @@
           {
             "group": "Getting Started",
             "pages": [
-              "index"
+              "index",
+              "guides/terminal-hub",
+              "guides/gaia",
+              "guides/ai-providers",
+              "quickstart",
+              "sdk/core/agent-system",
+              "reference/tui"
             ]
           },
           {
@@ -66,10 +72,8 @@
             "group": "Python Framework",
             "pages": [
               "setup",
-              "quickstart",
               "guides/install",
               "guides/agent-ui",
-              "guides/terminal-hub",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -111,7 +115,6 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/starter-skills",
-                      "guides/custom-agent",
                       "guides/composing-skills",
                       "guides/hub-publishing"
                     ]
@@ -145,32 +148,6 @@
                   "guides/eval",
                   "guides/eval-scenarios",
                   "guides/eval-ci"
-                ]
-              },
-              {
-                "group": "Playbooks",
-                "pages": [
-                  "playbooks/index",
-                  {
-                    "group": "Hardware Advisor Agent",
-                    "pages": [
-                      "playbooks/hardware-advisor/index"
-                    ]
-                  },
-                  {
-                    "group": "Document Q&A Agent",
-                    "pages": [
-                      "playbooks/chat-agent/part-1-getting-started",
-                      "playbooks/chat-agent/part-2-advanced-features",
-                      "playbooks/chat-agent/part-3-deployment"
-                    ]
-                  },
-                  {
-                    "group": "Custom Installer",
-                    "pages": [
-                      "playbooks/custom-installer/index"
-                    ]
-                  }
                 ]
               },
               {
@@ -212,7 +189,6 @@
                   {
                     "group": "Agents",
                     "pages": [
-                      "sdk/agents/specialized",
                       "sdk/agents/talk"
                     ]
                   },
@@ -227,7 +203,6 @@
                   {
                     "group": "Guides",
                     "pages": [
-                      "sdk/packaging",
                       "sdk/configuration",
                       "sdk/testing",
                       "sdk/performance-analysis-plotter",
@@ -241,7 +216,6 @@
                       "sdk/examples",
                       "sdk/advanced-patterns",
                       "sdk/api-reference",
-                      "sdk/migration",
                       "sdk/troubleshooting"
                     ]
                   }
@@ -257,9 +231,7 @@
           {
             "group": "Core Framework",
             "pages": [
-              "spec/agent-base",
-              "spec/tool-decorator",
-              "spec/console",
+              "spec/agent-skills",
               "spec/file-change-handler"
             ]
           },
@@ -315,8 +287,7 @@
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
-              "spec/chat-agent",
-              "spec/component-status"
+              "spec/chat-agent"
             ]
           }
         ]
@@ -341,8 +312,7 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
-                  "reference/eval-scorecard",
-                  "eval"
+                  "reference/eval-scorecard"
                 ]
               },
               "reference/dependency-management",
@@ -379,64 +349,6 @@
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Roadmap",
-        "groups": [
-          {
-            "group": "What's Next",
-            "pages": [
-              "roadmap"
-            ]
-          },
-          {
-            "group": "Agent UI",
-            "pages": [
-              "plans/agent-ui",
-              "plans/setup-wizard",
-              "plans/security-model",
-              "plans/connectors",
-              "plans/email-calendar-integration",
-              "plans/email-triage-agent",
-              "plans/messaging-integrations-plan",
-              "plans/autonomy-engine"
-            ]
-          },
-          {
-            "group": "Ecosystem",
-            "pages": [
-              "plans/agent-hub",
-              "plans/agent-hub-ui",
-              "plans/agent-ui-hub-publish",
-              "plans/email-agent-packaging",
-              "plans/flagship-installer",
-              "spec/agent-hub-restructure",
-              "spec/agent-skills",
-              "plans/skill-format",
-              "plans/skill-synthesis",
-              "plans/adaptive-skills",
-              "plans/oem-bundling"
-            ]
-          },
-          {
-            "group": "Infrastructure",
-            "pages": [
-              "plans/cua",
-              "plans/docker-containers",
-              "plans/mcp-docs",
-              "plans/desktop-installer",
-              "plans/tool-loader",
-              "plans/code-index-review"
-            ]
-          },
-          {
-            "group": "Agents",
-            "pages": [
-              "plans/image-agent",
-              "plans/vision-sdk"
             ]
           }
         ]
@@ -578,6 +490,46 @@
     {
       "source": "/guides/mcp/client",
       "destination": "/sdk/sdks/mcp"
+    },
+    {
+      "source": "/spec/agent-base",
+      "destination": "/sdk/core/agent-system"
+    },
+    {
+      "source": "/spec/tool-decorator",
+      "destination": "/sdk/core/tools"
+    },
+    {
+      "source": "/spec/console",
+      "destination": "/sdk/core/console"
+    },
+    {
+      "source": "/sdk/packaging",
+      "destination": "/guides/hub-publishing"
+    },
+    {
+      "source": "/sdk/migration",
+      "destination": "/sdk/core/agent-system"
+    },
+    {
+      "source": "/sdk/agents/specialized",
+      "destination": "/guides/gaia"
+    },
+    {
+      "source": "/guides/custom-agent",
+      "destination": "/sdk/core/agent-system"
+    },
+    {
+      "source": "/playbooks",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/plans/skill-format",
+      "destination": "/spec/agent-skills"
+    },
+    {
+      "source": "/spec/agent-hub-restructure",
+      "destination": "/guides/hub-publishing"
     }
   ]
 }
