@@ -1041,7 +1041,7 @@ def test_recent_files_bounds_every_output_field(tmp_path, monkeypatch, limit):
     assert result["total_found"] == 205
     assert result["count"] == limit
     assert result["truncated"] is True
-    assert result["all_files"] == result["files"]
+    assert "all_files" not in result
     assert len(result["files"]) == limit
     assert [item["file_name"] for item in result["files"]] == [
         f"report_{index:03}.txt" for index in range(limit)

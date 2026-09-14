@@ -2651,7 +2651,6 @@ class FileSearchToolsMixin:
                 return {
                     "status": "success",
                     "files": shown,
-                    "all_files": shown,
                     "truncated": truncated,
                     "count": len(shown),
                     "total_found": total_found,
