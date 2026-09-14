@@ -611,28 +611,24 @@ class RAGSDK:
                 embedding = item.get("embedding", [])
                 batch_embeddings.append(embedding)
 
-            # If batch returned empty, fall back to one-by-one encoding
-            if len(batch_embeddings) == 0 and len(batch_texts) > 0:
-                self.log.warning(
-                    f"   ⚠️  Batch {batch_num} returned 0 embeddings, trying one-by-one"
+            if len(batch_embeddings) != len(batch_texts):
+                raise RuntimeError(
+                    f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                    f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
+                    "Verify Lemonade Server is reachable and the embedding model is "
+                    "fully loaded, then retry indexing. No partial batch was accepted."
                 )
-                for single_text in batch_texts:
-                    try:
-                        single_resp = self.embedder.embeddings(
-                            [single_text],
-                            model=self.config.embedding_model,
-                            timeout=60,
-                        )
-                        single_data = single_resp.get("data", [])
-                        if single_data:
-                            batch_embeddings.append(single_data[0].get("embedding", []))
-                        else:
-                            self.log.warning(
-                                "   ⚠️  Single text (%d chars) returned no embedding, skipping",
-                                len(single_text),
-                            )
-                    except Exception as e:
-                        self.log.warning(f"   ⚠️  Single embedding failed: {e}")
+            expected_dim = len(all_embeddings[0]) if all_embeddings else None
+            for embedding in batch_embeddings:
+                if not embedding or (
+                    expected_dim is not None and len(embedding) != expected_dim
+                ):
+                    raise RuntimeError(
+                        f"Embedding backend returned an empty or inconsistent vector "
+                        f"in batch {batch_num} using {self.config.embedding_model!r}. "
+                        "Verify the embedding model is fully loaded, then retry indexing."
+                    )
+                expected_dim = len(embedding)
 
             all_embeddings.extend(batch_embeddings)
 
