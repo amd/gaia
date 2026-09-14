@@ -385,10 +385,14 @@ Four rules make the grant safe enough to bridge before the sandbox exists:
    write rejects `--body-file` (uploads a local file's contents), `--editor`
    (hangs a stdin-less agent), and `--web`. The flag is checked before the
    action, so a write carrying one never reaches a prompt.
-4. **The binary must be installed.** `load_skill` checks `PATH` and refuses with
-   the install command when it is missing. A skill that loads without the tool it
-   documents produces confident answers from no data — the failure this bridge
-   exists to prevent.
+4. **The binary must be installed** — though a missing one is no longer a dead
+   end. `load_skill` still checks `PATH` and still refuses, because a skill that
+   loads without the tool it documents produces confident answers from no data.
+   What changed is the remedy: a `BinarySetup` entry on the policy lets the agent
+   install the CLI and drive its browser sign-in itself, each behind its own
+   approval prompt, so the refusal names an action instead of ending the
+   conversation. See
+   [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
 
 The existing shell guardrails still apply on top: command chaining and
 redirection (`&&`, `;`, `>`, backticks, `$()`) are rejected before the policy
