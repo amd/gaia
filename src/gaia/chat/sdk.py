@@ -57,16 +57,6 @@ class AgentResponse:
     usage: Optional[Dict[str, Any]] = None
 
 
-def _describe_tool_call(tool_call: Dict[str, Any]) -> str:
-    """``name(args)`` for either the OpenAI or GAIA-normalised tool-call shape."""
-    fn = tool_call.get("function") or {}
-    name = fn.get("name") or tool_call.get("name") or "tool"
-    args = fn.get("arguments", tool_call.get("tool_args", ""))
-    if not isinstance(args, str):
-        args = json.dumps(args, default=str)
-    return f"{name}({args})"
-
-
 class AgentSDK:
     """
     Gaia Agent SDK - Unified text chat integration with conversation history.
@@ -203,16 +193,6 @@ class AgentSDK:
                 "name": msg.get("name", "tool"),
                 "tool_call_id": msg.get("tool_call_id"),
             }
-        if role == "assistant" and msg.get("tool_calls"):
-            # Backends that take history as text get the call as text too. Falling
-            # through here dropped the call and sent the turn back as "None".
-            calls = "; ".join(
-                _describe_tool_call(tc)
-                for tc in msg["tool_calls"]
-                if isinstance(tc, dict)
-            )
-            prefix = f"{content}\n" if content else ""
-            return {"role": "assistant", "content": f"{prefix}[Tool call: {calls}]"}
         if role == "tool":
             # Local/OpenAI-compatible backends receive tool results as user text.
             # The native Claude path above preserves the IDs Anthropic requires.

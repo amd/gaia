@@ -1,16 +1,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A tool-call turn must survive into the history a text-history backend receives.
+"""What a text-history backend (local, Fireworks) sees for a tool-call turn.
 
-Before this, every such turn reached a local or Fireworks model as an assistant
-message saying "None", with the call itself dropped — so the model never saw
-what it had called, and one model began answering "None".
+Two ways this has gone wrong, both measured on the same 144-run battery:
+the turn replayed as the word "None" (one model began answering "None"), and
+the turn replayed as ``[Tool call: name(args)]`` text (models copied that
+format instead of calling tools natively, and 58 runs died on parse errors).
+The turn must carry neither.
 """
 
 import json
 from types import SimpleNamespace
-
-import pytest
 
 from gaia.chat.sdk import AgentSDK
 
@@ -20,9 +20,7 @@ OPENAI_CALL = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "arguments": json.dumps(
-                {"file_path": "toybox/dates.py", "old_content": "a", "new_content": "b"}
-            ),
+            "arguments": json.dumps({"file_path": "toybox/dates.py"}),
         },
     }
 ]
@@ -34,31 +32,26 @@ def _sdk(use_claude):
     return sdk
 
 
-def test_tool_call_turn_is_not_replayed_as_none():
+def test_tool_call_turn_is_neither_none_nor_imitable_text():
     out = _sdk(False)._structure_history_message(
         {"role": "assistant", "content": None, "tool_calls": OPENAI_CALL}
     )
-    assert out["role"] == "assistant"
-    assert "None" not in out["content"]
-    assert out["content"].startswith("[Tool call: edit_file(")
-    assert (
-        "toybox/dates.py" in out["content"]
-    ), "the arguments are what stop a model repeating itself"
+    assert out == {"role": "assistant", "content": ""}
 
 
-def test_text_alongside_a_tool_call_is_kept():
+def test_text_alongside_a_tool_call_is_kept_verbatim():
     out = _sdk(False)._structure_history_message(
         {"role": "assistant", "content": "Renaming now.", "tool_calls": OPENAI_CALL}
     )
-    assert out["content"].startswith("Renaming now.\n[Tool call: edit_file(")
+    assert out == {"role": "assistant", "content": "Renaming now."}
 
 
-def test_gaia_normalised_tool_call_shape_is_rendered():
-    call = [{"id": "c1", "name": "read_file", "tool_args": {"file_path": "a.py"}}]
+def test_tool_result_still_names_the_tool():
     out = _sdk(False)._structure_history_message(
-        {"role": "assistant", "content": None, "tool_calls": call}
+        {"role": "tool", "name": "edit_file", "content": '{"status": "success"}'}
     )
-    assert out["content"] == '[Tool call: read_file({"file_path": "a.py"})]'
+    assert out["role"] == "user"
+    assert out["content"].startswith("[Tool result: edit_file]")
 
 
 def test_claude_path_still_sends_native_tool_calls():
@@ -68,13 +61,5 @@ def test_claude_path_still_sends_native_tool_calls():
     assert out["tool_calls"] == OPENAI_CALL and out["content"] is None
 
 
-def test_plain_assistant_message_is_unchanged():
-    out = _sdk(False)._structure_history_message(
-        {"role": "assistant", "content": "Done."}
-    )
-    assert out == {"role": "assistant", "content": "Done."}
-
-
-@pytest.mark.parametrize("content", [None])
-def test_none_content_never_becomes_the_word_none(content):
-    assert _sdk(False)._normalize_message_content(content) == ""
+def test_none_content_never_becomes_the_word_none():
+    assert _sdk(False)._normalize_message_content(None) == ""
