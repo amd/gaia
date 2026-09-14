@@ -21,7 +21,7 @@ on:
       - 'hub/agents/gaia/npm/**'
       - '.github/workflows/test_agent_gaia_npm.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/gaia/npm/**'
@@ -39,11 +39,16 @@ permissions:
 jobs:
   test-agent-gaia-npm:
     name: Build & Test gaia npm package
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     defaults:
       run:
+        shell: bash
         working-directory: hub/agents/gaia/npm
 
     steps:

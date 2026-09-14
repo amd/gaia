@@ -71,7 +71,16 @@ func buildLocked() error {
 	}
 	built = true
 
-	opts := []glamour.TermRendererOption{glamour.WithWordWrap(wordWrap)}
+	// PreservedNewLines because this renders CHAT, not a document. Markdown
+	// folds a single newline into a space, which is right for prose a human
+	// wrote in a file and wrong for an answer a model laid out line by line:
+	// "1. …\n2. …\n3. …" arrives as one run-on paragraph, and a URL that
+	// straddles the reflowed wrap gets split across two lines. The model's own
+	// line structure is the closest thing to its intent about layout.
+	opts := []glamour.TermRendererOption{
+		glamour.WithWordWrap(wordWrap),
+		glamour.WithPreservedNewLines(),
+	}
 	switch {
 	case os.Getenv(EnvStyle) != "":
 		// WithStylePath, not WithStandardStyle: it resolves a builtin name the

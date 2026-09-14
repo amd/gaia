@@ -15,7 +15,13 @@ type StatusBarState struct {
 	Connected bool
 	Steps     int
 	Streaming bool
-	Hint      string
+	// AwaitingDecision is set while the agent is parked on a confirmation the
+	// user has not answered. It outranks Streaming, which is true at the same
+	// time and is the wrong word for it: the turn is not producing anything,
+	// it is waiting on a person. Reading "streaming" for minutes while a
+	// prompt sits unanswered is how a question reads as a hang.
+	AwaitingDecision bool
+	Hint             string
 }
 
 var (
@@ -64,6 +70,9 @@ func RenderStatusBar(state StatusBarState, width int) string {
 	}
 	if state.Streaming {
 		status = "streaming"
+	}
+	if state.AwaitingDecision {
+		status = "waiting for your answer"
 	}
 
 	left := " " + dot + " " + fmt.Sprintf("%s %s", state.AgentName, status)

@@ -20,7 +20,6 @@ import type { GaiaModel, GaiaModelsResponse } from "./types";
 const DEFAULT_BASE_URL = "http://localhost:8080";
 const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
 const DEFAULT_CONTEXT_LENGTH = 128000;
-const HARDCODED_API_KEY = "gaia";
 
 /**
  * VS Code Chat provider backed by GAIA local LLM server.
@@ -227,7 +226,7 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			const response = await fetch(`${baseUrl}/v1/models`, {
 				method: "GET",
 				headers: {
-					Authorization: `Bearer ${HARDCODED_API_KEY}`,
+					Authorization: `Bearer ${(await this.secrets.get("gaia.apiKey")) || "gaia"}`,
 					"User-Agent": this.userAgent,
 				},
 			});
@@ -385,7 +384,7 @@ export class GaiaChatModelProvider implements LanguageModelChatProvider {
 			const response = await fetch(`${baseUrl}/v1/chat/completions`, {
                 method: "POST",
                 headers: {
-                    Authorization: `Bearer ${HARDCODED_API_KEY}`,
+                    Authorization: `Bearer ${(await this.secrets.get("gaia.apiKey")) || "gaia"}`,
                     "Content-Type": "application/json",
 					"User-Agent": this.userAgent,
                 },

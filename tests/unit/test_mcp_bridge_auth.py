@@ -101,6 +101,30 @@ def _request(url, token=None, method="GET", payload=None, raw_header=None):
         return e.code, json.loads(e.read().decode())
 
 
+def _raw(url, method="GET", origin=None, payload=None):
+    """Perform a request, returning (status, lowercased headers, body bytes)."""
+    headers = {}
+    if origin is not None:
+        headers["Origin"] = origin
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return (
+                response.status,
+                {k.lower(): v for k, v in response.headers.items()},
+                response.read(),
+            )
+    except urllib.error.HTTPError as e:
+        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
+
+
+LOCAL_ORIGIN = "http://localhost:3000"  # the example app's dev server
+EVIL_ORIGIN = "https://evil.example"
+
 PROTECTED_GETS = ["/status", "/tools"]
 JSONRPC_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 JSONRPC_CALL = {
@@ -224,14 +248,17 @@ class TestTokenConfigured:
         _, authed = _request(f"{base}/status", token=TOKEN)
         assert "gaia.query" in json.dumps(authed)
 
-    def test_cors_preflight_stays_open_and_allows_authorization(self, server_factory):
-        """Browsers never send Authorization on preflight."""
+    def test_loopback_preflight_is_approved_and_allows_authorization(
+        self, server_factory
+    ):
+        """Browsers never send Authorization on preflight, so it stays unauthenticated."""
         base, _ = server_factory(auth_token=TOKEN)
-        req = urllib.request.Request(f"{base}/status", method="OPTIONS")
-        with urllib.request.urlopen(req, timeout=10) as response:
-            assert response.status == 200
-            allowed = response.headers.get("Access-Control-Allow-Headers", "")
-        assert "Authorization" in allowed
+        status, headers, _ = _raw(
+            f"{base}/status", method="OPTIONS", origin=LOCAL_ORIGIN
+        )
+        assert status == 200
+        assert "Authorization" in headers.get("access-control-allow-headers", "")
+        assert headers.get("access-control-allow-origin") == LOCAL_ORIGIN
 
 
 class TestNoTokenConfigured:
@@ -253,6 +280,110 @@ class TestNoTokenConfigured:
         base, _ = server_factory(auth_token="")
         status, _ = _request(f"{base}/status")
         assert status == 200
+
+
+class TestBrowserOrigins:
+    """A web page elsewhere must not be able to drive or read the bridge.
+
+    Loopback is no boundary here: the attacker is a page in the user's own
+    browser fetching ``http://localhost:<port>``. What stops it is refusing a
+    foreign ``Origin`` outright and never answering ``Access-Control-Allow-Origin: *``.
+    """
+
+    @pytest.mark.parametrize("auth_token", [None, TOKEN])
+    def test_foreign_origin_post_is_refused_before_any_tool_runs(
+        self, server_factory, auth_token
+    ):
+        base, bridge = server_factory(auth_token=auth_token)
+        status, headers, body = _raw(
+            f"{base}/chat", method="POST", origin=EVIL_ORIGIN, payload={"query": "x"}
+        )
+        assert status == 403
+        assert bridge.executed == []
+        assert "access-control-allow-origin" not in headers
+        assert b"GAIA_MCP_ALLOWED_ORIGINS" in body
+
+    @pytest.mark.parametrize("path", ["/", "/chat", "/llm", "/rpc", "/v1/messages"])
+    def test_every_post_route_refuses_a_foreign_origin(self, server_factory, path):
+        base, bridge = server_factory(auth_token=None)
+        status, _, _ = _raw(
+            f"{base}{path}", method="POST", origin=EVIL_ORIGIN, payload=JSONRPC_CALL
+        )
+        assert status == 403
+        assert bridge.executed == []
+
+    def test_foreign_origin_cannot_read_inventory(self, server_factory):
+        base, _ = server_factory(auth_token=None)
+        status, headers, body = _raw(f"{base}/status", origin=EVIL_ORIGIN)
+        assert status == 403
+        assert b"gaia.query" not in body
+        assert "access-control-allow-origin" not in headers
+
+    def test_foreign_origin_preflight_is_refused(self, server_factory):
+        base, _ = server_factory(auth_token=None)
+        status, headers, _ = _raw(f"{base}/chat", method="OPTIONS", origin=EVIL_ORIGIN)
+        assert status == 403
+        assert "access-control-allow-origin" not in headers
+
+    def test_loopback_origin_is_echoed_never_wildcard(self, server_factory):
+        base, bridge = server_factory(auth_token=None)
+        status, headers, _ = _raw(
+            f"{base}/chat", method="POST", origin=LOCAL_ORIGIN, payload={"query": "x"}
+        )
+        assert status == 200
+        assert headers.get("access-control-allow-origin") == LOCAL_ORIGIN
+        assert bridge.executed == [("gaia.chat", {"query": "x"})]
+
+    def test_non_browser_client_gets_no_cors_header(self, server_factory):
+        """curl / MCP clients send no Origin: they work, and get no ACAO at all."""
+        base, _ = server_factory(auth_token=None)
+        status, headers, _ = _raw(f"{base}/status")
+        assert status == 200
+        assert "access-control-allow-origin" not in headers
+
+    def test_env_var_admits_an_extra_origin(self, server_factory, monkeypatch):
+        monkeypatch.setenv("GAIA_MCP_ALLOWED_ORIGINS", "https://n8n.internal")
+        base, _ = server_factory(auth_token=None)
+        status, headers, _ = _raw(f"{base}/status", origin="https://n8n.internal")
+        assert status == 200
+        assert headers.get("access-control-allow-origin") == "https://n8n.internal"
+
+
+class TestNoWildcardEver:
+    """No response the bridge sends may carry ``Access-Control-Allow-Origin: *``."""
+
+    @pytest.mark.parametrize("origin", [EVIL_ORIGIN, "null", LOCAL_ORIGIN, None])
+    @pytest.mark.parametrize(
+        "method,path,payload",
+        [
+            ("GET", "/health", None),
+            ("GET", "/status", None),
+            ("OPTIONS", "/chat", None),
+            ("POST", "/chat", {"query": "x"}),
+            ("POST", "/", JSONRPC_LIST),
+        ],
+    )
+    def test_no_wildcard_acao(self, server_factory, origin, method, path, payload):
+        base, _ = server_factory(auth_token=None)
+        _, headers, _ = _raw(
+            f"{base}{path}", method=method, origin=origin, payload=payload
+        )
+        acao = headers.get("access-control-allow-origin")
+        assert acao != "*"
+        if origin != LOCAL_ORIGIN:
+            assert acao is None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Requiring a token by default would break every existing gaia mcp "
+    "consumer; the bridge still defaults to no auth and warns at startup.",
+)
+def test_bridge_requires_a_token_by_default(server_factory):
+    base, bridge = server_factory(auth_token=None)
+    status, _, _ = _raw(f"{base}/chat", method="POST", payload={"query": "x"})
+    assert status == 401
+    assert bridge.executed == []
 
 
 class TestConfigurationContract:
@@ -294,3 +425,12 @@ class TestConfigurationContract:
         bridge_mod.start_server(host="localhost", port=0)
 
         assert captured["auth_token"] == "from-env"
+
+
+@pytest.mark.parametrize(
+    "origin", [None, "https://foreign.example", "http://localhost:4200"]
+)
+def test_cors_responses_always_vary_by_origin(server_factory, origin):
+    base, _ = server_factory(auth_token=None)
+    _, headers, _ = _raw(f"{base}/health", origin=origin)
+    assert headers.get("vary") == "Origin"
