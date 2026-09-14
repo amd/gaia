@@ -13,11 +13,17 @@ import (
 // stubGaia installs a fake `gaia` binary that prints what the test wants and
 // exits with the given code. Substituting Binary rather than PATH keeps the
 // real CLI (and its multi-second Python start-up) out of these tests.
-func stubGaia(t *testing.T, stdout string, exitCode int) {
+// skipWithoutPOSIXShell skips a test whose stub is a #!/bin/sh script.
+func skipWithoutPOSIXShell(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the shell stub is POSIX-only; the code under test is not")
 	}
+}
+
+func stubGaia(t *testing.T, stdout string, exitCode int) {
+	t.Helper()
+	skipWithoutPOSIXShell(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gaia")
 	script := "#!/bin/sh\ncat <<'EOF'\n" + stdout + "\nEOF\nexit " +
@@ -102,6 +108,7 @@ func TestAMissingGaiaNamesTheInstallCommand(t *testing.T) {
 }
 
 func TestDeclineForwardsNever(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	path := filepath.Join(dir, "gaia")
@@ -126,6 +133,7 @@ func TestDeclineForwardsNever(t *testing.T) {
 }
 
 func TestDeclineOmitsNeverForAPlainSkip(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	path := filepath.Join(dir, "gaia")
