@@ -113,6 +113,7 @@ print(response1.text)
 response2 = chat.send("Show me an example")
 print(response2.text)  # LLM remembers context
 
+# Failed requests and cancelled streams preserve the previous history.
 # Check history
 history = chat.get_history()
 print(f"Conversation turns: {len(history)}")

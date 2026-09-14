@@ -466,6 +466,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -530,13 +532,19 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
@@ -549,6 +557,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -603,11 +613,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """
