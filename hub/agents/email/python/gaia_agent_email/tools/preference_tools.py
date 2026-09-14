@@ -39,13 +39,29 @@ the *set* tool instead. Every removal tool below reports its outcome via
 an explicit ``removed`` field rather than relying on ``ok: true`` alone,
 so the agent-loop model has an unambiguous signal to narrate from and
 cannot claim a mutation that did not happen (see each tool's docstring).
+
+#2828: a live regression showed ``set_low_priority_sender`` muting a
+different real address than the one asked for. The suspected cause —
+tool-side fuzzy resolution against mailbox contacts — does NOT exist:
+``set_priority_sender``/``set_low_priority_sender`` take a bare ``email``
+string, run it through ``_normalize_email`` (lowercase/strip only, no
+lookup), and store exactly that; the confirmation already echoes back the
+normalized value that was actually stored. The mismatch was in the
+calling model's own tool-call argument, not in this module. There is no
+mailbox contact list available to validate against here, so what these
+tools now guard against is the deterministic case within their own
+reach: the new address colliding, by near-duplicate local-part, with an
+address already sitting in this agent's own preference store from an
+earlier turn (``_find_ambiguous_senders``) — that case fails loudly and
+names the candidates instead of silently applying.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.triage_heuristics import (
@@ -181,6 +197,53 @@ def _normalize_email(value: str) -> str:
     if "<" in cleaned or ">" in cleaned:
         return ""
     return cleaned.lower()
+
+
+# #2828: the tool has no mailbox contact list to resolve a name against — it
+# only ever sees the bare address the caller (the LLM) passes in. Fuzzy
+# resolution against contacts does not exist and was never the bug (see the
+# module docstring's #2828 note). What CAN happen deterministically is a
+# collision between the address just given and one already sitting in this
+# agent's own preference store from an earlier turn — e.g. the user narrowly
+# renames/retypes a sender they configured minutes ago. That collision is
+# cheap to detect and worth failing loudly on; a genuinely new, unique address
+# is let through even though it has never been seen before, because rejecting
+# every never-before-seen address would break the common case of muting a
+# sender for the first time.
+_SENDER_AMBIGUITY_RATIO = 0.82
+
+
+def _local_part(email: str) -> str:
+    """The portion before ``@``, used as the near-duplicate comparison basis.
+
+    Comparing local parts (not full addresses) is what catches a look-alike
+    like ``tomasz.iniewicz@gmail.com`` vs. ``tomasz.testingiewicz@outlook.com``
+    (#2828's exact case) — the domains differ entirely, so comparing full
+    strings would dilute the similarity score below any sane threshold.
+    """
+    return email.split("@", 1)[0]
+
+
+def _find_ambiguous_senders(normalized: str, known: Set[str]) -> List[str]:
+    """Return other addresses in ``known`` whose local-part nearly matches.
+
+    Skips an exact match to ``normalized`` itself (re-adding the same address
+    is a no-op, not an ambiguity). A match ratio >= ``_SENDER_AMBIGUITY_RATIO``
+    on the local part is what flags e.g. ``bob.smith`` vs. ``bob.smyth`` (a
+    plausible typo) while leaving unrelated addresses like ``john`` vs.
+    ``jane`` (ratio ~0.5) alone.
+    """
+    candidate_local = _local_part(normalized)
+    matches = [
+        other
+        for other in known
+        if other != normalized
+        and difflib.SequenceMatcher(
+            None, candidate_local, _local_part(other)
+        ).ratio()
+        >= _SENDER_AMBIGUITY_RATIO
+    ]
+    return sorted(matches)
 
 
 def _validate_session_preferences(prefs: Dict[str, Any]) -> None:
@@ -391,6 +454,11 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
+            #2828: if the address closely resembles one already configured
+            (e.g. ``priya@x.com`` vs. an existing ``priyanka@x.com``), this
+            fails loudly instead of silently applying to the wrong sender —
+            the error names the address(es) it could not disambiguate from.
+
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
                     Headers like ``"Alice <alice@example.com>"`` are
@@ -405,6 +473,15 @@ class PreferenceToolsMixin:
                     )
                 prefs = agent._session_preferences
                 _validate_session_preferences(prefs)
+                known = prefs["priority_senders"] | prefs["low_priority_senders"]
+                ambiguous = _find_ambiguous_senders(normalized, known)
+                if ambiguous:
+                    return _envelope_err(
+                        f"set_priority_sender: {normalized!r} closely resembles "
+                        f"already-configured address(es) {ambiguous} — refusing "
+                        "to guess which one was meant. Confirm the exact "
+                        "address with the user and retry."
+                    )
                 prefs["priority_senders"].add(normalized)
                 # If the same sender was previously low-priority, the new
                 # priority designation supersedes — silently drop the
@@ -510,6 +587,12 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
+            #2828: if the address closely resembles one already configured
+            (e.g. muting ``a@x.com`` when ``b@x.com``, a near-duplicate, is
+            already on either sender list), this fails loudly instead of
+            silently applying to the wrong sender — the error names the
+            address(es) it could not disambiguate from.
+
             Args:
                 email: A bare email address, e.g.
                     ``newsletter@stripe.com``.
@@ -523,6 +606,15 @@ class PreferenceToolsMixin:
                     )
                 prefs = agent._session_preferences
                 _validate_session_preferences(prefs)
+                known = prefs["priority_senders"] | prefs["low_priority_senders"]
+                ambiguous = _find_ambiguous_senders(normalized, known)
+                if ambiguous:
+                    return _envelope_err(
+                        f"set_low_priority_sender: {normalized!r} closely "
+                        f"resembles already-configured address(es) {ambiguous} "
+                        "— refusing to guess which one was meant. Confirm the "
+                        "exact address with the user and retry."
+                    )
                 prefs["low_priority_senders"].add(normalized)
                 # Same conflict resolution as set_priority_sender —
                 # later wins.
