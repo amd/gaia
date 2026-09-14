@@ -424,25 +424,61 @@ async def revoke_provider_token(
     happened so the caller can act on the local delete regardless and report
     the remote outcome truthfully:
 
-    - ``revoke_supported=False`` — the provider has no public revoke endpoint
-      (Microsoft's identity platform today; see
+    - ``revoke_supported=False, revoke_error=None`` — the provider has no
+      public revoke endpoint (Microsoft's identity platform today; see
       ``MicrosoftOAuthProvider.revoke_url``). The caller must say so, not
       imply a revoke happened.
+    - ``revoke_supported=False, revoke_error=<reason>`` — no revoke was even
+      attempted, but *not* because the provider lacks one: either the stored
+      connection was forwarded by a host app (see below) or the provider
+      could not be resolved. ``revoke_error`` names which, so callers don't
+      conflate "can't be revoked" with "wasn't tried".
     - ``revoke_supported=True, revoked_remotely=True`` — the provider's
       revoke endpoint accepted the request (or there was no refresh token
       stored to revoke in the first place).
     - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
       failed; ``revoke_error`` carries why. The provider-side grant is still
       live and the caller must say so.
+
+    **Forwarded connections are never revoked remotely (#2591 review).** A
+    connection imported via ``api.import_forwarded_connection`` stores a
+    refresh token minted under the *host app's* OAuth client, not GAIA's own
+    (``forwarded=True`` in the keyring blob, set by ``save_connection``).
+    Google's revoke endpoint takes no client auth and kills the whole grant
+    for whoever the token belongs to — so revoking it here would silently
+    sign the host app out of the user's account, recoverable only by
+    re-consenting through that other app. Local removal still proceeds
+    (the caller deletes the keyring entry regardless); only the remote call
+    is skipped.
     """
+    blob = peek_connection(provider_id, account_email=account_email)
+    if blob and blob.get("forwarded"):
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": (
+                "this connection was forwarded to GAIA by another application "
+                "— the token belongs to that app, not GAIA, so revoking it "
+                "would also sign the host app out of the account. Disconnect "
+                "it from the app that shared it, or from your account's "
+                "connected-apps page, to fully revoke access."
+            ),
+        }
+
     try:
         provider = get_provider(provider_id)
-    except (ConnectorsError, KeyError):
+    except (ConnectorsError, KeyError) as exc:
         # Unresolvable/unconfigured provider (e.g. a test double id, or a
-        # connector whose client credentials were never set up) — nothing
-        # to revoke against.
-        provider = None
-    revoke_url = getattr(provider, "revoke_url", None) if provider else None
+        # connector whose client credentials were never set up) — this is
+        # NOT the same as "this provider has no revoke endpoint": we simply
+        # couldn't determine whether one exists, and any live grant is
+        # untouched.
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
+        }
+    revoke_url = getattr(provider, "revoke_url", None)
     result: Dict[str, Any] = {
         "revoke_supported": bool(revoke_url),
         "revoked_remotely": False,
@@ -451,7 +487,6 @@ async def revoke_provider_token(
     if not revoke_url:
         return result
 
-    blob = peek_connection(provider_id, account_email=account_email)
     refresh_token = (blob or {}).get("refresh_token")
     if not refresh_token:
         # Nothing stored to revoke — there is no live grant to leave behind.

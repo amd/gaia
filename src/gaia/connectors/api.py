@@ -651,6 +651,9 @@ def import_forwarded_connection(
         client_id_hash=prov.client_id_hash,
         connected_at=connected_at,
         account_type=resolved_account_type,
+        # #2591 review: mark it so a later disconnect never revokes the
+        # host app's own OAuth grant — see save_connection's docstring.
+        forwarded=True,
     )
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh

@@ -138,6 +138,38 @@ class TestRevokeProviderToken:
         result = await revoke_provider_token("not-a-real-provider")
         assert result["revoke_supported"] is False
         assert result["revoked_remotely"] is False
+        # Distinct from "provider has no revoke endpoint" (Microsoft): this
+        # is "we couldn't even determine that" (#2591 review), so the reason
+        # must be reported, not collapsed into the same silent False.
+        assert result["revoke_error"] is not None
+        assert "could not be resolved" in result["revoke_error"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_forwarded_connection_is_never_revoked_remotely(
+        self, google_provider
+    ):
+        """#2591 review's critical finding: a connection forwarded by a host
+        app shares that app's OAuth grant. Revoking it here would sign the
+        host app itself out of the user's account — unrecoverable without
+        re-consenting through that other app. This must never happen."""
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            client_id_hash=google_provider.client_id_hash,
+            forwarded=True,
+        )
+        # No route registered for the revoke endpoint at all — respx raises
+        # if anything tries to call it, proving the network call never fires.
+        result = await revoke_provider_token("google")
+        assert result["revoke_supported"] is False
+        assert result["revoked_remotely"] is False
+        assert result["revoke_error"] is not None
+        assert "forwarded" in result["revoke_error"]
+        # The stored (host app's) refresh token is untouched.
+        assert peek_connection("google")["refresh_token"] == "host-app-rt"
 
 
 class TestOAuthPkceDisconnectRevokes:

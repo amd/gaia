@@ -696,15 +696,26 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
     # revoked when only the local keyring entry was cleared.
     result = result or {}
     if not result.get("revoke_supported"):
-        if "revoke_supported" in result:
+        if "revoke_supported" not in result:
+            # Handler type with no remote-revoke concept at all (e.g. an
+            # MCP-server connector) — nothing to be honest or dishonest about.
+            sys.stdout.write(f"Disconnected {args.connector_id}.\n")
+        elif result.get("revoke_error"):
+            # No revoke was even attempted, and it's not because the
+            # provider lacks an endpoint (forwarded connection, or the
+            # provider couldn't be resolved) — surface the real reason
+            # rather than the generic "no API" wording (#2591 review).
+            sys.stdout.write(
+                f"Disconnected {args.connector_id} locally. "
+                f"{result['revoke_error']}\n"
+            )
+        else:
             sys.stdout.write(
                 f"Disconnected {args.connector_id} locally. This provider has "
                 "no API to revoke access remotely — remove GAIA from your "
                 "account's connected-apps page if you want to fully revoke "
                 "it.\n"
             )
-        else:
-            sys.stdout.write(f"Disconnected {args.connector_id}.\n")
     elif result.get("revoked_remotely"):
         sys.stdout.write(
             f"Disconnected {args.connector_id} (provider access revoked).\n"
