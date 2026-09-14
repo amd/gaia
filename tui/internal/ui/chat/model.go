@@ -2802,9 +2802,18 @@ func (m ChatModel) renderQueuedRow() string {
 	if n := len(m.queued); n > 1 {
 		prefix = fmt.Sprintf("⏎ %d queued · ", n)
 	}
-	hint := "  Esc stops the turn and puts this back"
+	// Once a cancel is already pending, the NEXT Esc/Ctrl+C is forceLocalAbort
+	// (#2917), which abandons a queued follow-up rather than restoring it —
+	// see its doc comment for why. The row must say that, not the first
+	// press's promise, or a user pressing it a second time because nothing
+	// visibly happened loses their draft to a hint that was no longer true.
+	one, many := "  Esc stops the turn and puts this back", "  Esc stops the turn and puts these back"
+	if m.cancelPending {
+		one, many = "  Esc again abandons this", "  Esc again abandons these"
+	}
+	hint := one
 	if len(m.queued) > 1 {
-		hint = "  Esc stops the turn and puts these back"
+		hint = many
 	}
 
 	suffix := hint
