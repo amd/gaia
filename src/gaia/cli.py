@@ -3578,6 +3578,7 @@ Let me know your answer!
                         print(f"✅ {port_result['message']}")
                     else:
                         print(f"❌ {port_result['message']}")
+                        sys.exit(1)
             except FileNotFoundError:
                 # lemonade-server not in PATH, fallback to port kill
                 log.warning("lemonade-server not found, falling back to port kill")
@@ -3586,6 +3587,7 @@ Let me know your answer!
                     print(f"✅ {port_result['message']}")
                 else:
                     print(f"❌ {port_result['message']}")
+                    sys.exit(1)
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
@@ -4560,7 +4562,7 @@ def kill_process_by_port(port):
         try:
             terminate_pid(pid)
             killed.append(str(pid))
-        except (subprocess.CalledProcessError, OSError) as e:
+        except (subprocess.SubprocessError, OSError) as e:
             failed.append(f"{pid}: {e}")
 
     messages = []
@@ -4576,7 +4578,7 @@ def kill_process_by_port(port):
         )
     if failed:
         messages.append(
-            f"Failed to kill the process on port {port} ({'; '.join(failed)})."
+            f"Failed to kill process(es) on port {port} ({'; '.join(failed)})."
         )
     return {
         "success": bool(killed) and not refused and not failed,

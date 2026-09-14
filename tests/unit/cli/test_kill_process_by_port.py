@@ -412,3 +412,52 @@ def test_cli_exit_status_matches_stop_outcome(mocker, capsys, success):
             main()
         assert exc.value.code == 1
     assert "stop outcome" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("success", [False, True])
+def test_lemonade_port_stop_propagates_exit_status(mocker, success, missing):
+    from gaia.cli import main
+
+    mocker.patch("sys.argv", ["gaia", "kill", "--lemonade"])
+    mocker.patch(
+        "gaia.cli.subprocess.run",
+        side_effect=FileNotFoundError("lemonade-server") if missing else None,
+        return_value=SimpleNamespace(returncode=1, stderr="stop failed"),
+    )
+    mocker.patch(
+        "gaia.cli.kill_process_by_port",
+        return_value={"success": success, "message": "stop outcome"},
+    )
+    if success:
+        main()
+    else:
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_forceful_termination_is_bounded(mocker, platform):
+    from gaia.ports import terminate_pid
+
+    mocker.patch("sys.platform", platform)
+    run = mocker.patch("gaia.ports.subprocess.run")
+    terminate_pid(9001)
+    assert run.call_args.kwargs["timeout"] == 5
+    assert run.call_args.kwargs["check"] is True
+
+
+def test_termination_timeout_reports_failure_and_preserves_other_results(mocker):
+    mocker.patch(
+        "gaia.cli.listeners_on_port", return_value=[(101, "python3"), (102, "python3")]
+    )
+    mocker.patch(
+        "gaia.cli.terminate_pid",
+        side_effect=[None, subprocess.TimeoutExpired("kill", 5)],
+    )
+    result = kill_process_by_port(4200)
+    assert result["success"] is False
+    assert "Killed process(es) 101" in result["message"]
+    assert "102:" in result["message"]
+    assert "timed out" in result["message"]

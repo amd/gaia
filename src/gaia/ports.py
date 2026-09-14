@@ -202,6 +202,8 @@ def listeners_on_port(port: int) -> List[Tuple[int, str]]:
 def terminate_pid(pid: int) -> None:
     """Terminate ``pid`` with the platform's forceful kill."""
     if sys.platform.startswith("win"):
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], shell=False, check=True)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F"], shell=False, check=True, timeout=5
+        )
     else:
-        subprocess.run(["kill", "-9", str(pid)], shell=False, check=True)
+        subprocess.run(["kill", "-9", str(pid)], shell=False, check=True, timeout=5)
