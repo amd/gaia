@@ -34,7 +34,7 @@ VALID_SECRET = "s3cr3t-value"
 # The loopback route's nav steps, in order — Done answers walk straight
 # through; see gaia.connectors.setup_routes.GOOGLE_PERSONAL /
 # steps_for(sign_in="loopback").
-_WALKTHROUGH_DONE_ANSWERS = ["done", "done", "done", "done", "done"]
+_WALKTHROUGH_DONE_ANSWERS = ["done", "done", "done", "done"]
 
 
 def _connection(scopes=None, email="kalin@gmail.com", error=None):
@@ -237,6 +237,36 @@ def test_reconnect_with_client_already_configured_skips_the_walkthrough(
     assert google_connectors["started_flows"], "loopback sign-in never started"
     save_calls = [c for c in google_connectors["configured"] if c[1].get("save_only")]
     assert save_calls == [], "an already-configured client must not be re-walked"
+
+
+def test_secret_only_gap_asks_for_just_the_secret_not_the_whole_route(
+    google_connectors,
+):
+    """``gap == "client_secret"``: the client id is already configured, only
+    the secret is missing — must ask for the secret alone, never re-walk the
+    console route the user already completed."""
+    google_connectors["connection"] = None
+    google_connectors["client_secret"] = ""
+    agent = _FakeAgent(answers=["yes", "yes", VALID_SECRET])
+
+    out = _run(agent, provider="google")
+
+    assert out["ok"] is True, out
+    assert out["data"]["changed"] is True
+    # No walkthrough "Done" steps were asked — only the client-secret prompt.
+    secret_calls = [
+        c
+        for c in agent.console.asked
+        if "client secret" in c.get("message", "").lower()
+    ]
+    assert len(secret_calls) == 1
+    assert secret_calls[0]["sensitive"] is True
+    save_calls = [c for c in google_connectors["configured"] if c[1].get("save_only")]
+    assert len(save_calls) == 1
+    _, saved = save_calls[0]
+    assert saved["client_id"] == VALID_CLIENT_ID
+    assert saved["client_secret"] == VALID_SECRET
+    assert google_connectors["started_flows"], "loopback sign-in never started"
 
 
 def test_already_usable_google_mailbox_is_never_walked_through_setup(

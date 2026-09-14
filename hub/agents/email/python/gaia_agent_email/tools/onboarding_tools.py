@@ -385,6 +385,12 @@ def _run_google_setup(agent: Any) -> Dict[str, Any]:
     credential steps (id and secret) get saved together before sign-in
     starts, then ``_run_browser_flow`` takes over exactly as it does for
     ``_run_oauth``.
+
+    A client id with no secret (``gap == "client_secret"``) does NOT re-walk
+    the whole console route — the user already has a project and an OAuth
+    client, just not the secret on this machine. ``_collect_oauth_client``
+    already asks for exactly the missing piece and reuses the stored id, so
+    that path is reused here instead of duplicating it.
     """
     from gaia_agent_email.tools import setup_walkthrough as sw
 
@@ -393,7 +399,7 @@ def _run_google_setup(agent: Any) -> Dict[str, Any]:
     from gaia.connectors.setup_routes import SIGN_IN_LOOPBACK, get_route
 
     gap = _oauth_client_gap("google")
-    if gap is not None:
+    if gap == "client_id":
         route = get_route("google")
         if route is None:
             # Defensive — unreachable while setup_routes.ROUTES has a
@@ -416,6 +422,9 @@ def _run_google_setup(agent: Any) -> Dict[str, Any]:
                 },
             )
         )
+    elif gap == "client_secret":
+        client_config = _collect_oauth_client(agent, "google")
+        run_sync(configure("google", {**client_config, "save_only": True}))
 
     config: Dict[str, Any] = {
         "scopes": connect_scopes("google", ms.requested_scopes("google")),
@@ -792,6 +801,13 @@ def _setup_flow(agent: Any, wanted: str) -> str:
             target = by_provider[_choose_provider(agent, states)]
 
     if not _confirm_repair(agent, target):
+        # A first-time connect is the one decline that still needs the docs
+        # pointer: this is the last chance to hand it over before the
+        # provider-specific setup (walkthrough or otherwise) would have
+        # started. Reconnect/re-authorise declines already have a working
+        # setup, so the generic message is enough.
+        if target["state"] == ms.STATE_NOT_CONNECTED:
+            raise _Declined(f"{_DECLINED} Setup guide: {OAUTH_DOCS_URL}")
         raise _Declined(_DECLINED)
 
     provider = target["provider"]

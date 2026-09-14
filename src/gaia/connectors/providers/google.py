@@ -97,7 +97,7 @@ class GoogleOAuthProvider:
             # source of truth shared with the guided in-chat walkthrough,
             # same pattern as microsoft.py. Five hand-copies of a walkthrough
             # drifted apart once already (#2116); this is the second one.
-            route = get_route("google")
+            route = get_route(self.provider_id)
             console_steps = (
                 render_console_steps(route)
                 if route is not None

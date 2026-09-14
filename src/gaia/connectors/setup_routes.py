@@ -307,15 +307,6 @@ GOOGLE_PERSONAL = SetupRoute(
             ),
         ),
         Step(
-            id="redirect_uri",
-            title="Add a redirect URI",
-            instruction=(
-                "Add a http://localhost redirect URI under the OAuth client's "
-                "'Authorized redirect URIs'"
-            ),
-            verifiable=False,
-        ),
-        Step(
             id="create_client",
             title="Create an OAuth client ID",
             instruction=(
@@ -379,8 +370,8 @@ def get_route(provider: str) -> Optional[SetupRoute]:
     """Return the guided walkthrough for *provider*, or ``None`` if it has none.
 
     Never raises — a provider with no route is a normal, expected case (every
-    provider except Microsoft, today), and the caller renders a defined
-    "no guided walkthrough yet" response rather than crashing.
+    provider except Microsoft and Google, today), and the caller renders a
+    defined "no guided walkthrough yet" response rather than crashing.
     """
     return ROUTES.get(provider)
 

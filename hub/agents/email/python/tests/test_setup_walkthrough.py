@@ -413,14 +413,12 @@ def test_google_walkthrough_walks_every_step_and_collects_id_and_secret():
         "project",
         "enable_api",
         "consent_screen",
-        "redirect_uri",
         "create_client",
         "client_id",
         "client_secret",
     ]
     agent = _FakeAgent(
         answers=[
-            "done",
             "done",
             "done",
             "done",
@@ -451,7 +449,6 @@ def test_google_client_secret_prompt_is_marked_sensitive_never_echoed():
             "done",
             "done",
             "done",
-            "done",
             _VALID_GOOGLE_CLIENT_ID,
             "s3cr3t",
         ]
@@ -472,7 +469,6 @@ def test_google_client_id_prompt_is_not_sensitive():
             "done",
             "done",
             "done",
-            "done",
             _VALID_GOOGLE_CLIENT_ID,
             "s3cr3t",
         ]
@@ -488,7 +484,6 @@ def test_google_client_id_shape_check_rejects_a_bad_value_without_echoing_it():
     bogus = "not-a-google-client-id"
     agent = _FakeAgent(
         answers=[
-            "done",
             "done",
             "done",
             "done",
@@ -514,7 +509,6 @@ def test_google_client_id_shape_check_rejects_a_bad_value_without_echoing_it():
 def test_google_route_faq_is_reachable_and_confirms_the_secret_is_needed():
     agent = _FakeAgent(
         answers=[
-            "done",
             "done",
             "done",
             "done",

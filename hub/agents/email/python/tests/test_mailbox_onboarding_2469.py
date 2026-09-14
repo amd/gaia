@@ -492,6 +492,7 @@ def test_declining_the_client_credentials_changes_nothing(connectors):
 
     assert out["ok"] is True and out["data"]["declined"] is True
     assert connectors["configured"] == []
+    assert "amd-gaia.ai" in out["data"]["message"], "the user is told where to go"
 
 
 def test_a_fix_that_did_not_fix_it_is_reported_as_failure(connectors):
