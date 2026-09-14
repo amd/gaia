@@ -1083,8 +1083,11 @@ curl http://localhost:8080/health
     gaia api start --debug
     ```
 
-    Custom host/port:
+    Custom host/port. Binding beyond loopback is refused unless
+    `GAIA_API_KEY` is set, since the agent loop would otherwise be open to the
+    network ([Authentication](/sdk/infrastructure/api-server#authentication)):
     ```bash
+    export GAIA_API_KEY=$(openssl rand -hex 32)
     gaia api start --host 0.0.0.0 --port 8888
     ```
 
@@ -1251,6 +1254,15 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--log-file` | stdout | Write logs to this path (useful with `--background`) |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+##### Browser origins
+
+A web page can reach `http://localhost:8765` from the user's own browser, so
+the bridge refuses any request whose `Origin` is not loopback (`localhost`,
+`127.0.0.1`, `[::1]`) with **403**, and never answers
+`Access-Control-Allow-Origin: *`. Clients that send no `Origin` — curl, MCP
+clients, n8n — are unaffected. To allow a browser app on another origin, list
+it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
 ##### Authentication
 
@@ -2827,11 +2839,16 @@ ctrl+c.
 | Key | Action |
 |-----|--------|
 | `f` | Apply the focused row's fix — shown only when that row has one |
+| `p` | Choose Local, Fireworks AI, or AMD LLM Gateway (flagship setup) |
 | `r` | Re-check everything |
 | `d` | Toggle the raw answer behind the focused row |
 | `↑` / `↓` (or `k` / `j`) | Move between rows |
 | `enter` | Continue anyway — offered only when nothing is outright broken |
 | `esc`, `ctrl+c` | Quit. There is no screen behind the gate to go back to |
+
+In chat, `/provider` opens the same provider panel with masked key entry and a
+searchable model list. See [AI providers](/guides/ai-providers) for credentials,
+Gemma 4 31B, and gateway settings.
 
 #### Waiting on a consequential readiness problem
 
@@ -2876,7 +2893,7 @@ token.
 ```bash
 gaia tui --control                 # auto-assign a port
 gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --debug         # log every injected key, state change, and wait
+gaia tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
@@ -2889,7 +2906,7 @@ gaia tui --control --debug         # log every injected key, state change, and w
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading

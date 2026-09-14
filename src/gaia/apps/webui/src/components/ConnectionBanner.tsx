@@ -376,7 +376,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         restart with:{' '}
                         <code>
                             {systemStatus?.start_command
-                                ? `${systemStatus.start_command} --ctx-size ${MIN_CONTEXT_SIZE}`
+                                ? systemStatus.start_command
                                 : `LEMONADE_CTX_SIZE=${MIN_CONTEXT_SIZE} (see Settings)`}
                         </code>
                     </span>

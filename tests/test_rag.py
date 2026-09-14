@@ -794,9 +794,8 @@ class TestChatIntegration:
         chat.enable_rag()
         result = chat.add_document("test.pdf")
 
-        # add_document returns the result from index_document (dict, not bool despite type hint)
-        assert isinstance(result, dict)
-        assert result.get("success") is True
+        # add_document now honors its bool type hint instead of forwarding the raw stats dict
+        assert result is True
         mock_chat_dependencies["rag"].index_document.assert_called_with("test.pdf")
 
     def test_add_document_without_rag(self, mock_chat_dependencies):

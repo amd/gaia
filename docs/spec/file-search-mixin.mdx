@@ -18,17 +18,26 @@ title: "FileSearchToolsMixin"
 FileSearchToolsMixin provides agent-agnostic file search and management operations shared across multiple agents (Chat, Code). Features intelligent multi-phase search, type-based file analysis, and grep-like content searching.
 
 **Key Features:**
-- 3-phase intelligent file search (CWD → common locations → deep scan)
+- 3-phase intelligent file search (workspace → common locations → deep scan)
 - Type-aware file reading (Python AST, Markdown structure, binary detection)
 - Grep-like content search across file systems
 - Directory search with depth control
 - Generic file writing with directory creation
 
 **Search Strategy:**
-- Phase 0: Deep search current working directory (unlimited depth)
-- Phase 1: Search common locations (Documents, Downloads, Desktop) with depth limit
-- Phase 2: Deep drive/root search if still not found
+- A named `directory` is the WHOLE scope: searched to unlimited depth, and never
+  widened — not by Phase 1, not by `deep_search` (#3576)
+- Phase 0: the agent's **workspace** — `PathValidator.allowed_paths`, most
+  specific first. The most specific root is searched to unlimited depth; the
+  others, which accumulate as the user approves paths, are depth-capped
+- Phase 1: common locations (Documents, Downloads, Desktop) with a depth limit
+- Phase 2: deep drive/root search, only when `deep_search=True` and no
+  `directory` was named
 - Early termination on first match for speed
+
+The search root is the declared sandbox, **not** `Path.cwd()`. A sidecar is
+spawned by the daemon in its own package directory, so the working directory
+says how the process was launched, not where the user's work is.
 
 ---
 
@@ -56,20 +65,26 @@ class FileSearchToolsMixin:
     @tool
     def search_file(
         file_pattern: str,
+        directory: str = None,
         deep_search: bool = False,
         file_types: str = None
     ) -> Dict[str, Any]:
         """
         Search for files with two-phase strategy.
 
-        Quick search (default): CWD + common locations (Documents, Downloads, Desktop)
+        Quick search (default): workspace roots + common locations
+        Scoped search (directory=...): that directory only
         Deep search (deep_search=True): All drives (Windows) or root (Unix)
 
         Always do quick search first. Only use deep_search=True after quick search
-        found nothing and user confirms they want a deeper search.
+        found nothing and user confirms they want a deeper search. A named
+        directory is never widened, deep_search or not.
 
         Args:
             file_pattern: Pattern to search (e.g., 'oil', '*.pdf')
+            directory: Restrict the search to this folder. Pass it whenever the
+                user names one. A relative path resolves against the deepest
+                workspace root containing it.
             deep_search: Search all drives thoroughly (default: False)
             file_types: Filter by extensions (e.g., 'pdf,docx')
 
@@ -333,26 +348,40 @@ class FileSearchToolsMixin:
 ### 3-Phase Search
 
 ```python
-# Phase 0: Current directory (deep)
-cwd = Path.cwd()
-self.console.start_progress(f"Searching {cwd.name}...")
-search_location(cwd, max_depth=999)
-if matching_files:
-    return {"search_context": "current_directory", ...}
+# A named directory is the whole scope — resolved against the workspace,
+# sandbox-checked, and never widened below.
+if directory:
+    search_location(scope, max_depth=DEEP_ROOT_DEPTH)
+    roots = [scope]
+else:
+    # Phase 0: the workspace — PathValidator.allowed_paths, most specific
+    # first. Only the most specific root is walked exhaustively; the rest
+    # accumulate as the user approves paths and are depth-capped.
+    roots = search_roots(self)          # gaia.agents.tools.search_scope
+    for root in roots:
+        search_location(root, max_depth=root_depth(root, roots))
 
-# Phase 1: Common locations
-for location in [home/"Documents", home/"Downloads", home/"Desktop"]:
-    search_location(location, max_depth=5)
+    # Phase 1: Common locations
+    for location in [home/"Documents", home/"Downloads", home/"Desktop"]:
+        search_location(location, max_depth=5)
+
 if matching_files:
     return {"search_context": "common_locations", ...}
 
-# Phase 2: Deep drive search
+# Phase 2: Deep drive search — never when a directory was named
+if not deep_search or directory:
+    return {"status": "success", "files": [], "searched_paths": [...], ...}
 if platform.system() == "Windows":
     for drive in ["C:/", "D:/", ...]:
         search_location(drive, max_depth=999)
 else:
     search_location(Path("/"), max_depth=999)
 ```
+
+A zero result reports where it looked: `searched_paths`, a `search_context` of
+`"workspace"` or `"directory"`, and a `suggestion` telling the model that zero
+means zero under those paths, not zero on the machine. A named directory that
+does not exist is `status: "error"`, not an empty success.
 
 ### Python File Analysis
 

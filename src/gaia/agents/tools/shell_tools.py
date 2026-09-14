@@ -16,6 +16,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
+
 logger = logging.getLogger(__name__)
 
 # Security: WHITELIST approach - only allow explicitly safe commands
@@ -193,6 +195,37 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
     r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
 )
 
+#: Binaries an agent reaches for when it means "change this file". None are on
+#: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
+#: says "only read-only commands are allowed" and lists read-only examples,
+#: which leaves no route to the thing the agent was trying to do. Naming these
+#: lets the refusal point at edit_file instead of dead-ending (#3600).
+FILE_REWRITE_BINARIES = frozenset(
+    {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
+)
+
+#: In-place flags for the binaries that can also be used read-only. ``sed -n
+#: '10,20p' f`` prints a range and ``awk '{print $1}' f`` filters a stream;
+#: neither is an edit, and answering them with "use edit_file" would push the
+#: agent toward a write tool when it was trying to read.
+_IN_PLACE_FLAGS = ("-i", "--in-place")
+
+#: These write by definition — there is no read-only invocation to protect.
+_ALWAYS_WRITES = frozenset({"tee", "patch", "dd", "truncate", "ed"})
+
+
+def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
+    """Would this invocation change a file, as opposed to reading one?"""
+    if cmd_base in _ALWAYS_WRITES:
+        return True
+    return any(
+        part == flag
+        or part.startswith(flag + "=")
+        or (flag == "-i" and part.startswith("-i") and not part.startswith("--"))
+        for part in cmd_parts[1:]
+        for flag in _IN_PLACE_FLAGS
+    )
+
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
 #: only one a ``shell:execute`` grant may exempt from confirmation.
@@ -284,6 +317,18 @@ class ShellToolsMixin:
         self.max_commands_per_10_seconds = 3
 
     def _validate_shell_command(self, command: str) -> tuple:
+        """Every refusal ``command`` earns on its text alone, plus its segments.
+
+        Each refusal is stamped ``executed: False`` — nothing here has launched
+        anything, and downstream cannot tell a refused command from a failed one
+        by the shape of the error alone (#3677).
+        """
+        error, segments = self._shell_command_refusal(command)
+        if error is not None:
+            error = {**error, **NOT_EXECUTED}
+        return error, segments
+
+    def _shell_command_refusal(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its segments.
 
         Pure and side-effect free, so it can run twice: once as a pre-flight
@@ -727,6 +772,30 @@ class ShellToolsMixin:
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
                 }
         elif cmd_base not in ALLOWED_COMMANDS:
+            # Refusing a file rewrite with "only read-only commands are allowed"
+            # is a dead end: the agent wanted to change a file and the message
+            # names nothing that can. Point at the tool that does the job.
+            #
+            # Only when the invocation actually writes. `sed -n '10,20p' f`
+            # prints a line range; answering that with "use edit_file" sends the
+            # agent to a write tool when it was trying to read.
+            if cmd_base in FILE_REWRITE_BINARIES and _rewrites_in_place(
+                cmd_base, cmd_parts
+            ):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_base}' rewrites files and is not available. Use the "
+                        f"edit tools instead — they are not blocked."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Call edit_file with the exact existing text as old_content, "
+                        "or edit_python_file for .py to have the edit syntax-checked. "
+                        "Use write_file to create a file that does not exist yet."
+                    ),
+                    "examples": "edit_file(file_path=..., old_content=..., new_content=...)",
+                }
             return {
                 "status": "error",
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
@@ -763,6 +832,7 @@ class ShellToolsMixin:
                 allowed, reason, wait_time = self._check_rate_limit()
                 if not allowed:
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
                         "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
                         "has_errors": True,
@@ -775,6 +845,7 @@ class ShellToolsMixin:
                 if working_directory:
                     if not os.path.exists(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Working directory not found: {working_directory}",
                             "has_errors": True,
@@ -782,6 +853,7 @@ class ShellToolsMixin:
 
                     if not os.path.isdir(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Path is not a directory: {working_directory}",
                             "has_errors": True,
@@ -791,6 +863,7 @@ class ShellToolsMixin:
                     if hasattr(self, "path_validator"):
                         if not self.path_validator.is_path_allowed(working_directory):
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
@@ -798,6 +871,7 @@ class ShellToolsMixin:
                     elif hasattr(self, "_is_path_allowed"):
                         if not self._is_path_allowed(working_directory):
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": f"Access denied: {working_directory} is not in allowed paths",
                                 "has_errors": True,
@@ -865,6 +939,7 @@ class ShellToolsMixin:
                                     resolved_path
                                 ):
                                     return {
+                                        **NOT_EXECUTED,
                                         "status": "error",
                                         "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
                                         "has_errors": True,
@@ -1071,6 +1146,16 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                 }
 
+            except FileNotFoundError as exc:
+                # The executable is not there, so nothing started. Said out loud
+                # or the footer reports a missing pytest as a failing one.
+                logger.error(f"Command executable not found: {exc}")
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(exc),
+                    "has_errors": True,
+                }
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}

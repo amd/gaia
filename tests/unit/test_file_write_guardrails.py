@@ -519,20 +519,44 @@ class TestCreateBackup:
 
         assert backup_path is not None
         backup_name = os.path.basename(backup_path)
-        # Should match pattern: report.YYYYMMDD_HHMMSS.bak.txt
-        assert backup_name.startswith("report.")
-        assert ".bak" in backup_name
-        assert backup_name.endswith(".txt")
+        # report.txt.YYYYMMDD_HHMMSS.bak — the full original name, then the
+        # stamp, then ".bak" last.
+        assert backup_name.startswith("report.txt.")
+        assert backup_name.endswith(".bak")
 
-    def test_backup_preserves_extension(self, validator, tmp_path):
-        """Verify backup preserves the original file extension."""
+    def test_backup_keeps_the_original_name_but_not_its_extension(
+        self, validator, tmp_path
+    ):
+        """A backup must not still look like a file of the original type.
+
+        Keeping ".py" on the end made a backup of a test module importable-
+        looking: pytest collected ``test_x.<stamp>.bak.py``, failed on the
+        dotted module name, and took the whole suite down with it (#3747). The
+        original name is still there to read; the extension is not (#3747).
+        """
         original = tmp_path / "script.py"
         original.write_text("print('hello')")
 
         backup_path = validator.create_backup(str(original))
 
         assert backup_path is not None
-        assert backup_path.endswith(".py")
+        assert not backup_path.endswith(".py")
+        assert os.path.basename(backup_path).startswith("script.py.")
+
+    def test_a_backup_of_a_test_file_is_not_collectable(self, validator, tmp_path):
+        """The regression itself: pytest must not try to import the backup."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        original = tests_dir / "test_thing.py"
+        original.write_text("def test_ok():\n    assert True\n")
+
+        backup_path = validator.create_backup(str(original))
+
+        assert backup_path is not None
+        name = os.path.basename(backup_path)
+        assert not (
+            name.startswith("test_") and name.endswith(".py")
+        ), f"{name} matches pytest's test_*.py glob and will break collection"
 
     def test_backup_nonexistent_file_returns_none(self, validator, tmp_path):
         """Verify create_backup returns None for a nonexistent file."""
