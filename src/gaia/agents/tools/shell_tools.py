@@ -1029,8 +1029,6 @@ class ShellToolsMixin:
                         "mv": "move",
                     }
                     if cmd_base in _UNIX_TO_WIN:
-                        import shutil
-
                         if not shutil.which(cmd_base):
                             win_cmd = _UNIX_TO_WIN[cmd_base]
                             logger.info(
