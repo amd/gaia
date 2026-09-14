@@ -104,7 +104,7 @@ Get a working agent running to understand the basic flow.
         ```
 
         <Info>
-        Create your agent scripts in this folder. The standalone `gaia-agent-chat` wheel provides `ChatAgent`; its PyPI publishing is paused, so install it from the repository subdirectory. GAIA has no `agent-chat` extra. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. The standalone `gaia-agent-chat` wheel provides `ChatAgent`; its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. GAIA has no `agent-chat` extra. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
         </Info>
       </Tab>
 
@@ -129,8 +129,8 @@ Get a working agent running to understand the basic flow.
 
   <Step title="Start Lemonade Server">
     ```bash
-    # Start local LLM server with AMD NPU/iGPU acceleration
-    lemonade-server serve
+    # Install and start Lemonade with the chat models
+    gaia init
     ```
 
     <Info>

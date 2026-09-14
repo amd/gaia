@@ -393,10 +393,11 @@ def _generate_search_keys(self, query: str) -> List[str]:
     **Symptom:** Agent responds with "No documents indexed"
 
     **Debugging:**
-    ```python
-    # Verify RAG dependencies
-    uv pip install -e ".[rag]"
+    ```bash
+    uv pip install "amd-gaia[rag]"
+    ```
 
+    ```python
     # Check document exists
     import os
     print(os.path.exists("./manual.pdf"))  # Should be True
@@ -407,7 +408,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```
 
     **Common causes:**
-    - Missing RAG dependencies (`uv pip install -e ".[rag]"`)
+    - Missing RAG dependencies (`uv pip install "amd-gaia[rag]"`)
     - Incorrect file path
     - File not readable
   </Accordion>
