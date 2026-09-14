@@ -41,7 +41,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
    - Blacklist dangerous commands (rm, chmod, sudo, etc.)
    - Git read-only subcommands only
    - Working directory support
-   - Timeout protection (default: 30s)
+   - Timeout protection, scaled to the kind of command (see below)
 
 2. **Rate Limiting**
    - Max 10 commands per minute (sustained)
@@ -106,6 +106,7 @@ class ShellToolsMixin:
 
     Tools provided:
     - run_shell_command: Execute safe shell commands with security checks
+    - wait_for_condition: Poll a predicate until it succeeds, or hit a deadline
     """
 
     def __init__(self, *args, **kwargs):
@@ -136,7 +137,7 @@ class ShellToolsMixin:
     def run_shell_command(
         command: str,
         working_directory: Optional[str] = None,
-        timeout: int = 30
+        timeout: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute a shell command and return output.
@@ -152,7 +153,8 @@ class ShellToolsMixin:
         Args:
             command: Shell command to execute (e.g., 'ls -la')
             working_directory: Optional directory to run in
-            timeout: Max execution time in seconds (default: 30)
+            timeout: Max execution time in seconds. None (the default) picks
+                the default for the command's class — see Adaptive Timeouts.
 
         Returns:
             {
@@ -163,7 +165,8 @@ class ShellToolsMixin:
                 "return_code": int,
                 "has_errors": bool,
                 "duration_seconds": float,
-                "timeout": int,
+                "timeout": int,           # The applied timeout
+                "timeout_class": str,     # Which class it came from
                 "cwd": str,
                 "output_truncated": bool,
                 "rate_limited": bool,  # If rate limited
@@ -179,7 +182,72 @@ class ShellToolsMixin:
             Path utils: which, basename, dirname
         """
         pass
+
+    @tool
+    def wait_for_condition(
+        command: str,
+        working_directory: Optional[str] = None,
+        timeout: int = 120,
+        poll_interval: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Block until `command` exits 0, or until the deadline passes.
+
+        Args:
+            command: The predicate — exits 0 once the condition holds. Runs
+                through run_shell_command, so the same guardrails apply.
+            working_directory: Optional directory to run the predicate in
+            timeout: Give up after this many seconds (max 600)
+            poll_interval: Seconds between checks (5-60)
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "condition_met": bool,
+                "command": str,
+                "elapsed_seconds": float,
+                "polls": int,
+                "poll_interval_seconds": int,
+                "timeout": int,
+                "stdout": str,
+                "stderr": str,
+                "timed_out": bool,          # Deadline expired
+                "last_return_code": int,    # On expiry
+                "cancelled": bool           # Agent cancel signal fired
+            }
+        """
+        pass
 ```
+
+### Adaptive Timeouts
+
+A flat 30s timeout kills the commands that legitimately take minutes. The
+default now comes from the command itself — `src/gaia/agents/tools/command_timeouts.py`
+classifies it and applies the class default. An explicit `timeout=` always wins.
+
+| Class | Default | Matches |
+|-------|---------|---------|
+| `test` | 900s | pytest, tox, jest/vitest, `cargo test`, `go test`, `npm test`, `mvn test`, `gaia eval` |
+| `build` | 1800s | pip/uv/poetry/conda/apt installs, make, cmake, ninja, msbuild, tsc, `cargo build`, `npm ci`, `docker build` |
+| `network` | 300s | `git clone/fetch/pull/push`, gh, curl, wget, ssh/scp/rsync, `docker pull` |
+| `default` | 30s | everything else — the read-only allowlist (ls, cat, grep, `git status`) |
+
+A pipeline takes the longest class of any segment: `pytest -q \| tail` is a test
+run whose output happens to be filtered. Wrappers are transparent, so
+`python -m pytest`, `uv run pytest` and `npx jest` all classify as `test`.
+
+A timeout above the 3600s ceiling is **refused, not clamped** — a command killed
+at a limit its caller never chose is a failure with no visible cause.
+
+### Waiting Without Spinning
+
+`wait_for_condition` exists so the agent never sleeps-and-rechecks. Polling
+happens inside one call against a monotonic deadline, so a five-minute wait
+costs one step of the agent's loop budget rather than sixty. It is bounded by
+construction (600s ceiling, 5-60s poll interval), charged **once** against the
+shell rate limit rather than once per probe, and waits on the agent's cancel
+event so Stop takes effect immediately. Deadline expiry is an error carrying the
+last probe's output — never a quiet `False`.
 
 ---
 
