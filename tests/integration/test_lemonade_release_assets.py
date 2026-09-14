@@ -94,8 +94,10 @@ def require_github_network():
             pytest.fail(f"github.com did not resolve in CI - DNS failure: {e}")
         pytest.skip(f"github.com did not resolve - offline dev box: {e}")
     except _GitHubUnreachable as e:
-        pytest.skip(f"github.com unreachable after {_RETRY_ATTEMPTS} attempts "
-                     f"(transient network failure, not a confirmed outage): {e}")
+        pytest.skip(
+            f"github.com unreachable after {_RETRY_ATTEMPTS} attempts "
+            f"(transient network failure, not a confirmed outage): {e}"
+        )
 
 
 @pytest.mark.network
