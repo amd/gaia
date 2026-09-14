@@ -47,9 +47,12 @@ def test_oversized_turn_is_not_split_or_silently_truncated():
     logger.warning.assert_called_once()
 
 
-def test_impossible_budget_fails_loudly():
-    with pytest.raises(ValueError, match="No context budget"):
-        select_history([_turn(0)], 0)
+@pytest.mark.parametrize("budget", [0, -100])
+def test_impossible_budget_warns_and_preserves_persisted_turns(caplog, budget):
+    turns = [_turn(0)]
+    assert select_history(turns, budget) == []
+    assert turns == [_turn(0)]
+    assert "No context budget remains" in caplog.text
 
 
 def test_legacy_and_recorded_turns_do_not_duplicate_user_input():

@@ -90,7 +90,12 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
     The persistent transcript is never shortened.
     """
     if budget <= 0:
-        raise ValueError("No context budget remains for history; shorten the prompt.")
+        logger.warning(
+            "No context budget remains for history; replaying none of the %d "
+            "stored turn(s). Full evidence remains in the session database.",
+            len(turns),
+        )
+        return []
     retained: deque = deque()
     used = 0
     evicted = 0
@@ -136,3 +141,33 @@ def transcript_turns(messages: list[dict]) -> list[list[dict]]:
                 )
             pending = None
     return turns
+
+
+def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
+    """Render recorded native tool evidence for a model without native tools."""
+    result = deepcopy(turns)
+    for turn in result:
+        for index, message in enumerate(turn):
+            if message.get("tool_calls"):
+                calls = json.dumps(message["tool_calls"], ensure_ascii=False)
+                content = message.get("content") or ""
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False)
+                turn[index] = {
+                    "role": "assistant",
+                    "content": content + "\n[Recorded tool calls] " + calls,
+                }
+            elif message.get("role") == "tool":
+                content = message.get("content")
+                turn[index] = {
+                    "role": "user",
+                    "content": "[Recorded tool result: "
+                    + message.get("name", "unknown")
+                    + "] "
+                    + (
+                        content
+                        if isinstance(content, str)
+                        else json.dumps(content, ensure_ascii=False)
+                    ),
+                }
+    return result

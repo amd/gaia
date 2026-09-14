@@ -302,3 +302,29 @@ def test_http_turn_persists_evidence_and_restores_it_to_fresh_agent(
     assert restored == [trace(), trace("follow up")]
     assert "violet-otter-92" in json.dumps(restored)
     db.close()
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_model_switch_restores_compatible_evidence(monkeypatch, native):
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    db.add_message(session, "assistant", "answer", model_messages=_trace())
+    agent = SimpleNamespace(device="gpu", _uses_native_tool_calls=lambda: native)
+    helpers._restore_model_history(agent, db, session, "follow up")
+    assert "violet-otter-92" in json.dumps(agent.conversation_history)
+    assert "fact.txt" in json.dumps(agent.conversation_history)
+    assert any(m.get("tool_calls") for m in agent.conversation_history) == native
+    assert any(m["role"] == "tool" for m in agent.conversation_history) == native
+    assert transcript_turns(db.get_context_messages(session)) == [_trace()]
+    db.close()
+
+
+def test_large_paste_with_no_history_does_not_fail_restore(monkeypatch, caplog):
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    agent = SimpleNamespace(device="npu")
+    monkeypatch.setattr("gaia.agents.base.turn_metrics.count_tokens", lambda _: 100000)
+    helpers._restore_model_history(agent, db, session, "a large pasted message")
+    assert agent.conversation_history == []
+    assert "No context budget remains" in caplog.text
+    db.close()

@@ -1033,7 +1033,11 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
 
 def _restore_model_history(agent, db, session_id: str, query: str) -> None:
     """Reserve the current prompt and output before admitting completed turns."""
-    from gaia.agents.base.history import select_history, transcript_turns
+    from gaia.agents.base.history import (
+        select_history,
+        text_tool_history,
+        transcript_turns,
+    )
     from gaia.agents.base.turn_metrics import count_tokens
     from gaia.llm.lemonade_client import resolve_ctx_size
 
@@ -1046,9 +1050,13 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
     config = getattr(getattr(agent, "chat", None), "config", None)
     output = getattr(config, "max_tokens", 8192)
     budget = min(ctx // 2, ctx - overhead - output - 2048)
-    agent.conversation_history = select_history(
-        transcript_turns(db.get_context_messages(session_id)), budget
-    )
+    turns = transcript_turns(db.get_context_messages(session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    agent.conversation_history = select_history(turns, budget)
 
 
 def _dispatch_email_query(
@@ -1751,9 +1759,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             ": " + "x" * 512 + "\n\n"
         )
 
-        # Build conversation history
-        messages = db.get_context_messages(request.session_id)
-        history_pairs = _build_history_pairs(messages)
+        # Only the email relay consumes text pairs; other agents restore traces below.
+        history_pairs = (
+            _build_history_pairs(db.get_context_messages(request.session_id))
+            if session.get("agent_type") == "email"
+            else []
+        )
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
