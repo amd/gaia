@@ -1,0 +1,292 @@
+---
+title: "v0.24.0"
+description: "The flagship agent draws images, summarizes meetings, and orients itself before acting; one command now actually installs and runs it; and a file-read tool that could escape the --allowed-paths sandbox is fixed."
+---
+
+# GAIA v0.24.0 Release Notes
+
+## Breaking Changes
+
+- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship separately; the capability is now the flagship agent's tool surface, driven by a `SKILL.md` in `hub/skills/`. Installing or launching one of these by id now fails — use `gaia hub install gaia --trust` and load the matching skill instead. (PR [#2995](https://github.com/amd/gaia/pull/2995))
+
+## What's New
+
+- **`gaia hub install gaia --trust` actually installs and runs the flagship agent** — the daemon had no entry to run it as a sidecar, the one-line installers didn't ship its binary, and `gaia init` set up a different agent than the one the terminal UI opens. All three are fixed, and downloading GAIA now gives a real double-clickable installer instead of a raw binary telling you to go find `cmd.exe`. (PRs [#3031](https://github.com/amd/gaia/pull/3031), [#3146](https://github.com/amd/gaia/pull/3146), [#3330](https://github.com/amd/gaia/pull/3330), [#3125](https://github.com/amd/gaia/pull/3125), [#3120](https://github.com/amd/gaia/pull/3120))
+
+- **The agent draws pictures, summarizes meetings, and orients itself first** — "draw me a red bicycle" now reaches the image tools instead of producing nothing; pointing it at a recording (`summarize this meeting: standup.mp4`) returns a speaker-attributed transcript plus a brief with decisions and action items; and every task starts with a short scan of the project's shape instead of guessing paths from scratch. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3597](https://github.com/amd/gaia/pull/3597), [#3405](https://github.com/amd/gaia/pull/3405))
+
+- **Skills load themselves, and corrections stick** — an installed skill like `github-triage` is now matched to your question automatically instead of requiring you to name it, and a correction you give the agent is learned into memory instead of requiring a hand-edit of the shipped `SKILL.md`. (PRs [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
+
+- **Every answer states whether it was checked** — the agent now ends each turn with one line naming what it ran and what passed, instead of reporting success in the same tone whether or not anything was verified; `--trace` in the TUI records every tool call and result in order, so a wrong answer can be replayed and diagnosed instead of just re-described. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
+
+- **The TUI takes the mouse** — the wheel scrolls, a printed link is clickable, and a double click copies the message under it (`Ctrl+T` hands back native drag-select); a wide terminal now draws to its actual width instead of wrapping at 80 columns; and you can point the TUI at a local, Fireworks, or AMD Gateway model through Lemonade. (PRs [#3699](https://github.com/amd/gaia/pull/3699), [#3006](https://github.com/amd/gaia/pull/3006), [#3672](https://github.com/amd/gaia/pull/3672))
+
+- **Run Lemonade without the machine-wide installer** — `gaia lemonade embedded start` downloads, verifies, and runs GAIA's own private Lemonade Server behind a generated API key, so getting a model serving no longer needs admin rights or a shared tray app. (PR [#3121](https://github.com/amd/gaia/pull/3121))
+
+This release runs against Lemonade Server 11.8.1.
+
+## Security
+
+- **A file-read tool could escape the `--allowed-paths` sandbox (CWE-284)** — `write_file` enforced the sandbox boundary, but `read_file` checked no boundary at all, so a file outside `--allowed-paths` could be read even though writing to it was refused. Both read tools now enforce the same boundary as writes, and reads refuse credential-shaped files even inside an allowed folder. (PR [#3594](https://github.com/amd/gaia/pull/3594))
+- Also hardened: a `.bak` backup file could be imported as if it were the module it backed up (PR [#3748](https://github.com/amd/gaia/pull/3748)), and a PowerShell sink could execute untrusted text instead of only displaying it (PR [#3359](https://github.com/amd/gaia/pull/3359)).
+
+## Bug Fixes
+
+A selection of the user-visible fixes this release — the full list is in the changelog below.
+
+- **The flagship agent's core model floor now matches what can actually run it** (PR [#3055](https://github.com/amd/gaia/pull/3055)) — installs no longer point at a Lemonade version too old to serve the agent.
+- **A one-shot `/query` run no longer leaks an agent process** (PR [#3079](https://github.com/amd/gaia/pull/3079)).
+- **The npm sidecar no longer attaches to a foreign server** (PR [#3078](https://github.com/amd/gaia/pull/3078)) — it now verifies the server it finds is actually its own before using it.
+- **A turn parked on a confirmation prompt no longer hangs when stdin closes** (PR [#3080](https://github.com/amd/gaia/pull/3080)) — the agent ends the turn instead of waiting forever.
+- **Telegram's background polling survives** (PR [#3272](https://github.com/amd/gaia/pull/3272)) — the adapter no longer silently stops receiving messages.
+- **Uninstalling GAIA removes the embedded Lemonade runtime it installed** (PR [#3277](https://github.com/amd/gaia/pull/3277)) — `gaia uninstall` no longer leaves it behind.
+- **Outlook and Gmail search operators translate correctly for the email agent** (PRs [#3042](https://github.com/amd/gaia/pull/3042), [#3562](https://github.com/amd/gaia/pull/3562), [#3619](https://github.com/amd/gaia/pull/3619)) — a query that used to fail silently or match the wrong messages against Outlook's Graph API now works or fails loudly.
+- **RAG indexing honors a document's actual success flag** (PR [#3678](https://github.com/amd/gaia/pull/3678)) — a failed index no longer gets reported as indexed at every call site that checked it.
+- **Claude tool-call history survives across turns** (PR [#3410](https://github.com/amd/gaia/pull/3410)) — a multi-turn tool conversation no longer loses earlier tool results.
+- **An ambiguous edit is refused instead of silently changing the first match** (PR [#3396](https://github.com/amd/gaia/pull/3396)) — `edit_file` asks for a more specific match rather than guessing which occurrence you meant.
+- **A port collision between the MCP bridge, Agent UI, TUI, and Telegram is resolved** (PR [#3604](https://github.com/amd/gaia/pull/3604)) — the four no longer fight over the same default port.
+- **Telegram reports unsupported media types instead of failing silently** (PR [#3263](https://github.com/amd/gaia/pull/3263)).
+- **`GET /health` reports real component status** (PR [#2601](https://github.com/amd/gaia/pull/2601)) — it used to report `ok` even when the Lemonade backend couldn't serve requests; it now reports LLM and RAG status too.
+
+## Contributors
+
+Thanks to the community members who contributed to this release:
+
+- [@mikemikimike](https://github.com/mikemikimike) — Telegram background-polling and media-handling fixes, embedded-Lemonade uninstall cleanup, and TUI init-process reaping (PRs [#3272](https://github.com/amd/gaia/pull/3272), [#3277](https://github.com/amd/gaia/pull/3277), [#3271](https://github.com/amd/gaia/pull/3271))
+- [@itomek](https://github.com/itomek) — custom-agent guide fixes and CI reliability work, including provisioning the dev install in Claude Code cloud sessions (PRs [#3317](https://github.com/amd/gaia/pull/3317), [#3033](https://github.com/amd/gaia/pull/3033))
+- [@Hashim1999164](https://github.com/Hashim1999164) — hub agent pages showing the GAIA install path alongside npm, structured JSON for unexpected email API errors, and Outlook Graph query-escaping fixes (PRs [#3151](https://github.com/amd/gaia/pull/3151), [#3046](https://github.com/amd/gaia/pull/3046), [#3021](https://github.com/amd/gaia/pull/3021))
+- [@AmirF194](https://github.com/AmirF194) — Outlook/Gmail search-operator translation for the email agent (PRs [#3042](https://github.com/amd/gaia/pull/3042), [#3562](https://github.com/amd/gaia/pull/3562), [#3619](https://github.com/amd/gaia/pull/3619))
+- [@sujikathir](https://github.com/sujikathir) — the `/health` component-status endpoint and a Claude tool-history preservation fix (PRs [#2601](https://github.com/amd/gaia/pull/2601), [#3410](https://github.com/amd/gaia/pull/3410))
+- [@SIBTAIN-ASAD](https://github.com/SIBTAIN-ASAD) — Telegram unsupported-media-type reporting and test coverage (PR [#3263](https://github.com/amd/gaia/pull/3263))
+- [@wangzhengzhuo05](https://github.com/wangzhengzhuo05) — MCP/Telegram/TUI port-collision fix across the bridge, Agent UI, and daemon (PR [#3604](https://github.com/amd/gaia/pull/3604))
+- [@amd-pworfolk](https://github.com/amd-pworfolk) — stopped a non-LLM model's `ctx_size` from leaking into `get_status()` (PR [#3595](https://github.com/amd/gaia/pull/3595))
+
+## Full Changelog
+
+**218 commits** since v0.23.0:
+
+<details>
+<summary>Expand full changelog (218 commits)</summary>
+
+- `192c39d03` — style: black
+- `44a9a6ede` — fix(agent): drop whole records from a JSON string, don't slice one
+- `bc2871849` — Merge remote-tracking branch 'origin/main' into pr3670
+- `1a93f3e20` — fix: apply reviewed maintenance repairs for #3372 (#3713)
+- `fe863b5d9` — fix: apply reviewed maintenance repairs for #3613 (#3717)
+- `fa02dc063` — fix: apply reviewed maintenance repairs for #3375 (#3714)
+- `3c32386ce` — fix(security): put .bak last so a backup stops looking like a Python module (#3748)
+- `c11e2bf85` — test(installer): expect the not-executed flag on a refused MCP tool call (#3736)
+- `2cbde094b` — fix(vlm): raise when vision extraction fails instead of indexing the error (#3722)
+- `8c4661c38` — fix(agent,memory): let a bare recall() browse instead of erroring (#3705)
+- `7bd576723` — fix(agent): stop the verification footer claiming a rejected command ran (#3703)
+- `5bb9e53f0` — fix(tools): keep a finished edit reported as finished when the diff won't render (#3702)
+- `044a741b3` — fix(tools): search the user's project, not the directory the sidecar was spawned in (#3711)
+- `9fc740074` — fix(tools): describe the edit and write tools by what agents actually edit (#3712)
+- `eefd33dde` — fix(rag): stop indexing a damaged PDF page as a blank one (#3723)
+- `3d0dfbee1` — fix(ui): let a document on a reconnected drive come back (#3727)
+- `cd3dbe6de` — fix(talk): say when the microphone fails instead of printing "Listening…" (#3724)
+- `7c733bb01` — fix(hub): stop recording a failed first install as installed (#3726)
+- `140619559` — feat(tui): scroll with the wheel, click links, and print only measured ttft/tok-s (#3699)
+- `8113fd043` — fix(code-index): let a session index more than one repository (#3728)
+- `d311ac39e` — fix(tools): describe tool arguments at the slot the model fills (#3583)
+- `62e52f8e5` — fix(ui): let the operator declare document roots beyond $HOME (#3586)
+- `c57db1f0d` — fix(tools): honor find_files scope on the index path and stop doubling "error:" (#3671)
+- `cb77a334f` — fix(agents): retry instead of answering with raw tool-call JSON (#3598)
+- `41cd64ec2` — fix(llm): keep tool calls on a truncated assistant turn during overflow retry (#3582)
+- `36b8aa55d` — feat(skills): make image generation reachable from the flagship (#3073)
+- `600831f9e` — ci(vscode): drop the base-branch filter that now fails the lint gate (#3719)
+- `1c23713bd` — fix(ci): run the full suite on stacked PRs, not just PRs into main (#3372)
+- `b8e0496b1` — fix(eval): capture stdout when a scenario subprocess fails (#3375)
+- `d5d4a815c` — fix(tui,webui): stop the real agent on cancel; keep answer content (#3627)
+- `24c0ee4fd` — fix(agent-gaia): name a core floor that can actually run the agent (#3055)
+- `eee4666cd` — fix(security): make the file boundary the file, and hold it on reads (#3594)
+- `46a41f9ec` — fix(chat): restore recent context in long sessions (#3651)
+- `0d82616a9` — fix(tui): reject unsupported daemon permission bypass (#3654)
+- `c3284b464` — fix(npm): resolve Windows shims before launching the TUI (#3653)
+- `a07b87e40` — feat(skills): let a gh write ask instead of fail (#3009)
+- `1070ed226` — fix(api,mcp,web): refuse foreign origins and internal fetch targets (#3612)
+- `e373a19df` — chore(lemonade): remove the dead `lemonade-server serve` CLI from the last surfaces (#3617)
+- `305ae88e9` — fix(rag): preserve indexed documents when persistence fails (#3652)
+- `b76647e72` — fix(mcp): retrieve complete Agent UI transcripts (#3667)
+- `b7884b46d` — fix(rag): honor index_document's success flag at every truthy call site (#3678)
+- `1d3b2b415` — feat(tools): tell the agent its edit tools exist (#3602)
+- `86071110a` — fix(eval): make the agent eval gate's report mode actually report (#3613)
+- `404107919` — fix(memory): refuse chat-minted privileged rows and distil before pruning (#3614)
+- `2fc19e5ee` — feat(tui): choose local, Fireworks, or AMD Gateway via Lemonade (#3672)
+- `a5e16d0b9` — test(lemonade): assert four external contracts the mocks were faking (#3615)
+- `947d05225` — fix(schedule): honor day constraints in recurring timers (#3655)
+- `5155591ad` — fix(chat): retain admission slots for detached runs (#3657)
+- `13f61aebc` — fix(broker): wake queued requests at lease expiry (#3660)
+- `cb8c847a7` — fix(vscode): preserve split streaming tool calls (#3661)
+- `65499dabf` — fix(chat): load complete transcripts across message pages (#3664)
+- `d84f98474` — ci(eval): give the persistent Lemonade task the same launch env as every other start path (#3577)
+- `42377da7a` — fix(llm): don't let a non-LLM model's ctx_size leak into get_status() (#3595)
+- `e6a9efcf5` — Error when a named find_files folder is missing (#3580)
+- `b62eada91` — fix(agent): bound plain-string tool results with head and tail
+- `4d47ae9a9` — feat(agent): transcribe and summarize meeting recordings locally (#3597)
+- `cfc3d2959` — fix(email): don't treat a colon word inside a quoted phrase as an Outlook operator (#3619)
+- `e8f5bc898` — fix(mcp,telegram): resolve port 8765 collision across bridge, agent-ui, tui and telegram health (#3604)
+- `a2df094e3` — fix(llm): preserve Claude tool history (#3410)
+- `d9e381b9d` — fix(tui): reap cancelled init processes (#3271)
+- `d7cadd3e0` — fix(telegram): keep background polling alive (#3272)
+- `b81f9e1b0` — fix: uninstall embedded Lemonade runtime (#3277)
+- `146dd63cc` — fix(tui): send caller checkout to daemon ensure (#3268)
+- `4ce7c2662` — fix(email): allow move_to_label to restore inbox (#3267)
+- `36cab66de` — fix(connectors): preserve grants in device login (#3266)
+- `176faf8eb` — fix(email): report calendar listing truncation (#3264)
+- `ca2a5086d` — fix(email): honor sender preference ordering (#3257)
+- `659cb0cde` — fix(email): surface briefing cache age (#3256)
+- `7304f5e86` — ci(release): let the backend test step fail the release (#3573)
+- `07a3749c0` — fix(ci): report runner outages in minutes, not as a silent cancel a day later (#3411)
+- `68f10a8fa` — fix(agents): reject unknown @tool keyword arguments (#3252)
+- `c45593aed` — fix(email-tests): prevent headless keyring hangs (#3249)
+- `543b11ec6` — fix(skills): make skill tools work on the Claude provider (#3143)
+- `f83e96c14` — feat(agent): materialize a project map at task start (#3405)
+- `29e5d977c` — feat(tui): add --trace to record what the agent actually did (#3579)
+- `38bc3669b` — docs(troubleshooting): explain the audit-module antivirus false positive (#3348)
+- `f3d739485` — fix(email): fail loudly on Outlook operators Graph cannot translate (#3562)
+- `af7d492ed` — fix(eval): drive the agent eval with the OAuth token, and probe it for real (#3403)
+- `0c23e13a9` — fix(tools): refuse an ambiguous edit instead of changing the first match (#3396)
+- `4ccaa0738` — feat(agent): state whether an answer was verified, on every exit path (#3397)
+- `4c229d434` — fix(api,web): repair gaia api chat completions, HTTPS SNI, and download overwrite (#3364)
+- `456aef994` — chore(deps): bump anthropics/claude-code-action from 1.0.210 to 1.0.216 in the github-actions group across 1 directory (#3409)
+- `a87c3f631` — chore(deps-dev): bump the agent-ui-dependencies group in /src/gaia/apps/webui with 5 updates (#3407)
+- `7e7a2684d` — docs(plans): measure GAIA's agent-loop gaps against 345 real sessions (#3391)
+- `d09a7a64e` — feat(skills): learn a skill's corrections into memory, never into the file (#3023)
+- `c53918b75` — docs(claude): correct stale commands, the GaiaAgent status, and the CLI list (#3311)
+- `e274986a1` — fix(skills,tools): stop two tools deleting data while reporting success (#3358)
+- `74916c5f5` — fix(cli): stop uninstall and kill --port destroying what they do not own (#3361)
+- `0ec6ee13e` — fix(connectors): make the per-agent grant check real and bounded (#3363)
+- `9bd6bbadd` — chore(deps-dev): bump the python-dependencies group with 2 updates (#3408)
+- `a65bc4556` — chore(deps-dev): bump electron from 44.0.0 to 44.1.1 in the root-npm-dependencies group (#3406)
+- `b4f2c096f` — fix(telegram): scope the bot's tool surface and stop the allowlist failing open (#3306)
+- `d7470a8fc` — fix(ci): stop the Claude audits re-filing the same finding every run (#3310)
+- `dd98c0ff4` — fix(security): stop PowerShell sinks from executing untrusted text (#3359)
+- `833ca3d06` — fix(ui): stop any web page from driving the Agent UI backend (#3366)
+- `e9f28b311` — fix(release): make the v0.23.1 tag pass its own publish gates (#3354)
+- `abe87edc3` — Devlab/dispatch passing (#3344)
+- `5b284b4da` — feat(init): make `gaia init` the one setup path for the flagship (#3330)
+- `1ae7dad84` — fix(connectors): enforce catalog scope ceiling for authorization (#3247)
+- `0525d5b0a` — fix(chat): surface unavailable memory at startup (#3153)
+- `695e92c58` — docs(custom-agent): make the guide's agent examples actually run (#3317)
+- `a75904de1` — chore(deps-dev): bump the agent-ui-dependencies group in /src/gaia/apps/webui with 2 updates (#3314)
+- `a6a25f29c` — chore(deps): bump zod from 4.4.3 to 4.5.4 in the root-npm-dependencies group (#3313)
+- `ed32a2d4d` — fix(daemon): treat an unreaped sidecar as stopped, not as a survivor (#3229)
+- `211f08c5b` — Use the workspace root lockfile for the example Electron app (#3301)
+- `1886dd363` — test(conftest): stop the unit suite opening the developer's real browser (#3305)
+- `72241b2f2` — Release v0.23.1 (#3054)
+- `9b26827ca` — fix: keep source-less agents compatible with skill discovery (#3244)
+- `0fb49f1d6` — fix: preserve forwards across transient mint failures (#3245)
+- `1dec2462f` — fix(connectors): record only granted agent scopes (#3248)
+- `3e90f15d5` — fix(agent): use device profile for context overflow (#3253)
+- `18a8bcb89` — fix: guide daemon version skew upgrades (#3246)
+- `39af8ef9f` — fix(ui): report Lemonade probe failures accurately (#3250)
+- `0db152ebc` — fix(daemon): honor extended agent query timeouts (#3251)
+- `2dedc7654` — fix(tui): preserve partial-success batch outcomes (#3255)
+- `c5b00e85b` — fix(telegram): report unsupported media types (#3263)
+- `bc613dc85` — fix(hub): stop calling an app's npm package a frozen agent sidecar (#3299)
+- `821667c76` — fix(skills): normalize common plural stems (#3270)
+- `8ad4ee469` — fix(email): parse grouped Outlook duration queries (#3269)
+- `30b8246ad` — test: cover registered Telegram handlers (#3273)
+- `80cf9eb00` — test: verify embedded backend install contract (#3274)
+- `9b40c3522` — ci: run embedded Lemonade checksum guard (#3275)
+- `5b45a7c11` — fix: keep skill discovery loader available (#3276)
+- `1ff94ae6c` — fix: report RAG indexing failures accurately (#3278)
+- `0c4d725a0` — fix: report missing API server on stop (#3279)
+- `811e0bc04` — fix(talk): honor restart voice command (#3280)
+- `869f0bf41` — fix: fail Telegram startup when dependency is missing (#3283)
+- `31fcdd03c` — fix(mcp): expose TUI state wait matcher (#3284)
+- `f2dfcd8cb` — fix(hub): stop offering a GAIA install a non-agent card rules out (#3232)
+- `6ffee9e02` — chore(deps-dev): bump the agent-ui-dependencies group in /src/gaia/apps/webui with 5 updates (#3156)
+- `671000d8e` — chore(deps): bump the root-npm-dependencies group with 3 updates (#3155)
+- `438733605` — chore(deps): bump anthropics/claude-code-action from 1.0.206 to 1.0.210 in the github-actions group (#3157)
+- `0c28442a9` — fix(tui): preserve seeded transport for wheel agents (#3285)
+- `41a00915b` — fix(tui): gate Claude launches on credentials (#3286)
+- `25dd767da` — fix(ci): the eval gate skipped every category when the embedder failed (#3158)
+- `fdcdbff4c` — fix(website): Mac visitors on Safari got no install button (#3144)
+- `95f874817` — perf(gaia): send the flagship only the tools a turn needs (#3008)
+- `eb764bf5a` — feat(installer): the one-line install now brings the agent with it (#3146)
+- `ea0e5d924` — feat(cpp): skill sets and gaia-agent.yaml wiring (#2931)
+- `5b37cb138` — Route the Strix Halo jobs to the Ryzen Dev Lab pool (#3262)
+- `0047af97d` — ci(claude): skip Claude PR review for Dependabot PRs (#3259)
+- `11039b64e` — test(daemon): stop the hub stray-process test orphaning a sleep child (#3230)
+- `a338b94f4` — test(telegram): cover media ingest paths (#3150)
+- `a7bcf5e11` — Show GAIA install alongside npm on hub agent pages (#3151)
+- `ecae8f183` — test(telegram): pin the _allowed truth table including the fail-open (#3051)
+- `8e57b5197` — docs(readme): note the Email agent's CLI install path (#3041)
+- `b9330deba` — fix(email): translate Gmail-style operators for Outlook Graph search (#3042)
+- `3b23ac2b3` — feat(skills): load the right skill without the user knowing its name (#3010)
+- `d4666b8bd` — feat(lemonade): run a private, self-contained Lemonade Server (#3121)
+- `793fb4d42` — perf(ci): cut the C++ dependency cache from 407 MB to ~109 MB (#3142)
+- `2cd894579` — fix(telegram): apply the allowlist to every handler, not just messages (#3148)
+- `c128b18f6` — fix(cpp): unblock the C++ gate — split the third-party skill corpus from the conformance one (#3129)
+- `55c977006` — feat(factory): harvest Claude Code sessions into usage statistics (#3111)
+- `6db50643d` — chore(deps): bump the github-actions group across 1 directory with 3 updates (#3049)
+- `c7989b953` — fix(mcp): port servers to MCP SDK 2 (#3047)
+- `ee61b74fe` — Return structured JSON for unexpected email API errors (#3046)
+- `f2d8291c3` — feat(installer): double-click installers for the terminal hub (#3125)
+- `f601621d1` — fix(agent-gaia): stop one-shot /query runs leaking an agent each (#3079)
+- `4a6561c86` — chore(lemonade): pin Lemonade 11.8.1 (#3117)
+- `c51a1c520` — test(telegram): cover access and session isolation (#3052)
+- `98043fb56` — feat(tui): boot straight into the flagship agent, retire the hub browser (#3120)
+- `5bb64a6ba` — chore(deps-dev): bump the agent-ui-dependencies group across 1 directory with 8 updates (#3048)
+- `51c298e1a` — fix(tui): stop --use-claude from starting Lemonade, and name the Claude model (#3005)
+- `38423c84c` — fix(ci): unblock the walkthrough's wheel install, rein in the authz lens's subagents (#3109)
+- `abb8ddea8` — ci(release): require GAIA_HUB_PUBLISH_URL for hub publish, drop dead fallback (#3032)
+- `88299ea49` — feat(website): lead with the flagship agent, and say what it actually does (#3093)
+- `eda11b778` — fix(llm): suggest gaia init on macOS (#3027)
+- `11f4da758` — Escape quotes inside Outlook Graph search queries (#3021)
+- `1a3d0f0bd` — fix(packaging): add realtime dependencies to talk extra (#2954)
+- `ae0b64e9f` — chore(deps-dev): bump electron from 43.2.0 to 43.4.1 in the root-npm-dependencies group across 1 directory (#2871)
+- `b95c66dff` — test(memory): assert the reconcile 503 branch in every environment (#2868)
+- `708f806a0` — docs(playbooks): simplify index page (#2957)
+- `4ac8f1075` — fix(cli): drop non-constructor CLI flags before creating GaiaCliClient (#2976)
+- `191a317f2` — feat(api): report component health (#2601)
+- `40ed1513b` — chore(deps-dev): bump electron from 43.2.0 to 43.4.1 in /src/gaia/apps/example/webui in the example-app-dependencies group across 1 directory (#2869)
+- `dac81b60c` — docs(tui): tell people how to install the terminal hub (#3039)
+- `643f78432` — feat(tui): lay out to the real terminal width (#3006)
+- `ba64ed1e3` — fix(installer): install the extras the daemon needs to start (#3056)
+- `25c137275` — fix(ci): make the Claude audits produce output, not just run green (#3063)
+- `ee64d5cd2` — docs(agent-gaia): correct the npm sidecar docs against the code (#3076)
+- `625478393` — fix(tui): don't run an unverified binary from the hub install root (#3075)
+- `a6c68c8a4` — fix(agent-email): fail closed when a request omits its Host header (#3077)
+- `4b4de3a89` — fix(agent-gaia): stop the npm sidecar attaching to a foreign server (#3078)
+- `6692361d6` — fix(agent-gaia): end a turn parked on a confirmation when stdin closes (#3080)
+- `3ec80f141` — fix(tui): run an installed hub agent over the daemon, not stdio (#3062)
+- `c7c4cff17` — fix(agent): bill tool-approval time to the human, not the tool (#3007)
+- `b388562cc` — ci(installers): add job timeouts (#3020)
+- `c4a4fef42` — fix(ci): the README CI badge is permanently red and reports (#3050)
+- `e2ec50523` — docs(cli): remove duplicate terminal hub section (#3045)
+- `215477ab6` — ci: fix stale triggers and timeout left by the agent collapse (#3067)
+- `90c3132db` — docs: remove the Blender workshop left dead by the agent collapse (#3068)
+- `a4b84fae7` — perf(claude): cache the fixed prefill, and report the cache counters (#3026)
+- `fdd9f18c3` — refactor(agents): collapse per-task agents into flagship skills (#2995)
+- `5b4f1381d` — fix(ci): scheduled Claude audits were green but never ran (#3053)
+- `78bbc3076` — feat(website): TUI-first redesign — download the terminal hub, lead with the flagship agent (#3030)
+- `6faec485e` — ci(release): make the TUI binaries reproducible, drop the R2 probe (#3040)
+- `02691245e` — fix(hub): strip R2 credentials, and diagnose why R2 refuses them (#3037)
+- `aae4a50ce` — ci(hub): require component manifests to match the release tag again (#3036)
+- `8ca0f7d98` — fix(hub): give the website redeploy a repo to dispatch against (#3038)
+- `20e081909` — fix(hub): unblock large-artifact publishing, and version components independently (#3035)
+- `9ad1cee3e` — ci(cloud): provision the dev install in Claude Code cloud sessions (#3033)
+- `0befe27ce` — ci(linux): install Lemonade from the PPA, not deleted PyPI package (#3034)
+- `db170b8a2` — fix(agent-gaia): make the flagship agent releasable — RAG in the binary, 0.1.1 on npm (#3031)
+- `85ba09230` — fix(hub): stop boto3's default checksums breaking every R2 upload (#3029)
+- `5f3e7bbf1` — feat(hub): publish oversized artifacts direct to R2, bypassing the Worker body cap (#3025)
+- `b254708f1` — ci(hub): one approval per component release, not two (#3018)
+- `a0ecb0f68` — ci(eval): pin the agent eval to Strix Halo, and record which box measured (#3017)
+- `672cd1c5f` — fix(init): fail loudly when the Agent UI build can't produce a usable frontend (#2887)
+- `29a87fd87` — ci(eval): capture llama-server's error so the embedder failure is diagnosable (#3015)
+- `c8987ca67` — fix(email): declare the sidecar bearer gate in the OpenAPI contract (#3002)
+- `62e5611d9` — fix(email): "0 messages" for mail that exists — unsupported newer_than: duration unit (#2981)
+- `746468274` — fix(cli): exit non-zero from gaia agent status \<id>, add --json (#3001)
+- `9c89cb472` — ci(hub): deploy the Agent Hub Worker before publishing to it (#2991)
+- `47e6bc908` — fix(gaia): keep a loaded skill alive across turns; stop a control resize from wrecking the screen (#2932)
+- `9ed3c3523` — test(telegram): isolate HOME so the pid test can't clobber a live adapter (#2895)
+- `225c69377` — test(init): stop init tests overwriting the real ~/.gaia/config.json (#2891)
+- `8ed5b783d` — fix(release): emit release notes as short bullets, not prose (#2967)
+- `1beb714f3` — release(agent-email): 0.6.0 (#2933)
+
+</details>
+
+Full Changelog: [v0.23.0...v0.24.0](https://github.com/amd/gaia/compare/v0.23.0...v0.24.0)
