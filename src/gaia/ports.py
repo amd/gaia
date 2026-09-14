@@ -21,12 +21,13 @@ Two rules make the targeting safe, and both live here:
 
 from __future__ import annotations
 
-import logging
 import subprocess
 import sys
 from typing import List, Tuple
 
-log = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 # Process image names a "stop what's on this port" command may terminate.
 # The check is interpreter-level, not process-level: GAIA's own servers run as
@@ -151,10 +152,11 @@ def listeners_on_port(port: int) -> List[Tuple[int, str]]:
     Raises:
         FileNotFoundError: neither lsof nor netstat is available.
         subprocess.CalledProcessError: the listing tool failed outright.
+        subprocess.TimeoutExpired: a listing command exceeded five seconds.
     """
     if sys.platform.startswith("win"):
         output = subprocess.check_output(
-            ["netstat", "-ano"], text=True, errors="replace"
+            ["netstat", "-ano"], text=True, errors="replace", timeout=5
         )
         return [
             (pid, process_image_name(pid))
@@ -167,6 +169,7 @@ def listeners_on_port(port: int) -> List[Tuple[int, str]]:
         # Agent UI backend and any `gaia chat` talking to Lemonade.
         result = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            timeout=5,
             capture_output=True,
             text=True,
             errors="replace",
@@ -175,7 +178,7 @@ def listeners_on_port(port: int) -> List[Tuple[int, str]]:
     except FileNotFoundError:
         # lsof is not installed. netstat names the owning process itself.
         netstat_output = subprocess.check_output(
-            ["netstat", "-tulpn"], text=True, errors="replace"
+            ["netstat", "-tulpn"], text=True, errors="replace", timeout=5
         )
         return parse_unix_netstat_listeners(netstat_output, port)
 

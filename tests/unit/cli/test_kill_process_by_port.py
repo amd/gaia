@@ -25,6 +25,7 @@ from gaia.ports import (
     listeners_on_port,
     parse_unix_netstat_listeners,
     parse_windows_netstat_listeners,
+    process_image_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -290,3 +291,124 @@ class TestListenerLookupCallShape:
 
         assert listeners_on_port(13305) == [(4242, "lemonade-server")]
         assert netstat.call_args[0][0] == ["netstat", "-tulpn"]
+
+
+@pytest.mark.parametrize("backend", ["windows", "lsof", "netstat"])
+def test_listener_listing_timeout_surfaces(mocker, backend):
+    mocker.patch("sys.platform", "win32" if backend == "windows" else "linux")
+
+    def expired(*args, **kwargs):
+        assert kwargs["timeout"] == 5
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    mocker.patch("gaia.ports.subprocess.check_output", side_effect=expired)
+    mocker.patch(
+        "gaia.ports.subprocess.run",
+        side_effect=FileNotFoundError("lsof") if backend == "netstat" else expired,
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        listeners_on_port(4200)
+
+
+def test_cli_reports_listing_timeout_without_terminating(mocker):
+    mocker.patch(
+        "gaia.cli.listeners_on_port", side_effect=subprocess.TimeoutExpired("lsof", 5)
+    )
+    terminate = mocker.patch("gaia.cli.terminate_pid")
+    result = kill_process_by_port(4200)
+    assert result["success"] is False
+    assert "timed out" in result["message"]
+    terminate.assert_not_called()
+
+
+@pytest.mark.parametrize("other", ["refused", "failed", "both"])
+def test_partial_kill_reports_every_outcome(mocker, other):
+    listeners = [(101, "python")]
+    if other in ("refused", "both"):
+        listeners.append((202, "nginx"))
+    if other in ("failed", "both"):
+        listeners.append((303, "node"))
+    mocker.patch("gaia.cli.listeners_on_port", return_value=listeners)
+
+    def terminate(pid):
+        if pid == 303:
+            raise PermissionError("permission denied")
+
+    kill = mocker.patch("gaia.cli.terminate_pid", side_effect=terminate)
+    result = kill_process_by_port(4200)
+    assert result["success"] is False
+    assert "Killed process(es) 101" in result["message"]
+    if other in ("refused", "both"):
+        assert "Refusing to kill 202 (nginx)" in result["message"]
+        assert all(call.args != (202,) for call in kill.call_args_list)
+    if other in ("failed", "both"):
+        assert "303: permission denied" in result["message"]
+
+
+@pytest.mark.parametrize(
+    "platform,output,expected",
+    [
+        ("win32", '\r\n"python.exe","9001","Console","1","45,120 K"\r\n', "python.exe"),
+        (
+            "win32",
+            '"Lemonade-Server.exe","4242","Services","0","1,024 K"\r\n',
+            "lemonade-server.exe",
+        ),
+        (
+            "win32",
+            "INFO: No tasks are running which match the specified criteria.\r\n",
+            "",
+        ),
+        ("win32", "", ""),
+        ("linux", "/usr/bin/python3\n", "/usr/bin/python3"),
+        (
+            "darwin",
+            " /Applications/GAIA.app/Contents/MacOS/GAIA\n",
+            "/applications/gaia.app/contents/macos/gaia",
+        ),
+        ("linux", "", ""),
+    ],
+)
+def test_process_image_parser_from_platform_output(mocker, platform, output, expected):
+    mocker.patch("sys.platform", platform)
+    run = mocker.patch(
+        "gaia.ports.subprocess.run",
+        return_value=SimpleNamespace(stdout=output, returncode=0),
+    )
+    assert process_image_name(9001) == expected
+    args, kwargs = run.call_args
+    assert args[0] == (
+        ["tasklist", "/FI", "PID eq 9001", "/NH", "/FO", "CSV"]
+        if platform == "win32"
+        else ["ps", "-p", "9001", "-o", "comm="]
+    )
+    assert kwargs["timeout"] == 15
+    assert kwargs["errors"] == "replace"
+
+
+@pytest.mark.parametrize(
+    "error", [FileNotFoundError("ps"), subprocess.TimeoutExpired("ps", 15)]
+)
+def test_process_image_lookup_failure_is_never_killable(mocker, error):
+    mocker.patch("gaia.ports.subprocess.run", side_effect=error)
+    name = process_image_name(9001)
+    assert name == ""
+    assert not is_killable_process(name)
+
+
+@pytest.mark.parametrize("success", [False, True])
+def test_cli_exit_status_matches_stop_outcome(mocker, capsys, success):
+    from gaia.cli import main
+
+    mocker.patch("sys.argv", ["gaia", "kill", "--port", "4200"])
+    mocker.patch(
+        "gaia.cli.kill_process_by_port",
+        return_value={"success": success, "message": "stop outcome"},
+    )
+    if success:
+        main()
+    else:
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+    assert "stop outcome" in capsys.readouterr().out
