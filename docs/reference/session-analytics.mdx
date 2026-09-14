@@ -164,6 +164,12 @@ title summarizes what happened, which leaks the outcome into the label.
 
 ## Privacy
 
+By default, `scan` covers **every Claude Code project on your machine** — not just
+this repo — because `~/.claude/projects/` holds one subdirectory per project you've
+ever used Claude Code in, and there's no per-project filter. `tables.md` doesn't
+break the count down by project; check the `top_projects` field in `stats.json` if
+you want to see the mix before sharing anything.
+
 Transcripts contain absolute paths, branch names, repository content, and anything
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a
 report needs to be shared, put it somewhere private and scrub paths first — nothing
