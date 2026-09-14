@@ -73,11 +73,7 @@ func TestAgentMarkdownIsActuallyStyled(t *testing.T) {
 	if !strings.Contains(plain, "─") || !strings.Contains(plain, "│") {
 		t.Errorf("tables render with no rules:\n%s", plain)
 	}
-	// No space after the bar (see markdown_style.go): a wider token than the
-	// one column glamour's own wrap-budget math charges for it makes wrapped
-	// lines overflow by that difference, and #2518 is exactly that overflow
-	// forcing the panel's outer re-wrap to drop the indent on later lines.
-	if !strings.Contains(plain, "│Ship it") {
+	if !strings.Contains(plain, "│ Ship it") {
 		t.Errorf("block quotes render with no bar:\n%s", plain)
 	}
 }

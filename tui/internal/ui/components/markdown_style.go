@@ -102,16 +102,7 @@ func gaiaStyle(dark bool) ansi.StyleConfig {
 	base.LinkText.Bold = boolPtr(true)
 
 	base.BlockQuote.Color = strPtr(p.quote)
-	// Single column, not "│ ": glamour's own wrap-budget math
-	// (ansi.BlockStack.Width, tui/vendor knowledge — see PR discussion) charges
-	// exactly Style.Indent columns per line for the indent token, but its
-	// muesli/reflow indent.Writer renders the token verbatim regardless of its
-	// actual display width. A wider token than the charged Indent (glamour's
-	// own default style ships the same "│ "/Indent:1 mismatch) makes every
-	// wrapped blockquote line one column over the requested wrap width, which
-	// forces the panel's outer lipgloss re-wrap to split the overflow onto a
-	// new line that never gets the indent token — the ragged left edge in #2518.
-	base.BlockQuote.IndentToken = strPtr("│")
+	base.BlockQuote.IndentToken = strPtr("│ ")
 	base.BlockQuote.Italic = boolPtr(true)
 
 	base.HorizontalRule.Color = strPtr(p.rule)
