@@ -142,4 +142,38 @@ def test_the_agent_unwraps_the_query_the_bridge_wraps():
 
 def test_terminal_events_match_the_agent_vocabulary():
     """The bridge waits for exactly these to end a turn."""
-    assert bridge.TERMINAL_EVENTS == {"final", "error"}
+    from gaia.ui.sse_translation import TERMINAL_TYPES
+
+    assert bridge.TERMINAL_EVENTS == TERMINAL_TYPES
+
+
+def test_cancel_verb_matches():
+    assert bridge.CONTROL_CANCEL == stdio.CONTROL_CANCEL
+
+
+def test_a_cancel_the_bridge_builds_stops_the_agents_turn():
+    """Validity of the call: the agent's real parser routes it to a stop."""
+    import json
+
+    stopped = []
+
+    class RecordingState:
+        def cancel_active(self, reason):
+            stopped.append(reason)
+            return True
+
+    sent = []
+
+    class Recorder:
+        stdin = type(
+            "S",
+            (),
+            {"write": lambda self, d: sent.append(d), "flush": lambda self: None},
+        )()
+        stdout = None
+
+    channel = bridge.AgentChannel(on_event=lambda e, t: None, spawn=Recorder)
+    channel._proc = Recorder()
+    channel.cancel()
+    stdio.apply_control(json.loads(sent[-1]), RecordingState())
+    assert stopped, "the agent must treat the bridge's cancel as a stop"

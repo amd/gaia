@@ -19,9 +19,8 @@ locally the whole time; Slack carries the conversation, not the work.
 
   Shell commands, file writes, and code execution **pause and ask you first**: they arrive
   in Slack as Allow / Deny buttons, and nothing runs until you press one. **Reading does
-  not ask.** Anyone on the allowlist can read the files the agent can read — your home
-  directory, by default — and your indexed documents. Put only yourself on the allowlist
-  unless you mean otherwise.
+  not ask.** Whoever is on the allowlist can read the files the agent can read — your home
+  directory, by default — and your indexed documents.
 </Warning>
 
 ## Why Socket Mode
@@ -69,6 +68,10 @@ ID**. A display name or an email address will not work.
 The bridge **refuses to start without an allowlist**. Every member of a workspace can DM a
 bot, so an empty list would offer your local agent to all of them.
 
+It also **serves exactly one member**. The bridge drives a single agent with a single
+conversation, so a second member would share the first's history — and could ask what they
+read — along with every "Always allow" they granted.
+
 ## What the scopes are for
 
 | Scope | Why |
@@ -76,7 +79,7 @@ bot, so an empty list would offer your local agent to all of them.
 | `chat:write` | Post the reply and edit it as tokens stream in |
 | `im:history` | Read the DMs addressed to the bot |
 | `im:write` | Open a DM to reach you |
-| `files:read` | Download a document or image you share, for indexing |
+| `files:read` | Download a document or image you share, so the agent can open it |
 | `files:write` | Send back a file the agent produced |
 | `users:read` | Show the allowlist in names rather than raw IDs |
 
@@ -87,12 +90,16 @@ No channel scopes are requested. The app subscribes to `message.im` and nothing 
 Send a direct message. The reply streams in place, and a line underneath names the tools
 that ran.
 
-- **Share a file** and it is indexed — documents into RAG, images through the vision model
-  — so you can ask about it in the same conversation.
-- **Ask for a file back** and anything the agent writes under an upload root (your home
-  directory by default) is uploaded to the thread.
+- **Share a file** and it is saved to `~/.gaia/slack/inbox/`, and the agent is told where,
+  so it can open or index it before answering.
+- **Ask for a file back** and a file the agent writes — with `write_file`, `edit_file`, or
+  another file-writing tool — under an upload root (your home directory by default) is
+  uploaded to the thread once the write succeeds.
 - **A message sent mid-answer is queued**, not dropped. The agent handles one turn at a
   time, and you are told where you are in line.
+- **If the agent asks you a question mid-answer**, the question is posted and that answer
+  ends there — the bridge cannot pause for a reply. Answer with a normal message and the
+  agent picks up from the same conversation.
 
 ### Approving a tool
 
@@ -100,6 +107,10 @@ When the agent wants to run a command or write a file, the turn pauses and Slack
 action with **Allow**, **Deny**, and sometimes **Always allow**. Nothing runs until you
 choose. Only people on the allowlist can press the buttons — someone else viewing the
 conversation cannot approve a command on your machine.
+
+A prompt nobody answers within **ten minutes** is denied, and so is one Slack refuses to
+post. The agent would otherwise wait forever, and it is the only agent this bridge has — so
+one unanswered prompt would block every later message.
 
 **Always allow** appears only when the agent offers a specific scope to grant. When it
 does not, that call has no boundary narrow enough to grant standing permission to, so only
@@ -121,9 +132,10 @@ read-only window onto your documents.
 | `/slack` (in the TUI) | Show the connection's status, or run setup with `/slack setup` |
 | `gaia slack setup` | Create the Slack app and store its tokens |
 | `gaia slack connect` | Store a pair of tokens read from stdin — for a caller that collected them itself, such as the TUI |
-| `gaia slack start --allowed-users <ids>` | Run the bridge (blocks until Ctrl-C) |
+| `gaia slack start --allowed-users <id>` | Run the bridge (blocks until Ctrl-C) |
 | `gaia slack stop` | Stop a bridge started with `--background` |
 | `gaia slack status` | Show detection, configuration, and liveness |
+| `gaia slack decline [--never]` | Record that you don't want Slack set up — `--never` stops the TUI offering it again |
 
 Useful flags on `start`:
 

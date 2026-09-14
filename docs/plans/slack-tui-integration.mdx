@@ -42,7 +42,7 @@ Almost every piece has a home already. This is mostly wiring, not invention.
 | Talk to the flagship agent | `gaia_agent.stdio` (`hub/agents/gaia/python/gaia_agent/stdio.py`) | Newline-delimited JSON: one query per stdin line, canonical `status`/`tool_call`/`tool_result`/`token`/`final`/`error` events back. The TUI's `client.SubprocessClient` is the reference consumer. |
 | Ask permission for a tool | `gaia_control` back-channel, same file | A JSON line with a `gaia_control` key, read by a dedicated thread so it lands *during* a turn. Decisions are `allow` / `always` / `deny`. This is the piece Telegram never used. |
 | A messaging adapter to copy | `src/gaia/messaging/telegram.py` | Allowlist enforcement, PID file, health port, background thread, streaming via message edits. Copy the shape; do not copy the tool posture (§5.1). |
-| Ingest what a user sends | `ingest_document_to_rag` / `ingest_image_to_vlm` (`src/gaia/messaging/ingest.py`) | Already used by Telegram for photos and documents. |
+| Hand a shared file to the agent | The agent's own RAG and vision tools | Save the file to an inbox and tell the agent the path. Indexing in the bridge process would land in an index the agent child never sees. |
 | Store the tokens | connectors keyring (`src/gaia/connectors/_keyring.py`) | OS keyring. Tokens never land in a config file. |
 | An optional readiness row | `preflight.ExtraCheck{Optional: true}` (`tui/internal/ui/preflight/check.go:23`) | Already means "gates a capability, not the launch" — exactly what a Slack offer is. |
 
@@ -169,21 +169,26 @@ not available here — tool access *is* the feature — so each layer below is l
 1. **Socket Mode only.** An outbound WebSocket: no inbound port, no public URL, no webhook
    signing secret to leak, nothing for a home router to forward.
 2. **Allowlist with no permissive default.** Refuse to start without one, mirroring
-   `TelegramAllowlistError`. Default is the installing user alone. Pin the `team_id` too, so a
-   token that ends up in another workspace is refused rather than served.
+   `TelegramAllowlistError`. Exactly one member: the bridge has one agent and one
+   conversation, so a second member would share the first's history and "always" grants. Pin
+   the `team_id` too, so a token that ends up in another workspace is refused rather than
+   served.
 3. **DMs only in v1.** Anyone in a channel can address a bot in it. Channels and `@mentions`
    are Phase 5 and need their own threat model.
 4. **Per-call approval over Block Kit.** A `tool_call` event renders as a message with
    **Allow** / **Always allow** / **Deny** buttons; the click becomes a `gaia_control`
-   `tool_decision` line. No answer inside the timeout is a deny. This is the single most
-   valuable thing in the plan — it is what lets a remote surface hold real tools honestly.
+   `tool_decision` line. No answer within ten minutes, or a prompt Slack refuses to post, is a
+   deny — the agent itself waits forever, and one parked prompt would block the only agent.
+   This is the single most valuable thing in the plan — it is what lets a remote surface hold
+   real tools honestly.
 5. **Bypass is unreachable from Slack.** Not a button, not a command, not a config key the
    bridge reads. It is set locally or not at all, and the existing audit logger records it.
-6. **A read-only tool profile by default** (#690): documents, search, web. Shell and file
-   writes are opt-in at start time via `--allow-tools` — and even then still pass through
-   per-call approval, so opting in widens what *can* be asked, never what happens unasked.
-7. **Outbound file upload is exfiltration.** A file leaving the user's disk for Slack's servers
-   is approval-gated like any other side effect, and restricted to an allowlisted set of roots.
+6. **A read-only switch** (#690): the base agent already gates shell, file writes and code
+   execution, so the default asks per call and `--deny-gated-tools` refuses that whole set
+   outright. Reads stay ungated either way, and the setup confirmation says so.
+7. **Outbound file upload is exfiltration.** Only a file a write tool was called with is sent,
+   only after its result reports no failure, and only from an allowlisted set of roots — the
+   approval covered the write, not the transfer off the machine.
 8. **Input sanitization** (#690): strip Slack markup, cap length, and never let message text
    influence tool policy or bypass state.
 
@@ -192,12 +197,15 @@ not available here — tool access *is* the feature — so each layer below is l
 - **Streaming:** `chat.update` is rate-limited near one call per second per channel. Post a
   placeholder, update at most once a second with accumulated text, then a final update. Tool
   activity renders as a context-block trail rather than more messages.
-- **Files in:** download the share, hand to `ingest_document_to_rag` / `ingest_image_to_vlm`.
+- **Files in:** download the share into `~/.gaia/slack/inbox/` under a sanitized name, and
+  tell the agent the path so it opens or indexes the file in its own process.
 - **Files out:** `files.uploadV2` (`files.getUploadURLExternal` + `completeUploadExternal`).
   The old `files.upload` is retired — do not reach for the example in an old tutorial.
-- **Health port:** Socket Mode needs no inbound port, but the `/healthz` probe does. Add
-  `SLACK_HEALTH_PORT = 8769` to `src/gaia/mcp/ports.py`; 8765–8768 are taken and #3604 was the
-  last collision.
+- **Liveness:** Socket Mode needs no inbound port, so there is no health server. `gaia slack
+  status` checks the recorded pid with psutil and confirms the process is a Slack bridge, so a
+  stale pid file cannot name an unrelated process.
+- **Mid-run questions:** the stdio wire cannot deliver an answer, so a `needs_input` is posted
+  and the turn cancelled; the conversation survives, and the user's reply continues it.
 
 ---
 
@@ -205,7 +213,7 @@ not available here — tool access *is* the feature — so each layer below is l
 
 Signal is next (#693) and Telegram already exists, so the transport-agnostic half belongs in
 `src/gaia/messaging/bridge.py` from the start: the stdio child lifecycle, the turn queue, the
-approval marshalling, the streaming throttle, and file ingest. Per-platform adapters supply
+approval marshalling, and the streaming throttle. Per-platform adapters supply
 only what is genuinely platform-specific — the socket, the message renderer, and identity.
 
 Doing this in Phase 1 rather than after makes Signal roughly a three-day addition instead of a

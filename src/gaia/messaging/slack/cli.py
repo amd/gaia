@@ -269,12 +269,12 @@ def run_stop(*, emit: Callable[[str], None] = print) -> int:
     except (OSError, ValueError) as e:
         emit(f"❌ Could not read the Slack pid file at {PID_PATH}: {e}")
         return 1
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        emit(f"No process {pid} — clearing the stale pid file.")
+    if not _is_bridge_process(pid):
+        emit(f"No Slack bridge is running as pid {pid} — clearing the stale pid file.")
         PID_PATH.unlink(missing_ok=True)
         return 0
+    try:
+        os.kill(pid, signal.SIGTERM)
     except OSError as e:
         emit(f"❌ Could not stop process {pid}: {e}")
         return 1
@@ -406,11 +406,32 @@ def _pid_alive() -> bool:
         pid = int(PID_PATH.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return False
+    return _is_bridge_process(pid)
+
+
+def _is_bridge_process(pid: int) -> bool:
+    """True only for a live process that is a Slack bridge.
+
+    Not ``os.kill(pid, 0)``: on Windows signal 0 is a console Ctrl+C, not a
+    probe. And liveness alone is not enough — a stale pid file can name an
+    unrelated process that inherited the id.
+    """
     try:
-        os.kill(pid, 0)
-    except OSError:
+        import psutil
+
+        from gaia.daemon.instance import pid_alive
+    except ImportError as e:
+        raise RuntimeError(
+            "psutil is required to check the Slack bridge. Install it with: "
+            'pip install "amd-gaia[slack]"'
+        ) from e
+    if not pid_alive(pid):
         return False
-    return True
+    try:
+        cmdline = " ".join(psutil.Process(pid).cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+    return "slack" in cmdline and "start" in cmdline
 
 
 def run_status(*, as_json: bool = False, emit: Callable[[str], None] = print) -> int:

@@ -317,3 +317,78 @@ def test_print_url_emits_only_the_url(monkeypatch):
     assert code == 0
     assert len(lines) == 1
     assert lines[0].startswith("https://api.slack.com/apps?")
+
+
+# ----------------------------------------------------------------------
+# Liveness — never os.kill(pid, 0), never trust a pid alone
+# ----------------------------------------------------------------------
+
+
+def _sleeper(*extra_argv):
+    import subprocess
+    import sys
+
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)", *extra_argv]
+    )
+
+
+def test_a_live_process_that_is_not_a_bridge_is_not_reported_running():
+    """A stale pid file can name an unrelated process that inherited the id."""
+    proc = _sleeper()
+    try:
+        assert cli._is_bridge_process(proc.pid) is False
+    finally:
+        proc.kill()
+
+
+def test_a_live_bridge_process_is_recognised():
+    proc = _sleeper("slack", "start")
+    try:
+        assert cli._is_bridge_process(proc.pid) is True
+    finally:
+        proc.kill()
+
+
+def test_liveness_never_signals_the_recorded_process():
+    """On Windows os.kill(pid, 0) is a console Ctrl+C, not a probe.
+
+    Checked structurally: patching os.kill globally would also break psutil,
+    which legitimately uses signal 0 on POSIX.
+    """
+    import ast
+    import inspect
+
+    for func in (cli._pid_alive, cli._is_bridge_process):
+        tree = ast.parse(inspect.getsource(func))
+        kills = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "kill"
+        ]
+        assert not kills, f"{func.__name__} must not send a signal"
+
+
+def test_stop_does_not_signal_a_process_that_is_not_a_bridge(monkeypatch, tmp_path):
+    proc = _sleeper()
+    try:
+        pid_file = tmp_path / "slack.pid"
+        pid_file.write_text(str(proc.pid), encoding="utf-8")
+        monkeypatch.setattr(cli, "PID_PATH", pid_file)
+
+        lines = []
+        assert cli.run_stop(emit=lines.append) == 0
+        assert proc.poll() is None, "an unrelated process must survive stop"
+        assert not pid_file.exists()
+    finally:
+        proc.kill()
+
+
+def test_start_with_two_members_is_refused_with_the_reason(monkeypatch):
+    monkeypatch.setenv(credentials.BOT_TOKEN_ENV_VAR, "xoxb-env")
+    monkeypatch.setenv(credentials.APP_TOKEN_ENV_VAR, "xapp-env")
+    lines = []
+    assert cli.run_start(allowed_users="U0AAAAAAA,U0BBBBBBB", emit=lines.append) == 2
+    assert any("share one history" in line for line in lines)

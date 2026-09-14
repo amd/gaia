@@ -138,13 +138,13 @@ class TelegramAdapter:
         return user_id in self.allowed_users
 
     @require_allowed
-    async def _handle_start(self, update, context):
+    async def _handle_start(self, update, _context):
         await update.message.reply_text(
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
 
     @require_allowed
-    async def _handle_message(self, update, context):
+    async def _handle_message(self, update, _context):
         user = update.effective_user
         text = update.message.text or ""
 

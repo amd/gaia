@@ -236,6 +236,7 @@ setup(
         ],
         "slack": [
             "slack-sdk>=3.27",
+            "psutil>=5.9.0",
         ],
         "litellm": [
             "litellm>=1.35.0,<2.0",
