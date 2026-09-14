@@ -182,6 +182,7 @@ def _classify_chat_exception(exc: BaseException):
     what user-facing message to surface.
     """
     from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
+        LemonadeCloudAccountError,
         LemonadeContextOverflowError,
         LemonadeError,
         LemonadeModelNotFoundError,
@@ -212,6 +213,9 @@ def _classify_chat_exception(exc: BaseException):
     # losing the typed-class info.
     raw = str(exc)
     text = raw.lower()
+    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412.
+    if _re.search(r"cloud provider refused the request \(http 4(?:02|12)\)", text):
+        return LemonadeCloudAccountError()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the

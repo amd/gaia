@@ -739,6 +739,14 @@ def _cloud_request_error(status: Optional[int]) -> LemonadeClientError:
             "check your provider's usage limits and account in the TUI "
             "provider settings."
         )
+    if status in {402, 412}:
+        # Fireworks answers a suspended or over-limit account with 412.
+        return LemonadeClientError(
+            f"The cloud provider refused the request (HTTP {status}): the "
+            "account may be suspended, out of credit, or over its spending "
+            "limit. Retrying will not help. Check billing in your provider's "
+            "console, then the TUI provider settings."
+        )
     code = f" (HTTP {status})" if status is not None else ""
     return LemonadeClientError(
         f"Cloud request through Lemonade failed{code}. Check the provider "
