@@ -56,6 +56,47 @@ def test_defaults_missing_optional_fields():
     assert canonical["sensitive"] is False
 
 
+def test_plain_choices_form_still_produces_pickable_options():
+    # (#3804 review) request_user_input's documented ``choices`` form (a
+    # flat list of strings, no options=[{value,label,description}]) must
+    # still produce pickable options -- not silently degrade to a
+    # free-text-only question. Mirrors sse_translation._normalize_options'
+    # documented choices fallback exactly, via delegation rather than a
+    # second, independently-maintained normalizer.
+    raw = {
+        "type": "user_input_request",
+        "request_id": "req-4",
+        "message": "Which theme do you prefer?",
+        "choices": ["Light", "Dark"],
+        "options": [],
+        "allow_free_text": True,
+        "sensitive": False,
+    }
+
+    canonical = _canonicalize_user_input_request(raw)
+
+    assert canonical["options"] == [
+        {"value": "Light", "label": "Light", "description": ""},
+        {"value": "Dark", "label": "Dark", "description": ""},
+    ]
+
+
+def test_rich_options_form_takes_priority_over_choices():
+    raw = {
+        "type": "user_input_request",
+        "request_id": "req-5",
+        "message": "Which mailbox?",
+        "choices": ["gmail", "outlook"],
+        "options": [{"value": "gmail", "label": "Gmail", "description": "Use Gmail."}],
+    }
+
+    canonical = _canonicalize_user_input_request(raw)
+
+    assert canonical["options"] == [
+        {"value": "gmail", "label": "Gmail", "description": "Use Gmail."}
+    ]
+
+
 def test_sensitive_flag_is_preserved_true():
     canonical = _canonicalize_user_input_request(
         {

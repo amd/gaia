@@ -1187,12 +1187,21 @@ def _canonicalize_user_input_request(event: dict) -> dict:
     wire shape (#2595) — the same shape the email-relay path produces via
     ``CanonicalTranslator``, so the frontend's NeedsInputCard renders either
     source identically.
+
+    Options normalization is delegated to ``sse_translation._normalize_options``
+    rather than re-derived here: a caller using the documented ``choices``
+    form (a flat list of strings — see ``request_user_input``'s docstring)
+    must get pickable options exactly like a caller using the richer
+    ``options`` form, and duplicating that fallback here is how the two
+    would silently drift apart.
     """
+    from gaia.ui.sse_translation import _normalize_options
+
     return {
         "type": "needs_input",
         "request_id": str(event.get("request_id") or ""),
         "question": str(event.get("message") or ""),
-        "options": event.get("options") or [],
+        "options": _normalize_options(event),
         "allow_free_text": bool(event.get("allow_free_text", True)),
         "sensitive": bool(event.get("sensitive", False)),
         "timeout_seconds": event.get("timeout_seconds"),
