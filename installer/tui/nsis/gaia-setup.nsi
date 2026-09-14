@@ -461,8 +461,8 @@ Section "Uninstall"
   ; ~/.gaia holds chats, documents, memory and config. Default No, so data
   ; survives an uninstall unless the user explicitly asks otherwise; /SD IDNO
   ; makes a silent uninstall (Uninstall.exe /S, GPO, SCCM) keep it too.
-  MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Also remove your GAIA data (chats, documents, memory, config)?$\r$\n$\r$\nThis cannot be undone." \
+  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
+    "Delete ALL files in $PROFILE\.gaia?$\r$\n$\r$\nThis includes chats, documents, custom agents, skills, connector sign-ins and permissions, memory, MCP server settings, config, logs, and shared Python and terminal runtimes.$\r$\n$\r$\nOther GAIA installations using this folder will stop working. This cannot be undone. Choose No to keep everything." \
     /SD IDNO IDNO +2
   RMDir /r "$PROFILE\.gaia"
 SectionEnd
