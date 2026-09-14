@@ -138,7 +138,20 @@ class TestRelayQueryRequestBody:
             "query": "hello",
             "run_id": "rid-1",
             "context": ctx,
+            "can_answer_questions": True,
         }
+
+    def test_declares_can_answer_questions_true(self):
+        # (#2595 review) the sidecar's own QueryRequest.can_answer_questions
+        # defaults to False -- omitting this field silently makes ask() (in
+        # gaia_agent_email/question.py) refuse every mid-run question, even
+        # though this relay DOES render needs_input and answer it. A
+        # response-mocking test can never catch a missing outgoing field
+        # like this; assert the request body itself carries it.
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(_events({"type": "final", "answer": "ok"}))
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert proxy.query_stream_calls[0]["body"]["can_answer_questions"] is True
 
     def test_includes_model_and_max_steps_when_given(self):
         handler = _FakeHandler()

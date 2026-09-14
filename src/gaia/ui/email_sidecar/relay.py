@@ -375,7 +375,18 @@ def relay_query(
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
     """
     rid = run_id or str(uuid.uuid4())
-    body: Dict[str, Any] = {"query": query, "run_id": rid, "context": context}
+    # can_answer_questions=True (#2595): this relay DOES render needs_input
+    # and POST the answer back via POST /api/chat/user-input ->
+    # EmailSidecarProxy.respond_query. Omitting it defaults to the sidecar's
+    # safe False (see query_routes.QueryRequest.can_answer_questions), which
+    # makes ask() refuse every question with "use the Agent UI" -- even
+    # though the Agent UI is the caller asking.
+    body: Dict[str, Any] = {
+        "query": query,
+        "run_id": rid,
+        "context": context,
+        "can_answer_questions": True,
+    }
     if model_id:
         body["model"] = model_id
     if max_steps is not None:
