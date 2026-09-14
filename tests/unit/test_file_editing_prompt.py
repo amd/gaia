@@ -24,24 +24,50 @@ class _Bare(FileIOToolsMixin):
     _tools_registry = {"edit_file": {}, "edit_python_file": {}}
 
 
+class _EditFileOnly(FileIOToolsMixin):
+    """What every shipping profile actually looks like.
+
+    ``ChatAgent._register_tools`` pops ``edit_python_file`` out of each profile
+    that registers this mixin, so no configuration in the tree has both.
+    """
+
+    _tools_registry = {"edit_file": {}}
+
+
 class TestTheFragmentExists:
-    @pytest.mark.parametrize("profile", ["chat", "doc", "file", "full", "data", "web"])
-    def test_only_profiles_with_both_edit_tools_advertise_them(self, profile):
+    # Expectations are named, not recomputed. A test that derives the condition
+    # it is asserting agrees with any condition: gating on BOTH edit tools made
+    # the fragment dead in all six profiles, and the derived version passed.
+    @pytest.mark.parametrize(
+        "profile,advertises",
+        [
+            ("chat", False),
+            ("doc", True),
+            ("file", True),
+            ("full", True),
+            ("data", True),
+            ("web", False),
+        ],
+    )
+    def test_profiles_that_can_edit_say_so(self, profile, advertises):
         from tests.unit.test_profilespec_characterization import (
             chat_agent_build_context,
         )
 
         with chat_agent_build_context(profile) as agent:
             agent._register_tools()
-            available = {"edit_file", "edit_python_file"}.issubset(
-                agent._tools_registry
-            )
-            assert bool(agent.get_file_editing_system_prompt()) == available
+            assert bool(agent.get_file_editing_system_prompt()) is advertises
 
     def test_it_names_the_edit_tools(self):
         text = _Bare().get_file_editing_system_prompt()
         assert "edit_file" in text
         assert "edit_python_file" in text
+
+    def test_it_omits_the_python_tool_when_that_tool_is_absent(self):
+        """Naming a tool the agent does not have invites a call that fails."""
+        text = _EditFileOnly().get_file_editing_system_prompt()
+        assert "edit_file" in text
+        assert "edit_python_file" not in text
 
     def test_it_steers_away_from_rewriting_files_through_the_shell(self):
         text = _Bare().get_file_editing_system_prompt().lower()
