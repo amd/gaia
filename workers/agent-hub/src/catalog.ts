@@ -135,6 +135,28 @@ function parseScorecardScore(markdown: string | null): number | undefined {
 }
 
 /**
+ * The agent version the scorecard's front matter says it was MEASURED at
+ * (`agent.version`) — independent of, and frequently behind, the package's
+ * own `latest_version` (#2965). A scorecard is only regenerated when someone
+ * runs the eval + `gen_scorecard.py`, not on every release, so surfacing this
+ * lets the hub UI caption the score with the version it actually applies to
+ * instead of implying it was measured on the just-published package.
+ */
+function parseScorecardVersion(markdown: string | null): string | undefined {
+  if (!markdown) return undefined;
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
+  if (!match) return undefined;
+  try {
+    const fm = parseYaml(match[1]) as Record<string, unknown> | null;
+    const agentBlock = fm && typeof fm === "object" ? (fm.agent as Record<string, unknown> | undefined) : undefined;
+    const version = agentBlock?.version;
+    return typeof version === "string" && version.length > 0 ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Strip a leading YAML front-matter block (`---\n…\n---`) from markdown so the
  * rendered scorecard tab shows the prose body, not the raw front matter. The
  * machine-readable fields (aggregate, recipe) are parsed separately for
@@ -246,6 +268,7 @@ export function toIndexEntry(
       ? `${baseUrl.replace(/\/$/, "")}/${evalScorecardKey(agent.id, agent.latest_version)}`
       : undefined,
     eval_score: parseScorecardScore(evalScorecard),
+    eval_score_version: parseScorecardVersion(evalScorecard),
     package: pkg,
   };
 }
