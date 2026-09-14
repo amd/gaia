@@ -987,13 +987,15 @@ class _CancelParkFakeAgent:
         return {"answer": "Completed."}
 
 
-# --- (a) Pre-scan happy path -- THE key render-map proof --------------------
+# --- (a) Pre-scan happy path -- no render card is the intended design ------
 
 
-class TestPreScanCardSurvivesRealPipeline:
+class TestPreScanOmitsRenderCardByDesign:
+    # Why: sse_translation.py's ``_RENDER_TOOL_TO_LANG`` comment — pre_scan_inbox
+    # deliberately has no entry there.
     pytestmark = pytestmark_integration
 
-    def test_raw_query_stream_carries_the_render_card(
+    def test_raw_query_stream_omits_render_card_by_design(
         self, live_email_app, monkeypatch
     ):
         from gaia_agent_email import query_routes
@@ -1012,11 +1014,15 @@ class TestPreScanCardSurvivesRealPipeline:
         assert len(tool_results) == 1
         tr = tool_results[0]
         assert tr["tool"] == "pre_scan_inbox"
-        assert tr["render"] == "email_pre_scan"
+        assert "render" not in tr
         assert tr["data"]["kind"] == "email_pre_scan"
         assert tr["data"]["actionable"][0]["message_id"] == "m1"
 
-    def test_relay_query_carries_the_render_card(self, live_email_app, monkeypatch):
+        finals = [e for e in events if e.get("type") == "final"]
+        assert len(finals) == 1
+        assert finals[0]["answer"] == "Here's your inbox pre-scan."
+
+    def test_relay_query_omits_render_card_by_design(self, live_email_app, monkeypatch):
         from gaia_agent_email import query_routes
 
         from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
@@ -1029,8 +1035,12 @@ class TestPreScanCardSurvivesRealPipeline:
         tool_results = [e for e in handler.events if e.get("type") == "tool_result"]
         assert len(tool_results) == 1
         tr = tool_results[0]
-        assert tr["render"] == "email_pre_scan"
+        assert "render" not in tr
         assert tr["data"]["kind"] == "email_pre_scan"
+
+        answers = [e for e in handler.events if e.get("type") == "answer"]
+        assert len(answers) == 1
+        assert answers[0]["content"] == "Here's your inbox pre-scan."
 
 
 # --- (b) Send-class confirmation --------------------------------------------
