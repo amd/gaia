@@ -15,19 +15,9 @@ This module contains shared configuration constants used across the evaluation f
 # judge change out explicitly, rather than reading a shifted score as a regression.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
-# Per-million-token pricing for the CLOUD models an eval can run against.
-#
-# A model absent from this table costs 0.0 — see ``compute_cost``. That is
-# right for a locally served model (there is no per-token bill) and wrong for
-# a cloud one, where it silently reports a real spend as free. So every cloud
-# model the eval can reach has to be listed here, and adding a way to run a new
-# cloud provider means adding its rates in the same change.
-#
-# ``cached_per_mtok`` is optional and, when absent, cached input bills at the
-# full input rate. Absent and zero are different offers: zero means the
-# provider serves cached prompt tokens for free, and collapsing the two
-# misprices every cached turn.
-#
+# Per-million-token pricing for cloud models. An absent model costs 0.0 (local), so
+# every reachable cloud model must be listed or its spend reads as free.
+# ``cached_per_mtok`` absent = cached input bills at the input rate; 0 = free.
 # Claude: https://www.anthropic.com/pricing (read 2026-08-04)
 # Fireworks: https://docs.fireworks.ai/serverless/pricing (read 2026-09-13)
 MODEL_PRICING = {
@@ -62,12 +52,7 @@ MODEL_PRICING = {
     "claude-3-haiku-20240307": {"input_per_mtok": 0.25, "output_per_mtok": 1.25},
     # Default fallback for unknown models (using Sonnet pricing)
     "default": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    # Fireworks serverless, standard tier. Reached through Lemonade's cloud
-    # routing, where the model id carries a "fireworks." prefix.
-    #
-    # The 5.2 and 5.3 generations are NOT interchangeable: 5.3 charges nearly
-    # double for cached input, which is the token class most of a long agent
-    # run is made of.
+    # Fireworks serverless via Lemonade cloud routing. 5.3 cached input costs ~2x 5.2's.
     "fireworks.glm-5p2": {
         "input_per_mtok": 1.40,
         "output_per_mtok": 4.40,

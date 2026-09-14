@@ -48,7 +48,8 @@ def scorecard(
                 "tool_calls": tools,
                 "total_input_tokens": inp // total,
                 "total_output_tokens": out // total,
-                "total_cached_tokens": cached // total,
+                # None = no step reported a cache count (see to_performance_summary).
+                "total_cached_tokens": None if cached is None else cached // total,
                 "pipeline_latency_s": seconds / total,
             },
         }
@@ -106,9 +107,17 @@ class TestPricing:
         assert cached < uncached
 
     def test_an_unpriced_model_gets_no_dollars(self):
-        run = from_scorecard(scorecard("some-local-gguf"))
+        run = from_scorecard(scorecard("fireworks.some-unlisted-model"))
         assert run.input_tokens == 100_000
         assert run.usd is None
+
+    def test_an_unpriced_claude_model_gets_no_dollars(self):
+        assert from_scorecard(scorecard("claude-unlisted-9")).usd is None
+
+    def test_a_local_model_costs_a_defined_zero(self):
+        run = from_scorecard(scorecard("Gemma-4-E4B-it-GGUF"))
+        assert run.usd == 0.0
+        assert run.usd_per_pass == 0.0
 
     def test_cost_per_pass_is_the_comparison_that_matters(self):
         run = from_scorecard(scorecard("fireworks.glm-5p3", passed=2, total=4))
@@ -137,8 +146,33 @@ class TestRendering:
         assert "$0.0000" not in table
 
     def test_unpriced_models_are_named_rather_than_left_looking_free(self):
-        table = render_markdown([from_scorecard(scorecard("some-local-gguf"))])
-        assert "No published rate for some-local-gguf" in table
+        table = render_markdown([from_scorecard(scorecard("fireworks.unlisted"))])
+        assert "No published rate for fireworks.unlisted" in table
+
+    def test_a_local_model_reads_as_free_not_as_unpriced(self):
+        table = render_markdown([from_scorecard(scorecard("Gemma-4-E4B-it-GGUF"))])
+        assert "No published rate" not in table
+        assert "Served locally, no per-token bill: Gemma-4-E4B-it-GGUF" in table
+        assert "$0.0000" in table
+
+    def test_an_unpriced_model_sorts_after_a_priced_one(self):
+        table = render_markdown(
+            [
+                from_scorecard(scorecard("fireworks.unlisted")),
+                from_scorecard(scorecard("fireworks.glm-5p3")),
+            ]
+        )
+        lines = [ln for ln in table.splitlines() if ln.startswith("|")]
+        assert "fireworks.glm-5p3" in lines[2]
+        assert "fireworks.unlisted" in lines[3]
+
+    def test_unreported_cache_reads_as_absent_and_measured_zero_as_zero(self):
+        unreported = from_scorecard(scorecard("fireworks.glm-5p3", cached=None))
+        measured_zero = from_scorecard(scorecard("fireworks.glm-5p3", cached=0))
+        assert unreported.cached_share is None
+        assert measured_zero.cached_share == 0.0
+        assert "| —      |" in render_markdown([unreported])
+        assert "| 0%     |" in render_markdown([measured_zero])
 
     def test_empty_input_says_so(self):
         assert render_markdown([]) == "No runs to compare."

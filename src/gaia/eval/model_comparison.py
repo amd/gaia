@@ -21,10 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
+from gaia.eval.config import MODEL_PRICING
 from gaia.eval.quality_metrics import compute_cost
-
-#: Statuses that mean the scenario reached the judge — see ``build_scorecard``.
-_JUDGED = ("PASS", "FAIL")
+from gaia.llm.lemonade_client import cloud_model_provider
 
 
 @dataclass
@@ -34,7 +33,6 @@ class ModelRun:
     model: str
     scenarios: int = 0
     passed: int = 0
-    judged: int = 0
     avg_score: Optional[float] = None
     wall_seconds: Optional[float] = None
     steps: Optional[int] = None
@@ -62,13 +60,7 @@ class ModelRun:
 
     @property
     def usd_per_pass(self) -> Optional[float]:
-        """What one passing scenario cost.
-
-        The column that actually decides a model: a cheap model that fails half
-        the work is not cheap, and a costly one that passes everything may be
-        the better buy. Undefined with no passes — an infinite unit price is
-        not a number to put in a table.
-        """
+        """What one passing scenario cost; None with no passes (no infinite price)."""
         if self.usd is None or not self.passed:
             return None
         return self.usd / self.passed
@@ -89,16 +81,10 @@ def _add(total: Optional[float], value: Any) -> Optional[float]:
     return got if total is None else total + got
 
 
-def _mean(values: Sequence[float]) -> Optional[float]:
-    return sum(values) / len(values) if values else None
-
-
 def from_scorecard(scorecard: dict, model: Optional[str] = None) -> ModelRun:
     """Flatten one scorecard into a comparison row.
 
-    ``model`` names the row; without it the scorecard's own config is asked,
-    then its run id — a row has to be labelled with something, and an
-    unlabelled row in a model comparison is useless.
+    The row is named by ``model``, else the scorecard's config, else its run id.
     """
     summary = scorecard.get("summary") or {}
     config = scorecard.get("config") or {}
@@ -116,8 +102,6 @@ def from_scorecard(scorecard: dict, model: Optional[str] = None) -> ModelRun:
     run.avg_score = _num(summary.get("avg_score"))
 
     scenarios = scorecard.get("scenarios") or []
-    run.judged = sum(1 for s in scenarios if s.get("status") in _JUDGED)
-
     latencies: list[float] = []
     for scenario in scenarios:
         perf = scenario.get("performance_summary")
@@ -153,24 +137,29 @@ def from_scorecard(scorecard: dict, model: Optional[str] = None) -> ModelRun:
     return run
 
 
-def _price(run: ModelRun) -> Optional[float]:
-    """What this run cost, from its own token counts and the model's rates.
+def is_unpriced_cloud_model(model: str) -> bool:
+    """A cloud model with no ``MODEL_PRICING`` row — its real spend is unknown."""
+    if model in MODEL_PRICING:
+        return False
+    return model.startswith("claude-") or cloud_model_provider(model) is not None
 
-    Priced here rather than trusted from the scorecard's own ``cost`` block,
-    because that block was written by whatever rates were configured at run
-    time — comparing two models costed under two different tables is not a
-    comparison. A model with no published rate stays None: an unpriced model
-    shows tokens and no dollars, never a guess.
+
+def _price(run: ModelRun) -> Optional[float]:
+    """This run's cost from its own tokens under today's rates, not the scorecard's.
+
+    A local model (absent from the table, not cloud-routed) is a defined $0.00;
+    only an unpriced cloud model, or a run with no token counts, is None.
     """
     if run.input_tokens is None and run.output_tokens is None:
         return None
-    usd = compute_cost(
+    if is_unpriced_cloud_model(run.model):
+        return None
+    return compute_cost(
         int(run.input_tokens or 0),
         int(run.output_tokens or 0),
         model=run.model,
         cached_input_tokens=int(run.cached_tokens or 0),
     )
-    return usd or None
 
 
 def load_scorecard(path: str | Path) -> dict:
@@ -248,14 +237,14 @@ _COLUMNS: tuple[tuple[str, Any], ...] = (
 
 
 def render_markdown(runs: Iterable[ModelRun]) -> str:
-    """One markdown table, one row per model.
-
-    Sorted by pass rate then by cost, so the row that did the work best is
-    first and the cheapest way to do it that well is next to it.
-    """
+    """One markdown table, one row per model, sorted by pass rate then cost."""
+    # An unknown cost must not win the cheapest-first tiebreak.
     rows = sorted(
         runs,
-        key=lambda r: (-(r.pass_rate or 0.0), r.usd if r.usd is not None else 0.0),
+        key=lambda r: (
+            -(r.pass_rate or 0.0),
+            r.usd if r.usd is not None else float("inf"),
+        ),
     )
     if not rows:
         return "No runs to compare."
@@ -276,9 +265,23 @@ def render_markdown(runs: Iterable[ModelRun]) -> str:
     out = [line(header), "|" + "|".join("-" * (w + 2) for w in widths) + "|"]
     out.extend(line(row) for row in body)
 
-    unpriced = [r.model for r in rows if r.usd is None]
-    if unpriced:
+    local = [
+        r.model for r in rows if r.usd is not None and r.model not in MODEL_PRICING
+    ]
+    unpriced = [
+        r.model
+        for r in rows
+        if r.usd is None
+        and (r.input_tokens is not None or r.output_tokens is not None)
+        and is_unpriced_cloud_model(r.model)
+    ]
+    if local or unpriced:
         out.append("")
+    if local:
+        out.append(
+            "Served locally, no per-token bill: " + ", ".join(local) + " ($0.00)."
+        )
+    if unpriced:
         out.append(
             "No published rate for "
             + ", ".join(unpriced)

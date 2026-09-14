@@ -341,14 +341,9 @@ def compute_cost(
     behavior, not a fallback: the ``"default"`` pricing row is intentionally
     NOT applied to unrecognized models so local runs never get mis-billed.
 
-    ``cached_input_tokens`` is the part of the prompt the provider served from
-    its own cache; it is a SUBSET of ``total_input_tokens``, billed at
-    ``cached_per_mtok`` instead of the input rate. On a long agent run most of
-    the prompt is a cache hit, so ignoring the distinction can overstate the
-    bill several times over. A model with no cached rate bills cached input at
-    the full input rate, which is what a provider that does not discount it
-    does — distinct from a rate of zero, which means the provider serves it
-    free.
+    ``cached_input_tokens`` is a subset of ``total_input_tokens`` billed at the
+    cached rate. With no cached rate (none in the table, or explicit overrides
+    without ``cost_per_1m_cached``) cached input bills at the input rate.
     """
     if cost_per_1m_input is None or cost_per_1m_output is None:
         pricing = MODEL_PRICING.get(model or "")
@@ -364,7 +359,8 @@ def compute_cost(
         )
     else:
         in_rate, out_rate = cost_per_1m_input, cost_per_1m_output
-        pricing = MODEL_PRICING.get(model or "")
+        # Never mix an explicit rate card with the table's cached rate.
+        pricing = None
 
     if cost_per_1m_cached is not None:
         cached_rate = cost_per_1m_cached
