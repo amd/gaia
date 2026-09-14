@@ -870,8 +870,9 @@ class TestSkipChatModel(unittest.TestCase):
             with patch(
                 "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
                 return_value=True,
-            ):
+            ) as ensure_ready:
                 result = cmd._verify_setup()
+            ensure_ready.assert_not_called()
             self.assertTrue(result)
             checked = {
                 c.args[0] for c in mock_client.check_model_available.call_args_list

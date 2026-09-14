@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gaia.api.local_http import assert_bind_is_authenticated
 from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,9 @@ def start_server(
         ✅ GAIA API server started with debug mode enabled
     """
     warn_if_unconfirmed_tools_allowed()
+    # A LAN-reachable bind with no caller auth puts the agent loop on the
+    # network for anyone who can route to the port.
+    assert_bind_is_authenticated(host, "the GAIA API server")
 
     # Set environment variables for agent configuration
     # These will be read by agent_registry.py when agents are instantiated

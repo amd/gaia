@@ -409,32 +409,53 @@ result = agent.edit_file(
 
 ### Path Validation
 
-All file operations check paths against allowed directories:
+The allowlist answers "is this in scope". It does **not** answer "is this safe",
+so reads and writes each add a denylist on top of it.
+
+Reads go through `validate_read`, which refuses secrets that happen to sit inside
+an allowed directory — `.env`, `id_rsa`, `credentials.json`, `.netrc`, `.pem`/`.key`
+files, and anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`:
 
 ```python
-if not self.path_validator.is_path_allowed(file_path):
-    return {
-        "status": "error",
-        "error": f"Access denied: {file_path} is not in allowed paths"
-    }
+is_allowed, reason = self.path_validator.validate_read(file_path)
+if not is_allowed:
+    return {"status": "error", "error": reason}
 ```
 
+Writes go through `validate_write`, which additionally refuses
+[`BLOCKED_DIRECTORIES`](#allowed-paths-configuration) and any file that executes
+on its own — shell rc files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and anything inside a repo's `.git/`.
+
+`search_in_files` applies the read denylist per file as it walks, so a directory
+grep cannot return what `read_file` would have refused.
+
 ### Allowed Paths Configuration
+
+An allowed path may be a **directory or a single file**. Prefer files when the
+scope is derived from something a user attached — granting the folder a document
+happens to sit in grants everything else in it too.
 
 ```python
 # Typically configured when the agent is constructed
 path_validator = PathValidator(
     allowed_paths=[
         "/path/to/workspace",
-        "/path/to/project"
-    ],
-    blocked_paths=[
-        "/etc",
-        "/var",
-        "~/.ssh"
+        "/path/to/report.pdf",
     ]
 )
 ```
+
+`allowed_paths` has three distinct states:
+
+| Value | Meaning |
+|-------|---------|
+| `None` | No scope supplied — defaults to the CWD plus paths the interactive CLI persisted via `[a]lways` |
+| `[...]` | Exactly this scope. Machine-global persisted grants are **not** unioned in, and `[a]lways` during this session does not write to them |
+| `[]` | A scope of nothing — every path is refused, rather than silently widening to the CWD |
+
+The blocked directories (`/etc`, `~/.ssh`, `~/.gaia`, Windows system dirs, …) are
+computed at import time in `gaia.security`; they are not a constructor argument.
 
 ---
 
