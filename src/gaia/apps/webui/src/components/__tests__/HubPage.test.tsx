@@ -118,6 +118,61 @@ describe('HubPage agent-discovery failure (#2118)', () => {
     });
 });
 
+describe('HubPage installed version (issue #2970)', () => {
+    // GET /api/agents emits no version at all and the catalog sends
+    // `installed_version` — never `version`. Fixtures here mirror that wire
+    // shape so the Version row can't pass on a hand-set `version` field.
+    const EMAIL_INSTALLED: AgentInfo[] = [
+        agent({ id: 'email', name: 'Email', source: 'installed' }),
+    ];
+
+    beforeEach(() => {
+        mockedApi.listAgents.mockResolvedValue({ agents: EMAIL_INSTALLED, total: 1 });
+        mockedApi.listCatalog.mockResolvedValue({
+            offline: false,
+            agents: [
+                agent({
+                    id: 'email',
+                    name: 'Email',
+                    type: 'agent',
+                    status: 'installed',
+                    security_tier: 'verified',
+                    installed_version: '0.6.0',
+                    latest_version: '0.6.0',
+                }),
+            ],
+        });
+    });
+
+    function renderInstalledHub() {
+        return render(
+            <HubPage
+                agents={EMAIL_INSTALLED}
+                activeAgentId="email"
+                onSelect={() => {}}
+                onStartChat={() => {}}
+            />,
+        );
+    }
+
+    it('badges the installed card with the version from the wire', async () => {
+        renderInstalledHub();
+        expect(await screen.findByText('v0.6.0')).toBeInTheDocument();
+    });
+
+    it('shows the installed version in the Details modal', async () => {
+        const user = userEvent.setup();
+        renderInstalledHub();
+        await screen.findByText('Email');
+
+        await user.click(screen.getByRole('button', { name: 'Details' }));
+
+        const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).getByText('Version')).toBeInTheDocument();
+        expect(within(dialog).getByText('0.6.0')).toBeInTheDocument();
+    });
+});
+
 describe('HubPage trust gate (issue #1722)', () => {
     it('installs a verified agent in one click after the gate', async () => {
         const user = userEvent.setup();
