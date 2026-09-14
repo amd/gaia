@@ -703,18 +703,18 @@ def parse_equivalence_verdict(text: str) -> bool:
 
 
 def make_claude_judge(model: str | None = None) -> Callable[[str, str], bool]:
-    """An equivalence-judge callable backed by :class:`gaia.eval.claude.ClaudeClient`.
+    """An equivalence-judge callable backed by whichever Claude credential is available.
 
     Lazy import so the module stays importable (and unit-testable) without the
-    ``[eval]`` extras; ``ClaudeClient`` itself fails loud when the judge
-    credential is absent. The returned callable is what :func:`match_action_items`
+    ``[eval]`` extras; ``make_judge_client`` itself fails loud when no judge
+    credential is present. The returned callable is what :func:`match_action_items`
     consumes as ``judge_fn`` — it renders the equivalence prompt, calls the
     judge, and parses the strict yes/no verdict.
     """
-    from gaia.eval.claude import ClaudeClient
+    from gaia.eval.judge_client import make_judge_client
 
     # No temperature pin — the judge model rejects sampling params (400).
-    client = ClaudeClient(model=model)
+    client = make_judge_client(model=model)
 
     def judge(predicted_desc: str, expected_desc: str) -> bool:
         prompt = build_equivalence_prompt(predicted_desc, expected_desc)

@@ -3,6 +3,7 @@
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -133,7 +134,10 @@ class ClaudeClient:
 
     def get_completion(self, prompt):
         self.log.debug("Getting completion from Claude")
-        self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
+        # count_tokens is a second billed round-trip — only pay it if the debug
+        # line will actually be emitted.
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
             message = self.client.messages.create(
                 model=self.model,

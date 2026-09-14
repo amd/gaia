@@ -4,7 +4,7 @@
 (packaging/eval_drafting_report.py).
 
 Locks `main()`'s `should_fail` -> exit-code contract and the fail-loud
-`ANTHROPIC_API_KEY`-absent path (no generation, no judge call, no report
+no-judge-credential path (no generation, no judge call, no report
 written). These tests mock every `gaia.eval` entry point on the loaded module;
 calling the real `generate_drafts` in-process requires repo-root `PYTHONPATH`
 (see #2024) which this workflow does not set.
@@ -34,6 +34,8 @@ def _isolate_cwd(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _sentinel_api_key(monkeypatch):
+    # Both credentials, because either one satisfies the judge guard now.
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
 
 
@@ -95,9 +97,10 @@ def _report_path():
     return Path("eval-out") / "drafting_gate_report.json"
 
 
-def test_api_key_absent_returns_1_no_judge_no_report(monkeypatch):
+def test_no_judge_credential_returns_1_no_judge_no_report(monkeypatch):
     _set_model_env(monkeypatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     summary = _summary(_gate(False))
     (
         fake_generate,
@@ -117,6 +120,18 @@ def test_api_key_absent_returns_1_no_judge_no_report(monkeypatch):
     # eval-out/ itself IS created before the key check — characterize, don't
     # assert its absence; only the report file must be missing.
     assert not _report_path().exists()
+
+
+def test_subscription_token_alone_satisfies_the_judge_guard(monkeypatch):
+    """CI blanks ANTHROPIC_API_KEY and passes only the subscription token."""
+    _set_model_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+    summary = _summary(_gate(False))
+    _, _, fake_make_judge, _, _ = _install_fakes(monkeypatch, summary)
+
+    assert mod.main() == 0
+    assert fake_make_judge.called
 
 
 def test_gate_breach_returns_1(monkeypatch):

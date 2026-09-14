@@ -231,6 +231,32 @@ jobs:
           # .venv/Lib/... -> FileNotFoundError. See test_email_agent_eval.yml.
           install-package: '-e .[dev,eval,api] -e hub/agents/email/python'
 
+      # A subscription token authenticates the `claude` CLI, not the Messages API,
+      # so the judge needs the CLI on PATH. The stx pool ships no usable npm —
+      # hence setup-node. Same pair of steps as test_email_agent_eval.yml.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (judge transport)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "claude CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      # Prove the credential is ACCEPTED before spending hours of the serial
+      # Lemonade slot. An out-of-credit key that passed a presence-only check is
+      # what killed every email eval run, on every branch, ~25 minutes in.
+      - name: Preflight — judge credential (live probe)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          python -m gaia.eval.judge_client --probe
+          if ($LASTEXITCODE -ne 0) { throw "judge credential probe failed" }
+
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
@@ -392,7 +418,11 @@ jobs:
           # never commits a card with a silently-omitted drafting metric. With
           # drafting_gate_thresholds.json enforce:true a real breach also fails
           # here, so the refresh does not commit a regressed card.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer the subscription token; blank the key when it is present so
+          # judge_client does not pick the key's account. Same expression every
+          # other Claude workflow here uses.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
@@ -403,7 +433,11 @@ jobs:
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
           # Judge credential — REQUIRED (fail-loudly, no silent skip), same as
           # drafting. Runs the small committed action-item corpus, not the mbox.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer the subscription token; blank the key when it is present so
+          # judge_client does not pick the key's account. Same expression every
+          # other Claude workflow here uses.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
@@ -412,7 +446,11 @@ jobs:
         timeout-minutes: 25
         env:
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer the subscription token; blank the key when it is present so
+          # judge_client does not pick the key's account. Same expression every
+          # other Claude workflow here uses.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }

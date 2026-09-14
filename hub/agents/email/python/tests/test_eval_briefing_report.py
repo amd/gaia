@@ -4,7 +4,7 @@
 (packaging/eval_briefing_report.py).
 
 Locks `main()`'s `should_fail` -> exit-code contract, the fail-loud
-`ANTHROPIC_API_KEY`-absent path, and — unique to briefing — the enforcing
+no-judge-credential path, and — unique to briefing — the enforcing
 gate's asymmetric skip: a total generation/judge outage sets
 `should_fail = thresholds.enforce`, so under the committed `enforce: true`
 manifest a skip BLOCKS the build (returns 1), unlike the report-mode
@@ -37,6 +37,8 @@ def _isolate_cwd(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _sentinel_api_key(monkeypatch):
+    # Both credentials, because either one satisfies the judge guard now.
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
 
 
@@ -99,9 +101,10 @@ def _report_path():
     return Path("eval-out") / "briefing_gate_report.json"
 
 
-def test_api_key_absent_returns_1_no_judge_no_report(monkeypatch):
+def test_no_judge_credential_returns_1_no_judge_no_report(monkeypatch):
     _set_model_env(monkeypatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     summary = _summary(_gate(False))
     (
         fake_generate,

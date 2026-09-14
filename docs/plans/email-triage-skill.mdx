@@ -1,0 +1,363 @@
+---
+title: "Email Triage as a Flagship Skill"
+description: "Replace the standalone Email Triage Agent with an email tool mixin plus an inbox-triage skill on the flagship GAIA agent, so the custom agent can be decommissioned"
+icon: "inbox"
+---
+
+<Info>
+  **Issue draft.** Proposed for `amd/gaia`, labels `enhancement` + `agent` + `p1`.
+  Cross-links [#2672](https://github.com/amd/gaia/issues/2672),
+  [#2683](https://github.com/amd/gaia/issues/2683),
+  [#2863](https://github.com/amd/gaia/issues/2863),
+  [#2982](https://github.com/amd/gaia/issues/2982).
+</Info>
+
+## The problem
+
+Ask the flagship GAIA agent to triage your inbox and it cannot. It has no Gmail
+tool, no Outlook tool, and no Google or Microsoft connector grant — 67 registered
+tools and not one of them touches mail. Email lives in a separate installable
+agent with its own sidecar process, its own REST API, its own npm package, and its
+own 66-tool surface. A user who wants "read my mail and tell me what needs me"
+alongside "search my documents" has to run two agents and cannot ask one question
+that spans both.
+
+After this change, `triage my inbox` works in the Go TUI against the same flagship
+agent that already does documents, web, shell, and memory — and the standalone
+email agent becomes redundant rather than load-bearing.
+
+This is the architectural direction CLAUDE.md already states: per-task agents were
+deleted and their capability became the flagship's tool surface driven by a
+`SKILL.md` in `hub/skills/`. Email is the last major holdout.
+
+## Position against the prior art
+
+Four issues touch this area. This proposal is deliberately narrower than all of them.
+
+| Issue | What it wants | Relationship |
+|---|---|---|
+| [#2672](https://github.com/amd/gaia/issues/2672) | Email's ~59 tools become **portable skills installable into any agent** | Same mechanism, different goal. Explicitly keeps email agent behaviour unchanged — it does not decommission. Blocked on #2863. |
+| [#2683](https://github.com/amd/gaia/issues/2683) | Email agent as the **adaptive-skills (skills-v2) reference example** | Assumes the email agent keeps existing. Orthogonal; would retarget onto the flagship if this lands. |
+| [#2863](https://github.com/amd/gaia/issues/2863) | Phase 2 **local-capability sandbox** | Blocks #2672. **Does not block this proposal** — see below. |
+| [#2982](https://github.com/amd/gaia/issues/2982) | Collapse example agents into flagship + skills | Same direction, but names the email agent as an explicit **non-goal** ("reference sidecar product — stays"). **This proposal contradicts that.** Needs an owner decision. |
+
+**File this as a new issue narrowing #2672, not as an amendment.** #2672's goal is
+portability of email capability *into arbitrary agents*; its acceptance test is
+literally "a non-email agent installs an extracted skill and uses its tools", and
+it is blocked on a sandbox that does not exist. This proposal has one consumer (the
+flagship), needs no sandbox, and its success condition is the *deletion* of a
+package. Folding a decommission plan into a portability issue would bury it behind
+a blocker it does not have.
+
+## The constraint that picks the architecture — verified, and it is not what it looks like
+
+The premise that local-capability permissions are refused is **true but does not
+apply here**, for two independent reasons. Both were verified in code.
+
+**1. `shell` is no longer a local-capability domain.** It was, when #2672 was
+written. It is now binary-bridged:
+
+```python
+# src/gaia/skills/permissions.py:63-73
+CONNECTOR_BRIDGED_DOMAINS = frozenset({"network", "mcp"})
+BINARY_BRIDGED_DOMAINS = frozenset({"shell"})
+LOCAL_CAPABILITY_DOMAINS = (
+    frozenset(DOMAIN_LEVELS) - CONNECTOR_BRIDGED_DOMAINS - BINARY_BRIDGED_DOMAINS
+)
+```
+
+So the refused set today is `filesystem`, `database`, `desktop`, `env` — **not**
+`shell`. That is why `hub/skills/github-triage/SKILL.md` can declare
+`shell:execute:gh` and load: a scoped binary grant resolves against
+`BINARY_POLICIES` in `src/gaia/skills/binaries.py` (only `gh` and `pytest` have
+policies today). Unscoped `shell:execute` is still refused, because that asks for
+the whole shell. There is no allowlist exception and no bundled-vs-installed
+distinction — the gate is the same for every skill.
+
+**2. The gate only ever runs on skill permissions, never on agent code.** Every
+call site of `refuse_unbridged_permissions` passes `skill.parsed_permissions()`
+(`agent.py:1619`, `loader.py:62`, `install.py:353`, `publish.py:137`,
+`migrate.py:821`). A tool mixin composed into an agent class is ordinary Python in
+the agent — it is not a skill, declares no permissions, and is never gated.
+
+**Consequence:** a first-class email tool mixin is available **now**. The sandbox
+in #2863 is not on its critical path. What #2863 blocks is shipping email tools as
+a *skill-provided* `tools.py`, because the reversible-action ledger needs
+`database:write` — and that is precisely why #2672 is stuck.
+
+## Recommended architecture — A: tool mixin + skill
+
+**A new `gaia.agents.tools.email_tools.EmailToolsMixin`, registered in
+`KNOWN_TOOLS`, orchestrated by `hub/skills/inbox-triage/SKILL.md`.**
+
+The skill carries judgment (what "urgent" means, when to escalate, how to word a
+digest). The mixin carries capability (authenticated Gmail/Graph calls). This is
+exactly the split every shipped starter skill already uses — `document-brief`
+names `RAGToolsMixin`'s tools in `tools_required` without any code coupling.
+
+### Why not the alternatives
+
+**B — MCP connector.** Available today via `mcp:connect`, but there is no
+Gmail or Outlook server in `src/gaia/connectors/catalog/mcp_servers.py` (only
+`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`). Adopting it means handing a
+third-party `npx` subprocess standing access to the user's entire mailbox, and
+moving OAuth credentials out of the OS keyring into subprocess env vars — wrong
+for a local-first product, and it discards `gmail_backend.py` / `outlook_backend.py`,
+which are tested and already authenticate through `gaia.connectors.api`. Keep MCP
+as a bring-your-own-provider escape hatch, not the primary path.
+
+**C — skill drives the email agent's REST API.** Hides the agent instead of
+retiring it, so it fails the stated goal. It is not even cheap: the flagship has no
+HTTP POST tool, and `shell:execute:curl` has no binary policy, so it needs new
+plumbing to deliver strictly less.
+
+**D — a `gaia-mail` CLI plus a binary policy, mirroring `gh`.** Structurally the
+closest analogue to `github-triage`, but it means building the same Gmail client and
+then wrapping it in argv parsing and a second permission layer. Strictly more work
+than A for the same result.
+
+### Why A is cheaper than it looks
+
+The connector plumbing is already shared. `gmail_backend.py` and
+`outlook_backend.py` obtain tokens via
+`gaia.connectors.api.get_access_token_sync(provider=..., scopes=..., agent_id=...)`
+— the same call a core mixin makes. Grants are enforced centrally by
+`check_agent_grant()`. Moving the backends into `src/gaia/agents/tools/` is largely
+a relocation, not a rewrite.
+
+### New and changed files
+
+| Path | Change |
+|---|---|
+| `src/gaia/agents/tools/email_tools.py` | New — `EmailToolsMixin`, ~19 tools |
+| `src/gaia/agents/tools/_email/gmail.py` | New — relocated from `gaia_agent_email/gmail_backend.py` |
+| `src/gaia/agents/tools/_email/graph.py` | New — relocated from `outlook_backend.py` (Phase 4) |
+| `src/gaia/agents/tools/_email/scopes.py` | New — relocated; keeps the `https://mail.google.com/` exclusion (#2533) |
+| `src/gaia/agents/registry.py` | Add `"email"` to `KNOWN_TOOLS` |
+| `hub/skills/inbox-triage/SKILL.md` | New — the judgment layer |
+| `hub/agents/gaia/python/gaia-agent.yaml` | Bump `tools_count` (drift-guarded by `test_gaia_agent.py`) |
+
+## Capability parity
+
+A decommission is only credible if parity is explicit. Two views: the 27 externally
+exposed operations from `hub/agents/email/python/CAPABILITY_MATRIX.md`, and the
+66 internal agent-loop tools.
+
+### The 27 exposed operations
+
+| Op | Surface | Verdict | Note |
+|---|---|---|---|
+| `triage` | REST | **Must survive** | The headline capability |
+| `triage/batch` | REST | **Must survive** | Batch classification |
+| `triage_email` | MCP | **Must survive** | Duplicate of `triage` |
+| `triage_email_batch` | MCP | **Must survive** | Duplicate of `triage/batch` |
+| `prescan` | REST | **Must survive** | Cheap scan; feeds triage without per-message classification |
+| `search` | REST | **Must survive** | Gmail query operators |
+| `archive` | REST | **Must survive** | Core reversible action |
+| `unarchive` | REST | **Must survive** | Undo — safety-critical, not optional |
+| `attention` | REST | **Must survive** | "What needs you"; real dedup machinery (`attention_cache.py`) |
+| `briefing` | REST | **Must survive** (Phase 3) | Needs the scheduler |
+| `draft` | REST | **Must survive** | Judged by the `drafting` eval |
+| `draft_reply` | MCP | **Must survive** | Duplicate of `draft` |
+| `send` | REST | **Must survive** | Highest-stakes op; hard confirmation gate |
+| `send_email` | MCP | **Must survive** | Duplicate of `send` |
+| `confirm` | REST | **Must survive, reshaped** | Exists because a sidecar cannot prompt. On the flagship it becomes `console.confirm_tool_execution`, not an endpoint |
+| `calendar/events (GET)` | REST | Defer | Calendar is a separate capability; own scopes |
+| `calendar/events (POST)` | REST | Defer | |
+| `calendar/events/preview` | REST | Defer | |
+| `calendar/events/respond` | REST | Defer | RSVP |
+| `quarantine` | REST | Defer | Phishing SLM; carries the `specific-ai-tools` dependency |
+| `unquarantine` | REST | Defer | Pairs with `quarantine` |
+| `query` | REST | Drop | This *is* the agent loop — on the flagship the user just talks to the agent |
+| `query/{run_id}/cancel` | REST | Drop | TUI already cancels runs |
+| `query/{run_id}/respond` | REST | Drop | TUI already handles `needs_input` |
+| `/v1/connections` | REST | Drop | Covered by the connectors framework |
+| `/v1/connections/{provider} (POST)` | REST | Drop | Covered by `gaia connectors` |
+| `/v1/connections/{provider} (DELETE)` | REST | Drop | Covered by `gaia connectors` |
+
+**Headline: 15 must survive, 6 defer, 6 drop.** The 15 collapse to **11 distinct
+capabilities** once the four MCP tools fold into their REST twins.
+
+### The 66 internal tools → ~19
+
+Do not port 66 tools. The flagship already registers 67; adding 66 more would give
+it 133 and wreck `ToolLoader`'s per-turn selection — which is the same problem
+[#2835](https://github.com/amd/gaia/issues/2835) and
+[#2836](https://github.com/amd/gaia/issues/2836) are already solving *inside* the
+email agent. Parity is at the operation level, not the tool level.
+
+| Group | Email agent | Flagship mixin | How |
+|---|---|---|---|
+| Read | 9 (`read_tools`) | 5 | `list_inbox`, `search_messages`, `get_message`, `get_thread`, `list_labels` |
+| Triage | 3 | 3 | `triage_inbox`, `pre_scan_inbox`, `list_waiting_on_you` |
+| Organize | 15 (`organize_tools`) | 2 | Collapse the 7 single + 7 batch variants into one `organize_messages(ids, action)`; add `undo_last_action` |
+| Write | 5 (`reply_tools`) + 4 (`delete_tools`) | 3 | `draft_reply`, `send_draft`, `trash_message` |
+| Briefing / tasks | 3 | 3 | `get_briefing`, `extract_action_items`, `list_tasks` |
+| Preferences | 8 | 2 | `set_sender_priority`, `get_preferences` |
+| Connection | 3 | 1 | `check_mailbox_access` |
+| Calendar | 6 | 0 | Deferred |
+| Phishing | 2 | 0 | Deferred |
+| Voice / profile / misc | 5 | 0 | Deferred |
+| **Total** | **66** | **~19** | |
+
+### The hard parts
+
+These are not prompt-shaped and a `SKILL.md` cannot replicate them. Each needs real
+code in the mixin:
+
+- **Classification pipeline** — two-tier heuristic → LLM escalation
+  (`triage_heuristics.py`, `llm_triage.py`, `triage_condense.py`), 5-category
+  taxonomy tied to Gmail label semantics. Must move as code.
+- **Batch safety gate** — `ORGANIZE_BATCH_OP_THRESHOLD = 5` /
+  `ORGANIZE_BATCH_SENDER_THRESHOLD = 3` (`agent.py:782-783`): more than 5 organize
+  mutations across more than 3 distinct senders in one turn forces confirmation.
+  Must move verbatim.
+- **Undo ledger** — `action_store.py` persists `email_actions` / `email_drafts` to
+  `~/.gaia/email/state.db` with a 120s default window, and enforces the ordering
+  invariant that the API call succeeds *before* the row is recorded (a phantom undo
+  row is state corruption). This is the `database:write` dependency that blocks
+  #2672; as agent code it is unblocked.
+- **Context budgeting** — `context_budget.py`, `thread_fold.py`,
+  `body_normalize.py`. Partly generic, but the flagship's prompt is larger, so the
+  budget needs recalculating, not copying.
+- **Attention dedup** — `attention_cache.py` dedupes signals across four sources.
+- **Briefing scheduling** — `scheduler.py` / `schedule_store.py` are daemon-managed.
+  This is why briefing is Phase 3, not Phase 0.
+
+## Permission and connector model
+
+### Reads: one consent, then silent
+
+The mixin declares `REQUIRED_CONNECTORS` on the flagship agent class, mirroring the
+email agent's existing declaration (`gaia_agent_email/agent.py:748-760`). The user
+consents once when connecting the account; reads then run without prompting —
+the same shape as `gh issue list` running silently under `shell:execute:gh`.
+
+Scopes stay exactly as the email agent requests them, including the deliberate
+exclusion of `https://mail.google.com/` (full-mailbox permanent delete,
+[#2533](https://github.com/amd/gaia/issues/2533)). **Do not widen scopes during the
+move.** `build_tui.yml` already path-triggers on `scopes.py` as a drift guard; that
+guard must follow the file to its new home.
+
+### Writes: confirmation, and a higher bar than `gh`
+
+`gh issue comment` is public and retractable. Sending mail is private and
+irreversible. The gate must be stricter, not equivalent.
+
+The mechanism already exists and is wired: `TOOLS_REQUIRING_CONFIRMATION`
+(`agent.py:198`) is unioned at runtime with the agent's own
+`CONFIRMATION_REQUIRED_TOOLS` ClassVar (`agent.py:3184-3193`), and a listed tool
+causes `_execute_tool` to call `console.confirm_tool_execution` and block
+(`agent.py:3436`).
+
+| Action | Gate |
+|---|---|
+| `send_draft`, `send_now`, `forward_message`, `schedule_send` | **Always confirm**, showing literal to / subject / body preview |
+| `trash_message` | **Always confirm** — reversible only while the message stays in Trash |
+| `organize_messages` (archive, label, mark-read, star) | Silent below the batch threshold; **confirm** above 5 ops across more than 3 senders |
+| `undo_last_action` | Silent — it only ever reduces effect |
+| All reads | Silent after connector consent |
+
+**Do not route this through `src/gaia/governance/`.** The layer exists and is
+well-designed, but it has zero consumers: `@govern` appears only inside its own
+docstring, and `GovernedAgentMixin` is mixed into no agent in the repo. Wiring
+email writes into an unexercised path would be the first real user of a layer with
+no production evidence. Use the confirmation mechanism that already ships. If
+governance is later adopted, email writes are the obvious first
+`@govern(risk="review")` case — as a follow-up, not a prerequisite.
+
+## Acceptance bar
+
+**Blocker first:** [#2983](https://github.com/amd/gaia/issues/2983) — the flagship
+has no scorecard and no release eval gate. Committed baselines exist only for
+`rag_quality`, `tool_selection`, and `context_retention`
+(`tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/`). An email category for the
+flagship has to exist before "no regression" means anything.
+
+To justify decommissioning, the flagship plus skill must:
+
+| Suite | Bar |
+|---|---|
+| `quality` | **Meet or beat** the email agent's committed baseline on the acceptance-enforced within-one-bucket categorization metric. This is the release gate today; it stays the gate. |
+| `drafting` | **Meet or beat** `approval_min` 0.70 |
+| `briefing` | Run and report. Enforcement is off in the fixture; do not silently tighten or loosen it |
+| `action_items` | Run and report |
+| `perf` | Fresh Strix Halo baseline required. The flagship's prompt is larger, so a TTFT regression is *expected* — it must be quantified and accepted explicitly, not waved through |
+| `followups` | Out of scope — CI-unwired, tracked by [#2040](https://github.com/amd/gaia/issues/2040) |
+
+**The sleeper risk, and the one nobody would think to test:** adding ~19 tools to a
+67-tool agent can degrade selection for *non-email* work. Every phase must re-run
+`gaia eval agent --category tool_selection` against the flagship's existing
+committed baseline. A win on email that costs document Q&A is not a win.
+
+Evals run **serially** — never two `gaia eval agent` processes at once. Confirm
+`ps aux | grep "gaia eval" | grep -v grep | wc -l` prints `0` before starting.
+
+## Phased plan
+
+**Phase 0 — read-only Gmail triage from the TUI.** One PR. `EmailToolsMixin` with
+5 read tools plus `triage_inbox`, registered in `KNOWN_TOOLS`; `inbox-triage`
+skill; Google connector requirement with read scopes only. No writes, no state DB,
+no Outlook, no calendar. Acceptance: `triage my inbox` works end-to-end in
+`gaia tui` against a real Gmail account, and `tool_selection` does not regress
+against the committed baseline.
+
+**Phase 1** — organize + undo. Brings the action ledger and the batch threshold.
+
+**Phase 2** — draft, send, trash, behind confirmation.
+
+**Phase 3** — briefing, tasks, scheduling. Needs daemon-managed jobs.
+
+**Phase 4** — Outlook / Microsoft Graph.
+
+**Phase 5** — deprecate. Not before Phases 0–4 have shipped and the eval bar is met.
+
+## Decommission blast radius
+
+**This is a multi-release effort, and the removal is larger than the build.**
+
+| Surface | Scale |
+|---|---|
+| Tests | **174 files** — 130 in-package, 44 repo-wide |
+| CI workflows | **11** referencing email; **7** email-only (`release_agent_email.yml`, `test_email_agent{,_unit,_eval}.yml`, `test_agent_email_npm.yml`, `email_scorecard_refresh.yml`, `build_cpp_email.yml`) |
+| Package docs | ~332 KB across README / SPEC / SKILL / CHANGELOG / CAPABILITY_MATRIX / CONTRACT / `openapi.email.json` / `specification.html` — all must move together per CLAUDE.md |
+| npm | `@amd-gaia/agent-email` **published at 0.6.0** — needs `npm deprecate`, not deletion |
+| PyPI | `gaia-agent-email` in `setup.py:30` `AGENT_WHEEL_PACKAGES` |
+| Daemon | **9 modules** in `src/gaia/daemon/sidecars/` with email-specific paths, ports, and scope literals |
+| UI proxy | `src/gaia/ui/email_sidecar/` — 6 files, entirely an email proxy |
+| Eval framework | **5 modules** import `gaia_agent_email` directly (`benchmark.py`, `draft_quality.py`, `briefing_quality.py`, `followup_quality.py`, `action_item_quality.py`) |
+| CLI | `gaia email` + `gaia email autonomy` (`cli.py:1424-1489`, handlers at `4542-4825`) |
+| Go TUI | Catalog seed entry with `Transport: TransportDaemon` + tests |
+| Docs site | `docs/docs.json` lines 102-103, 398-399, 410; `guides/email.mdx`, `guides/email-integration.mdx`, 3 plan docs |
+
+**The cost nobody has priced:** the email agent is the *only* proven sidecar. It is
+the reference implementation for the entire daemon-supervised sidecar
+architecture — frozen binaries on four platforms, SSE translation, caller auth,
+forwarded credentials. Deleting it deletes that reference. A defensible middle
+path is to move the *capability* to the flagship and keep the package as an
+architectural reference, unlisted on the hub. That would also resolve the conflict
+with #2982's non-goal without abandoning either position.
+
+## Non-goals
+
+- Not delivering the Phase 2 sandbox (#2863). This proposal routes around it.
+- Not skills-v2 adaptive learning (#2683).
+- Not the C++ runtime (#1543, #2799).
+- Not calendar, phishing SLM, or voice-profile capability in Phases 0–4.
+- Not deleting the sidecar architecture — only this consumer of it.
+- Not widening OAuth scopes. The `https://mail.google.com/` exclusion is permanent.
+
+## Open questions for the owner
+
+1. **#2982 conflict.** It names the email agent a permanent non-goal. Does this
+   proposal supersede that, or does the package survive as an unlisted reference?
+2. **Move or duplicate?** #2672 asks the same question and never settled it.
+   Duplicating creates two implementations to drift; moving is a breaking change
+   for anyone importing `gaia_agent_email`. Recommendation: **move**, with the
+   package retained at a frozen version until Phase 5.
+3. **Does #2672 get closed, narrowed, or left alone** once this lands? Its
+   portability goal survives independently, but its email framing would be stale.
+4. **Eval decoupling.** Five eval modules import the email package directly. Do
+   they retarget to the flagship in Phase 0, or keep dual baselines through Phase 4?
+5. **npm consumers.** Is `@amd-gaia/agent-email` known to have external users? That
+   decides deprecation-window length.

@@ -29,9 +29,25 @@
 # CI keys off each gate's `should_fail` (= enforce AND not passed). With enforce
 # false everywhere, `should_fail` is never true, so a breached BAR cannot fail any
 # run on any trigger today. What still fails the build, on every trigger, is the
-# class of things that mean the eval could not prove anything: a missing
-# ANTHROPIC_API_KEY, an errored or unjudged case, a judge transport error, or a
-# harness crash (CLAUDE.md fail-loudly — never an un-judged pass).
+# class of things that mean the eval could not prove anything: a missing or
+# REJECTED judge credential, a judge transport error, or a harness crash
+# (CLAUDE.md fail-loudly — never an un-judged pass).
+#
+# ONE HOLE REMAINS, stated rather than papered over. If the judge answers but
+# every reply is unparseable, drafting and action-item record per-case errors,
+# their gate comes back `skipped`, and the step still exits 0 — the sentence
+# above used to claim "an errored or unjudged case" fails the build, and for
+# those two it does not. Only briefing checks `skipped` and fails. Closing that
+# means changing those scripts' exit semantics (and the committed tests that
+# pin them), which is its own change. A judge that cannot be reached at all is
+# covered: the transport raises and the step dies.
+#
+# JUDGE CREDENTIAL. The judged evals prefer CLAUDE_CODE_OAUTH_TOKEN (a Claude
+# Code subscription token, driven through `claude -p`) and fall back to
+# ANTHROPIC_API_KEY (a console API key, driven against the Messages API); the
+# selection lives in src/gaia/eval/judge_client.py, not here. The key alone is
+# what this workflow asked for until the account behind it ran out of credit and
+# every run on every branch died ~25 minutes in.
 #
 # Enforcement is toggled IN THE MANIFEST (data, not this workflow): flip a gate's
 # `"enforce"` to true and it blocks the weekly, the release AND the PR at once.
@@ -117,8 +133,8 @@
 # That, not the exit code, is the PR-facing signal today.
 #
 # FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
-# unreviewed fork code is not acceptable, and a fork PR carries no
-# ANTHROPIC_API_KEY, so it could only ever produce an un-judged result.
+# unreviewed fork code is not acceptable, and a fork PR carries no judge
+# credential, so it could only ever produce an un-judged result.
 # test_eval_agent_gemma_consolidation.yml now triggers on `pull_request` too (a
 # `push` filter re-fired it on every main-merge, gating PRs that touched no
 # Python), so it carries the same fork and draft clauses in its job `if:` —
@@ -199,8 +215,11 @@ on:
         type: string
         default: '1'
     secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Preferred judge credential — a Claude Code subscription token, driven through the `claude` CLI. One of this or ANTHROPIC_API_KEY is REQUIRED; with neither, the preflight fails the run before any eval spend, never a skip. (Declared optional only so the call site does not have to name it when using `secrets: inherit`.)'
+        required: false
       ANTHROPIC_API_KEY:
-        description: 'Judge credential for the drafting / action-item / briefing judged evals — REQUIRED; absent → the preflight step fails the run before any eval spend, never a skip. (Declared optional only so the call site does not have to name it when using `secrets: inherit`.)'
+        description: 'Fallback judge credential — a console API key, used only when CLAUDE_CODE_OAUTH_TOKEN is unset. See above for the required-ness rule.'
         required: false
 
 concurrency:
@@ -299,7 +318,7 @@ jobs:
       queue: max
     # PR guard (no-op for schedule / workflow_dispatch / workflow_call):
     #   - fork PRs never reach the self-hosted pool, and could only produce an
-    #     un-judged result anyway (no ANTHROPIC_API_KEY) — see the header;
+    #     un-judged result anyway (no judge credential) — see the header;
     #   - drafts skip the 90-minute run until marked ready (or labeled
     #     `ready_for_ci`), matching test_email_agent.yml;
     #   - `skip-email-eval` is the documented opt-OUT for an email PR that
@@ -319,27 +338,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Fail-fast preflight. The three judged evals (drafting / action-item /
-      # briefing) each hard-require the judge credential and exit 1 without it —
-      # but only after the ~40-minute benchmark has already run. Checking it here
-      # turns "burn 40 minutes of the single serial Lemonade slot, then die" into
-      # "die in 10 seconds", which matters much more now that PRs queue for that
-      # slot too. Fails on EVERY trigger — a run that cannot judge cannot produce
-      # evidence (CLAUDE.md: fail loudly, no silent skip).
-      # Deliberately NOT a Lemonade check: the "Start Lemonade Server" step below
-      # is already that preflight and throws when the server is not ready.
-      - name: Preflight — judge credential
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          # Single-quoted: a backtick in a double-quoted PowerShell string is the
-          # escape character and would eat the markdown ticks.
-          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
-            Write-Host '::error::ANTHROPIC_API_KEY is not set. The drafting, action-item and briefing evals score with the Claude judge (src/gaia/eval/claude.py) and exit 1 without it, so this run could only ever produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass `secrets: inherit` from the calling workflow.'
-            exit 1
-          }
-          Write-Host "Judge credential present."
-
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv
         with:
@@ -358,6 +356,42 @@ jobs:
           # .venv/Lib -> FileNotFoundError on the gate manifests. Editable keeps
           # __file__ in the repo so the manifests resolve.
           install-package: '-e .[dev,eval,api] -e hub/agents/email/python'
+
+      # A subscription token authenticates the `claude` CLI, not the Messages API,
+      # so the judge needs the CLI on PATH. The stx pool ships no usable npm —
+      # hence setup-node, same pair of steps as
+      # test_eval_agent_gemma_consolidation.yml.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (judge transport)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "claude CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      # Fail-fast preflight, on EVERY trigger — a run that cannot judge cannot
+      # produce evidence (CLAUDE.md: fail loudly, no silent skip).
+      #
+      # It sends one trivial prompt down the exact transport the evals use, rather
+      # than asserting the variable is non-empty. A present-but-rejected credential
+      # otherwise burns ~25 minutes of the single serial Lemonade slot before dying
+      # in the drafting eval.
+      #
+      # Deliberately NOT a Lemonade check: the "Start Lemonade Server" step below
+      # is already that preflight and throws when the server is not ready.
+      - name: Preflight — judge credential (live probe)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Blanked when the token is present: judge_client prefers the key, so
+          # leaving both set would keep using the key's account.
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          python -m gaia.eval.judge_client --probe
+          if ($LASTEXITCODE -ne 0) { throw "judge credential probe failed" }
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -432,10 +466,12 @@ jobs:
       # =================================================================
       - name: Voice-drafting quality eval (judge-scored)
         env:
-          # Judge credential for gaia.eval.claude.ClaudeClient — REQUIRED. When the
-          # secret is absent eval_drafting_report.py exits 1 (fail-loudly, never a
-          # skip), so this step throws rather than shipping an un-judged gate.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Judge credential for gaia.eval.judge_client — REQUIRED. When both
+          # secrets are absent eval_drafting_report.py exits 1 (fail-loudly, never
+          # a skip), so this step throws rather than shipping an un-judged gate.
+          # See the preflight above for why the key is blanked when OAuth is set.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
@@ -452,7 +488,7 @@ jobs:
       # hard negatives included). Generation drives the REAL triage path over a
       # FakeGmailBackend (Lemonade — nothing is ever sent). The Claude
       # equivalence judge resolves borderline description pairs and is REQUIRED:
-      # ANTHROPIC_API_KEY MUST be present, and if the judge cannot run the step
+      # a judge credential MUST be present, and if the judge cannot run the step
       # FAILS LOUDLY. There is NO fallback to fuzzy-only matching — a missing or
       # broken judge is an error, never a silent degradation to a weaker scorer
       # (CLAUDE.md: No Silent Fallbacks — Fail Loudly).
@@ -470,7 +506,9 @@ jobs:
         env:
           # Judge credential for the borderline equivalence judge — REQUIRED.
           # Absent -> the script fails loudly (NO fuzzy-only fallback).
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # See the preflight above for why the key is blanked when OAuth is set.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
@@ -510,9 +548,11 @@ jobs:
       # =================================================================
       - name: Daily-briefing summary-quality eval (judge-scored)
         env:
-          # Judge credential for gaia.eval.claude.ClaudeClient — REQUIRED. This
-          # gate has no report-mode fallback: an absent key fails the build.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Judge credential for gaia.eval.judge_client — REQUIRED. This gate has
+          # no report-mode fallback: an absent credential fails the build.
+          # See the preflight above for why the key is blanked when OAuth is set.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
