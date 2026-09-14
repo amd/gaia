@@ -327,7 +327,7 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | Where | Normal (default) | Sensitive |
 |-------|------------------|-----------|
 | System prompt | Included | **Never included** |
-| `recall` results | Returned | Returned (explicit query only) |
+| `recall` results | Returned | Returned for any filtered call -- a bare `recall()` skips them |
 | Tool history args | Full args logged | Args redacted to keys only |
 | Memory Dashboard | Normal display | Content blurred until clicked |
 | Terminal `/memory` view | Normal display | Shown in full, tagged `sensitive` -- not blurred |

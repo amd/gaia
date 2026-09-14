@@ -1193,11 +1193,13 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | Where | sensitive=0 (default) | sensitive=1 |
 |---|---|---|
 | System prompt | Included | Never included |
-| `recall()` results | Returned | Returned (explicit query) |
+| `recall()` results | Returned | Returned for any filtered call; a bare `recall()` skips them |
 | Tool history `args` | Full args logged | Args redacted to keys only |
 | Dashboard | Normal display | Badge, content blurred until clicked |
 
 The LLM can still access sensitive data via `recall()` -- it just won't be broadcast in the system prompt where it could leak into logs or debugging output.
+
+The one exception is a **filterless** `recall()`. That is the browse an unprompted greeting makes, and on a cloud-backed session everything it returns is sent to the provider, so it holds sensitive rows back. Any filter -- a `query`, a `category`, an `entity`, a time bound -- returns them as before (#3673).
 
 ---
 
