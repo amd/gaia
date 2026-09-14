@@ -338,9 +338,7 @@ GOOGLE_PERSONAL = SetupRoute(
         Step(
             id="client_id",
             title="Copy the Client ID",
-            instruction=(
-                "Copy the Client ID (ends in .apps.googleusercontent.com)"
-            ),
+            instruction=("Copy the Client ID (ends in .apps.googleusercontent.com)"),
             verifiable=True,
             collects_credential=True,
         ),

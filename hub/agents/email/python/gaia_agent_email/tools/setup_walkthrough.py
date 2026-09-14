@@ -34,7 +34,12 @@ from gaia_agent_email.tools.onboarding_tools import (
     narrate,
 )
 
-from gaia.connectors.setup_routes import SIGN_IN_DEVICE_CODE, Step, SetupRoute, steps_for
+from gaia.connectors.setup_routes import (
+    SIGN_IN_DEVICE_CODE,
+    SetupRoute,
+    Step,
+    steps_for,
+)
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -129,7 +134,7 @@ _STEP_TIMEOUT_SECONDS = 480
 #: Said ONCE, at the first non-verifiable step — never repeated per step.
 _CANNOT_SEE_PORTAL_NOTICE = (
     "A heads up: I can't see your screen or your provider's portal — I can "
-    "only tell you what to click and check what I can. Say \"I'm stuck\" any "
+    'only tell you what to click and check what I can. Say "I\'m stuck" any '
     "time and I'll hand you off to the written guide instead."
 )
 
@@ -214,18 +219,14 @@ def _collect_credential(agent: Any, step: Step, route: SetupRoute) -> str:
     the ``verifiable`` field's honesty this feature exists to uphold.
     """
     prompt = f"Paste the value for: {step.title}."
-    value = ask(
-        agent, prompt, allow_free_text=True, sensitive=step.sensitive
-    )
+    value = ask(agent, prompt, allow_free_text=True, sensitive=step.sensitive)
     check = _SHAPE_CHECKS.get((route.provider, step.id))
     if check is not None:
         error = check(value)
         while error is not None:
             answer = _faq_answer(step, route, value)
             narrate(agent, answer if answer is not None else error)
-            value = ask(
-                agent, prompt, allow_free_text=True, sensitive=step.sensitive
-            )
+            value = ask(agent, prompt, allow_free_text=True, sensitive=step.sensitive)
             error = check(value)
     return value
 
@@ -241,7 +242,7 @@ _FAQ_MAX_TURNS = 3
 #: invent an answer instead of admitting it doesn't have one.
 _FAQ_NO_MATCH = (
     "I don't have a written answer for that one. Say \"I'm stuck\" and I'll "
-    "hand you off to the full guide, or \"Done\" once you've finished this "
+    'hand you off to the full guide, or "Done" once you\'ve finished this '
     "step."
 )
 

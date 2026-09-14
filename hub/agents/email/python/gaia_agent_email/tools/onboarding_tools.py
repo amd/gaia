@@ -251,7 +251,9 @@ def connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
     return merged
 
 
-def _run_browser_flow(agent: Any, provider: str, config: Dict[str, Any]) -> Dict[str, Any]:
+def _run_browser_flow(
+    agent: Any, provider: str, config: Dict[str, Any]
+) -> Dict[str, Any]:
     """Start the browser OAuth flow with an already-assembled *config*, wait
     for the user to finish it, and grant the result to this agent.
 

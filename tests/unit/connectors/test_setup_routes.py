@@ -1,6 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Authored setup-walkthrough content (#2590) — Outlook only, this PR.
+"""Authored setup-walkthrough content (#2590, #2594) — Outlook and personal
+Gmail.
 
 Two things are worth defending:
 
@@ -59,7 +60,9 @@ def test_google_route_has_no_loopback_only_steps():
 def test_google_route_faq_confirms_a_secret_is_required():
     """The inverse of Microsoft's rule — Google's route must be honest that
     it DOES need a client secret."""
-    route_qa = next(qa for qa in sr.GOOGLE_PERSONAL.faq if "secret" in qa.question_hints)
+    route_qa = next(
+        qa for qa in sr.GOOGLE_PERSONAL.faq if "secret" in qa.question_hints
+    )
     assert "requires a client secret" in route_qa.answer.lower()
 
 
