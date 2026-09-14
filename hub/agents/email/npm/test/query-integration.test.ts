@@ -168,3 +168,26 @@ describe.skipIf(!python)("query() against the real sidecar (dev mode)", () => {
     expect((err as HttpError).status).toBe(404);
   }, 30_000);
 });
+
+describe.skipIf(!python)("SCHEMA_VERSION cross-language parity (#2746)", () => {
+  it("TS SCHEMA_VERSION matches Python contract.SCHEMA_VERSION", () => {
+    // Import, don't hardcode: the whole point is catching a bump on one side
+    // that forgot the other. Print both values so a mismatch is legible.
+    const proc = spawnSync(
+      python as string,
+      ["-c", "from gaia_agent_email.contract import SCHEMA_VERSION; print(SCHEMA_VERSION)"],
+      { timeout: 30_000, encoding: "utf-8" },
+    );
+    if (proc.status !== 0) {
+      throw new Error(
+        `failed to read Python SCHEMA_VERSION (exit ${proc.status}): ${proc.stderr}`,
+      );
+    }
+    const pythonVersion = proc.stdout.trim();
+    expect(
+      pythonVersion,
+      `TS SCHEMA_VERSION ("${SCHEMA_VERSION}") in src/types.ts must match Python ` +
+        `SCHEMA_VERSION ("${pythonVersion}") in gaia_agent_email/contract.py`,
+    ).toBe(SCHEMA_VERSION);
+  });
+});
