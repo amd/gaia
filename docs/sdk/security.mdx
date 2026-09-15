@@ -28,7 +28,16 @@ is_allowed, reason = session.validate_read("/home/user/documents/report.pdf")
 # Writes: additionally refuses blocked directories and files that execute on
 # their own (.bashrc, PowerShell profiles, autostart entries, .git/**).
 is_allowed, reason = session.validate_write("/home/user/documents/out.md")
+
+# A scratch directory for throwaway files. Only this directory is granted — the
+# rest of the system temp dir stays denied, and those denials name the scratch
+# directory. Secret and blocked-file checks still apply inside it.
+import tempfile
+session.set_scratch_dir(tempfile.mkdtemp(prefix="gaia-scratch-"))
 ```
+
+`ChatAgent` and `GaiaAgent` create one scratch directory per agent, name it in the
+system prompt, and delete it when the agent is cleaned up (`GaiaAgent.close()`).
 
 <Warning>
   Only a validator built **without** an `allowed_paths` argument reads or writes the

@@ -7,7 +7,9 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 import os
 import platform
 import re
+import shutil
 import sqlite3
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
@@ -275,6 +277,11 @@ class ChatAgent(
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
         )
+        # Without this, throwaway scripts land in the user's project.
+        self.scratch_dir: Optional[Path] = Path(
+            tempfile.mkdtemp(prefix="gaia-scratch-")
+        )
+        self.path_validator.set_scratch_dir(str(self.scratch_dir))
 
         # Store config for access in other methods
         self.config = config
@@ -1132,7 +1139,15 @@ No documents are currently indexed.
             "data_file_rules": data_file_rules,
             "load_tools_menu": load_tools_menu,
         }
-        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            prompt += (
+                f"\nScratch directory for temporary files: {scratch_dir} — put "
+                "throwaway scripts and intermediate files here, never in the "
+                "user's project.\n"
+            )
+        return prompt
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1482,7 +1497,8 @@ No documents are currently indexed.
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
-                        "error": f"Access denied: {file_path}",
+                        "error": f"Access denied: {file_path}."
+                        f"{self.path_validator.scratch_hint(file_path)}",
                     }
 
                 p = Path(file_path)
@@ -2596,3 +2612,16 @@ No documents are currently indexed.
                 self._scratchpad.close_db()
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            try:
+                shutil.rmtree(scratch_dir)
+                self.scratch_dir = None
+            except FileNotFoundError:
+                self.scratch_dir = None
+            except OSError as e:
+                logger.error(
+                    "Could not remove scratch directory %s during cleanup: %s",
+                    scratch_dir,
+                    e,
+                )
