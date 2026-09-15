@@ -131,6 +131,105 @@ class TestCalculateCost:
 
 
 # ---------------------------------------------------------------------------
+# Thinking-block-safe text extraction (#3884)
+#
+# claude-opus-5 (the default judge model) prepends a ThinkingBlock with no
+# ``.text`` attribute; earlier code indexed ``message.content[0].text``
+# blindly and crashed with AttributeError on the model's very first reply.
+# ---------------------------------------------------------------------------
+
+
+class TestFirstTextSkipsThinkingBlock:
+    """analyze_file / analyze_file_with_usage must skip non-text blocks."""
+
+    @pytest.fixture()
+    def client(self, monkeypatch):
+        return _build_client(monkeypatch, model="claude-opus-5")
+
+    @staticmethod
+    def _thinking_then_text(text="the answer"):
+        # A real ThinkingBlock has no `.text` attribute at all (not even
+        # None) — SimpleNamespace without a `text=` kwarg reproduces that
+        # exactly, unlike a Mock() which would auto-vivify one.
+        thinking_block = SimpleNamespace(type="thinking", thinking="reasoning...")
+        text_block = SimpleNamespace(type="text", text=text)
+        return [thinking_block, text_block]
+
+    def test_analyze_file_html_returns_text_block_not_block_zero(
+        self, client, tmp_path, monkeypatch
+    ):
+        html_file = tmp_path / "doc.html"
+        html_file.write_text("<html><body>hi</body></html>", encoding="utf-8")
+        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hi")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=self._thinking_then_text("summary text")
+        )
+
+        result = client.analyze_file(str(html_file), "summarize")
+
+        assert result == "summary text"
+
+    def test_analyze_file_binary_returns_text_block_not_block_zero(
+        self, client, tmp_path
+    ):
+        pdf_file = tmp_path / "doc.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake pdf content")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=self._thinking_then_text("pdf summary")
+        )
+
+        result = client.analyze_file(str(pdf_file), "summarize")
+
+        assert result == "pdf summary"
+
+    def test_analyze_file_with_usage_text_branch_skips_thinking_block(
+        self, client, tmp_path
+    ):
+        txt_file = tmp_path / "doc.txt"
+        txt_file.write_text("hello world", encoding="utf-8")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=self._thinking_then_text("text branch answer"),
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+
+        result = client.analyze_file_with_usage(str(txt_file), "summarize")
+
+        assert result["content"] == "text branch answer"
+
+    def test_analyze_file_with_usage_binary_branch_skips_thinking_block(
+        self, client, tmp_path
+    ):
+        pdf_file = tmp_path / "doc.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake pdf content")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=self._thinking_then_text("pdf branch answer"),
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+
+        result = client.analyze_file_with_usage(str(pdf_file), "summarize")
+
+        assert result["content"] == "pdf branch answer"
+
+    def test_no_text_block_raises_actionable_error_naming_model_and_types(
+        self, client, tmp_path
+    ):
+        txt_file = tmp_path / "doc.txt"
+        txt_file.write_text("hello world", encoding="utf-8")
+        # Only a thinking block — no text block anywhere in the response.
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(type="thinking", thinking="reasoning...")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            client.analyze_file_with_usage(str(txt_file), "summarize")
+
+        message = str(excinfo.value)
+        assert "claude-opus-5" in message
+        assert "SimpleNamespace" in message
+
+
+# ---------------------------------------------------------------------------
 # get_completion
 # ---------------------------------------------------------------------------
 
