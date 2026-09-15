@@ -5054,6 +5054,8 @@ Do NOT wrap conversational replies in JSON.
         cancelled_by_console = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        # Repeated calls already sent one correction; the next repeat ends the turn.
+        loop_corrected_calls: set = set()
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -6255,6 +6257,19 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
+                        if current_call not in loop_corrected_calls:
+                            loop_corrected_calls.add(current_call)
+                            # Sent as this call's result so tool_call_id pairing holds.
+                            messages.append(
+                                self._create_tool_message(
+                                    tool_name,
+                                    self._loop_correction_result(
+                                        tool_name, consecutive_count, recent_results
+                                    ),
+                                    tool_call_id=tool_call_id,
+                                )
+                            )
+                            continue
                         final_answer = self._build_loop_break_summary(
                             tool_name, consecutive_count, recent_results
                         )
@@ -6265,6 +6280,9 @@ Do NOT wrap conversational replies in JSON.
                     # Execute
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
+                    if self._is_throttled_result(tool_result):
+                        tool_call_history.pop()  # never ran, so not a repeat
+                        self._wait_out_rate_limit(tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -6475,11 +6493,25 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
+                    # Not ``step_results``: error recovery clears it before each retry.
+                    recent_results = [o.get("result") for o in previous_outputs]
+                    if current_call not in loop_corrected_calls:
+                        loop_corrected_calls.add(current_call)
+                        messages.append(
+                            self._create_tool_message(
+                                tool_name,
+                                self._loop_correction_result(
+                                    tool_name, consecutive_count, recent_results
+                                ),
+                            )
+                        )
+                        continue
+
                     # Force a final answer if the same tool is called repeatedly.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
                     final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count, step_results
+                        tool_name, consecutive_count, recent_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -6490,6 +6522,9 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+                if self._is_throttled_result(tool_result):
+                    tool_call_history.pop()  # never ran, so not a repeat
+                    self._wait_out_rate_limit(tool_result)
 
                 # Issue #1023: record success/failure of capability tools so
                 # the verbose-failure override downstream fires only when the
@@ -7203,23 +7238,116 @@ Do NOT wrap conversational replies in JSON.
             or result.get("return_code", 0) != 0
         )
 
+    _RATE_LIMIT_WAIT_CAP_S = 15.0
+    _LOOP_CONNECTION_RE = re.compile(
+        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+        r"|unreachable|could not connect|failed to establish|max retries exceeded"
+        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out",
+        re.IGNORECASE,
+    )
+    _LOOP_NOT_PERMITTED_RE = re.compile(
+        r"not allowed|not permitted|not in (?:the )?allowed|access denied"
+        r"|permission denied|blocked|refus",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _is_throttled_result(result: Any) -> bool:
+        """True when the tool refused the call for rate limiting — it never ran."""
+        return isinstance(result, dict) and result.get("rate_limited") is True
+
+    def _wait_out_rate_limit(self, result: Dict[str, Any]) -> None:
+        """Sleep the throttle's reported wait (capped) so the retry can run."""
+        try:
+            seconds = float(result.get("wait_time_seconds") or 0.0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Rate-limited result has a non-numeric wait_time_seconds: %r",
+                result.get("wait_time_seconds"),
+            )
+            return
+        seconds = min(max(seconds, 0.0), self._RATE_LIMIT_WAIT_CAP_S)
+        if seconds <= 0:
+            return
+        logger.info("Tool call was rate-limited; waiting %.1fs", seconds)
+        cancel = getattr(self, "_cancel_event", None)
+        if cancel is not None:
+            cancel.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    @staticmethod
+    def _loop_error_brief(result: Any) -> str:
+        """The error a failed result reports: ``error``, else last stderr line."""
+        if isinstance(result, dict):
+            err = result.get("error")
+            if err:
+                return str(err).strip()
+            stderr = result.get("stderr")
+            if isinstance(stderr, str):
+                lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+                if lines:
+                    return lines[-1]
+            return_code = result.get("return_code")
+            if return_code not in (None, 0):
+                return f"it exited with return code {return_code}"
+        return "the tool returned an error"
+
+    def _loop_correction_result(
+        self, tool_name: str, consecutive_count: int, recent_results: list
+    ) -> Dict[str, Any]:
+        """The tool result sent in place of a repeated call, asking for a new approach."""
+        last = recent_results[-1] if recent_results else None
+        if Agent._is_error_result(last):
+            brief = " ".join(self._loop_error_brief(last).split())
+            if len(brief) > 200:
+                brief = brief[:197] + "..."
+            outcome = f"the same error ({brief})"
+        else:
+            outcome = "no new progress"
+        correction = (
+            f"You have called {tool_name} {consecutive_count} times with the same "
+            f"arguments and it returned {outcome}. Do not repeat it — try a "
+            "different approach, or give your final answer."
+        )
+        logger.warning("Loop guard correction: %s", correction)
+        return {**NOT_EXECUTED, "status": "error", "error": correction}
+
     def _build_loop_break_summary(
         self,
         tool_name: str,
         consecutive_count: int,
         step_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; honest on errors."""
+        """Final-answer text when the loop breaks on repeats; names the real cause."""
         last = step_results[-1] if step_results else None
-        if Agent._is_error_result(last):
-            err = (last or {}).get("error") or "the tool returned an error"
+        denied = isinstance(last, dict) and last.get("status") == "denied"
+        if not (denied or Agent._is_error_result(last)):
+            return f"Task completed with {tool_name}. No further action needed."
+        err = self._loop_error_brief(last)
+        attempts = f"I tried calling `{tool_name}` {consecutive_count} times"
+        if self._is_throttled_result(last):
             return (
-                f"I tried calling `{tool_name}` {consecutive_count} times "
-                f"and it kept failing: {err}\n\n"
+                f"{attempts}, but it was rate-limited and did not run: {err}\n\n"
+                "Wait a moment and ask again, or ask for a different approach."
+            )
+        if self._LOOP_CONNECTION_RE.search(err):
+            return (
+                f"{attempts} and it kept failing: {err}\n\n"
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        return f"Task completed with {tool_name}. No further action needed."
+        if denied or self._LOOP_NOT_PERMITTED_RE.search(err):
+            return (
+                f"{attempts}, but it is not permitted here: {err}\n\n"
+                "Try a different approach — for example, split it into separate "
+                "steps or use another tool."
+            )
+        return (
+            f"{attempts} and it kept failing: {err}\n\n"
+            "I couldn't recover from this — please rephrase the request "
+            "or try a different approach."
+        )
 
     def _dedup_mutation_call(
         self,
