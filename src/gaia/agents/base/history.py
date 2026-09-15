@@ -175,7 +175,6 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
 
 def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
-    from gaia.agents.base.turn_metrics import count_tokens
     from gaia.llm.lemonade_client import (
         GPU_CTX_SIZE,
         LemonadeClient,

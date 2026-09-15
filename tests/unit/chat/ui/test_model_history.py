@@ -234,7 +234,7 @@ def test_budget_follows_device_and_reserves_overhead(monkeypatch, device, expect
     helpers._restore_model_history(agent, db, session, "query")
     assert selection.call_args.args[1] == expected
     agent.system_prompt = "very large system prompt"
-    monkeypatch.setattr("gaia.agents.base.turn_metrics.count_tokens", lambda _: 20000)
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 20000)
     helpers._restore_model_history(agent, db, session, "query")
     assert selection.call_args.args[1] == min(
         expected, (32768 if device == "npu" else 65536) - 30240
@@ -326,7 +326,7 @@ def test_large_paste_with_no_history_does_not_fail_restore(monkeypatch, caplog):
     db = ChatDatabase(":memory:")
     session = db.create_session()["id"]
     agent = SimpleNamespace(device="npu")
-    monkeypatch.setattr("gaia.agents.base.turn_metrics.count_tokens", lambda _: 100000)
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 100000)
     helpers._restore_model_history(agent, db, session, "a large pasted message")
     assert agent.conversation_history == []
     assert "No context budget remains" in caplog.text

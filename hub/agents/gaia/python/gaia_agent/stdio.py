@@ -1069,7 +1069,12 @@ def run_turn(
                 isinstance(value, dict) and value.get("model_messages") is not None
             )
             if streamed_answer is not None or has_trace:
-                _record_turn(agent, query, streamed_answer or "", value)
+                try:
+                    _record_turn(agent, query, streamed_answer or "", value)
+                except Exception as exc:
+                    logger.exception("Failed to preserve turn history")
+                    _write(_terminal_error(exc), out)
+                    return
             _write(terminal_event, out)
             return
         if "error" in result:
@@ -1090,11 +1095,13 @@ def run_turn(
             answer = value
         # Recorded even when empty — same reasoning as the streamed branch:
         # the question half of the pair must survive.
-        _record_turn(agent, query, answer, result.get("value"))
+        try:
+            _record_turn(agent, query, answer, result.get("value"))
+        except Exception as exc:
+            logger.exception("Failed to preserve turn history")
+            _write(_terminal_error(exc), out)
+            return
         _write({"type": "final", "answer": answer}, out)
-    except Exception as exc:
-        logger.exception("Failed to preserve turn history")
-        _write(_terminal_error(exc), out)
     finally:
         # Every exit path, including the early returns above: leaving a dead
         # turn's handler attached would send the next decision to a thread that
