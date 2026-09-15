@@ -32,7 +32,6 @@ import contextlib
 import json
 import os
 import queue
-import sys
 import threading
 import time
 import uuid
@@ -40,12 +39,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
+from gaia_agent.entry import main as _entry_main
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from gaia.logger import get_logger, route_console_logging_to_stderr
+from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
@@ -61,7 +61,16 @@ API_VERSION = "2.12"
 _HEARTBEAT_SECONDS = 10.0
 
 #: Local inference only — the flagship runs against Lemonade.
-_ALLOWED_PROVIDERS = frozenset({"lemonade"})
+#: Inference backends ``/query`` accepts. ``claude`` sends the conversation to
+#: Anthropic's API instead of the local Lemonade server — the stdio transport
+#: has always allowed that via ``--use-claude``, and refusing it here was what
+#: made the daemon transport a downgrade rather than a move (see
+#: docs/plans/daemon-convergence.mdx §3.2). Anything outside this set is still
+#: refused loudly rather than quietly falling back to the default.
+_ALLOWED_PROVIDERS = frozenset({"lemonade", "claude"})
+
+#: Provider value that means "not local".
+_CLAUDE_PROVIDER = "claude"
 
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 
@@ -148,6 +157,62 @@ class QueryRespondResponse(_Strict):
     run_id: str
     request_id: str
     delivered: bool
+
+
+#: The three answers a tool confirmation accepts, matching the stdio control
+#: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). A fourth
+#: spelling would be refused here rather than guessed at.
+_TOOL_DECISIONS = ("allow", "deny", "always")
+
+
+class ToolDecisionRequest(_Strict):
+    """Body of ``POST /v1/gaia/query/{run_id}/tool_decision``.
+
+    The HTTP twin of the stdio transport's ``tool_decision`` control message —
+    the seam that lets a remote surface answer a confirmation while the agent
+    thread is still parked on it.
+    """
+
+    decision: str = Field(
+        description=(
+            "One of 'allow', 'deny', 'always'. 'always' grants the pending "
+            "call's scope for the rest of the session."
+        )
+    )
+    confirm_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The 'confirm_id' from the needs_confirmation event being answered. "
+            "Without it a late answer resolves whichever confirmation replaced "
+            "the one it was typed against."
+        ),
+    )
+
+    @field_validator("decision")
+    @classmethod
+    def _known_decision(cls, v: str) -> str:
+        if v not in _TOOL_DECISIONS:
+            raise ValueError(
+                f"decision must be one of {', '.join(_TOOL_DECISIONS)}, got {v!r}"
+            )
+        return v
+
+
+class ToolDecisionResponse(_Strict):
+    run_id: str
+    decision: str
+    delivered: bool
+
+
+class BypassRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/bypass``."""
+
+    enabled: bool
+
+
+class BypassResponse(_Strict):
+    session_id: str
+    enabled: bool
 
 
 class _QueryRun:
@@ -535,7 +600,14 @@ async def query(request: QueryRequest):
 
     try:
         kwargs: Dict[str, Any] = {}
-        if request.model:
+        if request.provider == _CLAUDE_PROVIDER:
+            # ``model`` names a CLAUDE model here, not a Lemonade one — putting
+            # it in model_id would point the local client at an id it cannot
+            # serve, which fails much later and much less clearly.
+            kwargs["use_claude"] = True
+            if request.model:
+                kwargs["claude_model"] = request.model
+        elif request.model:
             kwargs["model_id"] = request.model
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
@@ -557,21 +629,36 @@ async def query(request: QueryRequest):
                     ),
                 )
             if request.model and request.model != session.model_id:
-                # Only construction reads a model, and this session's agent is
-                # already built — running the old one silently would answer a
-                # request the caller did not make.
-                current = session.model_id or "the agent's default model"
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"session {request.session_id} is already running "
-                        f"{current}, and a model cannot be switched on a live "
-                        f"session. Start a new session_id to use "
-                        f"{request.model!r}, or omit 'model' to continue on "
-                        "the current one."
-                    ),
+                # Switched in place rather than refused. Rebuilding the agent
+                # (or making the caller start a new session_id, which is what
+                # this used to say) throws away the conversation and every
+                # loaded skill — the two things a retained session exists to
+                # keep. run_lock is held here, so no turn is mid-inference.
+                try:
+                    display = session.switch_model(request.model)
+                except RuntimeError as exc:
+                    # The switch is all-or-nothing: the session is still on its
+                    # previous model, so this is a failed request, not a broken
+                    # session.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"could not switch session {request.session_id} to "
+                            f"{request.model!r}: {exc}. The session is still "
+                            f"running {session.model_id or 'its previous model'}."
+                        ),
+                    ) from exc
+                logger.info(
+                    "session %s switched to %s mid-conversation",
+                    request.session_id,
+                    display,
                 )
             agent = session.agent
+            # Hand this turn's handler the session's accumulated permission
+            # state — bypass, and every "always" the user has granted. Built
+            # fresh per turn, so without this both reset at every turn boundary
+            # and the user is re-asked for a call they already approved.
+            session.permissions.attach(handler)
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
                 # a later turn on this same still-live session isn't re-warned.
@@ -657,6 +744,9 @@ async def query(request: QueryRequest):
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
             if session is not None:
+                # Collect this turn's "always" grants into the session before
+                # the handler is dropped, or the next turn re-asks for them.
+                session.permissions.detach(handler)
                 session.run_lock.release()
             # This thread is the last thing to touch a one-shot agent — the
             # stream reads only run.result and the handler — so its RAG index,
@@ -678,6 +768,12 @@ async def query(request: QueryRequest):
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
+
+    # A confirmation can only be carried when somebody is there to answer it AND
+    # there is a session to hold the grant. ``can_answer_questions`` is the
+    # caller's own declaration that a human is watching (spec >= 2.6); a
+    # one-shot sets it False precisely so the agent never parks on a prompt.
+    can_confirm = session is not None and request.can_answer_questions is not False
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
@@ -710,6 +806,16 @@ async def query(request: QueryRequest):
                         # the worker thread blocks waiting for /respond.
                         continue
                     if ctype == "needs_confirmation":
+                        if can_confirm:
+                            # Answerable, so the run stays alive: keep draining
+                            # while the worker thread blocks in
+                            # confirm_tool_execution waiting for
+                            # /query/{run_id}/tool_decision. Same shape as
+                            # needs_input above.
+                            continue
+                        # Nobody can answer — refusing is the honest end, and
+                        # far better than parking a run on a prompt no one will
+                        # ever see.
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -792,6 +898,72 @@ async def respond_to_query(
     return QueryRespondResponse(
         run_id=run_id, request_id=body.request_id, delivered=True
     )
+
+
+@router.post("/query/{run_id}/tool_decision", response_model=ToolDecisionResponse)
+async def tool_decision(run_id: str, body: ToolDecisionRequest):
+    """Answer a ``needs_confirmation`` while the agent is still parked on it.
+
+    The HTTP twin of the stdio transport's ``tool_decision`` control message.
+    Without this the daemon transport could not run a gated tool at all — the
+    stream refused the confirmation and cancelled the run, because there was
+    nowhere for an answer to come from.
+
+    A decision for a prompt that is no longer pending is rejected rather than
+    silently dropped: dropping it would leave the caller believing it approved
+    something that never ran.
+    """
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No run {run_id!r} is in flight. It may have already finished "
+                "or been cancelled; the decision was not delivered."
+            ),
+        )
+    approved = body.decision in ("allow", "always")
+    delivered = run.handler.resolve_tool_confirmation(
+        approved=approved,
+        always=body.decision == "always",
+        confirm_id=body.confirm_id,
+    )
+    if not delivered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No tool confirmation is pending on run {run_id!r}"
+                + (f" for confirm_id {body.confirm_id!r}" if body.confirm_id else "")
+                + " — it was already answered, timed out, or never asked."
+            ),
+        )
+    return ToolDecisionResponse(run_id=run_id, decision=body.decision, delivered=True)
+
+
+@router.post("/sessions/{session_id}/bypass", response_model=BypassResponse)
+async def set_bypass(session_id: str, body: BypassRequest):
+    """Turn unattended tool approval on or off for a session.
+
+    Session-scoped rather than run-scoped because it must outlive any one turn —
+    that is the whole point of bypass — and it takes effect on the very next
+    gated tool, including one in a turn already running.
+
+    Only an EXISTING session is accepted: creating one here would build a whole
+    agent as a side effect of a settings toggle, and would silently succeed
+    against a typo'd session id.
+    """
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; bypass applies to a conversation, not to the "
+                "server."
+            ),
+        )
+    session.permissions.set_bypass(body.enabled)
+    return BypassResponse(session_id=session_id, enabled=body.enabled)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:
@@ -935,36 +1107,7 @@ def _warmup_blocking() -> None:
 app = build_app()
 
 
-#: argv spellings that select the HTTP sidecar. ``--serve`` is the explicit
-#: selector; the bind flags imply it because the daemon spawns the installed
-#: binary as ``<binary> --host H --port P`` with no ``--serve``
-#: (``gaia.daemon.sidecars.manager``). Neither spelling exists in the stdio
-#: parser and none of its flags exist here, so the split is unambiguous.
-_HTTP_SELECTORS = ("--serve", "--host", "--port")
-
-_TRANSPORT_HELP = """\
-gaia-agent serves two transports from one binary, chosen by argv:
-
-  gaia-agent --serve [--host HOST] [--port PORT]
-      The HTTP sidecar: the /v1/gaia/* contract the daemon and the Agent UI
-      speak. Bound to 127.0.0.1:8141 unless told otherwise.
-
-  gaia-agent [OPTIONS]
-      Newline-delimited JSON over stdin/stdout -- one query per line in, one
-      turn's canonical events out. This is what the TUI spawns. Its options:
-"""
-
-
-def _selects_http(argv: List[str]) -> bool:
-    """Whether *argv* asks for the HTTP sidecar rather than the stdio wire."""
-    return any(
-        arg == flag or arg.startswith(f"{flag}=")
-        for arg in argv
-        for flag in _HTTP_SELECTORS
-    )
-
-
-def _serve_http(argv: List[str]) -> int:
+def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
     import argparse
@@ -987,31 +1130,12 @@ def _serve_http(argv: List[str]) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    """Dispatch this process onto one of the agent's two transports.
-
-    ``--serve`` (or a bind flag) runs the HTTP sidecar. Everything else,
-    including no arguments at all, is the stdio JSONL transport the TUI spawns
-    as a child — its parser owns ``--model`` / ``--use-claude`` /
-    ``--claude-model`` / ``--json-events`` / ``--dev``, so argv is forwarded
-    verbatim. A flag from the wrong transport is an argparse error, never a
-    quiet switch to the other one.
-    """
-    args = list(sys.argv[1:] if argv is None else argv)
-    if _selects_http(args):
-        return _serve_http(args)
-
-    # The stdio parser cannot mention a mode it does not own.
-    if any(arg in ("-h", "--help") for arg in args):
-        print(_TRANSPORT_HELP)
-
-    # stdout is about to become the event wire, so nothing imported below may
-    # log to it — a stray line reaches the reader as a malformed event.
-    route_console_logging_to_stderr()
-
-    from gaia_agent.stdio import main as stdio_main
-
-    return stdio_main(args)
+# The transport split lives in ``gaia_agent.entry`` so the stdio wire never has
+# to import FastAPI to find out it was not selected. Re-exported here because
+# the frozen binary's entry point (packaging/server.py) reaches ``main`` through
+# this module — one implementation, two names, rather than two dispatchers that
+# can disagree.
+main = _entry_main
 
 
 if __name__ == "__main__":  # pragma: no cover

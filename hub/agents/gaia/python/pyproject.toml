@@ -33,9 +33,14 @@ dependencies = [
 ]
 
 [project.scripts]
-# The collapsed transport: the TUI spawns this once and trades newline-delimited
-# JSON over the pipe. No daemon, no HTTP port, no bearer token, no model lease.
-gaia-agent = "gaia_agent.stdio:main"
+# Two transports, one binary: `--serve` (or a bind flag) runs the HTTP sidecar
+# the daemon supervises, anything else runs the newline-delimited JSON wire a
+# parent process spawns. gaia_agent.entry is the dispatcher, and it is
+# deliberately light -- pointing this at server:main would make the stdio wire
+# import FastAPI (an extras-only dependency) just to discover it was not
+# selected; pointing it at stdio:main, as it did before, made `--serve`
+# unreachable from a pip install.
+gaia-agent = "gaia_agent.entry:main"
 
 [project.entry-points."gaia.agent"]
 gaia = "gaia_agent:build_gaia"
