@@ -11,7 +11,6 @@ from threading import Thread
 import pytest
 
 from gaia.cli import initialize_lemonade_for_agent
-from gaia.config import GaiaConfig
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -19,6 +18,8 @@ from gaia.llm.lemonade_manager import LemonadeManager
 @pytest.mark.parametrize("window", [16384, 131072])
 def test_startup_then_eviction_preserves_requested_window(monkeypatch, window):
     """Use real HTTP, manager startup, client reload, and serialized load bodies."""
+    from gaia.config import GaiaConfig
+
     monkeypatch.setenv("GAIA_CTX_SIZE", str(window))
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
     loaded = []

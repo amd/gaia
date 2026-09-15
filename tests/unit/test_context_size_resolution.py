@@ -12,7 +12,6 @@ import pytest
 import responses
 
 from gaia.cli import initialize_lemonade_for_agent
-from gaia.config import GaiaConfig
 from gaia.llm.lemonade_client import (
     MODELS,
     LemonadeClient,
@@ -23,6 +22,8 @@ from gaia.llm.lemonade_client import (
 
 @pytest.fixture(autouse=True)
 def isolated_config(monkeypatch):
+    from gaia.config import GaiaConfig
+
     monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
 
@@ -68,6 +69,8 @@ def test_npu_cap_warns_and_lower_override_is_honored(monkeypatch, caplog):
 
 
 def test_unset_device_uses_persisted_npu(monkeypatch):
+    from gaia.config import GaiaConfig
+
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="npu"))
     assert resolve_ctx_size("user.local-model") == 32768
 

@@ -157,6 +157,9 @@ def initialize_lemonade_for_agent(
     # Resolve inside the error boundary so invalid overrides exit cleanly.
     try:
         required_ctx = resolve_ctx_size(device=_configured_device())
+        get_logger(__name__).debug(
+            "Initializing %s with context size %d", agent, required_ctx
+        )
         if base_url:
             success = LemonadeManager.ensure_ready(
                 min_context_size=required_ctx,
