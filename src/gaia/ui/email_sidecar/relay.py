@@ -3,10 +3,11 @@
 """Relay the sidecar's canonical ``/query`` SSE loop into the UI's own SSE
 vocabulary (issue #2109).
 
-The email sidecar's ``POST /v1/email/query`` speaks a frozen, 7-event
-canonical vocabulary (spec #2015/#2016) —
+The email sidecar's ``POST /v1/email/query`` speaks a frozen, 8-event
+canonical vocabulary (spec #2015/#2016, ``needs_input`` added by #2595) —
 
-    status | token | tool_call | tool_result | needs_confirmation | final | error
+    status | token | tool_call | tool_result | needs_confirmation | needs_input
+    | final | error
 
 terminated by exactly one ``final`` or ``error``. The Agent UI's own SSE
 consumer (``gaia.ui._chat_helpers``'s streaming trunk) speaks a different,
@@ -293,6 +294,24 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
             }
         )
 
+    elif etype == "needs_input":
+        # Answerable, non-terminal (#2595) — unlike needs_confirmation this
+        # blocks the sidecar run until POST /api/chat/user-input delivers an
+        # answer, so every field the frontend needs to build and submit the
+        # prompt must cross this hop; run continues on the same stream.
+        options = event.get("options")
+        handler._emit(
+            {
+                "type": "needs_input",
+                "request_id": str(event.get("request_id") or ""),
+                "question": str(event.get("question") or ""),
+                "options": options if isinstance(options, list) else [],
+                "allow_free_text": bool(event.get("allow_free_text", True)),
+                "sensitive": bool(event.get("sensitive", False)),
+                "timeout_seconds": event.get("timeout_seconds"),
+            }
+        )
+
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
@@ -356,11 +375,27 @@ def relay_query(
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
     """
     rid = run_id or str(uuid.uuid4())
-    body: Dict[str, Any] = {"query": query, "run_id": rid, "context": context}
+    # can_answer_questions=True (#2595): this relay DOES render needs_input
+    # and POST the answer back via POST /api/chat/user-input ->
+    # EmailSidecarProxy.respond_query. Omitting it defaults to the sidecar's
+    # safe False (see query_routes.QueryRequest.can_answer_questions), which
+    # makes ask() refuse every question with "use the Agent UI" -- even
+    # though the Agent UI is the caller asking.
+    body: Dict[str, Any] = {
+        "query": query,
+        "run_id": rid,
+        "context": context,
+        "can_answer_questions": True,
+    }
     if model_id:
         body["model"] = model_id
     if max_steps is not None:
         body["max_steps"] = max_steps
+
+    # So a later POST /api/chat/user-input can find where to deliver the
+    # answer (#2595) — mirrors active_relay_response's lifetime exactly.
+    handler.active_relay_proxy = proxy
+    handler.active_relay_run_id = rid
 
     def _register_response(resp: Any) -> None:
         handler.active_relay_response = resp
@@ -421,6 +456,8 @@ def relay_query(
             logger.warning("email relay: stream failed for run_id=%s: %s", rid, exc)
     finally:
         handler.active_relay_response = None
+        handler.active_relay_proxy = None
+        handler.active_relay_run_id = None
 
     if handler.cancelled.is_set():
         _best_effort_cancel(proxy, rid)

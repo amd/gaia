@@ -9,7 +9,8 @@ export interface AgentInfo {
   id: string;
   name: string;
   description: string;
-  version: string;
+  /** Version string, when known. Not every source populates this field. */
+  version?: string;
   binaries: Record<string, string>;  // platform → binary name
   language?: string;
   toolsCount: number;

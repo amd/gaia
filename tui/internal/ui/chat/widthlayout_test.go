@@ -5,6 +5,7 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
 // terminalSizes spans the range a user actually runs the TUI at: a laptop
@@ -459,5 +461,56 @@ func TestCaptureCoversTheWidestWindowTheTUIAccepts(t *testing.T) {
 	if devPayloadWidth < widestLogMeasure {
 		t.Errorf("a --dev payload is captured at %d columns but one row can show %d",
 			devPayloadWidth, widestLogMeasure)
+	}
+}
+
+// #2518: at narrow widths a wrapped blockquote lost its left indent on every
+// line after the first, because glamour's own blockquote style charges 1
+// column for the "│ " indent token while emitting 2 — the overflow forced the
+// panel's outer lipgloss re-wrap to split the line, and that rewrap has no
+// idea a blockquote indent belongs at the front of the piece it moved.
+func TestBlockquoteContinuationKeepsIndent(t *testing.T) {
+	quote := "> This is a long blockquote answer that should wrap across several lines " +
+		"and every continuation line should keep the same left indent as the first " +
+		"line of the quoted block, even at a narrow terminal width like eighty columns."
+
+	for _, width := range []int{80, 200} {
+		t.Run(fmt.Sprintf("%dcols", width), func(t *testing.T) {
+			m := sizedChat(t, width, 40)
+			msg := &Message{Role: RoleAssistant, Content: quote, Rendered: components.RenderMarkdown(quote)}
+			rendered := ansi.Strip(m.renderMessage(msg, nil))
+
+			// Every non-blank rendered line belongs to the one blockquote
+			// paragraph, so every one of them — not merely the ones that
+			// happen to still carry a "│" — must open with it at the same
+			// column. Checking only the lines that already have "│" would
+			// pass right over the exact bug: a continuation line that lost
+			// its indent entirely just has no "│" to compare, and would be
+			// silently skipped instead of failing.
+			var indent = -1
+			quoteLines := 0
+			for _, line := range strings.Split(rendered, "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				runes := []rune(line)
+				col := 0
+				for col < len(runes) && runes[col] == ' ' {
+					col++
+				}
+				if indent == -1 {
+					indent = col
+				}
+				quoteLines++
+				if col != indent || col >= len(runes) || runes[col] != '│' {
+					t.Fatalf("at %d columns, a blockquote line lost its indent: "+
+						"first line's │ is at column %d, this line is %q", width, indent, line)
+				}
+			}
+			if quoteLines < 2 {
+				t.Fatalf("at %d columns, the blockquote rendered as only %d line(s); it did not wrap, so this test proves nothing: %q",
+					width, quoteLines, rendered)
+			}
+		})
 	}
 }
