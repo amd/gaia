@@ -948,6 +948,52 @@ class TestSessionEndpoints:
         resp = client.post("/api/sessions", json={"mail_provider": "yahoo"})
         assert resp.status_code == 422  # pattern validation fails loudly
 
+    @pytest.fixture
+    def gaia_only_registry(self):
+        from gaia.agents.registry import AgentRegistration, AgentRegistry
+
+        registry = AgentRegistry()
+        registry._register(
+            AgentRegistration(
+                id="gaia",
+                name="GAIA",
+                description="flagship",
+                source="installed",
+                conversation_starters=[],
+                factory=MagicMock(),
+                agent_dir=None,
+                models=[],
+            )
+        )
+        with patch("gaia.ui._chat_helpers._agent_registry", registry):
+            yield registry
+
+    def test_create_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        # #3883: a session for a removed agent could never answer a turn.
+        resp = client.post("/api/sessions", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "'data'" in detail
+        assert "chat, gaia" in detail
+        assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_create_session_registered_agent_type_accepted(
+        self, client, gaia_only_registry
+    ):
+        resp = client.post("/api/sessions", json={"agent_type": "gaia"})
+        assert resp.status_code == 200
+        assert resp.json()["agent_type"] == "gaia"
+
+    def test_update_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        sid = client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        assert client.get(f"/api/sessions/{sid}").json()["agent_type"] == "gaia"
+
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
         resp = client.put(f"/api/sessions/{sid}", json={"mail_provider": "microsoft"})

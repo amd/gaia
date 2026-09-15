@@ -13,7 +13,12 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .._chat_helpers import evict_session_agent, resolve_device_model
+from .._chat_helpers import (
+    _agent_type_unknown,
+    evict_session_agent,
+    get_agent_registry,
+    resolve_device_model,
+)
 from ..database import SESSION_DEFAULT_MODEL, ChatDatabase, is_placeholder_title
 from ..dependencies import get_db
 from ..models import (
@@ -67,6 +72,29 @@ _system_emitter = _SystemSseEmitter()
 # ── Session CRUD ─────────────────────────────────────────────────────────────
 
 
+def _reject_unknown_agent_type(agent_type: str | None) -> None:
+    """Raise HTTP 422 when *agent_type* names no registered agent.
+
+    A session bound to an unknown id can never answer — every turn would get
+    the canned "couldn't load the agent" reply — so refuse it up front and
+    name the ids that do resolve. Legacy aliases (``doc-lite``) still pass.
+    """
+    if not agent_type:
+        return
+    registry = get_agent_registry()
+    if not _agent_type_unknown(agent_type, registry):
+        return
+    valid_ids = sorted({reg.id for reg in registry.list()} | {"chat"})
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Unknown agent_type '{agent_type}'. Registered agent ids: "
+            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
+            "from the Agent Hub (`gaia hub`) and restart the server."
+        ),
+    )
+
+
 @router.get("/api/sessions", response_model=SessionListResponse)
 async def list_sessions(
     limit: int = 50, offset: int = 0, db: ChatDatabase = Depends(get_db)
@@ -87,6 +115,7 @@ async def create_session(
     request: CreateSessionRequest, db: ChatDatabase = Depends(get_db)
 ):
     """Create a new chat session."""
+    _reject_unknown_agent_type(request.agent_type)
     try:
         session = db.create_session(
             title=request.title,
@@ -162,6 +191,7 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
+    _reject_unknown_agent_type(request.agent_type)
     if (
         request.agent_type is not None
         or request.device is not None
