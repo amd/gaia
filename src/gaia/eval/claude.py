@@ -96,6 +96,23 @@ class ClaudeClient:
             f"Initialized ClaudeClient with model: {model}, max_retries: {max_retries}"
         )
 
+    def _first_text(self, content):
+        """Return the first text-bearing block's text from a Claude response.
+
+        Extended-thinking models (e.g. the default judge, claude-opus-5) prepend
+        a ``ThinkingBlock`` with no ``.text`` attribute, so indexing block 0
+        blindly breaks — scan for the first block that actually has text.
+        """
+        for block in content:
+            text = getattr(block, "text", None)
+            if text is not None:
+                return text
+        block_types = [type(block).__name__ for block in content]
+        raise ValueError(
+            f"Claude model '{self.model}' returned no text content block "
+            f"(block types: {block_types}); cannot extract a judge response."
+        )
+
     def _sampling_kwargs(self):
         """Sampling kwargs for a completion call: ``temperature`` only if pinned.
 
@@ -273,7 +290,7 @@ class ClaudeClient:
                     **self._sampling_kwargs(),
                 )
                 self.log.info("Successfully analyzed HTML content")
-                return message.content[0].text
+                return self._first_text(message.content)
 
             # For other file types, use the original base64 encoding method
             mime_types = {
@@ -315,7 +332,7 @@ class ClaudeClient:
                 **self._sampling_kwargs(),
             )
             self.log.info("Successfully analyzed file")
-            return message.content[0].text
+            return self._first_text(message.content)
 
         except Exception as e:
             self.log.error(f"Error analyzing file: {e}")
@@ -384,7 +401,7 @@ class ClaudeClient:
                 )
 
                 return {
-                    "content": message.content[0].text,
+                    "content": self._first_text(message.content),
                     "usage": usage,
                     "cost": cost,
                 }
@@ -439,7 +456,11 @@ class ClaudeClient:
             }
             cost = self.calculate_cost(usage["input_tokens"], usage["output_tokens"])
 
-            return {"content": message.content[0].text, "usage": usage, "cost": cost}
+            return {
+                "content": self._first_text(message.content),
+                "usage": usage,
+                "cost": cost,
+            }
 
         except Exception as e:
             self.log.error(f"Error analyzing file: {e}")
