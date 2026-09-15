@@ -14,7 +14,7 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
-- Explicit session deletion refuses busy agents instead of closing them mid-turn.
+- Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
 
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
   package script as argv[1], preserving unrelated tools in shared PATH directories.
