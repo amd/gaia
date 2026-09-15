@@ -42,6 +42,9 @@ is `INFO`.
 
 ## Local context window
 
+Overrides below 32,768 tokens emit a warning because agent prompts may be truncated.
+The requested value is still honored; increase or unset it if replies are empty.
+
 Set `GAIA_CTX_SIZE` to a positive integer token count to override the requested
 context window for CLI startup and subsequent local-model reloads. For example:
 

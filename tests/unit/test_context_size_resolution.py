@@ -140,3 +140,18 @@ def test_instance_exact_pin_takes_precedence(monkeypatch):
             "Gemma-4-E4B-it-GGUF"
         )  # pylint: disable=protected-access
         pinned.assert_called_once_with("Gemma-4-E4B-it-GGUF")
+
+
+@pytest.mark.parametrize("window", [4096, 16384])
+def test_low_override_warns_without_changing_requested_size(
+    monkeypatch, caplog, window
+):
+    monkeypatch.setenv("GAIA_CTX_SIZE", str(window))
+    assert resolve_ctx_size(device="gpu") == window
+    assert "below the recommended 32768 tokens" in caplog.text
+    assert "Increase or unset GAIA_CTX_SIZE" in caplog.text
+
+
+def test_small_registered_model_does_not_warn_without_override(caplog):
+    assert resolve_ctx_size("Qwen3-0.6B-GGUF", "gpu") == 4096
+    assert "below the recommended" not in caplog.text
