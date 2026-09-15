@@ -732,6 +732,7 @@ export type StreamEventType =
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
     | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
+    | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -776,6 +777,16 @@ export interface StreamEvent {
     confirm_id?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
+    /** Question id to echo back on POST /chat/user-input (for needs_input events). */
+    request_id?: string;
+    /** The question text (for needs_input events). */
+    question?: string;
+    /** 2-4 mutually-exclusive answer options (for needs_input events). */
+    options?: Array<{ value: string; label: string; description: string }>;
+    /** Whether a free-text answer is also accepted (for needs_input events). */
+    allow_free_text?: boolean;
+    /** Whether the answer must never be echoed into visible history (for needs_input events). */
+    sensitive?: boolean;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
