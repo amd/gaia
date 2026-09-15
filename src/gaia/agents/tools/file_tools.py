@@ -10,7 +10,7 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 import ast
 import csv
 import fnmatch
-import logging
+import heapq
 import mimetypes
 import os
 import platform
@@ -29,8 +29,9 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FileSearchToolsMixin:
@@ -923,8 +924,9 @@ class FileSearchToolsMixin:
                                         if len(matches) >= 100:
                                             return False
                         return True
-                    except Exception:
-                        return True  # Continue searching
+                    except (OSError, UnicodeError) as exc:
+                        logger.warning("Could not search %s: %s", file_path, exc)
+                        return True
 
                 # Search files
                 for file_path in directory.rglob("*"):
@@ -2505,13 +2507,19 @@ class FileSearchToolsMixin:
             Args:
                 location: 'all', 'documents', 'downloads', or 'desktop'
                 file_types: Comma-separated extensions to filter
-                max_results: Maximum number of results to return
+                max_results: Maximum results across all output fields (1-200)
                 days: Only show files modified within this many days
 
             Returns:
                 Dictionary with list of recent files sorted by modification time
             """
             try:
+                if (
+                    not isinstance(max_results, int)
+                    or isinstance(max_results, bool)
+                    or not 1 <= max_results <= 200
+                ):
+                    raise ValueError("max_results must be an integer between 1 and 200")
                 home = Path.home()
 
                 # Determine directories to scan
@@ -2572,6 +2580,7 @@ class FileSearchToolsMixin:
 
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
+                total_found = 0
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
@@ -2598,37 +2607,33 @@ class FileSearchToolsMixin:
                                 if modified_dt < cutoff:
                                     continue
 
-                                recent_files.append(
-                                    {
-                                        "file_name": item.name,
-                                        "file_path": str(item),
-                                        "size_bytes": stat_info.st_size,
-                                        "size": _human_readable_size(stat_info.st_size),
-                                        "modified": modified_dt.strftime(
-                                            "%Y-%m-%d %H:%M"
-                                        ),
-                                        "modified_ago": _relative_time(modified_dt),
-                                        "extension": item.suffix.lower(),
-                                        "directory": str(item.parent),
-                                    }
-                                )
-                            except (PermissionError, OSError):
+                                total_found += 1
+                                item_info = {
+                                    "file_name": item.name,
+                                    "file_path": str(item),
+                                    "size_bytes": stat_info.st_size,
+                                    "size": _human_readable_size(stat_info.st_size),
+                                    "modified": modified_dt.strftime("%Y-%m-%d %H:%M"),
+                                    "modified_ago": _relative_time(modified_dt),
+                                    "extension": item.suffix.lower(),
+                                    "directory": str(item.parent),
+                                }
+                                entry = (stat_info.st_mtime_ns, total_found, item_info)
+                                if len(recent_files) < max_results:
+                                    heapq.heappush(recent_files, entry)
+                                else:
+                                    heapq.heappushpop(recent_files, entry)
+                            except (PermissionError, OSError) as exc:
+                                logger.debug("Could not inspect %s: %s", item, exc)
                                 continue
 
                     except (PermissionError, OSError) as e:
                         logger.debug(f"Could not scan {scan_dir}: {e}")
                         continue
 
-                # Sort by modification time (most recent first)
-                recent_files.sort(key=lambda x: x["modified"], reverse=True)
-
-                total_found = len(recent_files)
+                shown = [entry[2] for entry in sorted(recent_files, reverse=True)]
                 locations_searched = [d.name for d in dirs_to_scan if d.exists()]
-
-                # Return all files — first batch shown directly, rest in a
-                # collapsible section so the LLM doesn't truncate them.
-                shown = recent_files[:max_results]
-                extra = recent_files[max_results:]
+                truncated = total_found > len(shown)
 
                 # Build display_message with collapsible extra files
                 loc_str = ", ".join(locations_searched)
@@ -2637,18 +2642,16 @@ class FileSearchToolsMixin:
                 ]
                 for f in shown:
                     display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                if extra:
+                if truncated:
                     display_parts.append(
-                        f"\n<details><summary>+{len(extra)} more files</summary>\n"
+                        f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
+                        "files omitted. Narrow location, file_types, or days to see other matches."
                     )
-                    for f in extra:
-                        display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                    display_parts.append("</details>")
 
                 return {
                     "status": "success",
-                    "files": recent_files[:max_results],
-                    "all_files": recent_files,
+                    "files": shown,
+                    "truncated": truncated,
                     "count": len(shown),
                     "total_found": total_found,
                     "locations_searched": locations_searched,
