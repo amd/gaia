@@ -40,6 +40,12 @@ class AgentConfig:
     assistant_name: str = "gaia"
 ```
 
+The SDK applies the system prompt once per request. `set_system_prompt()` and
+`update_config(system_prompt=...)` take effect on the next request; structured
+message calls can override it for one request without changing the stored prompt.
+
+Custom prompts use the native system-message channel for every provider.
+
 ### AgentResponse
 
 Responses include text, history, and optional statistics:
