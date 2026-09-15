@@ -23,7 +23,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Type-first TypeScript code or `.d.ts` design → `typescript-developer`
 - UI/UX research and wireframing → `ui-ux-designer`
 - Backend routers/SSE in `src/gaia/ui/` → `python-developer`
-- Installer/packaging → see `docs/plans/desktop-installer.mdx`
+- Installer/packaging → see `docs/guides/install.mdx`
 
 ## Agent UI (primary) — `src/gaia/apps/webui/`
 

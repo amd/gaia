@@ -1,0 +1,142 @@
+---
+title: "Build a Python Agent"
+description: "Create a configurable agent with validated tools, host-controlled output, and a tested query path."
+icon: "code"
+---
+
+Use a custom `Agent` subclass when your application needs its own instructions,
+data, or tools. If the flagship already has the tools you need, a
+[skill](/guides/composing-skills) is usually the smaller extension.
+
+Complete the [Python quickstart](/quickstart) first. This example uses the same
+Python environment and local model backend; it adds no package dependencies.
+
+## Create a configurable agent
+
+Save this as `catalog_agent.py`. The catalog belongs to the instance, and tool
+functions capture that instance rather than accepting a model-supplied `self`.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.tools import tool
+
+
+class CatalogAgent(Agent):
+    def __init__(self, catalog: dict[str, int], **kwargs):
+        # Registration runs inside the base constructor.
+        self.catalog = dict(catalog)
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return (
+            "Answer stock questions using list_items and get_stock. "
+            "Do not invent items or quantities."
+        )
+
+    def _register_tools(self):
+        @tool
+        def list_items() -> dict:
+            """List the item names available in the catalog."""
+            return {"items": sorted(self.catalog)}
+
+        @tool
+        def get_stock(item: str) -> dict:
+            """Look up the quantity available for one catalog item.
+
+            Args:
+                item: Exact item name returned by list_items.
+            """
+            if item not in self.catalog:
+                return {
+                    "status": "error",
+                    "error": f"Unknown item: {item}. Use list_items.",
+                }
+            return {"item": item, "quantity": self.catalog[item]}
+
+
+if __name__ == "__main__":
+    agent = CatalogAgent(
+        catalog={"notebooks": 12, "pens": 30},
+        output_handler=SilentConsole(silence_final_answer=True),
+    )
+    result = agent.process_query("How many notebooks are in stock?")
+    print(result["status"])
+    print(result["result"])
+```
+
+Run it:
+
+```bash
+uv run python catalog_agent.py
+```
+
+A successful answer reports **12 notebooks**. `SilentConsole` suppresses progress
+and its own final-answer display, leaving the two explicit prints. Logs and errors
+can still appear. It does not bypass tool approvals.
+
+The constructor initializes fields **before** `super().__init__()` because the
+base class calls `_register_tools()`. Forward `**kwargs` so callers can select a
+model, set `max_steps`, or supply an output handler. With an explicit `catalog`
+argument, a host must supply that data when constructing the agent; merely
+registering the class does not invent its application configuration.
+
+## Validate tools separately from the model
+
+The model chooses a call, but the function owns domain validation. An unknown item
+returns an actionable error; it never silently becomes a zero-stock answer.
+For a smoke check, save the following as `check_catalog.py` beside the agent file:
+
+```python
+from catalog_agent import CatalogAgent
+
+agent = CatalogAgent(
+    catalog={"notebooks": 12, "pens": 30},
+    skip_lemonade=True,
+    silent_mode=True,
+)
+stock = agent.get_tools_info()["get_stock"]["function"]
+assert stock("notebooks") == {"item": "notebooks", "quantity": 12}
+assert stock("missing")["status"] == "error"
+print("Catalog checks passed")
+```
+
+```bash
+uv run python check_catalog.py
+```
+
+This calls the function without a model request. `skip_lemonade=True` skips local
+backend preparation for this check; a real query still needs a backend.
+Direct function calls do not exercise argument coercion, approval policy, or
+harness timeouts. Test those through dispatch as well when your tools need them.
+
+Continue with [Test a Python Agent](/sdk/testing) for a complete pytest example
+that verifies the harness actually dispatches the tool.
+
+## Keep runtime state explicit
+
+The tool decorator uses a process-global registry. Run these small scripts as
+separate processes. A service hosting multiple agent instances needs deliberate
+tool isolation; see [registration and snapshots](/sdk/core/tools#register-functions-inside-the-agent).
+Do not clear the global registry while other agents are using it.
+
+`process_query()` returns a result dictionary. Inspect `status` and
+`error_history`, not only the answer text. The base harness does not automatically
+append completed turns to `conversation_history`; a conversational host must own
+that history. See the [result and history contracts](/sdk/core/agent-system#query-and-result-contract).
+
+For tools that write files, run commands, or change external state, declare their
+names in `CONFIRMATION_REQUIRED_TOOLS` and use a handler that can collect approval.
+`@tool` does not accept a `requires_confirmation` argument. Follow the
+[tool policy and timeout contracts](/sdk/core/tools#confirmation-and-policy).
+
+## Integrate or package
+
+Embed `CatalogAgent` directly when the caller owns its input data and lifecycle.
+Use [output handlers](/sdk/core/console) to connect progress and decisions to a UI.
+Subclassing `Agent` alone does not create a TUI transport, Hub package, HTTP
+endpoint, or persistent session store.
+
+For a separately installable agent, follow [Hub publishing](/guides/hub-publishing)
+and provide a factory that supplies required application configuration. For the
+terminal protocol and transport choices, see [TUI development](/reference/tui).

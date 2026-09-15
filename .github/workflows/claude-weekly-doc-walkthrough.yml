@@ -548,8 +548,7 @@ jobs:
             You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
             your own conclusion. This split exists because a single self-judging session
-            is a known false-negative risk (see docs/plans/weekly-doc-walkthrough-audit.md
-            "Job structure").
+            is a known false-negative risk.
 
             DOC UNDER TEST: ${{ matrix.doc.path }}
             TRANSCRIPT: `<RUN_DIR>\transcript.md`, where `RUN_DIR` is the OS-level env var
@@ -840,8 +839,7 @@ jobs:
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
-            execution-based sibling of the static nightly audit -- see
-            docs/plans/weekly-doc-walkthrough-audit.md). A deterministic pass has ALREADY
+            execution-based sibling of the static nightly audit). A deterministic pass has ALREADY
             merged the per-guide judges' findings into distinct defects and searched the
             whole open backlog for each. Your job is the part a script cannot do: verify
             the evidence, decide new-vs-already-tracked, and write for a human.

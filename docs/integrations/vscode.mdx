@@ -47,9 +47,9 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
   </Step>
 
   <Step title="Start Lemonade Server">
-    Ensure the LLM backend is running with extended context:
+    Prepare the LLM backend and configured model:
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Step>
 
@@ -112,10 +112,10 @@ Follow these steps in order:
 <Steps>
   <Step title="Start Lemonade Server (LLM Backend)">
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
 
-    <Info>Keep this terminal running and open a new terminal for the next step</Info>
+    <Info>Wait for setup to complete before starting the API server.</Info>
   </Step>
 
   <Step title="Start the GAIA API Server">
@@ -236,7 +236,7 @@ VSCode language model provider.
 
     **Solutions**:
     - The picker should list `gaia`. If it is empty, check that the `gaia-agent-gaia` package is installed — the server logs the import error it hit
-    - Ensure Lemonade Server is running: `lemonade-server serve --ctx-size 32768`
+    - Ensure Lemonade Server is running: `gaia init`
     - The API server needs to be running before selecting models
     - Check the GAIA output channel for error messages (View > Output > GAIA)
     - Try restarting VSCode
@@ -283,7 +283,7 @@ VSCode can also integrate with GAIA through the Model Context Protocol (MCP) ser
 <Steps>
   <Step title="Start Lemonade Server">
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Step>
 
@@ -421,7 +421,7 @@ src/vscode/gaia/
 
     ```bash
     # Terminal 1: Start Lemonade Server
-    lemonade-server serve --ctx-size 32768
+    gaia init
 
     # Terminal 2: Start GAIA API Server
     gaia api start

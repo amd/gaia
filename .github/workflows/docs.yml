@@ -46,7 +46,7 @@ jobs:
         working-directory: docs
         run: |
           echo "Validating documentation with Mintlify..."
-          mintlify validate
+          mintlify broken-links
           echo "✅ Documentation validated successfully"
 
       - name: Set up Python

@@ -28,10 +28,9 @@ gaia perf-vis <log_file> [<log_file> ...]
 
 ## Collecting llama.cpp Logs
 
-The script expects llama.cpp server logs. With [Lemonade](https://lemonade-server.ai/), you can capture telemetry like this:
+The script expects llama.cpp server logs, not GAIA setup output. Export the backend log from your running Lemonade installation and pass that file to the plotter:
 
 ```bash
-lemonade-server serve --ctx-size 32768 2>&1 | tee agent.log
 gaia perf-vis agent.log
 ```
 

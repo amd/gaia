@@ -43,7 +43,7 @@ how to wire new agents into the OpenAI surface.
 **Removed in v0.17.5 (#912):** YAML manifest agents (a directory containing
 only `agent.yaml`, no `agent.py`) are no longer loaded. The registry emits a
 `DeprecationWarning` per such directory and skips it. See the
-[Custom Agents guide](/guides/custom-agent#migrating-from-a-yaml-manifest) for
+[Custom Agents guide](/sdk/core/agent-system) for
 the migration recipe.
 </Warning>
 
@@ -134,7 +134,7 @@ source for the common pattern using `dataclasses.fields(...)`).
 
 The recommended way to scaffold a new agent is the **Gaia Builder Agent**
 (`gaia chat --ui` → **+** → **Build a Custom Agent**), which writes a
-ready-to-edit `agent.py`. See the [Custom Agents guide](/guides/custom-agent)
+ready-to-edit `agent.py`. See the [Custom Agents guide](/sdk/core/agent-system)
 for the full minimal example, the tool-mixin table, and the YAML-manifest
 migration recipe.
 
@@ -146,5 +146,5 @@ migration recipe.
   registry to resolve chat sessions.
 - [API Server](/sdk/infrastructure/api-server) — the separate OpenAI-style
   model registry used by `gaia api start`.
-- [Custom Agents guide](/guides/custom-agent) — Python agent recipes and
+- [Custom Agents guide](/sdk/core/agent-system) — Python agent recipes and
   the manifest → `agent.py` migration.

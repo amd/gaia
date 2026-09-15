@@ -1,135 +1,112 @@
 ---
-title: "Testing"
+title: "Test a Python Agent"
+description: "Test tool behavior and the full harness path without a live model, then validate real inference separately."
 icon: "vial"
 ---
 
-# Testing
+A useful agent test checks both the tool's behavior and whether the harness called
+it. An answer string alone does not establish that the tool ran.
 
-<Badge text="development" color="orange" />
+Use `catalog_agent.py` from [Build a Python Agent](/sdk/core/custom-agents).
+Save the following as `test_catalog_agent.py` beside it, then install pytest:
 
-## 17.1 Testing Agents
-
-```python
-import pytest
-from my_package.agent import MyAgent
-
-def test_agent_creation():
-    """Test agent can be created."""
-    agent = MyAgent()
-    assert agent is not None
-
-def test_tool_execution():
-    """Test a tool's implementation directly.
-
-    The base Agent does not expose a public `execute_tool()` — tools are
-    invoked by the planner after parsing LLM output. For unit tests, either
-    call the tool function directly (it's just a decorated Python function)
-    or look it up in the global registry.
-    """
-    from gaia.agents.base.tools import _TOOL_REGISTRY
-    agent = MyAgent()
-    entry = _TOOL_REGISTRY["my_tool"]
-    result = entry["function"](param="value")
-    assert result["status"] == "success"
-
-def test_query_processing():
-    """Test full query processing."""
-    agent = MyAgent()
-    result = agent.process_query("Do something")
-    assert "result" in result
+```bash
+uv pip install pytest
 ```
 
----
-
-## 17.2 Silent Mode for Testing
-
-```python
-from my_package.agent import MyAgent
-
-def test_silent_mode():
-    """Test with no console output."""
-    agent = MyAgent(silent_mode=True)
-    result = agent.process_query("Test query")
-    # No console output, just results
-    assert result is not None
-```
-
----
-
-## 17.3 Mocking LLM Responses
+## Test tool validation directly
 
 ```python
 from unittest.mock import patch
-from gaia.chat.sdk import AgentResponse
 
-def test_with_mocked_llm():
-    """Test agent with a mocked AgentSDK.
+from catalog_agent import CatalogAgent
+from gaia.agents.base import tools as tools_module
 
-    The AgentSDK exposes `send()` (and `send_stream()`), not `.complete()`.
-    Return an AgentResponse whose `text` contains the JSON the planner
-    expects — the agent will parse it and invoke the referenced tool.
-    """
-    with patch("gaia.chat.sdk.AgentSDK") as mock_chat:
-        mock_chat.return_value.send.return_value = AgentResponse(
-            text='{"tool": "my_tool", "tool_args": {"param": "value"}}',
+
+def test_stock_validation():
+    # Isolate this test's process-global registry and restore it afterward.
+    with patch.dict(tools_module._TOOL_REGISTRY, {}, clear=True):
+        agent = CatalogAgent(
+            catalog={"notebooks": 12},
+            skip_lemonade=True,
+            silent_mode=True,
         )
-
-        agent = MyAgent()
-        agent.process_query("Test")
-
-        assert mock_chat.return_value.send.called
+        get_stock = agent.get_tools_info()["get_stock"]["function"]
+        assert get_stock("notebooks")["quantity"] == 12
+        assert get_stock("missing")["status"] == "error"
 ```
 
-<Tip>
-Consider using the built-in `MockLLMProvider` / `MockVLMClient` helpers in
-`gaia.testing` (`src/gaia/testing/mocks.py`) for richer fixtures. The
-`require_lemonade` pytest fixture in `tests/conftest.py` skips integration
-tests automatically if no Lemonade server is running.
-</Tip>
+No model request is made. This checks domain behavior but bypasses the harness's
+argument coercion, permission checks, and timeout handling. The registry patch is
+a test fixture, not a pattern for resetting a running multi-agent service.
 
----
+## Test model response through dispatch
 
-## Behavior-E2E — Assert side-effects, not replies
+Add this second test to the same file:
 
-The class of bug "agent claims success but the tool never ran" (see [#1428](https://github.com/amd/gaia/issues/1428)) is invisible to:
+```python
+from types import SimpleNamespace
+from unittest.mock import patch
 
-- Unit tests that mock the LLM and feed clean tool calls
-- UI render E2E tests that assert "the agent replied"
+from catalog_agent import CatalogAgent
+from gaia.agents.base import tools as tools_module
 
-The pattern to catch it: drive each tool-using agent through the real server with a real model,
-repeat each scenario N× (the failure is output-format-dependent and non-deterministic),
-and assert the tool's **side-effect actually occurred** — not merely that the agent produced a reply.
 
-- **False-success is a hard fail**: a "success" reply with no side-effect is worse than honest failure.
-- **Planted unguessable facts**: use `secrets.token_hex(4)` in the prompt so a cached or hallucinated reply cannot accidentally pass.
-- **N× repetition**: repeat ≥5 times; treat any single run with a missing side-effect as a failure.
+def test_catalog_query_uses_the_tool():
+    with (
+        patch.dict(tools_module._TOOL_REGISTRY, {}, clear=True),
+        patch("gaia.agents.base.agent.AgentSDK") as sdk,
+    ):
+        sdk.return_value.send_messages.side_effect = [
+            SimpleNamespace(
+                text='{"tool":"get_stock","tool_args":{"item":"notebooks"}}',
+                stats=None,
+            ),
+            SimpleNamespace(text='{"answer":"12 notebooks"}', stats=None),
+        ]
+        agent = CatalogAgent(
+            catalog={"notebooks": 12},
+            skip_lemonade=True,
+            silent_mode=True,
+        )
+        with patch.object(
+            agent, "_execute_tool", wraps=agent._execute_tool
+        ) as execute:
+            result = agent.process_query("How many notebooks are in stock?")
 
-See `src/gaia/eval/behavior_harness.py` for the reusable `Scenario`/`BehaviorHarness` implementation.
-New agents plug in by adding a `Scenario` to `BUILDER_SCENARIOS` (or their own list).
+        execute.assert_called_once_with("get_stock", {"item": "notebooks"})
+        assert result["status"] == "success"
+        assert result["error_history"] == []
+        assert result["result"].startswith("12 notebooks")
+        assert sdk.return_value.send_messages.call_count == 2
+```
 
-The live tests live in `tests/integration/eval/test_behavior_e2e.py` and are gated by
-`@pytest.mark.real_model` — they skip automatically on Mac/standard CI and only run on
-`[self-hosted, strix-halo]` runners once [#1297](https://github.com/amd/gaia/issues/1297) lands.
-The helper unit tests (`tests/unit/eval/test_behavior_harness.py`) are fully deterministic
-and run in normal CI with no model required.
+Patch `AgentSDK` **where the harness imports it**, in `gaia.agents.base.agent`.
+The loop calls `send_messages()`. Patching `gaia.chat.sdk.AgentSDK.send()` does
+not intercept this path. The two responses drive a tool call and then completion;
+a single repeated tool response can hit loop guards instead of ending the test.
 
----
+This fixture exercises the prompt-based response path. Native tool-call parsing,
+streaming, permission denials, and cancellation need their own tests when your
+application uses those paths. `_execute_tool` is an internal test observation
+point, not a public API for bypassing the model.
 
-## Related Topics
+Run both tests:
 
-- [Core Agent System](./core/agent-system) - Learn about the base Agent class
-- [Best Practices](./best-practices) - Testing best practices
-- [Developer Guide](/reference/dev) - Test setup and running
-- [Evaluation Framework](/reference/eval) - Batch testing and ground truth
+```bash
+uv run python -m pytest test_catalog_agent.py -q
+```
 
----
+## Validate the real integration
 
-<small style="color: #666;">
+After deterministic tests pass, use the actual backend and host you intend to
+ship. Check the concrete result: a file contains the requested edit, a lookup
+returns the supplied data, or a query uses the intended repository. Exercise a
+failure and an approval denial as well as a successful request.
 
-**License**
+Repository integration tests may depend on `require_lemonade` and other fixtures
+in `tests/conftest.py`; those fixtures are not installed with the SDK. Check the
+test summary for skipped integrations before claiming a backend was tested.
 
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+See [development checks](/reference/dev), [agent evaluation](/reference/eval), and
+[tool policy and timeouts](/sdk/core/tools) for the next layer of validation.

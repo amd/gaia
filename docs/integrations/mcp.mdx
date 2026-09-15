@@ -77,7 +77,7 @@ The GAIA MCP Server provides an HTTP-native bridge that exposes GAIA's AI agents
   <Step title="Start Lemonade Server">
     Ensure the LLM backend is running:
     ```bash
-    lemonade-server serve --ctx-size 8192
+    gaia init
     ```
   </Step>
 </Steps>
@@ -356,7 +356,7 @@ The MCP server exposes the following GAIA agents as tools:
     **Symptoms**: Queries time out or fail
 
     **Solutions**:
-    - Start the Lemonade server: `lemonade-server serve`
+    - Start the Lemonade server: `gaia init`
     - Check `LEMONADE_BASE_URL` is correct (default `http://localhost:13305/api/v1`)
     - Verify models are loaded
   </Accordion>

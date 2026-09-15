@@ -409,7 +409,7 @@ if ext == ".py":
 
 ## Testing Requirements
 
-**File:** `tests/agents/tools/test_file_search_mixin.py`
+Existing scope regression tests are in `tests/unit/test_file_search_scope.py`.
 
 Key tests:
 - 3-phase search progression
@@ -423,39 +423,20 @@ Key tests:
 
 ---
 
-## Usage Examples
+## Using the registered tools
 
-```python
-# Multi-phase file search
-result = agent.search_file("manual", file_types="pdf")
-print(f"Found {result['count']} files in {result['search_context']}")
+Call `register_file_search_tools()` from your agent's registration hook. The
+signatures above describe registered harness tools, not Python instance methods
+such as `agent.search_file()` or `agent.read_file()`. Use the normal agent
+query/dispatch path; see [Testing agents](/sdk/testing).
 
-# Python file analysis
-result = agent.read_file("src/main.py")
-for symbol in result['symbols']:
-    print(f"{symbol['type']}: {symbol['name']} (line {symbol['line']})")
+The packaged [GAIA agent](/guides/gaia) already includes file search. For example:
 
-# Content search
-result = agent.search_file_content("TODO", directory="src", file_pattern="*.py")
-for match in result['matches']:
-    print(f"{match['file']}:{match['line']}: {match['content']}")
-
-# Write file
-result = agent.write_file("output/report.txt", "Report content", create_dirs=True)
+```text
+Find Python files containing TODO under ~/projects/my-app/src.
 ```
 
----
-
-*FileSearchToolsMixin Technical Specification*
-
----
-
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+Naming the directory limits the search to that tree. Inspect the returned
+paths and matches before changing files. For a custom host, review
+[tool composition](/sdk/mixins/tool-mixins) and the
+[source implementation](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_tools.py).

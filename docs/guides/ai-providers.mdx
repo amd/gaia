@@ -8,9 +8,21 @@ Lemonade runs local models and routes cloud chat requests. The header names the
 active provider and marks remote inference; document and memory embeddings stay
 on your Lemonade server.
 
-## Connect from the TUI
+## Choose where inference runs
 
-1. Start `gaia tui`. During setup, press **p** to choose an AI provider. In chat,
+| Choice | What you need |
+| --- | --- |
+| Local | A downloaded chat model and a running Lemonade server |
+| Fireworks AI | A Fireworks account/key and access to a serving model |
+| AMD LLM Gateway | Your organization's gateway URL, authentication settings, and credential |
+
+All three use Lemonade. Complete the terminal's setup checks first, or select a
+cloud provider during setup to avoid downloading an unused local chat model.
+Cloud routing requires Lemonade **11.8.1 or later**.
+
+## Connect Fireworks AI
+
+1. Start `gaia-tui`. During setup, press **p** to choose an AI provider. In chat,
    enter **`/provider`** from the command palette.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
@@ -24,13 +36,17 @@ require deployment or additional account access to serve requests. GAIA does not
 Fireworks deployment or silently substitute another model when Gemma is absent.
 Fireworks chat sends conversation history to Fireworks and may incur usage charges.
 
-For **AMD LLM Gateway**, enter your organization's OpenAI-compatible HTTPS base
+## Connect AMD LLM Gateway
+
+Open `/provider`, select **AMD LLM Gateway**, and enter your organization's OpenAI-compatible HTTPS base
 URL. The default authentication header is `Authorization`, with the prefix
 `Bearer ` (including its trailing space). For gateways using a bare API key,
 enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
-For **Local**, select a downloaded chat model. If none are installed, close the
+## Return to a local model
+
+Open `/provider`, choose **Local**, and select a downloaded chat model. If none are installed, close the
 panel and run setup. Selecting a cloud provider before setup downloads only the
 local embedding models, not an unused local chat model.
 
@@ -57,9 +73,12 @@ over `LEMONADE_API_KEY`. Otherwise GAIA reads its embedded-server credential fro
 `$GAIA_HOME/lemonade/state.json` (`~/.gaia` by default) and uses it only for the
 matching local HTTP server and port.
 
-Cloud routing requires Lemonade **11.8.1 or later** and is experimental upstream.
+Cloud routing is experimental upstream.
 An empty model list is reported as a discovery problem, not a successful connection.
 Check credentials, account model access, the gateway URL, and Lemonade's server log.
+A refused cloud account, such as an exhausted balance or suspended account, ends
+the turn with an account-specific error. Resolve that condition with the provider
+or select another configured provider; repeating the same request cannot fix it.
 
 ## Switching and validation
 
@@ -69,11 +88,8 @@ and loaded skills. A failed switch keeps the previous model. Selection applies t
 this running session; if the agent restarts, the TUI reports any reversion to its
 launch model.
 
-For development, build `tui/bin/gaia-tui` and launch the checkout with:
-
-```bash
-scripts/dev/run-tui.sh --dev --control
-```
+For development, follow [the checkout launch instructions](/reference/tui#run-the-flagship-from-your-checkout),
+then add `--control` to the launcher command.
 
 Use the control API to inspect screens and drive the same session. Developer mode
 shows agent progress and tool details; pasted credentials remain masked and input

@@ -74,35 +74,13 @@ observer.schedule(handler, "./data", recursive=True)
 observer.start()
 ```
 
-## Integration with Agents
+## Integration with agents
 
-`FileWatcher` works seamlessly with GAIA agents:
-
-```python
-from gaia import Agent, DatabaseMixin, FileWatcher
-
-class IntakeAgent(Agent, DatabaseMixin):
-    def __init__(self, watch_dir: str = "./intake_forms", **kwargs):
-        super().__init__(**kwargs)
-        self.init_db("data/intake.db")
-
-        # Set up file watching with callbacks
-        self._watcher = FileWatcher(
-            directory=watch_dir,
-            on_created=self._process_new_form,
-            extensions=[".pdf", ".png", ".jpg"],
-        )
-        self._watcher.start()
-
-    def _process_new_form(self, path: str):
-        """Called automatically when new files arrive."""
-        result = self.extract_data(path)
-        self.insert("forms", result)
-
-    def close(self):
-        self._watcher.stop()
-        self.close_db()
-```
+A watcher calls Python callbacks; it does not automatically create agent tools,
+extract structured data, or create database tables. Supply those behaviors in
+your host and stop the watcher during shutdown. The
+[complete example below](#complete-example) shows an `Agent` that registers its
+watching tools explicitly.
 
 ## API Reference
 

@@ -214,8 +214,6 @@ class TodoAgent(Agent, DatabaseMixin):
             )
 
     def _register_tools(self):
-        super()._register_tools()
-
         @tool
         def add_todo(title: str) -> dict:
             """Add a new todo item."""

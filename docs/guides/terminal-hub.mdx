@@ -1,348 +1,170 @@
 ---
 title: "Terminal UI"
-description: "gaia-tui boots straight into the flagship GAIA agent's chat — a splash, a readiness gate that fixes what it can, then the conversation. No terminal required to leave."
+description: "Install GAIA, start terminal chat, choose a provider, and control agent turns."
 icon: "terminal"
 ---
 
-`gaia-tui` is GAIA's terminal-native front door. It opens directly on the flagship
-`gaia` agent — conversation, documents, data, web research, memory, skills — behind a
-readiness gate that runs on every launch and checks the few things that would
-otherwise make the agent fail. Where it can fix a problem itself, one key does it.
-Where it can't, it says so and gives you the exact command.
+<Info>
+  **Source Code:** [TUI](https://github.com/amd/gaia/tree/main/tui)
+</Info>
 
-Download the installer for your platform from **[amd-gaia.ai](https://amd-gaia.ai/#install)**,
-run it, then open a new terminal:
+`gaia-tui` opens the flagship GAIA agent: conversation, documents, files, data,
+web research, memory, and skills. The Python `gaia` CLI is a separate program.
+
+## Install and launch
+
+Get the terminal installer for your platform from
+[GAIA downloads](https://amd-gaia.ai/#install) or the
+[release assets](https://github.com/amd/gaia/releases/latest). Open a new terminal
+so it receives the updated PATH, then run:
 
 ```bash
 gaia-tui
 ```
 
-<Info>
-  The Terminal UI and the [Agent UI](/guides/agent-ui) are two front ends over the same
-  agents. Use the terminal when you live in one or are on a headless box; use the Agent
-  UI when you want rendered cards and a browser. Both take a dropped file or a pasted
-  screenshot.
-</Info>
+The native terminal installer includes `gaia-tui` and the flagship `gaia-agent`.
+Building the Go client alone does not install the agent or model backend.
+See [building from source](/reference/tui#build-and-test).
 
-<Note>
-  `gaia-tui` is the Go terminal binary — never `gaia`, which is the Python CLI's
-  name and has entirely different subcommands. It accepts a leading `tui` word and
-  drops it, so `gaia-tui` and `gaia-tui tui` open the same session. See the
-  [CLI reference](/reference/cli#terminal-ui-gaia-tui) for its non-interactive
-  subcommands.
-</Note>
+The launch shows a splash, checks readiness, and opens chat. A missing agent
+binary points back to the installer. A missing local backend or model offers
+setup where supported. The focused row names the failure and its remedy.
 
-<Warning>
-  GAIA ships **one** agent through this binary: there is nothing to browse and nothing
-  to pick. An earlier version of the TUI opened on an Agent Hub browser — install,
-  uninstall, search, vote — with the flagship agent listed as "Coming Soon." That
-  screen, and the `list` / `install` / `uninstall` / `hub` subcommands that drove it,
-  are gone. Installing a hub sidecar agent (`email`) is now the Python CLI's job —
-  `gaia hub install <id>` — not the terminal's.
-</Warning>
+| Readiness key | Action |
+| --- | --- |
+| `f` | Run the focused row's fix, when offered |
+| `p` | Open the provider picker for flagship setup |
+| `r` | Re-check |
+| `d` | Show details |
+| Arrow keys or `j` / `k` | Select a row |
+| `Enter` | Continue when offered; failed rows block launch |
+| `Esc`, `Ctrl+C` | Quit |
 
-## Installing
+`[ok]` means checked, `[!]` failed, `[?]` unverified, `[ ]` waiting, and `[..]`
+checking. An unverified result is not a successful check; consequential uncertainty,
+such as insufficient model context, can require an explicit Enter to proceed.
 
-Every release publishes a native installer per platform, at
-[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform) and on the
-[GitHub release](https://github.com/amd/gaia/releases/latest). Each puts two binaries
-on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
-the hub runs) — so there is nothing to unzip and nothing to `chmod`.
+## Try your first conversation
 
-| Platform | File | How to install | Installs to |
-| --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
-| macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
-| macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
-| Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
-| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+Once chat opens, send a short request such as **“Explain what you can help me do.”**
+Then try a file task:
 
-The Windows setup is per-user: it needs no administrator rights and shows no UAC
-prompt. It also bundles Lemonade Server, so the install itself needs no network
-(Lemonade downloads its own runtime the first time you run a model). Start Menu
-and desktop shortcuts are created; open a **new** terminal afterwards, because an
-already-open one keeps the PATH it started with. Quit GAIA before upgrading —
-Windows cannot replace a running program, and the setup will tell you so rather
-than install over it half-way.
+1. Drag a text file from your home directory into the composer to insert its path.
+2. Add **“Summarize this file in three bullets”** and press Enter.
+3. Read the tool activity and answer. Follow up with **“Which part supports the second bullet?”**
 
-<Note>
-  There is no installer for Windows on Arm or Linux on Arm. The flagship agent
-  publishes no build for either, so an installer there would set up the hub with no
-  agent behind it. The raw `gaia-tui` binary is still published for all six targets
-  if you want to run the hub against an agent you build yourself.
-</Note>
+GAIA reads files through tools; inserting a path does not upload or attach the
+entire file by itself. File access is limited to allowed directories. Cloud
+inference can send retrieved file content to the chosen provider. See
+[flagship capabilities and file scope](/guides/gaia#permissions-and-file-scope).
 
-Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
-you say otherwise. On Windows, Add/Remove Programs offers to delete it; on Linux,
-`apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
-because other things may be using it — see `gaia uninstall --purge-lemonade`.
+## Choose inference
 
-A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
-omission — so remove the files and then forget the receipt:
+Local chat uses Lemonade. Press `p` during setup or enter `/provider` in chat to
+choose Local, Fireworks AI, or AMD LLM Gateway. Provider changes affect other clients
+of that Lemonade server. Cloud chat sends conversation history to the selected
+provider; web tools and connectors make their own network requests.
 
-```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-sudo rm -rf /usr/local/share/doc/gaia-tui
-sudo pkgutil --forget ai.amd.gaia.terminal-hub
-sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
-```
+Use [AI providers](/guides/ai-providers) for credentials, model selection,
+embedding requirements, and recovery. `/model` lists or switches models on the
+flagship subprocess; unsupported transports report the restriction.
 
-There are two receipts because the tools and the licence ship as separate
-components — forget both. `pkgutil --forget` drops only the installation receipt
-and deletes nothing, which is why the `rm` comes first. `~/.gaia` is untouched either way.
+## Chat controls
 
-macOS packages are unsigned unless the release was built with Apple credentials
-configured. Unsigned, Gatekeeper warns that the package comes from an
-unidentified developer. Right-click → Open no longer bypasses that as of macOS 15:
-dismiss the warning, then go to **System Settings → Privacy & Security** and click
-**Open Anyway** next to the blocked package.
+| Key | Action |
+| --- | --- |
+| `Enter` | Send; queue the message if a turn is running |
+| `Alt+Enter`, `Ctrl+J` | Insert a newline |
+| `Esc` while idle | Clear the composer |
+| `Esc` while streaming | Request cancellation; a second press forces a stop |
+| `Ctrl+C` while idle | Quit |
+| `Ctrl+C` while streaming | Request cancellation; a second press forces a stop |
+| `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation |
+| `Home` / `End` with an empty composer | Jump to the top / bottom |
+| `Ctrl+V` | Paste text or save a clipboard image and insert its path |
+| `Ctrl+Y` | Copy the answer |
+| `Ctrl+B` | Copy the last code block |
+| `Ctrl+T` | Toggle terminal selection mode |
 
-### Building from source
+The first stop request returns queued messages to the composer. A second stop
+abandons any follow-ups still queued and reports what was dropped. A queued
+follow-up that runs longer than three minutes shows a stop/recovery hint; the
+hint itself does not cancel it.
 
-Contributors who want the binary from a checkout, rather than the installer:
+A forced subprocess stop restarts the agent and loses in-memory skills and grants.
+It is different from cancelling a turn cooperatively. Persistent memory is separate
+from the current conversation; see [state and cancellation](/reference/tui#state-and-cancellation).
 
-```bash
-cd tui && make build     # -> tui/bin/gaia-tui
-```
+Drag a file or folder into the terminal to insert its path. The mouse wheel scrolls
+chat. Links open in a browser; double-clicking a message copies it. Hold the terminal's
+selection modifier (often Shift; Option in iTerm2) or use `Ctrl+T` for native selection.
+In selection mode, GAIA does not receive mouse clicks or wheel events.
 
-This builds `gaia-tui` only. `gaia-agent` still has to come from an installer or a
-hub download — the readiness gate below says so on the first screen if it is
-missing.
+## Commands and approval
 
-## The boot sequence
+Type `/` in an empty composer to open the searchable palette. Use arrows and Enter,
+or select a row with the mouse. `/help` shows the full shortcuts.
 
-Every launch — `gaia-tui` with no arguments, or `gaia-tui run email` — goes
-through the same three screens: a splash, a readiness gate, then chat.
+| Command | Action |
+| --- | --- |
+| `/help` | Show help |
+| `/clear` | Clear the visible transcript; see session behavior below |
+| `/memory` | Inspect agent memory |
+| `/setup` | Run flagship setup |
+| `/model` | List models; `/model <id>` requests a switch |
+| `/provider` | Configure local or cloud inference |
+| `/bypass` | Show the warning before enabling permission bypass |
+| `/bypass off` | Restore tool confirmation |
 
-```bash
-gaia-tui                 # the flagship agent
-gaia-tui run email       # any other agent, by id
-```
+Commands that depend on a subprocess capability are unavailable on daemon-backed
+sessions. Permission bypass is off by default. A daemon-backed session rejects
+`--bypass-permissions`; it does not silently disable its approval policy.
 
-### 1. Splash
+When a question appears, select an option with arrows, Tab, or its number and press
+Enter. Esc cancels the turn. Read the requested action before approving a tool.
 
-The first frame is GAIA's mascot over the wordmark and tagline, while the readiness
-gate spins up behind it — the launch never opens on a blank terminal:
+## Clear or start over
 
-```
-  [ GAIA mascot ]
+`/clear` clears the screen. With the flagship subprocess, the agent still retains
+its recent conversation, loaded skills, and temporary grants. To start a new
+subprocess conversation, quit while idle and relaunch `gaia-tui`. Persistent
+memory remains available after relaunch.
 
-  G A I A    Your local AI agent — by AMD
+On a daemon-backed session, `/clear` also drops the client’s conversation context
+and session ID, so the next message starts a new session. Neither path deletes
+persistent memory. See [state and cancellation](/reference/tui#state-and-cancellation).
 
-  starting GAIA…
-```
-
-On a terminal shorter than 32 rows or narrower than about 44 columns, the mascot
-is dropped and the frame is just the wordmark and tagline on one line.
-
-### 2. The readiness gate
-
-For the flagship, three things are checked, in order, each depending on the one
-before it: is `gaia-agent` on this machine, is the local model server (Lemonade)
-reachable, are the models downloaded. The gate stops at the first failure — a
-missing model server makes "are the models downloaded" meaningless.
-
-An all-green machine flashes through this screen and lands in chat without a
-keypress. A failure holds it open:
-
-```
-  Setting up GAIA                                                   1 of 3 ready
-  ──────────────────────────────────────────────────────────────────────────────
-    [ok]  GAIA agent          found at /usr/local/bin/gaia-agent
-  > [!]   Lemonade            not running
-          GAIA needs a local model server. It runs on your machine; no message
-          text ever leaves it.
-          f set it up now
-          or run: gaia init
-          look:   https://amd-gaia.ai/docs/guides/install
-    [ ]   Language model      —  checked once "Lemonade" is fixed
-  ──────────────────────────────────────────────────────────────────────────────
-  f set it up now · r re-check · d details · esc back
-```
-
-Pressing `f` runs `gaia init` right there and streams its progress into the
-screen; `esc` cancels it. The command is shown only as the copy-paste
-alternative — nothing on this screen requires leaving the TUI.
-
-If `gaia-agent` itself is missing, the gate stops on the first row and sends you
-to the installer — there is no in-TUI download for the agent binary:
-
-```
-  Setting up GAIA                                                   0 of 3 ready
-  ──────────────────────────────────────────────────────────────────────────────
-  > [!]   GAIA agent          not on this machine
-          gaia-agent is the program that does the thinking. Nothing runs without it.
-          Re-run the GAIA installer — it ships gaia-agent alongside gaia-tui.
-          run:   https://amd-gaia.ai/#install
-          look:  https://amd-gaia.ai/docs/guides/gaia
-    [ ]   Lemonade            —  checked once "GAIA agent" is fixed
-    [ ]   Language model      —  checked once "GAIA agent" is fixed
-  ──────────────────────────────────────────────────────────────────────────────
-  r re-check · d details · esc back
-```
-
-This row has no `f`: the TUI cannot install its own agent binary, so it names
-the installer instead of offering a key that would not work.
-
-`email` (and any other daemon-supervised agent) goes through the same three
-screens, but its gate has five rows instead of three: background service,
-sidecar, Lemonade, model, and mailbox. See [Email Triage](/guides/email) for
-that gate end to end.
-
-#### Markers
-
-| Marker | Meaning |
-|---|---|
-| `[ok]` | Checked and working |
-| `[!]` | Checked and failed |
-| `[?]` | Tried, but couldn't establish an answer either way — not a pass |
-| `[ ]` | Not checked yet (waiting on the row above) |
-| `[..]` | Checking now |
-
-The marker and the words carry the state on their own, so the screen reads the same
-on a monochrome terminal or piped to a file.
-
-#### Keys
-
-| Key | What it does |
-|---|---|
-| `f` | Apply the focused row's fix — shown only when that row has one (e.g. downloading the models) |
-| `r` | Re-check everything |
-| `d` | Toggle the raw answer the check got — paste this into a bug report |
-| `↑` / `↓` (or `k` / `j`) | Move between rows |
-| `Enter` | Continue anyway — offered only when nothing is outright broken |
-| `Esc` | **Quit.** There is no screen behind the gate to go back to — the footer still shows this key as "back" |
-| `Ctrl+C` | Quit |
-
-`Enter` is not offered while a row is failing outright. Press it anyway and the
-screen names the blocker rather than starting a chat that cannot talk. It *is*
-offered when a row is merely unverified (`[?]`) — nothing there says anything is
-broken.
-
-### 3. Chat
-
-Once the gate clears, GAIA starts the agent and drops you into the conversation:
-
-```
- GAIA  │ <agent>
-────────────────────────────────────────────────────────────────────────────────
-Welcome to GAIA
-Connected to: <agent>
-
-Type a message and press Enter to start chatting.
-Type /help for available commands.
-────────────────────────────────────────────────────────────────────────────────
-┃ Ask anything... (Enter to send, Ctrl+C to quit)
-  ● <agent> connected                                                Ctrl+C quit
-```
-
-| Key | What it does |
-|---|---|
-| `Enter` | Send message (queues it if the agent is still working) |
-| `Alt+Enter`, `Ctrl+J` | New line in the composer |
-| `Esc` | Idle: clear the composer. Streaming: stop the turn; the agent keeps its session. Press again to stop at once — an agent the TUI runs itself is then restarted without its loaded skills or grants |
-| `Ctrl+C` | Quit |
-| `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation one line / one page |
-| `Home` / `End` | Jump to the top / bottom, if the composer is empty |
-| Drag and drop a file or folder | Its path lands in the composer, quoted by your terminal if it has spaces |
-| `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
-| `Ctrl+Y` | Copy the whole answer |
-| `Ctrl+B` | Copy the last code block in the answer |
-
-By default GAIA owns the mouse, so the wheel scrolls the conversation — a
-full-screen terminal app has no scrollback of its own behind it — and a printed
-link is clickable. Hold `Shift` (`Option` in iTerm2) to drag-select without
-leaving that mode, or press `Ctrl+T` to hand the mouse back to your terminal
-outright.
-
-| Mouse | What it does |
-|---|---|
-| Wheel | Scrolls the conversation |
-| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
-| Double-click, on a message | Copies that message |
-| `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
-| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
-
-| Command | What it does |
-|---|---|
-| `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
-| `/clear` | Clear the conversation |
-| `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
-| `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
-| `/model` | Switch the flagship agent's live model |
-| `/bypass` | Let the agent run tools without asking (off by default) |
-
-Typing `/` as the first character of an empty composer opens a palette listing every
-command above with a one-line description, so there's no need to already know them or
-open `/help` first:
-
-```
-         ╭────────────────────────────────────────────────────────────╮
-         │  Slash Commands                                            │
-         │  ────────────────────────────────────────────────────────  │
-         │  /mo▏                                                      │
-         │                                                            │
-         │  ▸ /model   Switch the model this session runs on (gaia …  │
-         ╰────────────────────────────────────────────────────────────╯
-```
-
-Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
-selection, `Enter` to run it, `Esc` to close the palette without touching the composer
-or cancelling a running turn. A `/` typed mid-sentence is just a slash — the palette
-only opens on an otherwise-empty line.
-
-The mouse works the same list: hovering a row moves the selection there, and
-clicking the row that is already selected runs it — the common case, since hovering
-already selects before you click. Clicking outside the box closes the palette, same
-as `Esc`. None of this needs a mouse: every path above is reachable from the keyboard
-alone.
-
-When an agent asks a follow-up question mid-turn — "Gmail or Outlook?", say — its
-options are the same: `↑`/`↓` (or `Tab`) to move between them, a number key to pick
-one directly, `Enter` to answer, and the mouse works identically to the palette above.
-`Esc` cancels the turn rather than the question, since abandoning it is the only way
-out once it is up.
-
-A session launched with `--use-claude` skips first-boot setup entirely and does not
-start the local server — that flag exists to avoid the local backend, so running an
-installer that launches it would defeat it, and would hold the first answer behind a
-multi-minute install. The transcript says the server was not started and names what
-still needs it: RAG, memory and the code index embed through Lemonade, which has no
-Claude equivalent. Run `gaia init --skip-chat-model`, or `/setup` in
-the composer, when you want those.
-
-## Running another agent
-
-The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
-its own five-row readiness gate:
-
-```bash
-gaia-tui run email
-gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-tui chat --agent email                    # same thing, via `chat`
-```
-
-Installing or removing it is the Python CLI's job:
+## Other agents and scripts
 
 ```bash
 gaia hub list
 gaia hub install email --trust
-gaia hub uninstall email
+gaia-tui run email
+gaia-tui run email --query "How many unread messages do I have?" --timeout 90s
 ```
 
-## Colours (light vs dark terminals)
+Only trust packages whose publisher and requested access you accept. Installation
+and removal belong to the Python CLI, not the terminal client.
 
-Colours adapt to your terminal automatically. Some terminals never answer that
-query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mode:
+For `run --query` and `chat --agent --query`, the answer goes to stdout and progress
+to stderr. Exit `0` means answered without an unrecovered failure, `1` means failure,
+and `3` means an approval gate blocked the action. The default turn timeout is 15m.
+Interactive `chat --subprocess --query` instead sends an initial message and stays open.
+
+`gaia-tui status` inspects the daemon and installed agents. It does not start the
+daemon and exits nonzero if it cannot reach it; that does not by itself mean a
+standalone flagship subprocess cannot run.
+
+## Diagnose a problem
 
 ```bash
-GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
+gaia-tui --dev --trace=run.jsonl
 ```
 
-## Next steps
+`--dev` shows detailed activity; `--trace` records received agent events. Review a
+trace before sharing: it can contain document contents, tool arguments, and email.
+For light or dark terminals, set `GAIA_TUI_THEME=light` or `dark` (default `auto`).
 
-- [Email Triage](/guides/email) — the id-addressed agent, end to end.
-- [CLI reference](/reference/cli#terminal-ui-gaia-tui) — the non-interactive
-  subcommands (`run`, `chat`, `status`) and their exit codes.
-- [Driving the TUI programmatically](/guides/mcp/tui) — the control API, for tests
-  and assistants. Not needed for normal use.
+See [TUI architecture and troubleshooting](/reference/tui), the
+[CLI reference](/reference/cli#terminal-ui-gaia-tui), and
+[TUI control MCP](/guides/mcp/tui) for programmatic testing.

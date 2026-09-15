@@ -127,7 +127,7 @@ icon: "bug"
     uv pip show amd-gaia
 
     # Reinstall in editable mode (for developers)
-    uv pip uninstall amd-gaia -y
+    uv pip uninstall amd-gaia
     uv pip install -e .
     ```
   </Accordion>
@@ -136,24 +136,16 @@ icon: "bug"
     Ensure imports use the correct package paths:
     ```python
     from gaia.agents.base.agent import Agent  # ✅ Correct
-    from gaia import Agent  # ❌ Won't work unless exported
+    from gaia import Agent  # Also supported
     ```
   </Accordion>
 
   <Accordion title="Tools not registering" icon="wrench">
-    The `@tool` decorator must be inside `_register_tools()`:
-    ```python
-    # ✅ Correct - inside _register_tools
-    def _register_tools(self):
-        @tool
-        def my_tool():
-            pass
-
-    # ❌ Wrong - at class level
-    @tool
-    def my_tool():
-        pass
-    ```
+    Define instance-bound tools in `_register_tools()` and call mixin registration
+    methods there. A module-level `@tool` also registers when its definition runs,
+    but it does not bind to your agent's state. Registered tools are dispatched by
+    the harness, not automatically exposed as methods on the agent. See
+    [Python agent troubleshooting](/sdk/troubleshooting#tools-are-missing-or-call-the-wrong-agent).
   </Accordion>
 
   <Accordion title="LLM not responding" icon="robot">
@@ -164,7 +156,7 @@ icon: "bug"
 
     If not running, start it via the Lemonade tray icon (Windows) or:
     ```bash
-    lemonade-server serve
+    gaia init
     ```
 
     If Lemonade is not installed, run:
@@ -216,7 +208,7 @@ icon: "bug"
        ```
     3. Restart Lemonade cleanly:
        ```bash
-       gaia kill --lemonade && lemonade-server serve
+       gaia kill --lemonade && gaia init
        ```
     4. Close other GPU/NPU-heavy apps competing for the device (image
        generators, other LLM servers, GPU benchmarks).
@@ -260,9 +252,9 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Agent processing failed" icon="triangle-exclamation">
-    Ensure Lemonade is running with sufficient context size:
+    Prepare the backend and model for the configured device profile:
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Accordion>
 
@@ -418,7 +410,7 @@ icon: "bug"
 
     **Fix:**
     ```bash
-    uv pip uninstall -y numpy pandas scikit-learn
+    uv pip uninstall numpy pandas scikit-learn
     uv pip install numpy pandas scikit-learn
     ```
   </Accordion>

@@ -77,7 +77,7 @@ which covers the same steps from the BYO-client angle.)
      The scopes GAIA supports (`gmail.readonly`, `gmail.send`,
      `gmail.modify`, `calendar.readonly`, `calendar.events`,
      `drive.readonly`, …) are declared in
-     [`src/gaia/connectors/catalog/google.py`](../../src/gaia/connectors/catalog/google.py).
+     [`src/gaia/connectors/catalog/google.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/google.py).
    - **Audience → Test users**: while the app is in Testing status, only
      listed test users can authorize — add internal QA accounts here.
 4. **Google Auth Platform → Clients** (old path:

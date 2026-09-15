@@ -1,0 +1,160 @@
+---
+title: "TUI Architecture and Development"
+description: "Understand terminal transports, session lifetime, debugging, and source validation."
+icon: "terminal"
+---
+
+<Info>
+  **Source Code:** [transport factory](https://github.com/amd/gaia/blob/main/tui/internal/client/factory.go),
+  [catalog](https://github.com/amd/gaia/blob/main/tui/internal/catalog/catalog.go),
+  [flagship stdio entry](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/stdio.py)
+</Info>
+
+The TUI is a Go/Bubble Tea client. It renders events and sends user input; the
+Python agent harness decides which tools to call. `gaia-tui`, the Python `gaia`
+CLI, and the `gaia-agent` child are different executables.
+
+## Transport selection
+
+| Installation | Transport | Lifecycle |
+| --- | --- | --- |
+| Seeded flagship with a stdio `gaia-agent` executable | Subprocess, newline-delimited events | The TUI starts and retains the child |
+| Flagship installed as a Hub binary artifact | HTTP/SSE through the daemon | The daemon supervises the sidecar |
+| Email and other discovered Hub sidecars | HTTP/SSE through the daemon | The daemon supervises the sidecar |
+| `chat --subprocess "<command>"` | Explicit subprocess | The caller supplies the command and its protocol options |
+
+Discovery searches PATH, verified Hub installation directories, then repository
+C++ build outputs. `~/.gaia/agents/<id>/.installed` records installation state.
+A binary-artifact record selects daemon transport even for the flagship. A wheel
+record preserves a seeded transport. Do not fabricate sentinel files to register
+an agent: being listed does not establish a runnable protocol or daemon spec.
+
+The normal subprocess path is:
+
+```text
+gaia-tui -> gaia-agent (persistent stdio child) -> model client -> tools
+```
+
+A Hub sidecar path is:
+
+```text
+gaia-tui -> authenticated daemon relay -> agent HTTP/SSE sidecar -> model client -> tools
+```
+
+The daemon owns sidecar authentication and supervision. The TUI's optional
+[control API](/guides/mcp/tui) is a separate server for operating the UI; it is
+not the inference or sidecar endpoint.
+
+## State and cancellation
+
+The subprocess stays alive across turns, keeping its agent instance, conversation,
+loaded skills, and temporary grants. Cooperative cancellation stops work without
+reconstructing that instance. A second Esc forces a stop; restarting the child
+loses that in-memory state. Already completed tool effects are not undone.
+
+The SSE client supplies a run ID, session ID, and conversation context. It records
+compact descriptions of displayed cards in that context so follow-up questions can
+refer to visible results. The server's retained session state is separate from the
+TUI transcript and the persistent memory store.
+
+The flagship stdio host carries the last **12 question/answer pairs** into the
+next turn. It does not replay previous tool calls and results. The visible
+transcript can therefore contain more detail than the model receives.
+
+| Action | Flagship subprocess | Daemon-backed session |
+| --- | --- | --- |
+| `/clear` | Clears the display only; child history, skills, and grants remain | Clears displayed and transmitted context, and drops the session ID |
+| First Esc during a turn | Requests cooperative cancellation | Requests cancellation through the client |
+| Quit and relaunch | Starts a new child with fresh in-memory state | Starts a new client conversation; daemon lifecycle is separate |
+
+None of these deletes persistent memory or undoes completed tool effects. Inspect
+and manage durable facts through the [Memory guide](/guides/memory).
+
+## Model and permission options
+
+`--use-claude` and `--bypass-permissions` apply to catalog subprocess agents.
+Daemon-backed sessions reject these flags. `--claude-model` requires
+`--use-claude`; run `gaia-tui --help` for the accepted model IDs in your build.
+For `chat --subprocess`, put supported agent flags inside the command you own.
+
+A Claude launch skips local chat setup, but retrieval, memory, and code indexing
+still need Lemonade embeddings. `gaia init --skip-chat-model` sets up that local
+portion. Cloud inference sends conversation data to the provider.
+
+`run --model` is rejected for catalog subprocess agents; use `/model` inside chat.
+Daemon queries support a model override. Provider configuration through Lemonade
+is covered by [AI providers](/guides/ai-providers).
+
+## Debugging
+
+| Evidence | Enable or inspect | What it establishes |
+| --- | --- | --- |
+| TUI detail | `gaia-tui --dev` | Rendered steps, tool arguments/results, timings |
+| Received events | `gaia-tui --trace=run.jsonl` | Parsed events and unparsed frames, in arrival order |
+| Agent log | `~/.gaia/logs/gaia-agent.log` for the stdio flagship | Agent diagnostics; `--dev` enables DEBUG |
+| Harness turn recorder | `GAIA_TURN_LOG` | Agent-side prompt/token and turn measurements |
+| Daemon state | `gaia daemon status`, `gaia daemon agents` | Supervising process and running sidecars |
+| UI control | `gaia-tui --control` | Current frame and state for automation |
+
+Bare `--trace` chooses `~/.gaia/traces/<timestamp>-<agent>.jsonl`. A custom path
+must use `=`. The trace is not a token-accounting record and is not automatically
+pruned. Tool payloads can include private data; inspect them before sharing.
+
+If a source change has no effect, check all three layers: the Go binary you built,
+the agent executable it discovered, and the checkout that started the daemon.
+Rebuilding the TUI does not rebuild the agent. `--dev` enables diagnostics; it does
+not select source code for a sidecar.
+
+For email source development, `GAIA_EMAIL_AGENT_MODE=dev` selects dev mode. Run the
+daemon from the same editable checkout; a mismatched checkout is refused. Stop and
+restart only the daemon you intend to replace, since it can serve other sessions.
+
+## Build and test
+
+From a repository checkout, use the Go version declared in `tui/go.mod`:
+
+```bash
+cd tui
+make build
+./bin/gaia-tui --help
+./bin/gaia-tui run --help
+go test ./... -count=1
+go vet ./...
+```
+
+For concurrency-sensitive changes, also run `make test-race`. These tests use
+fixtures and mock agents; passing them does not prove a live model or a published
+installer works.
+
+To test the screen without inference, build the repository mock:
+
+```bash
+make mock-agent
+./bin/gaia-tui --mock ./bin/mock-agent --control
+```
+
+Use [TUI control MCP](/guides/mcp/tui) to resize, read state, send input, and wait
+for conditions. Read the whole screen after each action. Plain-text captures do
+not establish color or styling correctness.
+
+## Run the flagship from your checkout
+
+After completing the [Python development setup](/reference/dev), run these commands
+from the repository root in the same activated environment:
+
+```bash
+uv pip install -e hub/agents/chat/python -e hub/agents/gaia/python
+make -C tui build
+gaia init
+scripts/dev/run-tui.sh --dev
+```
+
+The launcher puts the repository’s `gaia-agent` shim first on PATH and points
+`PYTHONPATH` at the core, chat, and flagship source trees. It uses `python` from
+your environment; set `GAIA_DEV_PYTHON` to an explicit interpreter path if needed.
+This prevents a frozen installed binary from hiding your Python edits.
+
+The catalog still chooses transport from installation metadata. If the flagship
+is installed as a Hub binary artifact, use its daemon source-mode instructions in
+the [flagship guide](/guides/gaia#install-and-launch). A source-mode sidecar is not
+evidence for the published binary; validate the transport you intend to ship.

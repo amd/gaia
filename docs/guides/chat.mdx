@@ -307,7 +307,7 @@ print(result)
 
 <Note>
 **Off by default, `doc` profile only.** This is the first stage of a phased
-rollout ([Dynamic Tool Loader plan](/plans/tool-loader)); enable it explicitly to
+rollout ([Agent harness](/sdk/core/agent-system)); enable it explicitly to
 try it.
 </Note>
 
@@ -340,7 +340,7 @@ GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
 It needs memory enabled (it reuses the memory embedder). If memory is off, the
 toggle is off, or the embedder is unreachable, the agent automatically falls back
 to showing **all** tools — so a turn never loses access to a tool it needs. See
-the [Dynamic Tool Loader plan](/plans/tool-loader) for the full design.
+the [Agent harness](/sdk/core/agent-system) for the full design.
 
 ## Next Steps
 
