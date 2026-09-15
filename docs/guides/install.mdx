@@ -148,7 +148,7 @@ Delete the `.AppImage` file. To also remove your data:
 
 The CLI lets you escalate cleanup as far as you want — useful for reclaiming disk or fully resetting:
 ```bash
-gaia uninstall --dry-run                    # Preview what would be removed
+gaia uninstall --purge --dry-run            # Preview the purge tier without deleting
 gaia uninstall --venv                       # Just the Python env
 gaia uninstall --purge                      # Venv + chats + documents + config
 gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
