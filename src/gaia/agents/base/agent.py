@@ -904,7 +904,7 @@ Do NOT wrap conversational replies in JSON.
         output_handler=None,
         max_plan_iterations: int = 3,
         max_consecutive_repeats: int = 4,
-        min_context_size: int = 32768,
+        min_context_size: Optional[int] = None,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
@@ -931,7 +931,7 @@ Do NOT wrap conversational replies in JSON.
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
-            min_context_size: Minimum context size required for this agent (default: 32768).
+            min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -996,7 +996,11 @@ Do NOT wrap conversational replies in JSON.
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
-            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                LemonadeClient,
+                cloud_model_provider,
+                resolve_ctx_size,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
@@ -1007,6 +1011,11 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
+                if (
+                    min_context_size is None
+                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
+                ):
+                    min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
                     quiet=silent_mode,
@@ -5031,7 +5040,9 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        messages = []
+        from gaia.agents.base.history import TurnMessages
+
+        messages = TurnMessages()
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
         # set). Built here so it spans the whole turn — the total it reports is
@@ -5094,6 +5105,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
+        messages.recorded.clear()
         messages.append({"role": "user", "content": user_input})
 
         # Use provided max_steps or fall back to class default
@@ -5607,7 +5619,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -5765,7 +5777,7 @@ Do NOT wrap conversational replies in JSON.
                             # model still sees its tool-call history, but cap
                             # any single tool-result content to 500 chars and
                             # drop all-but-last-2 tool results entirely.
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -7099,6 +7111,7 @@ Do NOT wrap conversational replies in JSON.
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
             }
+            self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below.
             self._finish_turn_record("", steps_taken)
             return self.last_result
@@ -7159,6 +7172,8 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
         }
+
+        result["model_messages"] = messages.finish(result["result"])
 
         # Write trace to file if requested
         if trace:
