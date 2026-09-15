@@ -1110,51 +1110,19 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
 def _restore_model_history(agent, db, session_id: str, query: str) -> None:
     """Reserve the current prompt and output before admitting completed turns."""
     from gaia.agents.base.history import (
+        history_budget,
         select_history,
         text_tool_history,
         transcript_turns,
     )
-    from gaia.agents.base.turn_metrics import count_tokens
-    from gaia.llm.lemonade_client import (
-        GPU_CTX_SIZE,
-        LemonadeClient,
-        cloud_model_provider,
-        resolve_ctx_size,
-    )
 
-    model = getattr(agent, "model_id", None)
-    provider = getattr(getattr(agent, "chat", None), "llm_client", None)
-    backend = getattr(provider, "_backend", None)
-    cloud = (
-        backend.cloud_model_provider(model)
-        if isinstance(backend, LemonadeClient)
-        else cloud_model_provider(model)
-    )
-    if getattr(agent, "_use_claude", False):
-        from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
-
-        ctx = CLAUDE_CTX_SIZE
-    elif cloud:
-        # Remote admission policy, not a claim about the provider's context ceiling.
-        ctx = GPU_CTX_SIZE
-    else:
-        ctx = resolve_ctx_size(
-            model=getattr(agent, "model_id", None),
-            device=getattr(agent, "device", None),
-        )
-    prompt = getattr(agent, "system_prompt", "")
-    tools = getattr(agent, "_openai_tools", [])
-    overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    config = getattr(getattr(agent, "chat", None), "config", None)
-    output = getattr(config, "max_tokens", 8192)
-    budget = min(ctx // 2, ctx - overhead - output - 2048)
     turns = transcript_turns(db.get_context_messages(session_id))
     if (
         hasattr(agent, "_uses_native_tool_calls")
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, budget)
+    agent.conversation_history = select_history(turns, history_budget(agent, query))
 
 
 def _dispatch_email_query(

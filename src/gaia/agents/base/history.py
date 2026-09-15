@@ -171,3 +171,102 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
                     ),
                 }
     return result
+
+
+def history_budget(agent: Any, query: str) -> int:
+    """Reserve prompt, tools, output and safety margin for any transport."""
+    from gaia.agents.base.turn_metrics import count_tokens
+    from gaia.llm.lemonade_client import (
+        GPU_CTX_SIZE,
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_ctx_size,
+    )
+
+    model = getattr(agent, "model_id", None)
+    provider = getattr(getattr(agent, "chat", None), "llm_client", None)
+    backend = getattr(provider, "_backend", None)
+    cloud = (
+        backend.cloud_model_provider(model)
+        if isinstance(backend, LemonadeClient)
+        else cloud_model_provider(model)
+    )
+    if getattr(agent, "_use_claude", False):
+        from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
+
+        ctx = CLAUDE_CTX_SIZE
+    elif cloud:
+        # Remote admission policy, not a claim about the provider's context ceiling.
+        ctx = GPU_CTX_SIZE
+    else:
+        ctx = resolve_ctx_size(
+            model=getattr(agent, "model_id", None),
+            device=getattr(agent, "device", None),
+        )
+    prompt = getattr(agent, "system_prompt", "")
+    tools = getattr(agent, "_openai_tools", [])
+    overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
+    config = getattr(getattr(agent, "chat", None), "config", None)
+    output = getattr(config, "max_tokens", 8192)
+    return min(ctx // 2, ctx - overhead - output - 2048)
+
+
+class SessionHistory(list):
+    """A bounded model view backed by a complete, optionally durable transcript.
+
+    ``clear`` also erases the archive so clearing a TUI session cannot resurrect
+    earlier evidence. Each append is committed before the next turn starts.
+    """
+
+    def __init__(self, path=None):
+        import sqlite3
+        from pathlib import Path
+
+        super().__init__()
+        if path is not None:
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Transcripts contain local file contents; keep new archives private.
+            import os
+
+            fd = (
+                os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                if not path.exists()
+                else None
+            )
+            if fd is not None:
+                os.close(fd)
+        self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
+        )
+        self._db.commit()
+
+    def record(self, messages: list[dict]) -> None:
+        """Persist a complete turn without modifying its native tool IDs."""
+        with self._db:
+            self._db.execute(
+                "INSERT INTO turns(messages) VALUES (?)",
+                (json.dumps(messages, ensure_ascii=False),),
+            )
+
+    def prepare(self, agent: Any, query: str) -> None:
+        """Rebuild the bounded view for the currently selected model."""
+        turns = [
+            json.loads(row[0])
+            for row in self._db.execute("SELECT messages FROM turns ORDER BY id")
+        ]
+        if (
+            hasattr(agent, "_uses_native_tool_calls")
+            and not agent._uses_native_tool_calls()
+        ):
+            turns = text_tool_history(turns)
+        self[:] = select_history(turns, history_budget(agent, query))
+
+    def clear(self) -> None:
+        with self._db:
+            self._db.execute("DELETE FROM turns")
+        super().clear()
+
+    def close(self) -> None:
+        self._db.close()

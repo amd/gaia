@@ -17,6 +17,7 @@ on:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/llm/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/skills/**'
       - 'src/gaia/code_index/**'
@@ -29,6 +30,7 @@ on:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
+      - 'src/gaia/llm/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/skills/**'
       - 'src/gaia/code_index/**'
@@ -83,6 +85,11 @@ jobs:
           echo "Skill library, lazy skill activation, stdio transport, server..."
           echo ""
           python -m pytest hub/agents/gaia/python/tests/ -v --tb=short
+
+      - name: Run shared history budgeting and persistence tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: python -m pytest tests/unit/agents/test_model_history.py -v --tb=short
 
       - name: Run Skill Framework Tests
         env:

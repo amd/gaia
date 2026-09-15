@@ -785,6 +785,22 @@ trimming does not replace the retained evidence with stubs. Calls interrupted
 before a result was recorded receive an explicit incomplete-result message;
 this does not claim they executed successfully.
 
+The flagship TUI persists these traces in private SQLite files under
+`~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
+starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
+explicitly resume the same transcript, or pass `--history-file` to the stdio
+agent. This archive contains tool output, including local file contents.
+Delete the file to remove it. A host calling `conversation_history.clear()`
+erases both the visible history and its archived turns.
+
+The next prompt admits complete turns using the active model's context budget,
+reserving space for the system prompt, tool schemas, current question and answer.
+Older turns are evicted in blocks from the model view, never cut into invalid
+call/result pairs. The archive remains intact across context eviction and model
+switches. The terminal event is sent only after the completed trace is committed;
+a storage failure is reported as an error rather than a successful saved turn.
+
+
 <Accordion title="How process_query() Works Internally">
 
 When you call `agent.process_query(user_input)`, here's the detailed flow:
