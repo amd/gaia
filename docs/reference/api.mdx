@@ -27,7 +27,7 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
 <Steps>
   <Step title="Start Lemonade Server">
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Step>
 
@@ -82,7 +82,7 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
     Must be running with sufficient context:
 
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Card>
 </CardGroup>
@@ -337,9 +337,9 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
     curl http://localhost:13305/health
     ```
 
-    **Verify context size:**
+    **Prepare the configured model:**
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
 
     **Enable debug mode:**
@@ -354,7 +354,7 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
 | Issue | Solution |
 |-------|----------|
 | "Model not found" | Confirm the model id is registered in `AGENT_MODELS` — `GET /v1/models` lists what's actually available |
-| "Agent processing failed" | Ensure Lemonade is running with `--ctx-size 32768` |
+| "Agent processing failed" | Run `gaia init` and inspect the reported model/readiness error |
 | "Port already in use" | Stop existing server or use `--port` flag |
 | Streaming not working | Ensure `"stream": true` in request |
 
@@ -372,10 +372,10 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
 
 <Steps>
   <Step title="Start Servers">
-    Start Lemonade server with extended context:
+    Prepare Lemonade and the configured model:
 
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
 
     Start GAIA API server:

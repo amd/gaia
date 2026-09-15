@@ -136,3 +136,21 @@ def test_redirects_have_unique_sources_and_existing_destinations(docs_config):
 )
 def test_retired_entry_points_redirect_to_maintained_docs(docs_config, route):
     assert route in {redirect["source"] for redirect in docs_config["redirects"]}
+
+
+def test_current_docs_do_not_recommend_removed_lemonade_cli():
+    stale = []
+    for page in (REPO_ROOT / "docs").rglob("*.mdx"):
+        if "releases" in page.relative_to(REPO_ROOT / "docs").parts:
+            continue
+        for line_number, line in enumerate(page.read_text().splitlines(), 1):
+            if any(
+                command in line
+                for command in (
+                    "lemonade-server serve",
+                    "lemonade-server pull",
+                    "lemonade-server list",
+                )
+            ):
+                stale.append(f"{page.relative_to(REPO_ROOT)}:{line_number}")
+    assert not stale, f"Removed CLI recommended in current docs: {stale}"

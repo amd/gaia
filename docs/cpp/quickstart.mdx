@@ -68,9 +68,7 @@ icon: "rocket"
   <Step title="Start an LLM server">
     The agent connects to any OpenAI-compatible LLM server at `http://localhost:13305/api/v1` by default. The recommended backend is [Lemonade Server](https://lemonade-server.ai) (optimized for AMD hardware):
 
-    ```bash
-    lemonade-server serve
-    ```
+    Open the installed Lemonade application and use its model controls to load a chat model.
 
     <Note>
     **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. Just set `AgentConfig::baseUrl` and `AgentConfig::modelId`. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.

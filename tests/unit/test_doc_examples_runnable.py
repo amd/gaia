@@ -272,3 +272,31 @@ def test_chat_sdk_non_rag_examples_execute_with_a_mock_provider():
             assert provider.generate.called or provider.chat.called
         checked += 1
     assert checked == 8
+
+
+def test_database_spec_agent_constructs_and_uses_sqlite(tmp_path, monkeypatch):
+    """Run the published TodoAgent against a real temporary SQLite database."""
+    monkeypatch.chdir(tmp_path)
+    source = next(
+        source
+        for source in _python_examples("docs/spec/database-mixin.mdx")
+        if "class TodoAgent" in source
+    )
+    with (
+        patch.dict(tools_module._TOOL_REGISTRY, {}, clear=True),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.agents.base.agent.AgentSDK"),
+    ):
+        namespace = {}
+        exec(compile(source, "database-mixin.mdx", "exec"), namespace)
+        agent = namespace["TodoAgent"](silent_mode=True)
+        try:
+            registry = tools_module._TOOL_REGISTRY
+            created = registry["add_todo"]["function"]("Review docs")
+            registry["complete_todo"]["function"](created["id"])
+            rows = registry["list_todos"]["function"]()["todos"]
+            assert len(rows) == 1
+            assert rows[0]["title"] == "Review docs"
+            assert rows[0]["done"] == 1
+        finally:
+            agent.close_db()

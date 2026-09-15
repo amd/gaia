@@ -95,26 +95,14 @@ Malformed input raises `ValueError` naming the offending value and the rule, whi
 These tools still give the LLM read and write access to **every** table in the database — there is no per-table authorization. Point `db_path` at a database holding only what the agent should be able to change, or override `_register_db_tools()` to expose domain-specific operations.
 </Note>
 
-#### Composing with Other Mixins
+#### Composing with other mixins
 
-`DatabaseAgent` can be extended with additional mixins for more capabilities:
-
-```python
-from gaia import DatabaseAgent
-from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
-
-class MyAgent(DatabaseAgent, RAGToolsMixin, FileToolsMixin):
-    """Agent with database, RAG, and file tools."""
-
-    def __init__(self, **kwargs):
-        super().__init__(db_path="data/app.db", **kwargs)
-
-    def _get_system_prompt(self) -> str:
-        return "You can query databases, search documents, and manage files."
-
-    def _register_tools(self):
-        pass  # All tools auto-registered from parent classes
-```
+`DatabaseAgent` registers its database tools. Adding another mixin to the class
+does not initialize or register that mixin's capabilities automatically.
+Set its required host state and call its registration method from
+`_register_tools()`. RAG and file-watching integrations have additional lifecycle
+requirements; see [tool mixins](/sdk/mixins/tool-mixins) and
+[the complete watcher example](/sdk/utils/file-watcher#complete-example).
 
 ### 2. DatabaseMixin (Recommended for production)
 

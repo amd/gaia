@@ -27,10 +27,10 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
   <Tab title="Windows">
     1. Follow the [Quickstart](/quickstart) to install GAIA
     2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
-    3. GAIA automatically starts Lemonade Server when needed, or start manually:
+    3. Prepare the backend and model with GAIA setup:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
   </Tab>
 
@@ -40,7 +40,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
     3. Start the server:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
 
     4. Verify installation:
@@ -1040,9 +1040,9 @@ gaia telegram stop
 
 ### Quick Start
 
-1. Start Lemonade with extended context:
+1. Prepare Lemonade and the configured model:
 ```bash
-lemonade-server serve --ctx-size 32768
+gaia init
 ```
 
 2. Start GAIA API server:
@@ -1543,11 +1543,11 @@ gaia download --agent code
 To download individual models, use the Lemonade Server CLI directly:
 
 ```bash
-lemonade-server pull MODEL_NAME [OPTIONS]
+lemonade pull MODEL_NAME [OPTIONS]
 ```
 
 <Tip>
-Use `lemonade-server list` to see all available models and their download status.
+Use `lemonade list` to see all available models and their download status.
 </Tip>
 
 ---
@@ -2816,14 +2816,10 @@ non-zero. Against an unreachable dependency that is about a second; the ceiling
 is the time it takes to start the sidecar. Nothing is sent to the agent, and the
 gate screen is never rendered: a script has nobody to press a key. The flagship normally uses a subprocess gate; a Hub binary install selects the daemon transport instead. See [transport selection](/reference/tui#transport-selection).
 
-```bash
-$ gaia-tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: lemonade-server serve
-$ echo $?   # 1, after about a second
-```
+When a dependency is unavailable, stderr identifies the failed readiness check
+and prints a remedy. Backend startup guidance depends on the installed Lemonade
+application. Run `gaia init` to prepare the local backend before retrying; inspect
+the reported endpoint if you configured a remote server.
 
 The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
 2h` to change it — so an agent that accepts the query and then stops answering is
@@ -3208,7 +3204,7 @@ All commands support these global options:
     If you get connection errors, ensure Lemonade server is running:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
   </Accordion>
 
