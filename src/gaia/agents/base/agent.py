@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import ChainMap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -32,6 +33,7 @@ from typing import (
     FrozenSet,
     List,
     Literal,
+    MutableMapping,
     Optional,
     Tuple,
     Union,
@@ -39,7 +41,7 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     build_verification_scope,
@@ -1067,7 +1069,8 @@ Do NOT wrap conversational replies in JSON.
         from gaia.agents.base.artifacts import ArtifactStore
 
         self._output_artifacts = ArtifactStore()
-        self._register_output_reader()
+        if any(name != "read_tool_output" for name in self._tools_registry):
+            self._register_output_reader()
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1404,7 +1407,6 @@ Do NOT wrap conversational replies in JSON.
     def _register_output_reader(self):
         from gaia.agents.base.artifacts import store_for
 
-        @tool(atomic=True)
         def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
             """Read exact omitted tool output by handle, without rerunning the tool.
 
@@ -1416,16 +1418,28 @@ Do NOT wrap conversational replies in JSON.
             return store_for(self).read(artifact, offset, limit)
 
         self._output_reader_entry = {
-            **_TOOL_REGISTRY["read_tool_output"],
+            "name": "read_tool_output",
+            "description": read_tool_output.__doc__,
+            "parameters": {
+                "artifact": {"type": "string", "required": True},
+                "offset": {"type": "integer", "required": False},
+                "limit": {"type": "integer", "required": False},
+            },
             "function": read_tool_output,
+            "atomic": True,
+            "display_label": None,
+            "timeout": None,
         }
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+        self._tool_overrides["read_tool_output"] = self._output_reader_entry
         if self._instance_tools is not None:
             self._instance_tools["read_tool_output"] = self._output_reader_entry
         if hasattr(self, "_system_prompt_cache"):
             del self._system_prompt_cache
 
     @property
-    def _tools_registry(self) -> Dict[str, Any]:
+    def _tools_registry(self) -> MutableMapping[str, Any]:
         """Return this agent's effective tool registry.
 
         Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
@@ -1434,8 +1448,10 @@ Do NOT wrap conversational replies in JSON.
         """
         if self._instance_tools is not None:
             return self._instance_tools
-        if hasattr(self, "_output_reader_entry"):
-            return {**_TOOL_REGISTRY, "read_tool_output": self._output_reader_entry}
+        if hasattr(self, "_tool_overrides"):
+            # Keep legacy in-place registry additions visible across lookups,
+            # without sharing this agent's continuation reader with another one.
+            return ChainMap(self._tool_overrides, _TOOL_REGISTRY)
         return _TOOL_REGISTRY
 
     def _snapshot_tools(self) -> None:
@@ -1446,8 +1462,8 @@ Do NOT wrap conversational replies in JSON.
         will not affect other agents or the global dict.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
-        if hasattr(self, "_output_reader_entry"):
-            self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_tool_overrides"):
+            self._instance_tools.update(self._tool_overrides)
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -4341,6 +4357,8 @@ Do NOT wrap conversational replies in JSON.
             if len(result_str) > threshold:
                 from gaia.agents.base.artifacts import store_for
 
+                if not hasattr(self, "_output_reader_entry"):
+                    self._register_output_reader()
                 handle = store_for(self).put(result_str)
                 metadata = {
                     "artifact": handle,

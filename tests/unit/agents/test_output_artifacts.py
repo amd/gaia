@@ -78,8 +78,10 @@ def test_text_pages_recover_a_large_single_line_and_unicode(tmp_path):
 
 def test_reader_remains_instance_owned_after_another_agent_and_refresh():
     first = make_agent()
+    first._register_output_reader()
     first_handle = store_for(first).put("first private evidence")
     second = make_agent()
+    second._register_output_reader()
     second_handle = store_for(second).put("second private evidence")
     first._snapshot_tools()
     reader = first._tools_registry["read_tool_output"]["function"]
@@ -90,6 +92,7 @@ def test_reader_remains_instance_owned_after_another_agent_and_refresh():
 
 def test_registering_reader_preserves_system_prompt_and_tool_instructions():
     agent = make_agent()
+    agent._register_output_reader()
     assert isinstance(agent.system_prompt, str) and agent.system_prompt
     assert "read_tool_output" in agent.system_prompt
     agent._register_output_reader()
@@ -135,3 +138,50 @@ def test_whitespace_json_list_keeps_original_records_and_recovers_bytes(
     excerpt = json.loads(agent._handle_large_tool_result("read_file", raw, []))
     assert excerpt[: len(expected)] == expected
     assert store_for(agent).read(excerpt[-1]["artifact"], 0, 2)["content"] == "[ "
+
+
+def test_registry_additions_survive_lookup_and_snapshot():
+    agent = make_agent()
+    agent._register_output_reader()
+    added = {"function": lambda: "added"}
+    agent._tools_registry["new_tool"] = added
+    assert agent._tools_registry["new_tool"] is added
+    agent._snapshot_tools()
+    assert agent._tools_registry["new_tool"] is added
+
+
+def test_empty_agent_keeps_no_tool_surface(monkeypatch):
+    from gaia.agents.base import tools
+
+    monkeypatch.setattr(tools, "_TOOL_REGISTRY", {})
+    monkeypatch.setattr("gaia.agents.base.agent._TOOL_REGISTRY", tools._TOOL_REGISTRY)
+    agent = make_agent()
+    assert not agent._tools_registry
+
+
+def test_empty_agents_never_inherit_another_sessions_reader(monkeypatch):
+    from gaia.agents.base import tools
+
+    monkeypatch.setattr(tools, "_TOOL_REGISTRY", {})
+    monkeypatch.setattr("gaia.agents.base.agent._TOOL_REGISTRY", tools._TOOL_REGISTRY)
+    first = make_agent()
+    first._register_output_reader()
+    handle = store_for(first).put("private evidence")
+    second = make_agent()
+    assert not second._tools_registry
+    second._register_output_reader()
+    with pytest.raises(ValueError, match="Unknown output"):
+        second._tools_registry["read_tool_output"]["function"](handle)
+
+
+def test_reader_advertises_valid_native_parameter_types():
+    agent = make_agent(model_id="Gemma-4-E4B-it-GGUF")
+    agent._register_output_reader()
+    schema = next(
+        t["function"]
+        for t in agent._openai_tools
+        if t["function"]["name"] == "read_tool_output"
+    )
+    assert schema["parameters"]["properties"]["artifact"]["type"] == "string"
+    assert schema["parameters"]["properties"]["offset"]["type"] == "integer"
+    assert schema["parameters"]["properties"]["limit"]["type"] == "integer"
