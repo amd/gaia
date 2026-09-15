@@ -83,6 +83,27 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
 )
 
 
+def python_script_run_context(
+    script: Path, project_dir: os.PathLike | str
+) -> tuple[Path, Dict[str, str]]:
+    """Working directory and environment for running *script* as a subprocess.
+
+    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
+    ``tests/test_x.py`` can import the project's packages; anything else runs
+    from its own folder with the environment unchanged.
+    """
+    script = Path(script).resolve()
+    project = Path(project_dir).resolve()
+    env = dict(os.environ)
+    if not script.is_relative_to(project):
+        return script.parent, env
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        os.pathsep.join([str(project), existing]) if existing else str(project)
+    )
+    return project, env
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -1445,6 +1466,12 @@ No documents are currently indexed.
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
+                A script inside the agent's project directory runs from that
+                directory, with it on PYTHONPATH, so a test file such as
+                tests/test_x.py can import the project's own packages. A script
+                outside the project runs from its own folder. Relative paths in
+                the script resolve against that working directory.
+
                 Args:
                     file_path: Path to the .py file to run
                     args: Space-separated CLI arguments to pass to the script
@@ -1473,11 +1500,15 @@ No documents are currently indexed.
                 cmd = [sys.executable, str(p.resolve())] + (
                     shlex.split(args) if args.strip() else []
                 )
+                run_dir, env = python_script_run_context(
+                    p, getattr(self.config, "project_root", None) or os.getcwd()
+                )
                 start = time.monotonic()
                 try:
                     r = subprocess.run(
                         cmd,
-                        cwd=str(p.parent.resolve()),
+                        cwd=str(run_dir),
+                        env=env,
                         capture_output=True,
                         # An inherited stdin leaves the child waiting on a pipe
                         # nobody writes to, and the run only ends at the timeout.
