@@ -589,6 +589,43 @@ class RAGSDK:
                     response = self.embedder.embeddings(
                         batch_texts, model=self.config.embedding_model, timeout=180
                     )
+                    batch_embeddings = []
+                    data = response.get("data", [])
+                    if any("index" in item for item in data):
+                        indices = [item.get("index") for item in data]
+                        if any(
+                            not isinstance(i, int) or isinstance(i, bool)
+                            for i in indices
+                        ) or sorted(indices) != list(range(len(batch_texts))):
+                            raise RuntimeError(
+                                "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
+                            )
+                        data = sorted(data, key=lambda item: item["index"])
+                    for item in data:
+                        embedding = item.get("embedding", [])
+                        batch_embeddings.append(embedding)
+
+                    if len(batch_embeddings) != len(batch_texts):
+                        raise RuntimeError(
+                            f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                            f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
+                            "Verify Lemonade Server is reachable and the embedding model is "
+                            "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
+                            "Then retry indexing. No partial batch was accepted."
+                        )
+                    expected_dim = len(all_embeddings[0]) if all_embeddings else None
+                    for embedding in batch_embeddings:
+                        if not embedding or (
+                            expected_dim is not None and len(embedding) != expected_dim
+                        ):
+                            raise RuntimeError(
+                                f"Embedding backend returned an empty or inconsistent vector "
+                                f"in batch {batch_num} using {self.config.embedding_model!r}. "
+                                "Verify the embedding model is fully loaded or lower chunk_size if "
+                                "inputs exceed its token limit, then retry indexing."
+                            )
+                        expected_dim = len(embedding)
+
                     break  # Success, exit retry loop
                 except Exception as e:
                     if attempt < max_retries:
@@ -603,32 +640,6 @@ class RAGSDK:
                         raise
 
             batch_duration = time.time() - batch_start
-
-            # Extract embeddings from response
-            # Expected format: {"data": [{"embedding": [...]}, ...]}
-            batch_embeddings = []
-            for item in response.get("data", []):
-                embedding = item.get("embedding", [])
-                batch_embeddings.append(embedding)
-
-            if len(batch_embeddings) != len(batch_texts):
-                raise RuntimeError(
-                    f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
-                    f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
-                    "Verify Lemonade Server is reachable and the embedding model is "
-                    "fully loaded, then retry indexing. No partial batch was accepted."
-                )
-            expected_dim = len(all_embeddings[0]) if all_embeddings else None
-            for embedding in batch_embeddings:
-                if not embedding or (
-                    expected_dim is not None and len(embedding) != expected_dim
-                ):
-                    raise RuntimeError(
-                        f"Embedding backend returned an empty or inconsistent vector "
-                        f"in batch {batch_num} using {self.config.embedding_model!r}. "
-                        "Verify the embedding model is fully loaded, then retry indexing."
-                    )
-                expected_dim = len(embedding)
 
             all_embeddings.extend(batch_embeddings)
 
