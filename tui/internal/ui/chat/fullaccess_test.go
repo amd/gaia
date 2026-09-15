@@ -477,7 +477,7 @@ func TestNeverClearsThePreference(t *testing.T) {
 	m := NewChatModel(&permissionClient{}, "gaia", "", false)
 
 	updated, _ := m.submit("/full-access always")
-	updated, _ = updated.(ChatModel).submit("/full-access never")
+	_, _ = updated.(ChatModel).submit("/full-access never")
 
 	if savedFullAccess(t, path) {
 		t.Error("never must clear the saved preference")

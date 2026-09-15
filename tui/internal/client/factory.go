@@ -143,9 +143,14 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 	}
 }
 
+// FullAccessSupported reports whether this agent's transport can carry full access.
+func FullAccessSupported(agent catalog.Agent) bool {
+	return agent.Transport != catalog.TransportDaemon
+}
+
 // CheckFullAccessSupported validates launch options before readiness can connect.
 func CheckFullAccessSupported(agent catalog.Agent, enabled bool) error {
-	if enabled && agent.Transport == catalog.TransportDaemon {
+	if enabled && !FullAccessSupported(agent) {
 		return fmt.Errorf("--full-access is not supported for agent %q over the daemon transport. Drop --full-access to keep confirmation prompts enabled", agent.ID)
 	}
 	return nil

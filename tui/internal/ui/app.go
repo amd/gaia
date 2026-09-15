@@ -349,7 +349,7 @@ func agentNameFromPath(path string) string {
 // preference is a default, not a demand: it is set aside for this launch and
 // explained, never allowed to stop the TUI opening over a flag nobody typed.
 func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string, error) {
-	if fullAccess && saved && client.CheckFullAccessSupported(agent, true) != nil {
+	if fullAccess && saved && !client.FullAccessSupported(agent) {
 		return false, "[!] Full access is saved as your default, but " + agent.Name +
 			" runs through the GAIA background service, which does not support it yet. " +
 			"Confirmation prompts are ON for this session.\n" +
