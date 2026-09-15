@@ -14,6 +14,8 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
+
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
   package script as argv[1], preserving unrelated tools in shared PATH directories.
 
