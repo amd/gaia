@@ -929,7 +929,7 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
     now = datetime.now(timezone.utc).timestamp()
     searchable = _searchable_text(msg).lower()
     for token in _query_tokens(query):
-        literal = token.strip('"\'')
+        literal = token.strip("\"'")
         date_verdict = _date_operator_matches(token, msg, now)
         if date_verdict is not None:
             if not date_verdict:
@@ -939,11 +939,11 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
             if "UNREAD" not in label_ids:
                 return False
         elif token.startswith("from:"):
-            needle = token[len("from:") :].strip('"\'')
+            needle = token[len("from:") :].strip("\"'")
             if needle not in headers.get("from", "").lower():
                 return False
         elif token.startswith("subject:"):
-            needle = token[len("subject:") :].strip('"\'')
+            needle = token[len("subject:") :].strip("\"'")
             if needle not in headers.get("subject", "").lower():
                 return False
         else:
