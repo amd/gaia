@@ -983,3 +983,11 @@ Advanced patterns for production tools
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 </small>
+
+## Instance-local tool registration
+
+Capability-gated tools can pass `registry=local_tools` to `@tool(...)`. The
+decorator writes only to that mapping, including when it is empty. Merge it into
+the owning agent's instance registry after normal registration. This prevents
+concurrently constructed agents from snapshotting another instance's gated tools.
+Existing callers that omit `registry` keep the normal global registration behavior.

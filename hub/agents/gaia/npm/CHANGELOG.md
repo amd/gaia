@@ -19,6 +19,10 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- Opt-in developer-mode skill and consent-gated MCP handoffs to Claude Code/Codex,
+  with managed worktrees, approved feedback snapshots and reported preview results.
+  Python `[mcp]` installation is required for the bridge; normal mode has no access.
+
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it

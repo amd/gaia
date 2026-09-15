@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, requiresFreshConsent, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -799,10 +799,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         return;
                     }
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
+                    const alwaysAllowed: string[] = requiresFreshConsent(toolName) ? [] : JSON.parse(
                         localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
                     );
-                    if (alwaysAllowed.includes(toolName)) {
+                    if (!requiresFreshConsent(toolName) && alwaysAllowed.includes(toolName)) {
                         // Auto-approve without showing the modal
                         api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
@@ -833,10 +833,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // notification store for the PermissionPrompt overlay.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
+                    const alwaysAllowed: string[] = requiresFreshConsent(toolName) ? [] : JSON.parse(
                         localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
                     );
-                    if (alwaysAllowed.includes(toolName)) {
+                    if (!requiresFreshConsent(toolName) && alwaysAllowed.includes(toolName)) {
                         api.confirmTool(sessionId, true).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
                         );

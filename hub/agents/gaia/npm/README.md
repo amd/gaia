@@ -225,3 +225,15 @@ at it directly; the fetcher will not be talked into it.
 - Issues: <https://github.com/amd/gaia/issues>
 
 MIT licensed. © 2024-2026 Advanced Micro Devices, Inc.
+
+## Developer engineering mode
+
+The flagship supports opt-in `--developer-mode` (or `GAIA_DEVELOPER_MODE=1` for
+the host process), separate from diagnostic `--dev`. It loads a developer-only
+skill and tools for explicitly approved context snapshots to Claude Code/Codex.
+The local MCP server also requires explicit developer mode; normal sessions cannot
+share through it. Coding stays in the native app with managed worktrees and
+reported preview/results. No self-assessment or automatic updating is enabled.
+Configure pairing from a Python GAIA installation with `[mcp]`; the frozen agent
+can reuse that configuration but is not itself a Python MCP launcher.
+See the [usage guide](https://amd-gaia.ai/docs/guides/harness-engineering).

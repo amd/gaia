@@ -21,6 +21,13 @@ const MAX_NOTIFICATIONS = 500;
 /** localStorage key for the "always allow" tool list. */
 export const ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
 
+/** These decisions apply to one displayed snapshot or code scope, never a tool name. */
+export function requiresFreshConsent(tool: string | undefined): boolean {
+  return tool === 'share_engineering_context'
+    || tool === 'append_engineering_context'
+    || tool === 'approve_engineering_code';
+}
+
 // ── State Interface ──────────────────────────────────────────────────────
 
 interface NotificationState {
@@ -85,12 +92,13 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     // Find the notification to get the session ID for the REST call
     const notification = get().notifications.find((n) => n.id === id);
     const sessionId = notification?.agentId;
+    const rememberChoice = remember && !requiresFreshConsent(notification?.tool);
 
     // Try Electron IPC first, then fall back to REST API
     const electronApi = window.gaiaAPI;
     if (electronApi?.notification?.respondPermission) {
       try {
-        await electronApi.notification.respondPermission(id, action, remember);
+        await electronApi.notification.respondPermission(id, action, rememberChoice);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
         // Don't update local state — the agent didn't receive the response.
@@ -107,7 +115,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       }
     }
     // Persist "always allow" preference in localStorage
-    if (action === 'allow' && remember) {
+    if (action === 'allow' && rememberChoice) {
       if (notification?.tool) {
         const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]');
         if (!existing.includes(notification.tool)) {
