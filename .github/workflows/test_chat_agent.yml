@@ -85,7 +85,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev,rag]
+          uv pip install --system -e .[dev,rag,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
