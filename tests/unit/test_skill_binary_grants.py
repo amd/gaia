@@ -23,6 +23,7 @@ import pytest
 
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
+    TIER_CONFIRM,
     ShellToolsMixin,
     skill_granted_binaries,
 )
@@ -531,14 +532,25 @@ def test_the_granted_binary_exemption_does_not_cover_the_rest_of_the_pipeline():
     assert "Access denied" in result["error"]
 
 
-def test_an_ungranted_command_in_a_pipeline_is_still_refused():
+def test_an_ungranted_command_in_a_pipeline_is_offered_for_confirmation():
+    """An ungranted binary no longer kills the pipeline — it asks.
+
+    ``_run`` calls the tool directly, so reaching "success" here means "would
+    run once approved"; the gate itself lives in ``Agent._execute_tool`` and is
+    covered by the confirmation tests below.
+    """
     host = _Validating()
     host._granted_binaries = BinaryGrants()
     host._granted_binaries.grant("gh", skill_name="github-triage")
 
-    result = _run(host, "gh issue list --repo amd/gaia | kubectl get pods")
-    assert result["status"] == "error"
-    assert "kubectl" in result["error"]
+    command = "gh issue list --repo amd/gaia | kubectl get pods"
+    assert (
+        host.policy_refusal_for_call("run_shell_command", {"command": command}) is None
+    )
+
+    error, _ = host._validate_shell_command(command)
+    assert error is not None and error["tier"] == TIER_CONFIRM
+    assert "kubectl" in error["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -684,9 +696,6 @@ def _refusal(host, command: str):
         ("gh issue close 2975", "Allowed issue actions"),
         ("gh api -X POST repos/amd/gaia/issues", "-X may only be GET"),
         ("gh alias set x", "is not allowed"),
-        # Ungranted and unknown commands are equally pre-decided.
-        ("kubectl get pods", "not in the allowed list"),
-        ("git push", "not allowed"),
         ("gh issue list && rm -rf /", "Shell operators"),
         ("gh issue list 'unterminated", "Invalid command syntax"),
     ],
@@ -695,6 +704,26 @@ def test_a_call_the_policy_refuses_is_refused_before_any_prompt(command, expecte
     error = _refusal(_Gated("gh"), command)
     assert error is not None, f"{command!r} reached the confirmation prompt"
     assert expected in error["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Not reads, but a prompt can describe each one exactly. These used to
+        # be refused in front of the gate, which is what made the agent unable
+        # to do ordinary work its user was standing right there to approve.
+        "kubectl get pods",
+        "git push",
+        "git commit -m wip",
+        "npm test",
+        "rm notes.txt",
+        "find . -delete",
+    ],
+)
+def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(command):
+    assert (
+        _refusal(_Gated("gh"), command) is None
+    ), f"{command!r} was refused before anyone could approve it"
 
 
 @pytest.mark.parametrize(

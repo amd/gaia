@@ -63,7 +63,7 @@ BASE = f"http://{HOST}:{PORT}"
 REQUIRED_PATHS = {"/v1/gaia/query", "/v1/gaia/init"}
 
 #: The flagship's catalog entry declares no ``BinaryArgs``, so the TUI spawns
-#: the binary bare and only appends flags for dev mode / Claude / bypass
+#: the binary bare and only appends flags for dev mode / Claude / full access
 #: (``tui/internal/client/factory.go``). Bare argv IS the shipping invocation,
 #: which is why "no arguments" has to mean the stdio wire.
 STDIO_ARGV: list[str] = []

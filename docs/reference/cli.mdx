@@ -1423,6 +1423,36 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
+| `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
+
+### Full access
+
+By default the agent asks before it runs a shell command or writes a file. Turn
+that off every time you launch `gaia-tui` with:
+
+```bash
+gaia config set full_access true
+```
+
+The TUI shows a warning banner on every frame while it is on, and names this
+setting as the reason. To turn it off:
+
+| | |
+|---|---|
+| `gaia config set full_access false` | stop it coming back |
+| `/full-access never` (in the TUI) | same, without leaving the session |
+| `/full-access off` (in the TUI) | this session only; the setting stays |
+| `gaia-tui --full-access=false` | skip it for one launch |
+
+Full access needs an agent the TUI launches itself. A Hub-installed flagship runs
+through the GAIA background service, which doesn't support it yet: `--full-access`
+is refused there, and a saved `full_access` leaves prompts on with a note in the
+chat saying so.
+
+This is the only thing that turns full access on without someone asking for it
+on that launch, so it is read **only** from your own `~/.gaia/config.json` — a
+project-local `.env` or a checked-in config file can never switch off your
+confirmation prompts.
 
 ### Default model precedence
 

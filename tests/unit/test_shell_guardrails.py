@@ -3,8 +3,12 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import pytest
+
 from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
+    TIER_CONFIRM,
+    TIER_REFUSE,
     ShellToolsMixin,
 )
 
@@ -83,23 +87,84 @@ class TestBlockedCommands:
 
 
 class TestGitSubcommands:
-    def test_git_push_blocked(self):
+    def test_git_push_needs_confirmation(self):
         result = validate("git push origin main")
         assert result is not None
+        assert result["tier"] == TIER_CONFIRM
         assert (
             "push" in result["error"].lower()
             or "not allowed" in result["error"].lower()
         )
 
-    def test_git_commit_blocked(self):
+    def test_git_commit_needs_confirmation(self):
         result = validate("git commit -m 'msg'")
         assert result is not None
+        assert result["tier"] == TIER_CONFIRM
 
     def test_git_diff_allowed(self):
         assert validate("git diff HEAD") is None
 
     def test_git_show_allowed(self):
         assert validate("git show HEAD") is None
+
+
+# ---------------------------------------------------------------------------
+# Git global options that precede the subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestGitGlobalOptions:
+    """A global flag must not be mistaken for the subcommand (#3624)."""
+
+    def test_dash_c_repo_path_then_read_only_subcommand(self):
+        assert validate("git -C /repo branch --list") is None
+
+    def test_dash_c_repo_path_then_write_subcommand_still_blocked(self):
+        result = validate("git -C /repo push origin main")
+        assert result is not None
+        assert "push" in result["error"]
+
+    def test_git_dir_separate_value(self):
+        assert validate("git --git-dir /repo/.git log --oneline") is None
+
+    def test_git_dir_inline_value(self):
+        assert validate("git --git-dir=/repo/.git status") is None
+
+    def test_work_tree_and_no_pager_combined(self):
+        assert validate("git --no-pager --work-tree /repo status") is None
+
+    def test_namespace_value_is_not_read_as_subcommand(self):
+        # Without value-consumption the walk would land on "reset".
+        result = validate("git --namespace reset status")
+        assert result is None
+
+    def test_version_needs_no_subcommand(self):
+        assert validate("git --version") is None
+
+    def test_config_override_refused(self):
+        result = validate("git -c core.pager=sh status")
+        assert result is not None
+        assert "-c" in result["error"]
+
+    def test_config_env_refused(self):
+        result = validate("git --config-env=core.pager=EVIL status")
+        assert result is not None
+        assert "--config-env" in result["error"]
+
+    def test_exec_path_refused(self):
+        result = validate("git --exec-path=/tmp/evil status")
+        assert result is not None
+        assert "--exec-path" in result["error"]
+
+    def test_unknown_global_option_refused(self):
+        result = validate("git --brand-new-flag status")
+        assert result is not None
+        assert "--brand-new-flag" in result["error"]
+
+    def test_global_option_with_no_subcommand_refused(self):
+        result = validate("git -C /repo")
+        assert result is not None
+        assert "No git subcommand" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +373,131 @@ class TestPowerShellFiltering:
             validate("powershell -Command Get-Process | Where-Object Name -eq svchost")
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Which tier a block lands in, and what full access lifts
+# ---------------------------------------------------------------------------
+
+
+class _Host(ShellToolsMixin):
+    """A host whose console says how a prompt would be approved."""
+
+    debug = False
+
+    def __init__(self, host_opt_in=False):
+        super().__init__()
+
+        class _Console:
+            auto_approve_gated_tools = host_opt_in
+
+        self.console = _Console()
+
+
+def refusal(command, host_opt_in=False):
+    """What the pre-prompt gate returns -- None means the user gets asked."""
+    return _Host(host_opt_in).policy_refusal_for_call(
+        "run_shell_command", {"command": command}
+    )
+
+
+@pytest.fixture
+def env_pre_approves(monkeypatch):
+    """GAIA_AUTO_APPROVE_TOOLS=1, as an unattended run sets it."""
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+
+
+class TestTiers:
+    """A block is refused only when a yes/no prompt cannot honestly describe it."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m wip",
+            "git push origin main",
+            "npm test",
+            "rm notes.txt",
+            "find . -delete",
+            "sort -o out.txt in.txt",
+        ],
+    )
+    def test_a_describable_write_is_confirmable(self, command):
+        assert validate(command)["tier"] == TIER_CONFIRM
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -c core.pager=evil.sh status",
+            "git --exec-path=/tmp/evil status",
+            "powershell -EncodedCommand aQBlAHgA",
+        ],
+    )
+    def test_an_undescribable_escalation_is_refused(self, command):
+        assert validate(command)["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize(
+        "command", ["cat a && rm b", "echo hi > f", "cat 'unterminated"]
+    )
+    def test_what_the_runner_cannot_execute_is_refused(self, command):
+        error, _ = _Host()._validate_shell_command(command)
+        assert error["tier"] == TIER_REFUSE
+
+
+class TestConfirmableCommandsReachThePrompt:
+    """The regression this tier exists to prevent: refusing an approvable call."""
+
+    @pytest.mark.parametrize(
+        "command",
+        ["git commit -m wip", "git push origin main", "npm test", "rm notes.txt"],
+    )
+    def test_not_refused_before_the_prompt(self, command):
+        assert refusal(command) is None
+
+    @pytest.mark.parametrize(
+        "command", ["git -c core.pager=evil.sh status", "cat a && rm b"]
+    )
+    def test_refused_escalations_stay_refused_even_with_a_host_opt_in(self, command):
+        assert refusal(command, host_opt_in=True) is not None
+
+
+class TestEnvironmentOnlyApproval:
+    """GAIA_AUTO_APPROVE_TOOLS skips prompts; it never widened what a run executes."""
+
+    def test_a_confirmable_command_is_refused_when_only_the_env_approves(
+        self, env_pre_approves
+    ):
+        error = refusal("rm notes.txt")
+        assert error is not None
+        assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
+
+    def test_the_no_prompt_list_still_runs_under_the_env(self, env_pre_approves):
+        assert refusal("git status") is None
+
+    def test_a_host_opt_in_is_a_person_deciding(self, env_pre_approves):
+        """The TUI's full access sets the handler attribute, not the env var."""
+        assert refusal("rm notes.txt", host_opt_in=True) is None
+
+    def test_the_execution_path_refuses_too(self, env_pre_approves, tmp_path):
+        """Defence in depth: a direct tool call never skips the same rule."""
+        from gaia.agents.base.tools import get_tool_metadata
+
+        host = _Host()
+        host.register_shell_tools()
+        run = get_tool_metadata("run_shell_command")["function"]
+
+        result = run(command="touch made.txt", working_directory=str(tmp_path))
+        assert result["status"] == "error"
+        assert not (tmp_path / "made.txt").exists()
+
+    def test_a_host_opt_in_runs_it(self, env_pre_approves, tmp_path):
+        from gaia.agents.base.tools import get_tool_metadata
+
+        host = _Host(host_opt_in=True)
+        host.register_shell_tools()
+        run = get_tool_metadata("run_shell_command")["function"]
+
+        result = run(command="touch made.txt", working_directory=str(tmp_path))
+        assert result["status"] == "success", result
+        assert (tmp_path / "made.txt").exists()

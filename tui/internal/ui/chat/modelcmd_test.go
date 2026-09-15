@@ -29,7 +29,7 @@ func (c *queryCapturingClient) Send(_ context.Context, query string) (<-chan int
 }
 
 // The /model forms are recognised as commands, not questions — mirrors
-// TestBypassCommandsAreNeverSentAsQueries.
+// TestFullAccessCommandsAreNeverSentAsQueries.
 func TestModelCommandsAreRecognised(t *testing.T) {
 	for _, cmd := range []string{
 		"/model",
@@ -53,7 +53,7 @@ func TestModelCommandsAreRecognised(t *testing.T) {
 	}
 }
 
-// Unlike /bypass, /model genuinely needs the agent — only it can discover
+// Unlike /full-access, /model genuinely needs the agent — only it can discover
 // Lemonade's downloaded models and validate a Claude credential — so it must
 // still reach Send with the exact literal line, dispatched as a recognised
 // command rather than silently dropped or mangled.
