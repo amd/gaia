@@ -4132,7 +4132,26 @@ Do NOT wrap conversational replies in JSON.
             )
 
             return budget_for_ctx(CLAUDE_CTX_SIZE)
-        return truncation_budget(self.device)
+        device = self.device
+        if str(getattr(self, "model_id", "")).lower().endswith("-flm"):
+            device = "npu"
+        elif device is None:
+            from gaia.config import GaiaConfig
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+
+            model = getattr(self, "model_id", None)
+            backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+            cloud = (
+                backend.cloud_model_provider(model)
+                if isinstance(backend, LemonadeClient)
+                else cloud_model_provider(model)
+            )
+            # Gateway sessions do not depend on local hardware configuration.
+            # Preserve their conservative admission budget until metadata supplies
+            # a provider-specific window; do not guess one from the host profile.
+            if not cloud:
+                device = GaiaConfig.load().default_device
+        return truncation_budget(device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module
     #: using postponed annotations hands us the string "int", not ``int``, and

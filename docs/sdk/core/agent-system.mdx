@@ -477,11 +477,12 @@ threshold remain unchanged. Oversized strings become a JSON envelope containing
 serialized envelope, including escaping, fits the target budget, so long logs
 retain both their initial context and final diagnostic lines.
 
-Local thresholds/targets are 30,000/20,000 characters for NPU or an unspecified
-device and 60,000/40,000 for GPU/CPU; the Claude path uses its existing larger
-window. These are per-result character budgets, not measured remaining tokens.
-The omitted middle is not yet recoverable through a continuation tool. Existing
-structured-result exceptions and tool-specific caps remain separate.
+Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
+for GPU/CPU. An omitted device follows the configured profile; FLM models retain
+the NPU budget. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens. The envelope includes
+an artifact handle and continuation instructions for recovering the omitted
+middle with `read_tool_output`. Structured results retain complete records.
 
 ## Common Pitfalls and Solutions
 

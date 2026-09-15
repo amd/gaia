@@ -39,6 +39,13 @@ from gaia.llm.lemonade_client import truncation_budget
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolated_device_profile(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="npu"))
+
+
 class _TestAgent(Agent):
     """Minimal concrete Agent: no LLM/network access, no tools."""
 
@@ -679,3 +686,35 @@ class TestStringResults:
             assert len(evidence) <= 20000
             assert "HEAD_FACT" in evidence and "TAIL_FACT" in evidence
             assert json.loads(evidence)["omitted_chars"] > 0
+
+
+@pytest.mark.parametrize("profile", ["npu", "gpu", "cpu"])
+def test_unset_device_uses_configured_profile(monkeypatch, profile):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device=profile))
+    agent = make_agent(device=None)
+    assert agent._truncation_budget() == truncation_budget(profile)
+    agent.device = "npu"
+    assert agent._truncation_budget() == truncation_budget("npu")
+
+
+def test_flm_model_keeps_npu_budget_even_with_gpu_profile(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+    agent = make_agent(device="gpu", model_id="gemma4-it-e2b-FLM")
+    assert agent._truncation_budget() == truncation_budget("npu")
+
+
+@pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.remote-model"])
+def test_gateway_budget_does_not_load_local_device_config(monkeypatch, model):
+    from gaia.config import GaiaConfig
+
+    agent = make_agent(device=None, model_id=model)
+
+    def invalid_config():
+        raise ValueError("broken local configuration")
+
+    monkeypatch.setattr(GaiaConfig, "load", invalid_config)
+    assert agent._truncation_budget() == truncation_budget(None)
