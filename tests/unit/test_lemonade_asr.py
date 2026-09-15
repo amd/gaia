@@ -1050,6 +1050,13 @@ class TestErrors:
     def test_unreachable_server_names_url_and_next_step(
         self, monkeypatch, client, wav_file
     ):
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            lambda: SimpleNamespace(instruction="Open the installed Lemonade app."),
+        )
+
         def refuse(_session, _request, **_kwargs):
             raise requests.ConnectionError("connection refused")
 
@@ -1059,7 +1066,8 @@ class TestErrors:
             client.transcribe(wav_file)
         message = str(excinfo.value)
         assert "http://localhost:13305/api/v1" in message
-        assert "lemonade-server serve" in message
+        assert "Open the installed Lemonade app." in message
+        assert "lemonade-server serve" not in message
         assert "gaia init" in message
 
     def test_timeout_suggests_a_bigger_timeout(self, monkeypatch, client, wav_file):
