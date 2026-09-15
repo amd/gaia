@@ -509,7 +509,9 @@ def _generate_search_keys(self, query: str) -> List[str]:
   </Card>
 
   <Card title="Security" icon="lock">
-    Set `allowed_paths` in production. Prevents path traversal and unauthorized access.
+    Set `allowed_paths` in production, and list the **files** a session needs rather than
+    the folders holding them. It is a scope, not a safety guarantee — secrets and
+    login-execution files are refused separately.
   </Card>
 
   <Card title="Incremental Development" icon="vial">

@@ -27,6 +27,7 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.security import BLOCKED_DIRECTORIES
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -181,6 +182,7 @@ def _classify_chat_exception(exc: BaseException):
     what user-facing message to surface.
     """
     from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
+        LemonadeCloudAccountError,
         LemonadeContextOverflowError,
         LemonadeError,
         LemonadeModelNotFoundError,
@@ -211,6 +213,13 @@ def _classify_chat_exception(exc: BaseException):
     # losing the typed-class info.
     raw = str(exc)
     text = raw.lower()
+    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
+    # message itself is kept: it names the provider and where to add funds.
+    refused = _re.search(
+        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, _re.IGNORECASE
+    )
+    if refused:
+        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
@@ -385,7 +394,9 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -923,20 +934,85 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
         return [], []
 
 
-def _compute_allowed_paths(rag_file_paths: list) -> list:
-    """Derive allowed filesystem paths from document locations.
+def _managed_documents_dir() -> Path:
+    """The Agent UI's own documents folder — the session's writable scratch space.
 
-    Collects the unique parent directories of all RAG document paths.
-    Falls back to the current working directory when no document paths
-    are provided, to avoid granting unnecessarily broad access across
-    unrelated projects on the same machine.
+    Resolved late rather than imported as a constant so a test that relocates
+    ``Path.home()`` gets the relocated directory.
     """
-    dirs = set()
+    return (Path.home() / ".gaia" / "documents").resolve()
+
+
+def _unsafe_directory_grant_reason(directory: Path) -> str:
+    """Why *directory* is too broad to hand a session, or ``""`` if it is fine.
+
+    Args:
+        directory: A resolved directory being considered as a session scope.
+
+    Returns:
+        A reason naming what the grant would expose, empty when it is safe.
+    """
+    if directory == Path(directory.anchor):
+        return "it is a filesystem root"
+    if directory == Path.home().resolve():
+        return "it is your home directory"
+    for blocked in BLOCKED_DIRECTORIES:
+        blocked_path = Path(blocked).resolve()
+        if directory == blocked_path or blocked_path.is_relative_to(directory):
+            return f"it contains the protected directory '{blocked}'"
+        if directory.is_relative_to(blocked_path):
+            return f"it is inside the protected directory '{blocked}'"
+    return ""
+
+
+def _compute_allowed_paths(rag_file_paths: list) -> list:
+    """Derive a session's filesystem scope from its attached documents.
+
+    Grants each document **file**, never the directory it sits in.
+    ``PathValidator`` matches exact paths, so a session that attached
+    ``~/notes.txt`` gets ``~/notes.txt`` — granting ``Path.home()`` because a
+    document happened to be saved there handed the whole home tree to an agent
+    with ``write_file`` and shell tools.
+
+    Always adds GAIA's own managed documents directory so the agent still has
+    somewhere to *write* — a bounded, GAIA-owned folder the Agent UI already
+    surfaces, rather than whichever of the user's folders a document came from.
+
+    Falls back to the current working directory only when nothing is attached,
+    and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
+    protected directory — a scope that broad is not a scope.
+
+    Args:
+        rag_file_paths: Paths of the documents attached to this session.
+
+    Returns:
+        The allowlist, always including the managed documents directory.
+    """
+    allowed = set()
     for fp in rag_file_paths:
-        dirs.add(str(Path(fp).parent))
-    if not dirs:
-        dirs.add(str(Path.cwd()))
-    return list(dirs)
+        if not fp:
+            continue
+        try:
+            allowed.add(str(Path(fp).resolve()))
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping unresolvable document path %r: %s", fp, exc)
+    managed = str(_managed_documents_dir())
+    if allowed:
+        allowed.add(managed)
+        return sorted(allowed)
+
+    cwd = Path.cwd().resolve()
+    reason = _unsafe_directory_grant_reason(cwd)
+    if reason:
+        logger.warning(
+            "Refusing to grant this session file access to %s because %s. The "
+            "session keeps only the managed documents directory. Attach "
+            "a document, or start the Agent UI backend from a project directory.",
+            cwd,
+            reason,
+        )
+        return [managed]
+    return sorted({managed, str(cwd)})
 
 
 def _session_agent_kwargs(
@@ -1039,11 +1115,33 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         transcript_turns,
     )
     from gaia.agents.base.turn_metrics import count_tokens
-    from gaia.llm.lemonade_client import resolve_ctx_size
-
-    ctx = resolve_ctx_size(
-        model=getattr(agent, "model_id", None), device=getattr(agent, "device", None)
+    from gaia.llm.lemonade_client import (
+        GPU_CTX_SIZE,
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_ctx_size,
     )
+
+    model = getattr(agent, "model_id", None)
+    provider = getattr(getattr(agent, "chat", None), "llm_client", None)
+    backend = getattr(provider, "_backend", None)
+    cloud = (
+        backend.cloud_model_provider(model)
+        if isinstance(backend, LemonadeClient)
+        else cloud_model_provider(model)
+    )
+    if getattr(agent, "_use_claude", False):
+        from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
+
+        ctx = CLAUDE_CTX_SIZE
+    elif cloud:
+        # Remote admission policy, not a claim about the provider's context ceiling.
+        ctx = GPU_CTX_SIZE
+    else:
+        ctx = resolve_ctx_size(
+            model=getattr(agent, "model_id", None),
+            device=getattr(agent, "device", None),
+        )
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
@@ -1141,6 +1239,33 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _canonicalize_user_input_request(event: dict) -> dict:
+    """Translate a raw ``user_input_request`` event (emitted by
+    ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
+    wire shape (#2595) — the same shape the email-relay path produces via
+    ``CanonicalTranslator``, so the frontend's NeedsInputCard renders either
+    source identically.
+
+    Options normalization is delegated to ``sse_translation._normalize_options``
+    rather than re-derived here: a caller using the documented ``choices``
+    form (a flat list of strings — see ``request_user_input``'s docstring)
+    must get pickable options exactly like a caller using the richer
+    ``options`` form, and duplicating that fallback here is how the two
+    would silently drift apart.
+    """
+    from gaia.ui.sse_translation import _normalize_options
+
+    return {
+        "type": "needs_input",
+        "request_id": str(event.get("request_id") or ""),
+        "question": str(event.get("message") or ""),
+        "options": _normalize_options(event),
+        "allow_free_text": bool(event.get("allow_free_text", True)),
+        "sensitive": bool(event.get("sensitive", False)),
+        "timeout_seconds": event.get("timeout_seconds"),
+    }
+
+
 # Remediation copy for a turn that produced no answer at all — reserved for a
 # genuine backend failure, never a deliberate cancel or an intentionally-empty
 # final (see _empty_answer_outcome).
@@ -1227,7 +1352,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
@@ -1762,7 +1887,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Only the email relay consumes text pairs; other agents restore traces below.
         history_pairs = (
             _build_history_pairs(db.get_context_messages(request.session_id))
-            if session.get("agent_type") == "email"
+            if (request.agent_type or session.get("agent_type")) == "email"
             else []
         )
 
@@ -2462,6 +2587,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     if (event.get("decision") or "BLOCK").upper() == "BLOCK":
                         _persist_policy_block_if_needed()
+                elif event_type == "user_input_request":
+                    event = _canonicalize_user_input_request(event)
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.
@@ -2599,7 +2726,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 base_url = (
                     LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
-                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+                _auth = lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(
                         f"{base_url}/stats", headers=_auth

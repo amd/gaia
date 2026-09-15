@@ -385,6 +385,13 @@ class LemonadeInstaller:
                 self._unreachable_asset_error(url, f"timed out after {timeout}s"),
                 definitive=False,
             ) from e
+        except ConnectionError as e:
+            # http.client.RemoteDisconnected is raised directly by
+            # HTTPConnection.getresponse() and is NOT wrapped in URLError - a
+            # transient drop, not proof the asset is gone.
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, str(e)), definitive=False
+            ) from e
 
         if status != 200:
             raise LemonadeAssetError(

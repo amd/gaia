@@ -328,3 +328,37 @@ def test_large_paste_with_no_history_does_not_fail_restore(monkeypatch, caplog):
     assert agent.conversation_history == []
     assert "No context budget remains" in caplog.text
     db.close()
+
+
+@pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.some-model"])
+def test_cloud_history_does_not_consult_local_override(monkeypatch, model):
+    monkeypatch.setenv("GAIA_CTX_SIZE", "invalid-local-setting")
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    db.add_message(session, "user", "read fact")
+    db.add_message(session, "assistant", "answer", model_messages=_trace())
+    agent = SimpleNamespace(model_id=model, device="npu", system_prompt="small")
+    helpers._restore_model_history(agent, db, session, "follow-up")
+    assert agent.conversation_history == _trace()
+    db.close()
+
+
+def test_discovered_cloud_history_uses_cached_provider_metadata(monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", "invalid-local-setting")
+    backend = LemonadeClient()
+    backend._model_metadata["company.gemma"] = {"recipe": "cloud"}
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    db.add_message(session, "user", "read fact")
+    db.add_message(session, "assistant", "answer", model_messages=_trace())
+    agent = SimpleNamespace(
+        model_id="company.gemma",
+        device="npu",
+        system_prompt="small",
+        chat=SimpleNamespace(llm_client=SimpleNamespace(_backend=backend)),
+    )
+    helpers._restore_model_history(agent, db, session, "follow-up")
+    assert agent.conversation_history == _trace()
+    db.close()

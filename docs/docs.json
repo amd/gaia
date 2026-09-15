@@ -86,6 +86,7 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
                       "guides/transcription"
@@ -344,6 +345,7 @@
                   "eval"
                 ]
               },
+              "reference/session-analytics",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -400,6 +402,7 @@
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]

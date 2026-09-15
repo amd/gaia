@@ -452,8 +452,34 @@ export async function toggleSessionPrivacy(id: string): Promise<Session> {
     return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
+export async function getMessageCount(sessionId: string): Promise<number> {
+    const { total } = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `/sessions/${sessionId}/messages?limit=1&offset=0`,
+    );
+    return total;
+}
+
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
-    return apiFetch('GET', `/sessions/${sessionId}/messages`);
+    const pageSize = 100;
+    const path = `/sessions/${sessionId}/messages`;
+    const first = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `${path}?limit=${pageSize}&offset=0`,
+    );
+    const messages = [...first.messages];
+    // Bound this load to its initial count; a running agent may keep appending.
+    // The next refresh retrieves those newer messages.
+    const total = first.total;
+    while (messages.length < total) {
+        const limit = Math.min(pageSize, total - messages.length);
+        const page = await apiFetch<{ messages: Message[]; total: number }>(
+            'GET', `${path}?limit=${limit}&offset=${messages.length}`,
+        );
+        if (page.messages.length === 0) {
+            throw new Error('Incomplete transcript received. Please reload the conversation.');
+        }
+        messages.push(...page.messages);
+    }
+    return { messages, total };
 }
 
 export async function exportSession(sessionId: string): Promise<{ content: string }> {
@@ -493,7 +519,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'needs_confirmation', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
 ]);
 
 export function sendMessageStream(
@@ -700,6 +726,17 @@ export async function confirmToolExecution(
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
+/** Answer a pending mid-run `needs_input` question (#2595). The agent
+ *  blocks server-side until this call lands, so the run continues once it
+ *  resolves. */
+export async function respondToInput(
+    sessionId: string,
+    requestId: string,
+    value: string,
+): Promise<{ status: string; request_id: string }> {
+    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
 
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */

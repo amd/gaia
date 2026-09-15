@@ -506,7 +506,9 @@ class TestLoadModelCorruptNonInteractive:
             client.load_model("Qwen3-0.6B-GGUF", prompt=False)
 
         info_text = " ".join(
-            r.getMessage() for r in caplog.records if r.levelno >= logging.INFO
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno >= logging.INFO and r.name == client.log.name
         )
         assert "40" in info_text
 

@@ -91,12 +91,8 @@ async def send_message(
     # asyncio.Lock held by another coroutine is unsafe because the lock
     # has no ownership tracking.
     #
-    # The lock guards the synchronous request window; ``run_manager`` guards
-    # the *background tail* — a streaming run keeps going (and persisting)
-    # after the client disconnects and the HTTP lock is released (#1580), so
-    # a new turn for the same session must also be rejected while that
-    # background run is still active, or it would corrupt the cached agent's
-    # conversation state.
+    # The session lock and run registry cover the entire producer lifetime,
+    # including detached runs, to protect the cached agent's conversation state.
     if session_lock.locked() or run_manager.is_running(sid):
         raise HTTPException(
             status_code=409,
@@ -118,6 +114,9 @@ async def send_message(
             detail="The server is busy processing other chat requests. "
             "Please try again in a few moments.",
         )
+    except asyncio.CancelledError:
+        session_lock.release()
+        raise
 
     # Both session_lock and chat_semaphore are now held by this coroutine.
     # Track whether ownership was transferred to the streaming generator.
@@ -129,27 +128,34 @@ async def send_message(
 
     try:
         if request.stream:
-            # Use BackgroundTask to ensure locks are released even if the client
-            # disconnects mid-stream (async generator finally block is unreliable
-            # when FastAPI/Starlette drops the connection before first yield).
+            stream_resources_released = False
+
+            def _release_stream_locks(_task=None):
+                nonlocal stream_resources_released
+                if stream_resources_released:
+                    return
+                stream_resources_released = True
+                session_lock.release()
+                chat_semaphore.release()
+
             async def _release_stream_resources():
-                try:
-                    session_lock.release()
-                except RuntimeError:
-                    pass
-                try:
-                    chat_semaphore.release()
-                except ValueError:
-                    pass
+                # A disconnected subscriber must not admit a second producer.
+                run = run_manager.get(sid)
+                if run is not None and run.task is not None and not run.done.is_set():
+                    run.task.add_done_callback(_release_stream_locks)
+                else:
+                    # Includes disconnect/failure before the producer started.
+                    _release_stream_locks()
 
             async def _stream():
-                db.add_message(request.session_id, "user", request.message)
-                # The run's detached lifecycle owns producer + persistence and
-                # fires the AgentLoop notify on real completion; this subscriber
-                # just relays buffered + live events to the browser. Detaching
-                # (client disconnect) no longer cancels the run (#1580).
-                async for chunk in srv._stream_chat_response(db, session, request):
-                    yield chunk
+                try:
+                    db.add_message(request.session_id, "user", request.message)
+                    # The detached lifecycle owns producer + persistence;
+                    # this subscriber only relays buffered and live events.
+                    async for chunk in srv._stream_chat_response(db, session, request):
+                        yield chunk
+                finally:
+                    await _release_stream_resources()
 
             sem_released = True
             return StreamingResponse(
@@ -249,6 +255,53 @@ async def confirm_tool(request: ToolConfirmRequest):
         )
     handler.resolve_tool_confirmation(request.approved)
     return {"status": "ok", "approved": request.approved}
+
+
+class UserInputRequest(BaseModel):
+    """Request body for answering a mid-run ``needs_input`` question."""
+
+    session_id: str
+    request_id: str
+    value: str
+
+
+@router.post("/api/chat/user-input")
+async def user_input(request: UserInputRequest):
+    """Answer a mid-run ``needs_input`` question from the agent (#2595).
+
+    Two run shapes can be waiting on this: an in-process agent blocked in
+    ``SSEOutputHandler.request_user_input_blocking()`` (resolved via
+    ``resolve_user_input``), or an email-relay run blocked on the sidecar's
+    own ``/query`` loop (resolved via ``resolve_relay_input``, which posts to
+    the sidecar). Tried in that order; a session with neither pending is a
+    404, never a silent no-op accept.
+    """
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404,
+            detail="No active chat session found for this session ID",
+        )
+    delivered = handler.resolve_user_input(request.request_id, request.value)
+    if not delivered:
+        try:
+            delivered = handler.resolve_relay_input(request.request_id, request.value)
+        except SidecarError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not deliver the answer: {exc}",
+            ) from exc
+    if not delivered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending question for this session (it may have already "
+            "timed out or been answered).",
+        )
+    return {"status": "ok", "request_id": request.request_id}
 
 
 class CancelStreamRequest(BaseModel):
