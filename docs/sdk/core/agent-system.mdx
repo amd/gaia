@@ -350,7 +350,7 @@ Agents accept many configuration parameters. Here's what each one does:
 agent = MyAgent(
     # === LLM Selection ===
     use_claude=False,              # Use Anthropic Claude API
-    use_chatgpt=False,             # Use OpenAI ChatGPT API
+    use_chatgpt=False,             # Removed; True raises migration guidance
     # If both are False, uses local Lemonade Server
 
     # === Local LLM Settings ===
@@ -431,31 +431,14 @@ agent = MyAgent(
 **Best for:** Complex reasoning, production applications, code analysis.
 </Accordion>
 
-<Accordion title="Option 3: ChatGPT API - Wide Compatibility">
+<Accordion title="Gateway models through Lemonade">
 
-Uses OpenAI's GPT models:
+The direct OpenAI and LiteLLM adapters have been removed. Configure the upstream
+model in Lemonade and pass its server URL and catalog model ID to the agent.
+See [gateway migration](/sdk/sdks/llm#gateway-migration). Legacy
+`use_chatgpt=True` calls raise an actionable error rather than selecting another
+provider.
 
-```bash
-# Set your API key
-export OPENAI_API_KEY="your-key-here"
-```
-
-```python
-agent = MyAgent(
-    use_chatgpt=True
-)
-```
-
-**Pros:**
-- Wide tool support
-- Familiar API
-- Good general performance
-
-**Cons:**
-- API costs
-- Requires internet connection
-
-**Best for:** Integration with existing OpenAI workflows.
 </Accordion>
 
 ### Tuning Agent Behavior

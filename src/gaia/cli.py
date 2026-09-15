@@ -118,9 +118,9 @@ def initialize_lemonade_for_agent(
     Args:
         agent: Agent name (chat, talk, rag, vlm, minimal, mcp)
         quiet: Suppress output (only errors)
-        skip_if_external: If True, skip initialization when using Claude/ChatGPT
+        skip_if_external: If True, skip initialization when using Claude
         use_claude: Whether Claude API is being used
-        use_chatgpt: Whether ChatGPT API is being used
+        use_chatgpt: Removed option; True raises migration guidance
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
@@ -152,8 +152,13 @@ def initialize_lemonade_for_agent(
         host = host if host is not None else env_host
         port = port if port is not None else env_port
 
+    if use_chatgpt:
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
+
     # Skip initialization if using external API
-    if skip_if_external and (use_claude or use_chatgpt):
+    if skip_if_external and use_claude:
         return True, base_url or env_base_url
 
     # One context size per device profile, never a per-agent literal: every
@@ -1215,7 +1220,7 @@ def build_parser():
     parent_parser.add_argument(
         "--use-chatgpt",
         action="store_true",
-        help="Use ChatGPT/OpenAI API instead of local Lemonade server",
+        help=argparse.SUPPRESS,
     )
     parent_parser.add_argument(
         "--claude-model",
@@ -3206,6 +3211,10 @@ def main():
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    if getattr(args, "use_chatgpt", False):
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        parser.error(REMOVED_PROVIDER_MESSAGE)
 
     # Check if action is specified
     if not args.action:
