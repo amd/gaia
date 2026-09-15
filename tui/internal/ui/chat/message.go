@@ -22,17 +22,19 @@ const (
 )
 
 type Message struct {
-	Role      MessageRole
-	Content   string
-	Rendered  string
-	ToolName  string
-	Success   *bool
-	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // backend-measured time to first token; 0 => not reported, omit from display
-	TokPerS   float64       // backend-measured generation rate; 0 => not reported, omit from display
-	Steps     int           // agent steps taken
-	ToolsUsed int           // tools invoked
-	Tokens    int           // real generated-token count; 0 => not reported, omit from display
+	Role         MessageRole
+	Content      string
+	Rendered     string
+	ToolName     string
+	Success      *bool
+	Duration     time.Duration // time from query to answer
+	TTFT         time.Duration // backend-measured time to first token; 0 => not reported, omit from display
+	TokPerS      float64       // backend-measured generation rate; 0 => not reported, omit from display
+	Steps        int           // agent steps taken
+	ToolsUsed    int           // tools invoked
+	Tokens       int           // real generated-token count; 0 => not reported, omit from display
+	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
+	CachedTokens int           // prompt tokens served from the backend's cache
 
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an

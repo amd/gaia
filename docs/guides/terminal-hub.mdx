@@ -271,6 +271,8 @@ outright.
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model |
 | `/bypass` | Let the agent run tools without asking (off by default) |
+| `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
+| `/cost help` | Where the rates come from, and how to set your own |
 
 Typing `/` as the first character of an empty composer opens a palette listing every
 command above with a one-line description, so there's no need to already know them or
@@ -310,6 +312,71 @@ multi-minute install. The transcript says the server was not started and names w
 still needs it: RAG, memory and the code index embed through Lemonade, which has no
 Claude equivalent. Run `gaia init --skip-chat-model`, or `/setup` in
 the composer, when you want those.
+
+## What a session costs
+
+`/cost` answers "what has this conversation spent", which is the question behind
+deciding whether a task is worth running on a cloud model at all:
+
+```
+Session so far — 12 turns on fireworks.glm-5p3
+
+  active time   14m 22s
+  agent steps   84
+  tool calls    132
+
+  input tokens  1.2M   (969.7k served from cache, 77%)
+  output tokens 93.0k
+
+  cost          $1.4083 USD  (input $0.3921 + cached $0.2521 + output $0.4092)
+                published rates as of 2026-09-13
+```
+
+Two things that line is careful about, because a cost readout that gets them wrong
+looks like a measurement and nobody re-checks it:
+
+- **Every number is measured, never estimated.** They are summed from what the
+  backend reported for each turn. A turn whose backend reported no token counts
+  still counts as a turn, contributes nothing to the token totals, and the view
+  says how many turns went unmeasured rather than quietly averaging over them.
+- **`active time` is the sum of the turns, not the clock.** The minutes you spend
+  reading an answer are not the agent working, so they are not in it.
+
+While a **metered** model is running — a cloud provider you are billed by, or Claude
+— the running spend also rides the status bar, so it is in front of you when you
+decide whether to ask the expensive follow-up. A local model costs nothing to run
+again and a gateway your organisation already pays for is not your bill, so neither
+shows the line.
+
+### Rates, and setting your own
+
+Rates for the models GAIA ships are built in, and every dollar figure is printed with
+the date they were read, so a stale card is visible rather than silent. A model with
+no published rate shows tokens and no dollars — an absent figure sends you to look it
+up, where a guessed one quietly prices your month wrong.
+
+To override one — a negotiated price, a tier that isn't listed, or a correction after
+a provider moves its prices — write `~/.gaia/model-prices.json`:
+
+```json
+{
+  "fireworks.glm-5p3": {
+    "input_per_mtok": 1.40,
+    "output_per_mtok": 4.40,
+    "cached_per_mtok": 0.26
+  }
+}
+```
+
+Dollars per million tokens; your file wins over the built-in rates, and the readout
+says which of the two it quoted. Keys match exactly first and then by longest prefix,
+so one entry can cover a whole family. Omitting `cached_per_mtok` bills cached input
+at the full input rate, and setting it to `0` means cached input is free — different
+offers, so they are written differently. `GAIA_MODEL_PRICES` overrides the path.
+
+If that file exists but can't be parsed, `/cost` says so and names the problem rather
+than reporting "no rate configured" — otherwise you would edit a file that is already
+being ignored.
 
 ## Running another agent
 
