@@ -113,7 +113,6 @@ print(response1.text)
 response2 = chat.send("Show me an example")
 print(response2.text)  # LLM remembers context
 
-# Failed requests and cancelled streams preserve the previous history.
 # Check history
 history = chat.get_history()
 print(f"Conversation turns: {len(history)}")
@@ -186,6 +185,10 @@ personal_response = personal_chat.send("What's for dinner?")
 ---
 
 ## Conversation History
+
+Failed requests and streams cancelled before the final chunk preserve the previous
+history. Once the final chunk arrives, the completed turn remains in history even
+if the caller stops reading immediately.
 
 ```python
 from gaia.chat.sdk import AgentSDK

@@ -83,3 +83,13 @@ def test_backend_error_after_stream_chunk_restores_history(sdk):
     with pytest.raises(OSError, match="connection reset"):
         next(stream)
     assert list(sdk.chat_history) == ["user: first", "assistant: answer"]
+
+
+def test_history_survives_close_at_final_chunk(sdk):
+    sdk.llm_client.generate.return_value = iter(["one", "two"])
+    stream = sdk.send_stream("new question")
+    for chunk in stream:
+        if chunk.is_complete:
+            break
+    stream.close()
+    assert list(sdk.chat_history) == ["user: new question", "assistant: onetwo"]

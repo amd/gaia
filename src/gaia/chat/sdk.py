@@ -458,6 +458,8 @@ class AgentSDK:
         """
         Send a message and get a complete response with conversation history.
 
+        Failed turns restore the conversation history to its pre-call state.
+
         Args:
             message: The message to send
             no_history: When True, bypass stored chat history and send only this prompt
@@ -549,6 +551,9 @@ class AgentSDK:
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
