@@ -118,12 +118,18 @@ func TestSendingAQuestionReturnsToTheNewestContent(t *testing.T) {
 
 // Tokens land in the transcript as they arrive — a 90s turn that shows nothing
 // until the final event is indistinguishable from a hang.
+//
+// Through the repaint tick, not straight off the token: tokens arrive faster
+// than a screen refreshes, so the model coalesces them (markDirty) and the
+// spinner tick — ten a second for the whole turn — is what puts them up. That
+// is the pipeline a user watches, so it is the one this asserts against.
 func TestStreamedTokensAppearBeforeTheFinalEvent(t *testing.T) {
 	m := newTestChat(t)
 	m = feed(t, m,
 		event.CanonicalTokenEvent{Type: "token", Delta: "The github-triage skill "},
 		event.CanonicalTokenEvent{Type: "token", Delta: "clusters open issues."},
 	)
+	m = repaint(t, m)
 
 	if out := ansi.Strip(m.viewport.View()); !strings.Contains(out, "clusters open issues.") {
 		t.Errorf("streamed tokens are not on screen before `final`:\n%s", out)

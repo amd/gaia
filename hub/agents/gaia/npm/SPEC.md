@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.12"`                  |
+| Contract version   | `API_VERSION = "2.13"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -268,6 +268,7 @@ the header.
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
+| `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.13) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
@@ -398,6 +399,34 @@ keys never travel through stdio queries. These controls are not exposed over
 remotely, so a local server URL alone does not establish local inference.
 
 ---
+
+### 5.6 Adding to a turn already running
+
+`POST /v1/gaia/query/{run_id}/followup` with `{ "text": "…" }` hands a live run
+something the user typed after it started. Contract ≥ 2.13.
+
+It is not a second turn and not an interrupt. The run keeps going on its
+existing SSE stream; the agent folds the text into that turn's context at its
+next agent-loop step boundary, labelled as arriving mid-task, and answers it
+alongside the work already in progress. A five-minute turn can therefore be
+corrected ("actually, only the unread ones") while it is still running, instead
+of the correction waiting out the turn it was meant to change.
+
+Two refusals, both loud, because the caller has already taken the message from
+the user and owes them a truthful answer about where it went:
+
+| Status | Meaning                                                      |
+| ------ | ------------------------------------------------------------ |
+| `404`  | No such run in flight — it finished or was cancelled. Send it as a new `/query`. |
+| `409`  | The run's agent is not accepting mid-turn input.              |
+
+Because `/query` is stateless (§2.4) the host still owns the transcript: record
+a delivered follow-up in the `context` you push on the **next** turn, between
+that turn's question and its answer, or the conversation loses words the agent
+demonstrably saw.
+
+Clients that predate 2.13 get a `404` on the path itself. Probe `/version`
+before sending rather than reading a 404 as "the run ended".
 
 ## 6. Process ownership
 

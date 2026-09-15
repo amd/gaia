@@ -192,13 +192,15 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `POST /v1/gaia/query` | Run one turn. Streams Server-Sent Events. |
 | `POST /v1/gaia/query/{run_id}/cancel` | Cooperatively cancel a live run. |
 | `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
+| `POST /v1/gaia/query/{run_id}/followup` | Add to a turn already running, without interrupting it. |
 
-`/query` implements the shared canonical SSE contract (API version **2.12**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
+`/query` implements the shared canonical SSE contract (API version **2.13**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
 
 - **You mint the `run_id`**, not the server. Cancellation keys off it, so it has to exist before the request rather than arrive in the stream.
 - **Conversation context is pushed in the body**, never pulled. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
 - **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
 - **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
+- **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
 - **Confirmation-gated tools end the run with a refusal** — see [Tools that need your approval](#tools-that-need-your-approval).
 
 ### Authenticating your requests

@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.12**; the stream is
+package — call it with plain `fetch`. Contract version **2.13**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -321,6 +321,14 @@ Rules a client must respect:
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
+- **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
+  (contract ≥ 2.13, body `{ text }`). The run is not interrupted and no second
+  turn starts: the agent folds the text in at its next step boundary and
+  answers it alongside what it was already doing. Unknown run → **404**, an
+  agent that cannot take one → **409**; both are loud, so hold the message
+  rather than telling the user it was sent. `/query` is stateless, so put a
+  delivered follow-up into the next turn's `context` yourself, between that
+  turn's question and its answer.
 
 ## 8. Over `/v1/gaia/query`, confirmation-gated tools are **refused, not prompted**
 
@@ -547,7 +555,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.12","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
