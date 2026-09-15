@@ -86,17 +86,26 @@ def verification_check_label(
     """
     name = (tool_name or "").strip()
     if name == "execute_python_file" and isinstance(result, dict):
-        if not check_was_executed(result) or type(result.get("return_code")) is not int:
+        return_code = result.get("return_code")
+        if (
+            not check_was_executed(result)
+            or not isinstance(return_code, int)
+            or isinstance(return_code, bool)
+        ):
             return None
         output = "\n".join(
             value
             for key in ("stdout", "stderr")
             if isinstance((value := result.get(key)), str)
         )
-        if re.search(
+        summary = re.search(
             r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
             r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$",
             output,
+        )
+        if summary and re.search(
+            r"\b[1-9]\d* (?:passed|failed|error|errors|xfailed|xpassed)\b",
+            summary.group(0),
         ):
             return "pytest"
         if re.search(
@@ -114,7 +123,14 @@ def verification_check_label(
         command = tool_args.get(key)
         if isinstance(command, str) and command.strip():
             match = _CHECK_COMMAND_RE.search(command)
-            return " ".join(match.group(0).split()).lower() if match else None
+            if not match:
+                return None
+            label = " ".join(match.group(0).split()).lower()
+            return {
+                "python -m pytest": "pytest",
+                "py.test": "pytest",
+                "python -m unittest": "unittest",
+            }.get(label, label)
     return None
 
 

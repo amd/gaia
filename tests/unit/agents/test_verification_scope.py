@@ -141,7 +141,7 @@ def _scope_line(text: str) -> str:
     "command,expected",
     [
         ("pytest tests/unit -q", "pytest"),
-        ("python -m pytest tests/", "python -m pytest"),
+        ("python -m pytest tests/", "pytest"),
         ("python util/lint.py --all", "util/lint.py"),
         ("npm run test", "npm run test"),
         ("cargo clippy -- -D warnings", "cargo clippy"),
@@ -928,6 +928,10 @@ def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
         ("printed a result", "", 0, None),
         ("OK", "", 0, None),
         ("0 passed in 0.01s", "", None, None),
+        ("0 passed in 0.01s", "", 0, None),
+        ("5 skipped in 0.01s", "", 0, None),
+        ("12 deselected in 0.01s", "", 0, None),
+        ("1 warning in 0.01s", "", 0, None),
         ("example: 3 passed in 0.01s", "", 0, None),
     ],
 )
@@ -951,10 +955,11 @@ def test_refused_python_runner_is_not_a_check():
 
 
 @pytest.mark.parametrize("code", [0, 1])
-def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code):
+@pytest.mark.parametrize("command", ["pytest", "python -m pytest", "py.test"])
+def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code, command):
     agent._turn_tool_executions = []
     agent._note_verification_signal(
-        "run_shell_command", {"command": "pytest"}, {"status": "error", **NOT_EXECUTED}
+        "run_shell_command", {"command": command}, {"status": "error", **NOT_EXECUTED}
     )
     agent._note_verification_signal(
         "execute_python_file",
