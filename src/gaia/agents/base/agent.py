@@ -640,6 +640,66 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Do not call any more tools.]"
 )
 
+# Unfinished-answer guard (#3887): a "final answer" that is really a plan,
+# a narrated next step, or a tool call typed out as text.
+_MAX_UNFINISHED_ANSWER_REPROMPTS = 2
+_UNFINISHED_PARAGRAPH_MAX_CHARS = 500
+_FENCED_BLOCK_PATTERN = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+_TOOL_CALL_MARKUP_PATTERN = re.compile(
+    r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
+)
+_EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
+_NEXT_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
+    r"(?:executing step|first step|(?:my|our) next step"
+    r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
+    r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
+    r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
+    re.IGNORECASE,
+)
+_PLAN_HEADING_PATTERN = re.compile(
+    r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+
+
+def _unfinished_answer_kind(answer: str) -> Optional[str]:
+    """Classify an answer that did not actually finish the task.
+
+    Returns ``"tool_markup"`` when the prose carries a tool call written as
+    text, ``"narration"`` when it ends by announcing a next step or plan, and
+    ``None`` for an ordinary answer. Fenced code is ignored, and an answer that
+    ends in a code block is never narration.
+    """
+    text = (answer or "").replace("\u2019", "'").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    if _TOOL_CALL_MARKUP_PATTERN.search(prose):
+        return "tool_markup"
+    if not text or text.endswith("```"):
+        return None
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    if not paragraphs:
+        return None
+    last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
+    if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
+        return "narration"
+
+    if len(paragraphs[-1]) > _UNFINISHED_PARAGRAPH_MAX_CHARS:
+        return None
+    sentences = re.split(r"(?<=[.!?])\s+", last_line)
+    if _NEXT_STEP_INTENT_PATTERN.match(sentences[-1]):
+        return "narration"
+    heading_lines = [paragraphs[-1].splitlines()[0]]
+    if len(paragraphs) > 1:
+        heading_lines.append(paragraphs[-2].splitlines()[0])
+    if any(
+        _PLAN_HEADING_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip())
+        for line in heading_lines
+    ):
+        return "narration"
+    return None
+
 
 class Agent(abc.ABC):
     """
@@ -5057,6 +5117,7 @@ Do NOT wrap conversational replies in JSON.
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
+        unfinished_answer_reprompts = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -6783,6 +6844,43 @@ Do NOT wrap conversational replies in JSON.
                         )
                     continue
 
+                unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                can_reprompt_unfinished = (
+                    steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                )
+                if unfinished_kind and not can_reprompt_unfinished:
+                    logger.warning(
+                        "[WORKFLOW] Not re-prompting unfinished %s answer: re-prompt "
+                        "budget or step limit reached (%d/%d re-prompts, "
+                        "step %d/%d): %s",
+                        unfinished_kind,
+                        unfinished_answer_reprompts,
+                        _MAX_UNFINISHED_ANSWER_REPROMPTS,
+                        steps_taken,
+                        steps_limit,
+                        answer_candidate[-120:],
+                    )
+                if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
+                    unfinished_answer_reprompts += 1
+                    logger.debug(
+                        "[WORKFLOW] Blocking tool-call markup as final answer: %s",
+                        answer_candidate[:120],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your answer contains a tool call written out as "
+                                'text (for example `<invoke name=...>` or a `{"tool": '
+                                "...}` object), so it was never run. Issue it as a "
+                                "real tool call now, or give the final answer if the "
+                                "task is complete."
+                            ),
+                        }
+                    )
+                    continue
+
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
                 # no actual answer, regardless of whether tools were already called.
@@ -6819,6 +6917,24 @@ Do NOT wrap conversational replies in JSON.
                         )
                     messages.append({"role": "user", "content": correction})
                     continue  # Don't set final_answer — loop again to force the query
+
+                if unfinished_kind == "narration" and can_reprompt_unfinished:
+                    unfinished_answer_reprompts += 1
+                    logger.debug(
+                        "[WORKFLOW] Blocking narrated next step as final answer: %s",
+                        answer_candidate[-120:],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You described your next step instead of doing it. "
+                                "Do it now with a tool call, or give the final "
+                                "answer if the task is complete."
+                            ),
+                        }
+                    )
+                    continue
 
                 # Tool-syntax artifact guard: catch responses that are just a tool-call label
                 # like "[tool:query_specific_file]" — Qwen3 confusion where the model writes
