@@ -99,6 +99,38 @@ class TestRevokeProviderToken:
         assert "400" in result["revoke_error"]
 
     @pytest.mark.asyncio
+    @respx.mock
+    async def test_failure_never_leaks_response_body_or_token(
+        self, seeded_google, caplog
+    ):
+        """A CodeQL-flagged leak path: the failed-revoke request just posted
+        the refresh token, and the provider's raw error body used to be
+        glued straight into ``revoke_error`` (and a WARNING log line) —
+        which #3816 threads out to the CLI and the Agent UI. If a provider
+        ever echoes request context into its error body, that would leak
+        the token to ``~/.gaia/gaia.log`` and to the user's screen. Neither
+        the response body nor the token value may appear anywhere."""
+        token_shaped_body = (
+            "invalid_token: seed-rt was rejected "
+            "(ya29.a0AfH6SMBx-token-shaped-secret-value)"
+        )
+        respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(400, text=token_shaped_body)
+        )
+        with caplog.at_level("WARNING", logger="gaia.connectors.flow"):
+            result = await revoke_provider_token("google")
+
+        assert result["revoked_remotely"] is False
+        assert result["revoke_error"] is not None
+        assert "seed-rt" not in result["revoke_error"]
+        assert token_shaped_body not in result["revoke_error"]
+        assert "400" in result["revoke_error"]
+
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "seed-rt" not in log_text
+        assert token_shaped_body not in log_text
+
+    @pytest.mark.asyncio
     async def test_no_stored_token_is_trivially_revoked(self, google_provider):
         # Nothing was ever connected — there is no live grant to leave
         # behind, so this is not a failure.

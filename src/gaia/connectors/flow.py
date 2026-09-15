@@ -496,17 +496,42 @@ async def revoke_provider_token(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(revoke_url, data={"token": refresh_token})
-        if response.status_code not in (200, 204):
-            raise ConnectorsError(
-                f"{provider_id} revoke endpoint rejected the request "
-                f"(status {response.status_code}): {response.text[:300]}"
-            )
-        result["revoked_remotely"] = True
-    except Exception as exc:  # noqa: BLE001 — report honestly, don't block disconnect
-        result["revoke_error"] = str(exc)
-        logger.warning(
-            "flow: provider-side revoke failed provider=%s: %s", provider_id, exc
+    except httpx.HTTPError as exc:
+        # Only the HTTP call itself (timeout, connection refused, DNS, TLS,
+        # protocol errors) is an expected failure mode worth reporting
+        # honestly and swallowing here. httpx exception strings are safe:
+        # they describe the failure (e.g. "ConnectTimeout"), never echo the
+        # request body we just posted the refresh token in. Anything else
+        # (a bug in this function) is NOT caught — it should crash loudly
+        # rather than be reported as a routine revoke failure.
+        result["revoke_error"] = (
+            f"{provider_id} revoke request failed: {type(exc).__name__}"
         )
+        logger.warning(
+            "flow: provider-side revoke request failed provider=%s error_type=%s",
+            provider_id,
+            type(exc).__name__,
+        )
+        return result
+
+    if response.status_code in (200, 204):
+        result["revoked_remotely"] = True
+        return result
+
+    # Never interpolate the response body into a log line or a
+    # caller-visible field: this request just posted the refresh token, and
+    # some providers echo request context (e.g. `error_description`) back
+    # into error bodies. The status code is enough for a user to act on and
+    # carries no risk of leaking the token.
+    result["revoke_error"] = (
+        f"{provider_id} revoke endpoint rejected the request "
+        f"(status {response.status_code})"
+    )
+    logger.warning(
+        "flow: provider-side revoke rejected provider=%s status=%s",
+        provider_id,
+        response.status_code,
+    )
     return result
 
 
