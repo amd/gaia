@@ -158,3 +158,84 @@ def test_low_override_warns_without_changing_requested_size(
 def test_small_registered_model_does_not_warn_without_override(caplog):
     assert resolve_ctx_size("Qwen3-0.6B-GGUF", "gpu") == 4096
     assert "below the recommended" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "model,device,window",
+    [
+        ("Gemma-4-E4B-it-GGUF", "gpu", 131072),
+        ("gemma4-it-e2b-FLM", "npu", 32768),
+    ],
+)
+def test_agent_constructor_resolves_override_before_manager(
+    monkeypatch, model, device, window
+):
+    from gaia.agents.base.agent import Agent
+
+    class ReachedManager(Exception):
+        pass
+
+    class ProbeAgent(Agent):
+        def _register_tools(self):
+            pass
+
+        def _get_system_prompt(self):
+            return "test"
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
+    with patch(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+        side_effect=ReachedManager,
+    ) as ready:
+        with pytest.raises(ReachedManager):
+            ProbeAgent(model_id=model, device=device, min_context_size=32768)
+    assert ready.call_args.kwargs["min_context_size"] == window
+
+
+@pytest.mark.parametrize("window", [16384, 131072])
+def test_installer_saved_recipe_uses_same_override(monkeypatch, window):
+    from unittest.mock import MagicMock
+
+    from gaia.installer.init_command import InitCommand
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", str(window))
+    model = "Gemma-4-E4B-it-GGUF"
+    client = MagicMock()
+    client.check_model_loaded.return_value = False
+    client.list_models.return_value = {
+        "data": [{"id": model, "recipe_options": {"ctx_size": window}}]
+    }
+    command = InitCommand(profile="chat")
+    command._test_model_inference(client, model)
+    assert client.load_model.call_args.kwargs["ctx_size"] == window
+    assert client.load_model.call_args.kwargs["save_options"] is True
+
+
+@pytest.mark.parametrize(
+    "profile,previous,expected", [("npu", "gpu", 32768), ("chat", "npu", 131072)]
+)
+def test_installer_profile_wins_before_config_is_saved(
+    monkeypatch, profile, previous, expected
+):
+    from unittest.mock import MagicMock
+
+    from gaia.config import GaiaConfig
+    from gaia.installer.init_command import InitCommand
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device=previous))
+    command = InitCommand(profile=profile)
+    with (
+        patch("gaia.llm.lemonade_client.LemonadeClient") as client,
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", return_value=False
+        ) as ready,
+    ):
+        client.return_value.health_check.return_value = {"status": "ok"}
+        command._verify_setup()
+    assert ready.call_args.kwargs["min_context_size"] == expected
+    probe = MagicMock()
+    probe.check_model_loaded.return_value = False
+    probe.list_models.return_value = {"data": []}
+    command._test_model_inference(probe, "user.custom-GGUF")
+    assert probe.load_model.call_args.kwargs["ctx_size"] == expected

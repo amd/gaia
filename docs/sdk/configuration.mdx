@@ -46,7 +46,8 @@ Overrides below 32,768 tokens emit a warning because agent prompts may be trunca
 The requested value is still honored; increase or unset it if replies are empty.
 
 Set `GAIA_CTX_SIZE` to a positive integer token count to override the requested
-context window for CLI startup and subsequent local-model reloads. For example:
+context window for CLI startup, agent construction, installer verification and
+subsequent local-model reloads. For example:
 
 ```bash
 GAIA_CTX_SIZE=131072 gaia chat
@@ -63,7 +64,8 @@ loaded with a sufficient window is reused; lowering the value takes effect on th
 next load rather than forcing eviction. SDK `ctx_size_override` remains a separate
 instance-scoped exact pin and takes precedence over this environment variable.
 
-This setting does not change installer profile defaults or overflow recovery.
+Installer verification uses the profile being installed, even before it is saved.
+This setting does not change overflow recovery; it controls requested load capacity.
 
 ## 16.2 Configuration in Code
 
