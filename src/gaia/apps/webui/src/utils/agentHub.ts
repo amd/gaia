@@ -24,6 +24,16 @@ export function formatBytes(bytes?: number | null): string {
     return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
+/**
+ * The version to display, read off the fields the catalog really sends (#2970):
+ * installed entries carry ``installed_version``, not-yet-installed ones only
+ * ``latest_version``. ``version`` exists only after ``mergeCatalogStatus``, so
+ * reading it alone leaves every raw catalog entry blank.
+ */
+export function displayVersion(agent: AgentInfo): string | undefined {
+    return agent.installed_version ?? agent.version ?? agent.latest_version;
+}
+
 /** True when an install-status snapshot represents an in-flight install. */
 export function isInstalling(status?: InstallStatus | null): boolean {
     if (!status) return false;

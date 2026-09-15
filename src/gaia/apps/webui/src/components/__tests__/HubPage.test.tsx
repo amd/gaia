@@ -118,6 +118,74 @@ describe('HubPage agent-discovery failure (#2118)', () => {
     });
 });
 
+describe('HubPage version visibility (issue #2970)', () => {
+    // GET /api/agents sends no version field at all and the catalog sends
+    // `installed_version` / `latest_version` — never `version`. These fixtures
+    // mirror that wire shape exactly, so a Version that only renders off a
+    // hand-set `version` fails here instead of passing on a fiction.
+    const EMAIL_INSTALLED: AgentInfo[] = [agent({ id: 'email', name: 'Email', source: 'installed' })];
+
+    function catalogEntry(partial: Partial<AgentInfo>): AgentCatalogResponse {
+        return {
+            offline: false,
+            agents: [
+                agent({
+                    id: 'email',
+                    name: 'Email',
+                    type: 'agent',
+                    security_tier: 'verified',
+                    compatibility: { level: 'compatible' },
+                    ...partial,
+                }),
+            ],
+        };
+    }
+
+    it('badges the installed card with the version the catalog reports', async () => {
+        mockedApi.listCatalog.mockResolvedValue(
+            catalogEntry({ status: 'installed', installed_version: '0.6.0', latest_version: '0.6.0' }),
+        );
+        render(
+            <HubPage
+                agents={EMAIL_INSTALLED}
+                activeAgentId="email"
+                onSelect={() => {}}
+                onStartChat={() => {}}
+            />,
+        );
+        expect(await screen.findByText('v0.6.0')).toBeInTheDocument();
+    });
+
+    it('badges a not-yet-installed catalog card with the version on offer', async () => {
+        mockedApi.listCatalog.mockResolvedValue(
+            catalogEntry({ status: 'available', latest_version: '0.6.0', source: 'hub' }),
+        );
+        mockedApi.listAgents.mockResolvedValue({ agents: [], total: 0 });
+        render(
+            <HubPage agents={[]} activeAgentId="" onSelect={() => {}} onStartChat={() => {}} />,
+        );
+        expect(await screen.findByText('v0.6.0')).toBeInTheDocument();
+    });
+
+    it('shows the version in Details for a not-yet-installed agent', async () => {
+        const user = userEvent.setup();
+        mockedApi.listCatalog.mockResolvedValue(
+            catalogEntry({ status: 'available', latest_version: '0.6.0', source: 'hub' }),
+        );
+        mockedApi.listAgents.mockResolvedValue({ agents: [], total: 0 });
+        render(
+            <HubPage agents={[]} activeAgentId="" onSelect={() => {}} onStartChat={() => {}} />,
+        );
+        await screen.findByText('Email');
+
+        await user.click(screen.getByRole('button', { name: 'Details' }));
+
+        const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).getByText('Version')).toBeInTheDocument();
+        expect(within(dialog).getByText('0.6.0')).toBeInTheDocument();
+    });
+});
+
 describe('HubPage trust gate (issue #1722)', () => {
     it('installs a verified agent in one click after the gate', async () => {
         const user = userEvent.setup();

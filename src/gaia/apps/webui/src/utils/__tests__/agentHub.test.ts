@@ -6,6 +6,7 @@ import {
     formatBytes,
     isInstalling,
     compatLevel,
+    displayVersion,
     mergeCatalogStatus,
     splitAvailable,
     countUpdates,
@@ -66,6 +67,27 @@ describe('compatLevel', () => {
 
     it('reads the catalog verdict', () => {
         expect(compatLevel(agent({ id: 'x', compatibility: { level: 'incompatible' } }))).toBe('incompatible');
+    });
+});
+
+describe('displayVersion', () => {
+    // Fixtures use only the fields GET /api/agents/catalog actually sends.
+    it('prefers the installed version straight off the wire', () => {
+        expect(displayVersion(agent({
+            id: 'email', installed_version: '0.6.0', latest_version: '0.7.0',
+        }))).toBe('0.6.0');
+    });
+
+    it('falls back to the merged display version', () => {
+        expect(displayVersion(agent({ id: 'email', version: '0.6.0' }))).toBe('0.6.0');
+    });
+
+    it('falls back to the offered version for a not-yet-installed agent', () => {
+        expect(displayVersion(agent({ id: 'email', latest_version: '0.6.0' }))).toBe('0.6.0');
+    });
+
+    it('is undefined when the catalog sent no version at all', () => {
+        expect(displayVersion(agent({ id: 'local-only' }))).toBeUndefined();
     });
 });
 
