@@ -172,8 +172,8 @@ DOC_BUNDLES = [
 # Always-on set (13 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
-# skill discovery, two universal entry points -- ``read_file`` and
+# signalling), the ``load_tools`` escape hatch, ``load_skill`` for the skill
+# catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
 # documents say" without a round trip, and the two file-edit tools. Editing is
 # always on because semantic selection cannot rank it: on explicit edit
@@ -201,8 +201,8 @@ FULL_CORE_TOOLS = frozenset(
         "request_user_input",
         # escape hatch (#1450)
         "load_tools",
-        # proactive skill discovery (#3235) — the shortlist prompt tells the
-        # model to call this even when the skills bundle was not selected.
+        # the skill catalogue (#3764) tells the model to call this even when
+        # the skills bundle was not selected.
         "load_skill",
     }
 )

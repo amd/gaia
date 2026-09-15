@@ -378,6 +378,7 @@ class ShellToolsMixin:
                 segment,
                 command if len(segments) == 1 else " ".join(segment),
                 granted_binaries=granted,
+                skill_manager=getattr(self, "skill_manager", None),
             )
             if error:
                 return error, segments
@@ -550,6 +551,7 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        skill_manager: Any = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -558,6 +560,8 @@ class ShellToolsMixin:
             cmd_base: The lowercased command name.
             cmd_parts: The shlex-split command.
             command: The raw command string.
+            skill_manager: The host's skill manager, so refusing an ungranted CLI
+                can name the installed skill that grants it. Optional.
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
@@ -585,13 +589,36 @@ class ShellToolsMixin:
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
             if binary not in granted_binaries:
+                from gaia.agents.base.skill_catalog import skills_granting
+
+                # Name the skill: "a skill that declares it" left models no route.
+                granting = (
+                    skills_granting(skill_manager.discover(), binary)
+                    if skill_manager is not None
+                    else []
+                )
+                if granting:
+                    route = (
+                        "Call load_skill with "
+                        f"{' or '.join(repr(n) for n in granting)}, "
+                        "then run the command again."
+                    )
+                elif skill_manager is not None:
+                    route = (
+                        f"No installed skill declares 'shell:execute:{binary}'; "
+                        "search_skill_hub can find one."
+                    )
+                else:
+                    route = (
+                        f"No skill that grants 'shell:execute:{binary}' could be "
+                        "looked up here; "
+                        "list_skills or search_skill_hub can find one."
+                    )
                 return {
                     "status": "error",
                     "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
+                        f"Command '{binary}' is not available to this agent until a "
+                        f"skill that grants it is loaded. {route}"
                     ),
                     "has_errors": True,
                     "hint": f"{policy.summary} {policy.install_hint}",
