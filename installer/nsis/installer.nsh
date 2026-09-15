@@ -131,10 +131,8 @@
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
       "GAIA Agent UI"
 
-  ; Offer to remove user data (~/.gaia/) — chats, documents, Python venv,
-  ; config, and logs. Default is "No" so users keep their data unless they
-  ; explicitly opt in. /SD IDNO makes silent uninstalls (GPO/SCCM) keep
-  ; data by default.
+  ; Optional cleanup deletes the entire shared GAIA home, including other
+  ; installations' runtimes. Interactive and silent defaults preserve it.
   ;
   ; Uses a relative jump (IDNO +2) instead of named labels to avoid
   ; label-collision risk if electron-builder ever expands this macro
