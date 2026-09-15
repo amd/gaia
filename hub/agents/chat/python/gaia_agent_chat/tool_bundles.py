@@ -181,12 +181,9 @@ DOC_BUNDLES = [
 # too, so a file-shaped or document-shaped turn pulls their whole cohort in
 # with them.
 #
-# write_file/edit_file were promoted here from the file_edit bundle (#3752):
-# editing is the flagship's core job, and semantic selection lost them to
-# memory/skill/RAG tools on 5 of 7 measured coding requests -- CORE is
-# cap- and score-exempt, so promotion removes the failure mode outright
-# rather than trying to out-rank it. Doc profile is unaffected: DOC_CORE_TOOLS
-# keeps read_file only, because the doc profile is document Q&A, not editing.
+# write_file/edit_file are cap- and score-exempt here on purpose -- editing is
+# the flagship's core job, not something that should have to out-rank memory
+# or skill tools for a slot.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
