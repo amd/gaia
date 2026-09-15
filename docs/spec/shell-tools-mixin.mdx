@@ -45,7 +45,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 2. **Rate Limiting**
    - Max 10 commands per minute (sustained)
-   - Max 3 commands per 10 seconds (burst)
+   - Max 3 commands per 10 seconds (burst); read-only allowlisted commands are exempt from the burst limit but still count toward the per-minute cap
    - Clear wait time messaging
    - Timestamp tracking with deque
 

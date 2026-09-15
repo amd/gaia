@@ -124,6 +124,92 @@ SAFE_GIT_COMMANDS = {
     "help",
 }
 
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+}
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _resolve_git_subcommand(cmd_parts: list) -> tuple:
+    """Step over git's global options to find the real subcommand.
+
+    ``git -C <path> branch`` is a branch listing, not a ``-C`` command; reading
+    ``cmd_parts[1]`` blindly refuses every invocation that carries a global flag.
+
+    Returns:
+        ``(subcommand, error_message)`` — exactly one is non-None. A terminal
+        flag like ``--version`` comes back as the subcommand, since nothing
+        follows it.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            return token.lower(), None
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            return name, None
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, (
+            f"Git global option '{name}' is not recognized, so the subcommand "
+            "behind it cannot be identified."
+        )
+
+    return None, "No git subcommand was given."
+
+
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
     "get-",
@@ -295,6 +381,62 @@ def _split_pipeline(cmd_parts: list) -> list:
     return segments
 
 
+#: Git global options whose value is a filesystem path git will operate in.
+_GIT_PATH_FLAGS = ("-C", "--git-dir", "--work-tree")
+
+
+def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
+    """``(flag, resolved_path)`` for every path-taking git global option.
+
+    Resolved the way git does: ``-C`` is relative to the directory before it,
+    and ``--git-dir``/``--work-tree`` are relative to the last ``-C``. Without
+    this check ``-C`` would be a way around the ``working_directory`` sandbox.
+    """
+    values: list = []
+    base = Path(cwd)
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+        name, has_inline, inline = token.partition("=")
+        if name not in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            index += 1
+            continue
+        if has_inline:
+            value = inline
+            index += 1
+        elif index + 1 < len(cmd_parts):
+            value = cmd_parts[index + 1]
+            index += 2
+        else:
+            break
+        if name in _GIT_PATH_FLAGS:
+            resolved = base.joinpath(value).resolve()
+            values.append((name, str(resolved)))
+            if name == "-C":
+                base = resolved
+    return values
+
+
+_CD_CHAIN = re.compile(r"^\s*cd\s+(?P<path>\"[^\"]*\"|'[^']*'|\S+)\s*&&")
+
+
+def _cd_chain_hint(command: str) -> Dict[str, str]:
+    """A hint naming ``working_directory`` when *command* is ``cd <path> && ...``."""
+    match = _CD_CHAIN.match(command)
+    if not match:
+        return {}
+    path = match.group("path").strip("\"'")
+    rest = command[match.end() :].strip()
+    return {
+        "hint": (
+            f"Don't chain 'cd {path} && ...'. Call run_shell_command again with "
+            f"command={rest!r} and working_directory={path!r}."
+        )
+    }
+
+
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
@@ -304,7 +446,9 @@ class ShellToolsMixin:
 
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
-    - Max 3 commands per 10 seconds for burst prevention
+    - Max 3 commands per 10 seconds for burst prevention; read-only allowlisted
+      commands are exempt from the burst limit but still count toward the
+      per-minute cap
     """
 
     def __init__(self, *args, **kwargs):
@@ -325,7 +469,7 @@ class ShellToolsMixin:
         """
         error, segments = self._shell_command_refusal(command)
         if error is not None:
-            error = {**error, **NOT_EXECUTED}
+            error = {**error, **_cd_chain_hint(command), **NOT_EXECUTED}
         return error, segments
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -487,9 +631,16 @@ class ShellToolsMixin:
         )
         return True
 
-    def _check_rate_limit(self) -> tuple:
+    def _check_rate_limit(self, read_only: bool = False) -> tuple:
         """
         Check if rate limit allows another command.
+
+        Args:
+            read_only: The command is read-only and allowlisted (see
+                ``_is_read_only_command``). Such commands skip the 10-second
+                burst limit — orienting in a repo is a rapid run of ``ls`` and
+                ``cat`` — but still count toward, and are held to, the
+                per-minute cap.
 
         Returns:
             (allowed: bool, reason: str, wait_time: float)
@@ -511,7 +662,7 @@ class ShellToolsMixin:
         recent_10_sec = sum(1 for t in self.shell_command_times if t > ten_sec_ago)
 
         # Check 10-second burst limit
-        if recent_10_sec >= self.max_commands_per_10_seconds:
+        if not read_only and recent_10_sec >= self.max_commands_per_10_seconds:
             recent_times = [t for t in self.shell_command_times if t > ten_sec_ago]
             if recent_times:
                 oldest_in_window = min(recent_times)
@@ -543,6 +694,44 @@ class ShellToolsMixin:
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
+
+    def _is_read_only_command(self, command: str) -> bool:
+        """True when every segment is an allowlisted command the policy clears.
+
+        Skill-granted CLIs (``gh``) are not on ``ALLOWED_COMMANDS`` and so never
+        count, even for a read: they reach remote services, which is what the
+        burst limit is for.
+        """
+        error, segments = self._shell_command_refusal(command)
+        return (
+            error is None
+            and bool(segments)
+            and all(seg[0].lower() in ALLOWED_COMMANDS for seg in segments)
+        )
+
+    def _git_path_refusal(self, segments: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
+
+        The same allowed-paths check ``working_directory`` gets.
+        """
+        for segment in segments:
+            if segment[0].lower() != "git":
+                continue
+            for flag, path in _git_path_flag_values(segment, cwd):
+                if hasattr(self, "path_validator"):
+                    allowed = self.path_validator.is_path_allowed(path)
+                elif hasattr(self, "_is_path_allowed"):
+                    allowed = self._is_path_allowed(path)
+                else:
+                    continue
+                if not allowed:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"Access denied: git {flag} {path} is not in allowed paths",
+                        "has_errors": True,
+                    }
+        return None
 
     @staticmethod
     def _validate_command(
@@ -614,13 +803,23 @@ class ShellToolsMixin:
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+                git_subcmd, resolve_error = _resolve_git_subcommand(cmd_parts)
+                if resolve_error is not None:
+                    return {
+                        "status": "error",
+                        "error": resolve_error,
+                        "has_errors": True,
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
+                    }
+                if (
+                    git_subcmd not in SAFE_GIT_COMMANDS
+                    and git_subcmd not in GIT_TERMINAL_FLAGS
+                ):
                     return {
                         "status": "error",
                         "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
                     }
         # Special handling for wmic - only allow read-only queries
         elif cmd_base == "wmic":
@@ -817,11 +1016,24 @@ class ShellToolsMixin:
             command: str, working_directory: Optional[str] = None, timeout: int = 30
         ) -> Dict[str, Any]:
             """
-            Execute a shell command and return the output.
+            Run ONE read-only shell command and return its output.
+
+            Rules — a command that breaks one is blocked, not run:
+            - One command per call. No shell operators: &&, ||, ;, &, >, >>, <,
+              backticks, $(...), heredocs. Pipes (|) are allowed, e.g.
+              "grep -rn TODO src | head -20".
+            - To run somewhere else, pass working_directory — never "cd DIR && cmd".
+            - Only read-only commands run without approval: ls, cat, head, tail,
+              grep, find, wc, sort, uniq, diff, stat, du, ps, which, echo, and
+              read-only git (status, log, show, diff, branch, ls-files, rev-parse;
+              git -C DIR is fine). rm, mv, cp, python, pip, curl and git writes
+              are blocked.
+            - To run a Python script use execute_python_file; to change files use
+              edit_file or write_file — when those tools are available.
 
             Args:
-                command: Shell command to execute
-                working_directory: Directory to run command in
+                command: A single command, optionally piped with |. No &&, ;, >, < or $().
+                working_directory: Directory to run the command in. Use this instead of cd.
                 timeout: Maximum execution time in seconds
 
             Returns:
@@ -829,7 +1041,9 @@ class ShellToolsMixin:
             """
             try:
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time = self._check_rate_limit()
+                allowed, reason, wait_time = self._check_rate_limit(
+                    read_only=self._is_read_only_command(command)
+                )
                 if not allowed:
                     return {
                         **NOT_EXECUTED,
@@ -953,6 +1167,10 @@ class ShellToolsMixin:
                                     arg,
                                     exc,
                                 )
+
+                git_path_error = self._git_path_refusal(segments, cwd)
+                if git_path_error:
+                    return git_path_error
 
                 cmd_base = cmd_parts[0].lower()
 
