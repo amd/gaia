@@ -18,8 +18,9 @@ One module rather than a method on each mixin, so the two cannot drift.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Tuple
 
 #: Depth the primary root is walked to — effectively unlimited. The project the
 #: user is working in is the one place worth an exhaustive walk.
@@ -30,6 +31,13 @@ DEEP_ROOT_DEPTH = 999
 #: that finds nothing; the old code capped the same folders at 5 for the same
 #: reason.
 SHALLOW_ROOT_DEPTH = 5
+
+#: Wall-clock budget for one search walk. Well under the 180 s tool watchdog,
+#: so the model gets partial results and a hint instead of an abandoned call.
+SEARCH_TIME_BUDGET_S = 20.0
+
+#: Directory entries one search walk may examine before it stops (#3889).
+SEARCH_ENTRY_BUDGET = 200_000
 
 
 def path_validator_of(host: Any) -> Any:
@@ -68,3 +76,49 @@ def root_depth(root: Path, roots: List[Path]) -> int:
     if roots and Path(root) == Path(roots[0]):
         return DEEP_ROOT_DEPTH
     return SHALLOW_ROOT_DEPTH
+
+
+def _is_gaia_install_dir(path: Path) -> bool:
+    """True when *path* is where GAIA itself lives, not where the user works.
+
+    Covers the installed ``gaia`` package's parent (``src/`` or
+    ``site-packages``), the running interpreter's prefix, and a hub agent's
+    ``hub/agents/<id>/python`` directory — the cwd a dev-mode sidecar is
+    spawned in.
+    """
+    import gaia
+
+    own = [Path(gaia.__file__).resolve().parent.parent, Path(sys.prefix).resolve()]
+    if any(path == d or d in path.parents for d in own):
+        return True
+    parts = path.parts
+    return any(
+        parts[i : i + 2] == ("hub", "agents") and parts[i + 3] == "python"
+        for i in range(len(parts) - 3)
+    )
+
+
+def walk_plan(host: Any) -> List[Tuple[Path, int]]:
+    """``(root, max_depth)`` pairs for a search with no ``directory`` given.
+
+    Normally :func:`search_roots` with :func:`root_depth`. When the process cwd
+    sits strictly inside an allowed root — the sandbox is ``$HOME`` and the user
+    launched from a project under it — the cwd is walked deep first and the
+    root containing it drops to :data:`SHALLOW_ROOT_DEPTH`, so a lookup cannot
+    turn into a walk of the whole home folder (#3889). A cwd that is not inside
+    the sandbox, or is GAIA's own install/package directory, is ignored: that
+    is how the process was launched, not where the user's work is (#3576).
+    """
+    roots = search_roots(host)
+    plan = [(root, root_depth(root, roots)) for root in roots]
+    cwd = Path.cwd().resolve()
+    resolved = [Path(r).resolve() for r in roots]
+    if cwd in resolved:
+        return plan
+    container = next((r for r in resolved if r in cwd.parents), None)
+    if container is None or _is_gaia_install_dir(cwd):
+        return plan
+    return [(cwd, DEEP_ROOT_DEPTH)] + [
+        (root, SHALLOW_ROOT_DEPTH if res == container else depth)
+        for (root, depth), res in zip(plan, resolved)
+    ]

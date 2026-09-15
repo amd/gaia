@@ -14,11 +14,13 @@ import logging
 import mimetypes
 import os
 import platform
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List
 
+from gaia.agents.tools import search_scope
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     record_read,
@@ -26,8 +28,8 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
-    root_depth,
     search_roots,
+    walk_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,12 +238,64 @@ class FileSearchToolsMixin:
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
+                budget = {}
+
+                def reset_budget():
+                    budget.update(
+                        started=time.monotonic(),
+                        entries=0,
+                        truncated=False,
+                    )
+
+                def budget_exhausted() -> bool:
+                    if budget["truncated"]:
+                        return True
+                    if (
+                        budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET
+                        or time.monotonic() - budget["started"]
+                        >= search_scope.SEARCH_TIME_BUDGET_S
+                    ):
+                        budget["truncated"] = True
+                        logger.info(
+                            "search_file stopped after %d entries / %.1f s",
+                            budget["entries"],
+                            time.monotonic() - budget["started"],
+                        )
+                    return budget["truncated"]
+
+                def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
+                    """Mark a result partial when the walk ran out of budget."""
+                    if not budget["truncated"]:
+                        return result
+                    secs = time.monotonic() - budget["started"]
+                    where = "a narrower `directory`" if directory else "`directory`"
+                    hint = (
+                        f"Search stopped after {secs:.1f} s — pass {where} to "
+                        "search a specific folder."
+                    )
+                    result["truncated"] = True
+                    result["hint"] = hint
+                    if not result.get("files"):
+                        result["display_message"] = (
+                            f"Search for '{file_pattern}' stopped before "
+                            "finishing; nothing matched in the part searched"
+                        )
+                        result["suggestion"] = (
+                            "This is NOT a complete zero: the search ran out of "
+                            f"time before covering searched_paths. {hint}"
+                        )
+                    return result
+
+                reset_budget()
+                walked = set()
+
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if not location.exists():
+                    if not location.exists() or budget_exhausted():
                         return
 
                     searched_locations.append(str(location))
+                    walked.add(location)
                     logger.debug(f"Searching {location}...")
 
                     def search_recursive(current_path: Path, depth: int):
@@ -270,6 +324,9 @@ class FileSearchToolsMixin:
 
                         try:
                             for item in current_path.iterdir():
+                                budget["entries"] += 1
+                                if budget_exhausted():
+                                    return
                                 # Skip system/hidden directories
                                 if item.name.startswith(
                                     (".", "$", "Windows", "Program Files")
@@ -283,7 +340,11 @@ class FileSearchToolsMixin:
                                     if matches_pattern_and_type(item):
                                         matching_files.append(str(item.resolve()))
                                         logger.debug(f"Found: {item.name}")
-                                elif item.is_dir() and depth < max_depth:
+                                elif (
+                                    item.is_dir()
+                                    and depth < max_depth
+                                    and item not in walked
+                                ):
                                     search_recursive(item, depth + 1)
                         except (PermissionError, OSError) as e:
                             logger.debug(f"Skipping {current_path}: {e}")
@@ -354,7 +415,8 @@ class FileSearchToolsMixin:
                     # Phase 0+1: the agent's allowed paths AND common document
                     # locations (always both, so a Documents file isn't missed
                     # just because a workspace root had some matches).
-                    roots = self._search_roots()
+                    plan = walk_plan(self)
+                    roots = [root for root, _ in plan]
                     if hasattr(self, "console") and hasattr(
                         self.console, "start_progress"
                     ):
@@ -362,11 +424,11 @@ class FileSearchToolsMixin:
                             f"🔍 Searching the workspace for '{file_pattern}'..."
                         )
                     logger.debug("Phase 0: searching %s", [str(r) for r in roots])
-                    for root in roots:
+                    for root, max_depth in plan:
                         # Only the project gets an exhaustive walk. The rest of
                         # the sandbox is approvals that accumulated over time,
                         # and a zero-result search would traverse all of them.
-                        search_location(root, max_depth=root_depth(root, roots))
+                        search_location(root, max_depth=max_depth)
 
                     # Always also search common locations (Documents, Downloads, etc.)
                     if hasattr(self, "console") and hasattr(
@@ -419,16 +481,18 @@ class FileSearchToolsMixin:
                 # If found in CWD + common locations, return immediately
                 if matching_files:
                     limited_files = matching_files[:10]
-                    return {
-                        "status": "success",
-                        "files": limited_files,
-                        "file_list": self._format_file_list(limited_files),
-                        # Report only what the UI can actually access (avoid "count > returned files").
-                        "count": len(limited_files),
-                        "total_locations_searched": len(searched_locations),
-                        "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(limited_files)} file(s)",
-                    }
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": limited_files,
+                            "file_list": self._format_file_list(limited_files),
+                            # Report only what the UI can actually access (avoid "count > returned files").
+                            "count": len(limited_files),
+                            "total_locations_searched": len(searched_locations),
+                            "search_context": "common_locations",
+                            "display_message": f"✓ Found {len(limited_files)} file(s)",
+                        }
+                    )
 
                 # Quick search found nothing. A named directory is the WHOLE
                 # scope: a drive-wide sweep would answer about somewhere else,
@@ -439,26 +503,32 @@ class FileSearchToolsMixin:
                     # Name the places that were searched. A bare zero reads as
                     # "there are none", and the model relays it that way (#3576).
                     where = ", ".join(str(r) for r in roots) or "nowhere"
-                    return {
-                        "status": "success",
-                        "files": [],
-                        "count": 0,
-                        "total_locations_searched": len(searched_locations),
-                        "searched_paths": [str(p) for p in searched_locations],
-                        "search_context": "directory" if directory else "workspace",
-                        "display_message": (
-                            f"No files matching '{file_pattern}' under {where}"
-                        ),
-                        "deep_search_available": not directory,
-                        "suggestion": (
-                            "Zero here means zero UNDER THE PATHS LISTED IN "
-                            "searched_paths, not zero on the machine. Say where you "
-                            "looked. If the user named a folder, pass it as "
-                            "`directory`."
-                        ),
-                    }
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": [],
+                            "count": 0,
+                            "total_locations_searched": len(searched_locations),
+                            "searched_paths": [str(p) for p in searched_locations],
+                            "search_context": (
+                                "directory" if directory else "workspace"
+                            ),
+                            "display_message": (
+                                f"No files matching '{file_pattern}' under {where}"
+                            ),
+                            "deep_search_available": not directory,
+                            "suggestion": (
+                                "Zero here means zero UNDER THE PATHS LISTED IN "
+                                "searched_paths, not zero on the machine. Say where "
+                                "you looked. If the user named a folder, pass it as "
+                                "`directory`."
+                            ),
+                        }
+                    )
 
                 # Phase 2: Deep drive search (only when explicitly requested)
+                reset_budget()
+                walked.clear()
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Deep search across all drives (this may take a minute)..."
@@ -488,29 +558,33 @@ class FileSearchToolsMixin:
                 # Return final results
                 if matching_files:
                     limited_files = matching_files[:10]
-                    return {
-                        "status": "success",
-                        "files": limited_files,
-                        "file_list": self._format_file_list(limited_files),
-                        # Report only what the UI can actually access (avoid "count > returned files").
-                        "count": len(limited_files),
-                        "total_locations_searched": len(searched_locations),
-                        "display_message": f"✓ Found {len(limited_files)} file(s) after deep search",
-                        "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
-                    }
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": limited_files,
+                            "file_list": self._format_file_list(limited_files),
+                            # Report only what the UI can actually access (avoid "count > returned files").
+                            "count": len(limited_files),
+                            "total_locations_searched": len(searched_locations),
+                            "display_message": f"✓ Found {len(limited_files)} file(s) after deep search",
+                            "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
+                        }
+                    )
                 else:
                     searched_str = f"{len(searched_locations)} locations"
-                    return {
-                        "status": "success",
-                        "files": [],
-                        "count": 0,
-                        "total_locations_searched": len(searched_locations),
-                        "searched_paths": [str(p) for p in searched_locations],
-                        "search_summary": searched_str,
-                        "display_message": f"❌ No files found matching '{file_pattern}'",
-                        "searched": f"Searched {searched_str}",
-                        "suggestion": "Try a different search term, check spelling, or provide the full file path if you know it.",
-                    }
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": [],
+                            "count": 0,
+                            "total_locations_searched": len(searched_locations),
+                            "searched_paths": [str(p) for p in searched_locations],
+                            "search_summary": searched_str,
+                            "display_message": f"❌ No files found matching '{file_pattern}'",
+                            "searched": f"Searched {searched_str}",
+                            "suggestion": "Try a different search term, check spelling, or provide the full file path if you know it.",
+                        }
+                    )
 
             except Exception as e:
                 logger.error(f"Error searching for files: {e}")
