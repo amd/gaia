@@ -270,6 +270,15 @@ class FollowupToolsMixin:
             when the user asks what they're waiting on, which emails went
             unanswered, or who they should chase.
 
+            DIRECTION disambiguates this from ``pre_scan_inbox``'s card: this
+            tool is mail the user SENT that got no reply; the card's
+            ``needs_you`` rows are mail the user RECEIVED and hasn't acted on
+            (the opposite direction). A phrasing like "what am I waiting on"
+            or "what's outstanding on my end" can mean either — default to
+            THIS tool (the sent-mail direction) unless the user's own
+            wording names something that arrived in their inbox instead. See
+            ``ROUTING.md`` for the full decision table.
+
             READ-ONLY: this tool only detects and reports. It never composes
             or transmits a follow-up nudge — if the user wants to chase a
             thread, draft a reply as a separate, confirmed action.
