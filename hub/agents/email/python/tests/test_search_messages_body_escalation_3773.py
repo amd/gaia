@@ -138,6 +138,56 @@ def _call(search_messages, **kwargs) -> Dict[str, Any]:
     return payload["data"]
 
 
+def _payload_plain_text(msg: Dict[str, Any]) -> str:
+    """Flatten inline text/plain/html payload body content into one string."""
+    payload = (msg.get("payload") or {})
+    body = payload.get("body") or {}
+    parts = payload.get("parts") or []
+
+    def walk(part: Dict[str, Any]) -> str:
+        mime = (part.get("mimeType") or "").lower()
+        part_body = part.get("body") or {}
+        if mime.startswith("multipart/"):
+            chunks = [walk(child) for child in part.get("parts") or []]
+            return "\n".join(c for c in chunks if c)
+        if mime in {"text/plain", "text/html"}:
+            raw_b64 = part_body.get("data")
+            if not raw_b64:
+                return ""
+            raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
+            return raw.decode("utf-8", errors="replace")
+        return ""
+
+    return walk(payload) if payload else ""
+
+
+def test_vendor_corpus_treats_quoted_and_unquoted_phrases_the_same(
+    corpus_inbox_path,
+):
+    """A quoted phrase must behave like the bare phrase, and body-only hits
+    must be reachable by the fake Gmail backend used in offline evals."""
+    gmail = FakeGmailBackend(corpus_inbox_path)
+
+    bare_hits = gmail.list_messages(query="kernel fusion", max_results=100)
+    quoted_hits = gmail.list_messages(query='"kernel fusion"', max_results=100)
+
+    assert bare_hits["resultSizeEstimate"] > 0
+    assert {m["id"] for m in bare_hits["messages"]} == {
+        m["id"] for m in quoted_hits["messages"]
+    }
+
+    body_only_for_phrase = [
+        msg
+        for msg in gmail._messages.values()
+        if "kernel fusion" in _payload_plain_text(msg).lower()
+        and "kernel fusion" not in (msg.get("payload") or {}).get("headers", [])
+    ]
+    assert body_only_for_phrase
+    assert {m["id"] for m in bare_hits["messages"]}.issuperset(
+        {msg["id"] for msg in body_only_for_phrase}
+    )
+
+
 # ---------------------------------------------------------------------------
 # _query_has_free_text: the deterministic classifier itself
 # ---------------------------------------------------------------------------
