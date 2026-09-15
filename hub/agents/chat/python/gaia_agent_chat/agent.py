@@ -1489,10 +1489,12 @@ No documents are currently indexed.
                         timeout=timeout,
                         check=False,
                     )
+                    from gaia.agents.base.artifacts import retain_excerpt
+
                     return {
                         "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
+                        "stdout": retain_excerpt(self, r.stdout, 8000),
+                        "stderr": retain_excerpt(self, r.stderr, 2000),
                         "return_code": r.returncode,
                         "has_errors": r.returncode != 0,
                         "duration_seconds": round(time.monotonic() - start, 2),
@@ -2025,6 +2027,7 @@ No documents are currently indexed.
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._register_output_reader()
         self._snapshot_tools()
         if spec.generic_file_ops:
             _chat_exclude = {

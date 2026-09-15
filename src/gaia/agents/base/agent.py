@@ -39,7 +39,7 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     build_verification_scope,
@@ -1043,6 +1043,10 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        self._output_artifacts = ArtifactStore()
+        self._register_output_reader()
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1376,6 +1380,29 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    def _register_output_reader(self):
+        from gaia.agents.base.artifacts import store_for
+
+        @tool(atomic=True)
+        def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
+            """Read exact omitted tool output by handle, without rerunning the tool.
+
+            Args:
+                artifact: Output handle returned by a truncated result.
+                offset: Zero-based character offset in the original output.
+                limit: Page size in characters, 1 to 8000.
+            """
+            return store_for(self).read(artifact, offset, limit)
+
+        self._output_reader_entry = {
+            **_TOOL_REGISTRY["read_tool_output"],
+            "function": read_tool_output,
+        }
+        if self._instance_tools is not None:
+            self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
     @property
     def _tools_registry(self) -> Dict[str, Any]:
         """Return this agent's effective tool registry.
@@ -1386,6 +1413,8 @@ Do NOT wrap conversational replies in JSON.
         """
         if self._instance_tools is not None:
             return self._instance_tools
+        if hasattr(self, "_output_reader_entry"):
+            return {**_TOOL_REGISTRY, "read_tool_output": self._output_reader_entry}
         return _TOOL_REGISTRY
 
     def _snapshot_tools(self) -> None:
@@ -1396,6 +1425,8 @@ Do NOT wrap conversational replies in JSON.
         will not affect other agents or the global dict.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
+        if hasattr(self, "_output_reader_entry"):
+            self._instance_tools["read_tool_output"] = self._output_reader_entry
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -4253,6 +4284,15 @@ Do NOT wrap conversational replies in JSON.
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
+                from gaia.agents.base.artifacts import store_for
+
+                handle = store_for(self).put(result_str)
+                metadata = {
+                    "artifact": handle,
+                    "continuation": "read_tool_output",
+                    "total_chars": len(result_str),
+                }
+                target -= len(json.dumps(metadata, ensure_ascii=False)) + 4
                 # Some tools hand back json.dumps(...) as a str (code search,
                 # index status). Eliding those mid-record leaves the model half
                 # an entry at each end, so parse first and let the structured
@@ -4274,6 +4314,23 @@ Do NOT wrap conversational replies in JSON.
                         truncated_result = json.dumps(
                             truncated_result, ensure_ascii=False
                         )
+                was_text = isinstance(truncated_result, str)
+                if was_text:
+                    truncated_result = json.loads(truncated_result)
+                if isinstance(truncated_result, dict):
+                    truncated_result.update(metadata)
+                elif (
+                    truncated_result
+                    and isinstance(truncated_result[-1], dict)
+                    and truncated_result[-1].get("truncated") is True
+                    and truncated_result != structured
+                ):
+                    truncated_result[-1].update(metadata)
+                else:
+                    # Whitespace-heavy JSON can fit after parsing, with no marker.
+                    truncated_result.append(metadata)
+                if was_text:
+                    truncated_result = json.dumps(truncated_result, ensure_ascii=False)
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"

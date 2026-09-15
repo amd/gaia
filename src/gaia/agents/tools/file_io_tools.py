@@ -202,7 +202,9 @@ class FileIOToolsMixin:
         """Register all file I/O tools."""
 
         @tool
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -212,6 +214,8 @@ class FileIOToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -225,6 +229,17 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
+                        ),
+                    }
 
                 # Read file content
                 try:
