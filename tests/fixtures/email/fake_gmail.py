@@ -22,6 +22,7 @@ unit tests, NOT a parallel implementation.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import mailbox
 import re
@@ -813,15 +814,10 @@ def _query_tokens(query: str) -> List[str]:
     """Split a Gmail query into whitespace tokens while keeping quoted phrases intact."""
     tokens: List[str] = []
     current: List[str] = []
-    quote: Optional[str] = None
+    quote = False
     for ch in query or "":
-        if ch in {'"', "'"}:
-            if quote == ch:
-                quote = None
-            elif quote is None:
-                quote = ch
-            else:
-                current.append(ch)
+        if ch == '"':
+            quote = not quote
             continue
         if ch.isspace() and quote is None:
             if current:
@@ -853,8 +849,8 @@ def _payload_text(part: Dict[str, Any]) -> str:
         try:
             raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
             text = raw.decode("utf-8", errors="replace")
-        except Exception:
-            text = ""
+        except binascii.Error as exc:
+            raise ValueError(f"invalid base64 body data: {exc}") from exc
         if mime_type == "text/html":
             text = re.sub(r"<[^>]+>", " ", text)
         return text
@@ -929,7 +925,7 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
     now = datetime.now(timezone.utc).timestamp()
     searchable = _searchable_text(msg).lower()
     for token in _query_tokens(query):
-        literal = token.strip("\"'")
+        literal = token
         date_verdict = _date_operator_matches(token, msg, now)
         if date_verdict is not None:
             if not date_verdict:

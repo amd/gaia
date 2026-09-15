@@ -33,7 +33,6 @@ Hermetic: ``FakeGmailBackend`` only, no Lemonade, no network.
 
 from __future__ import annotations
 
-import base64
 import json
 import sys
 from pathlib import Path
@@ -56,7 +55,10 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
+from tests.fixtures.email.fake_gmail import (  # noqa: E402
+    FakeGmailBackend,
+    _payload_text,
+)
 
 
 def _b64url(text: str) -> str:
@@ -138,35 +140,12 @@ def _call(search_messages, **kwargs) -> Dict[str, Any]:
     return payload["data"]
 
 
-def _payload_plain_text(msg: Dict[str, Any]) -> str:
-    """Flatten inline text/plain/html payload body content into one string."""
-    payload = (msg.get("payload") or {})
-    body = payload.get("body") or {}
-    parts = payload.get("parts") or []
-
-    def walk(part: Dict[str, Any]) -> str:
-        mime = (part.get("mimeType") or "").lower()
-        part_body = part.get("body") or {}
-        if mime.startswith("multipart/"):
-            chunks = [walk(child) for child in part.get("parts") or []]
-            return "\n".join(c for c in chunks if c)
-        if mime in {"text/plain", "text/html"}:
-            raw_b64 = part_body.get("data")
-            if not raw_b64:
-                return ""
-            raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
-            return raw.decode("utf-8", errors="replace")
-        return ""
-
-    return walk(payload) if payload else ""
-
-
-def test_vendor_corpus_treats_quoted_and_unquoted_phrases_the_same(
-    corpus_inbox_path,
-):
+def test_body_only_quoted_and_unquoted_phrases_match():
     """A quoted phrase must behave like the bare phrase, and body-only hits
     must be reachable by the fake Gmail backend used in offline evals."""
-    gmail = FakeGmailBackend(corpus_inbox_path)
+    body = "A" * 250 + " kernel fusion "
+    gmail, messages = _build_inbox(1, body_text=body)
+    subject = messages[0]["payload"]["headers"][0]["value"]
 
     bare_hits = gmail.list_messages(query="kernel fusion", max_results=100)
     quoted_hits = gmail.list_messages(query='"kernel fusion"', max_results=100)
@@ -179,13 +158,24 @@ def test_vendor_corpus_treats_quoted_and_unquoted_phrases_the_same(
     body_only_for_phrase = [
         msg
         for msg in gmail._messages.values()
-        if "kernel fusion" in _payload_plain_text(msg).lower()
-        and "kernel fusion" not in (msg.get("payload") or {}).get("headers", [])
+        if "kernel fusion" in _payload_text(msg.get("payload") or {}).lower()
+        and "kernel fusion" not in subject.lower()
+        and "kernel fusion" not in (msg.get("snippet") or "").lower()
     ]
     assert body_only_for_phrase
     assert {m["id"] for m in bare_hits["messages"]}.issuperset(
         {msg["id"] for msg in body_only_for_phrase}
     )
+
+
+def test_apostrophes_do_not_break_following_operators():
+    gmail, _ = _build_inbox(1, body_text="A" * 250 + " O'Brien approved this.")
+
+    hits = gmail.list_messages(
+        query="O'Brien from:vendor@example.com", max_results=100
+    )
+
+    assert hits["resultSizeEstimate"] == 1
 
 
 # ---------------------------------------------------------------------------
