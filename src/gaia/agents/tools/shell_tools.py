@@ -1119,13 +1119,11 @@ class ShellToolsMixin:
                 truncated = False
                 max_output = 10_000
 
-                if len(stdout) > max_output:
-                    stdout = stdout[:max_output] + "\n...output truncated (stdout)..."
-                    truncated = True
+                from gaia.agents.base.artifacts import retain_excerpt
 
-                if len(stderr) > max_output:
-                    stderr = stderr[:max_output] + "\n...output truncated (stderr)..."
-                    truncated = True
+                truncated = len(stdout) > max_output or len(stderr) > max_output
+                stdout = retain_excerpt(self, stdout, max_output)
+                stderr = retain_excerpt(self, stderr, max_output)
 
                 # Debug logging
                 if hasattr(self, "debug") and self.debug:
