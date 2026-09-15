@@ -439,7 +439,7 @@ On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tr
 </Note>
 
 <Note>
-`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Port-listing and forceful termination commands time out after five seconds and report inspection failures. If only some listeners are terminated, the command reports the killed, refused, and failed processes and exits 1. An empty port exits 0 because the requested stopped state already holds. `--lemonade` propagates failures from its port-based stop path. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
 </Note>
 
 ### Agent Command
@@ -3149,7 +3149,7 @@ gaia kill --port 13305
 This command will:
 - Find the process ID (PID) bound to the specified port
 - Forcefully terminate that process
-- Provide feedback about success or failure
+- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
 
 ---
 
