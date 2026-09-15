@@ -285,7 +285,7 @@ def _excerpt(current_content: str, old_content: str) -> Dict[str, Any]:
         "current_content_start_line": start,
         "current_content_end_line": end,
         "current_content_total_lines": total,
-        "current_content_truncated": truncated,
+        "current_content_truncated": truncated or start > 1 or end < total,
         "current_content_anchored_on": anchored_on,
     }
 
@@ -321,6 +321,46 @@ def _error(
     return payload
 
 
+def check_file_state(
+    file_path: str,
+    current_content: Optional[str] = None,
+    *,
+    old_content: str = "",
+    operation: str = "Write",
+) -> Optional[Dict[str, Any]]:
+    """Reject a stale mutation after the caller has validated path access."""
+    tracker = FileStateTracker.instance()
+    if not tracker.has_record(file_path):
+        return None
+    if current_content is None:
+        if not os.path.exists(file_path):
+            return None
+        with open(file_path, "r", encoding="utf-8") as source:
+            current_content = source.read()
+    divergence = tracker.check(file_path, current_content)
+    if not divergence.diverged:
+        return None
+    error = _error(
+        f"{operation} rejected: {file_path} changed on disk after it was read — "
+        f"{divergence.reason}. Nothing was written. A bounded excerpt of the "
+        "current file is included as `current_content`. Read the current file "
+        "in full before retrying a whole-file write; never use this excerpt "
+        "as the complete replacement. Base any edit on the current content, "
+        "not on what you read earlier.",
+        file_path,
+        len(_match_offsets(current_content, old_content)) if old_content else 0,
+        {
+            "stale": True,
+            "hash_at_read": divergence.hash_at_read,
+            "hash_now": divergence.hash_now,
+            **_excerpt(current_content, old_content),
+        },
+    )
+    # The returned content anchors a corrected retry to this generation.
+    tracker.record_read(file_path, current_content)
+    return error
+
+
 def apply_unique_replacement(
     file_path: str,
     current_content: str,
@@ -350,26 +390,10 @@ def apply_unique_replacement(
             {},
         )
 
-    divergence = FileStateTracker.instance().check(file_path, current_content)
-    if divergence.diverged:
-        error = _error(
-            f"Edit rejected: {file_path} changed on disk after it was read — "
-            f"{divergence.reason}. Nothing was written. The file's current "
-            "content is included as `current_content`; reissue the edit against "
-            "that, not against what you read earlier.",
-            file_path,
-            len(_match_offsets(current_content, old_content)),
-            {
-                "stale": True,
-                "hash_at_read": divergence.hash_at_read,
-                "hash_now": divergence.hash_now,
-                **_excerpt(current_content, old_content),
-            },
-        )
-        # Returning the content *is* a read, so re-anchor. Without this the
-        # ledger still holds the superseded hash and the corrected retry is
-        # rejected as stale too — forever.
-        FileStateTracker.instance().record_read(file_path, current_content)
+    error = check_file_state(
+        file_path, current_content, old_content=old_content, operation="Edit"
+    )
+    if error is not None:
         return None, error
 
     offsets = _match_offsets(current_content, old_content)
