@@ -369,6 +369,17 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
             echo "Ctx-stamp requirement OFF."
           fi
+      - name: Resolve package version being released (#2965)
+        id: pkgver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # package.json is the single source the "Resolve + validate release
+          # version" step (later in this workflow) also cross-checks the tag
+          # against, so re-reading it here needs no extra trust assumption.
+          PKG_VER="$(python -c "import json; print(json.load(open('${PKG_DIR}/package.json'))['version'])")"
+          echo "version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "Package version: ${PKG_VER}"
       - name: Run scorecard gate
         shell: bash
         run: |
@@ -376,13 +387,15 @@ jobs:
           PREV="${{ steps.prev_tag.outputs.prev_tag }}"
           BARS="${{ steps.bars.outputs.args }}"
           CTX="${{ steps.ctx.outputs.args }}"
+          PKGVER="${{ steps.pkgver.outputs.version }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
               --scorecard hub/agents/email/npm/SCORECARD.md \
-              --baseline-ref "${PREV}" ${BARS} ${CTX}
+              --baseline-ref "${PREV}" --expected-version "${PKGVER}" ${BARS} ${CTX}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/email/npm/SCORECARD.md ${BARS} ${CTX}
+              --scorecard hub/agents/email/npm/SCORECARD.md \
+              --expected-version "${PKGVER}" ${BARS} ${CTX}
           fi
 
   # ── Stage 1c: email eval suite (release gate, self-hosted) ─────────

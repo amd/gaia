@@ -2094,6 +2094,11 @@ Examples:
         help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
     )
     agent_eval_parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="With --compare, fail when baseline scenarios are missing or unmeasured",
+    )
+    agent_eval_parser.add_argument(
         "--save-baseline",
         action="store_true",
         help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
@@ -2649,8 +2654,11 @@ Examples:
         default=None,
         help=(
             "Explicit dev-mode source directory (escape hatch for --mode dev "
-            "when this shell isn't inside a git work tree). Default: resolved "
-            "from this checkout via `git rev-parse --show-toplevel`."
+            "when this shell isn't inside a git work tree). Must be an "
+            "absolute path ending in hub/agents/<agent_id>/python (e.g. "
+            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "Default: resolved from this checkout via "
+            "`git rev-parse --show-toplevel`."
         ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
@@ -3881,25 +3889,49 @@ Let me know your answer!
                                 "  Run `gaia eval agent --save-baseline` first to save a baseline."
                             )
                             sys.exit(1)
+                        current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), compare_paths[0]
+                            str(baseline_path), str(current_path)
                         )
                     elif len(compare_paths) == 2:
-                        result = compare_scorecards(compare_paths[0], compare_paths[1])
+                        baseline_path, current_path = map(Path, compare_paths)
+                        result = compare_scorecards(
+                            str(baseline_path), str(current_path)
+                        )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero
+                    # Quality and completeness are separate checks. The strict
+                    # opt-in uses exactly the CI integrity gate's missing/blocked/
+                    # skipped/error semantics, including newly added scenarios.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
+                    if getattr(args, "require_complete", False):
+                        from gaia.eval.integrity_gate import check_category
+
+                        problems, status_line = check_category(
+                            baseline_path, current_path, "comparison"
+                        )
+                        print(status_line)
+                        for problem in problems:
+                            print(f"[ERROR] {problem}")
+                        total_issues += len(problems)
+                    elif result.get("unmeasured"):
+                        unmeasured = result["unmeasured"]
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from the quality verdict: {ids}. Add "
+                            "--require-complete to also enforce measurement completeness."
+                        )
                     if total_issues > 0:
                         print(
-                            f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
+                            f"[ERROR] Detected {total_issues} regression or required-completeness issue(s); failing."
                         )
                         sys.exit(2)
                     # Otherwise success
@@ -4842,6 +4874,19 @@ def handle_api_command(args):
             if getattr(args, "step_through", False):
                 os.environ["GAIA_API_STEP_THROUGH"] = "1"
 
+            from gaia.api.local_http import (
+                UnauthenticatedBindError,
+                assert_bind_is_authenticated,
+            )
+
+            # A LAN-reachable bind with no API key puts the agent loop on the
+            # network; refuse it before the app (and its agents) load.
+            try:
+                assert_bind_is_authenticated(args.host, "the GAIA API server")
+            except UnauthenticatedBindError as e:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
+
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
             from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
@@ -5734,14 +5779,21 @@ def _bootstrap_infer():
                 if not inferred_deleted:
                     try:
                         store.delete_by_source("inferred")
-                    except Exception as exc:
-                        get_logger(__name__).warning(
-                            "Could not clear previously inferred facts: %s", exc
-                        )
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Could not clear the previous inferred profile ({e}); "
+                            "nothing was stored. Check that the memory database "
+                            "is writable and not held by another GAIA process "
+                            "(`gaia kill` clears stale ones), then re-run "
+                            "`gaia memory bootstrap`."
+                        ) from e
                     inferred_deleted = True
 
                 try:
                     store.store(
+                        # `gaia memory` is an admin path and every row here was
+                        # just approved at the prompt.
+                        allow_privileged=True,
                         category="profile",
                         content=content,
                         source="inferred",
@@ -5766,7 +5818,10 @@ def _bootstrap_infer():
 def _bootstrap_discover():
     """Phase 2: System discovery — scan local system, present findings for review."""
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.agents.base.memory_store import (
+        USER_REVIEWED_CATEGORIES,
+        MemoryStore,
+    )
 
     print("\n=== GAIA Memory Bootstrap — System Discovery ===")
     print("Scanning your system for projects, apps, and more...")
@@ -5824,8 +5879,15 @@ def _bootstrap_discover():
             else:
                 # Default = approve (empty string or 'y')
                 try:
+                    category = item.get("category", "fact")
+                    if category not in USER_REVIEWED_CATEGORIES:
+                        raise ValueError(
+                            f"category {category!r} cannot be approved here; "
+                            f"expected one of {sorted(USER_REVIEWED_CATEGORIES)}"
+                        )
                     store.store(
-                        category=item.get("category", "fact"),
+                        allow_privileged=True,  # approved at the prompt
+                        category=category,
                         content=item["content"],
                         source="discovery",
                         context=item.get("context", "global"),
@@ -5959,6 +6021,7 @@ def _bootstrap_system(force: bool = True):
         for fact in facts:
             try:
                 store.store(
+                    allow_privileged=True,  # system-context collection
                     category="system",
                     content=fact["content"],
                     domain=fact.get("domain"),

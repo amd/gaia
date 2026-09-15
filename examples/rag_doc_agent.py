@@ -158,8 +158,8 @@ def main():
         print("Document Q&A Agent ready!\n")
     except Exception as e:
         print(f"Error initializing agent: {e}")
-        print("\nMake sure Lemonade server is running:")
-        print("  lemonade-server serve")
+        print("\nMake sure Lemonade Server is running. To install and start it:")
+        print("  gaia init")
         return
 
     # Interactive loop

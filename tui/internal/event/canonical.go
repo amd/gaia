@@ -160,9 +160,16 @@ type CanonicalFinalEvent struct {
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.
 // Fields absent from the payload stay zero and are simply not displayed.
+//
 // Tokens is the real generated-token count. TTFT is the turn's first LLM
-// call's own measured time-to-first-token — the server-measured fallback
-// used when no token ever streamed this turn.
+// call's own measured time-to-first-token and TokPerS its measured generation
+// rate — both come from the backend that did the inference, and both are
+// absent whenever it reported none (an OpenAI-compatible remote endpoint, for
+// instance). Zero therefore means unmeasured, never zero-valued, and the
+// client must print nothing rather than derive a stand-in: a rate or a
+// latency taken off the turn's own wall clock counts tool execution as model
+// time and is wrong by an order of magnitude on any multi-step turn.
+//
 // Metrics is the agent's per-turn performance record, present only when the
 // agent ran with GAIA_TURN_LOG set. Nil on every ordinary turn and from any
 // agent older than the record — callers must treat absence as normal.
@@ -172,6 +179,7 @@ type CanonicalUsage struct {
 	Elapsed   float64             `json:"elapsed"`
 	Tokens    int                 `json:"tokens"`
 	TTFT      float64             `json:"ttft"`
+	TokPerS   float64             `json:"tok_per_s"`
 	Metrics   *CanonicalTurnStats `json:"-"`
 }
 
