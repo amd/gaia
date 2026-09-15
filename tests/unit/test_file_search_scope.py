@@ -414,3 +414,199 @@ class TestTheIndexScopeUsesTheSameRoots:
         named = root / "tui"
 
         assert _scope_roots(str(named), agent) == [named.resolve()]
+
+
+# ============================================================================
+# 6. A walk is bounded, and prefers the cwd inside a broad sandbox (#3889)
+# ============================================================================
+
+
+def _register_search_file(sandbox):
+    mixin = FileSearchToolsMixin()
+    mixin.path_validator = sandbox
+    mixin.register_file_search_tools()
+    return _TOOL_REGISTRY["search_file"]["function"]
+
+
+@pytest.fixture
+def registry():
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        yield
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+@pytest.fixture
+def big_home(tmp_path):
+    """A home-sized sandbox: many folders, and a cwd elsewhere."""
+    home = tmp_path / "home"
+    for d in range(40):
+        folder = home / f"folder{d}" / "sub"
+        folder.mkdir(parents=True)
+        for f in range(25):
+            (folder / f"notes{f}.txt").write_text("x\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    prev = Path.cwd()
+    os.chdir(elsewhere)
+    try:
+        yield home
+    finally:
+        os.chdir(prev)
+
+
+class TestTheWalkIsBounded:
+    def test_an_exhausted_entry_budget_returns_what_it_found_marked_truncated(
+        self, big_home, registry, monkeypatch
+    ):
+        import time
+
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        started = time.monotonic()
+        result = search_file("notes")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 5, elapsed
+        assert result["status"] == "success"
+        assert result["truncated"] is True
+        assert result["count"] > 0, result
+        assert "pass `directory`" in result["hint"]
+
+    def test_a_truncated_miss_does_not_read_as_an_honest_zero(
+        self, big_home, registry, monkeypatch
+    ):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml")
+
+        assert result["count"] == 0
+        assert result["truncated"] is True
+        assert "NOT a complete zero" in result["suggestion"]
+        assert "No files matching" not in result["display_message"]
+
+    def test_an_exhausted_time_budget_stops_the_walk(
+        self, big_home, registry, monkeypatch
+    ):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_TIME_BUDGET_S", 0.0)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("notes")
+
+        assert result["truncated"] is True
+        assert result["count"] == 0
+
+    def test_a_named_directory_is_bounded_too(self, big_home, registry, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml", directory=str(big_home))
+
+        assert result["truncated"] is True
+        assert "narrower `directory`" in result["hint"]
+
+    def test_a_search_within_budget_is_not_marked_truncated(self, search_file, project):
+        result = search_file("*.go")
+        assert "truncated" not in result
+
+
+class TestCwdInsideABroadSandbox:
+    @pytest.fixture
+    def home_with_project(self, tmp_path):
+        home = (tmp_path / "home").resolve()
+        project = home / "work" / "proj"
+        buried = project / "a" / "b" / "c" / "d" / "e" / "f"
+        buried.mkdir(parents=True)
+        (buried / "deep_in_project.py").write_text("x = 1\n")
+        other = home / "other" / "a" / "b" / "c" / "d" / "e" / "f"
+        other.mkdir(parents=True)
+        (other / "deep_elsewhere.py").write_text("x = 1\n")
+        prev = Path.cwd()
+        os.chdir(project)
+        try:
+            yield home, project
+        finally:
+            os.chdir(prev)
+
+    def test_the_cwd_is_walked_deep_first_and_home_goes_shallow(
+        self, home_with_project
+    ):
+        from gaia.agents.tools.search_scope import (
+            DEEP_ROOT_DEPTH,
+            SHALLOW_ROOT_DEPTH,
+            walk_plan,
+        )
+
+        home, project = home_with_project
+
+        class Host:
+            path_validator = _Sandbox(home)
+
+        assert walk_plan(Host()) == [
+            (project, DEEP_ROOT_DEPTH),
+            (home, SHALLOW_ROOT_DEPTH),
+        ]
+
+    def test_search_file_reaches_deep_project_files_but_not_deep_home_files(
+        self, home_with_project, registry
+    ):
+        home, _ = home_with_project
+        search_file = _register_search_file(_Sandbox(home))
+
+        result = search_file("deep_")
+
+        names = [Path(f).name for f in result["files"]]
+        assert "deep_in_project.py" in names
+        assert "deep_elsewhere.py" not in names
+        assert len(names) == len(set(names))
+
+    def test_a_cwd_outside_the_sandbox_changes_nothing(self, project):
+        from gaia.agents.tools.search_scope import DEEP_ROOT_DEPTH, walk_plan
+
+        root, _ = project
+
+        class Host:
+            path_validator = _Sandbox(root)
+
+        assert walk_plan(Host()) == [(root.resolve(), DEEP_ROOT_DEPTH)]
+
+    def test_gaias_own_package_directory_is_never_preferred(self, monkeypatch):
+        """A sidecar's cwd is how it was launched, not the user's project (#3576)."""
+        import gaia
+        from gaia.agents.tools.search_scope import DEEP_ROOT_DEPTH, walk_plan
+
+        package_dir = Path(gaia.__file__).resolve().parent
+        sandbox_root = package_dir.parent.parent
+        monkeypatch.chdir(package_dir)
+
+        class Host:
+            path_validator = _Sandbox(sandbox_root)
+
+        assert walk_plan(Host()) == [(sandbox_root, DEEP_ROOT_DEPTH)]
+
+    def test_a_hub_agent_source_directory_is_never_preferred(
+        self, tmp_path, monkeypatch
+    ):
+        from gaia.agents.tools.search_scope import DEEP_ROOT_DEPTH, walk_plan
+
+        home = tmp_path.resolve()
+        sidecar_dir = home / "gaia" / "hub" / "agents" / "email" / "python"
+        sidecar_dir.mkdir(parents=True)
+        monkeypatch.chdir(sidecar_dir)
+
+        class Host:
+            path_validator = _Sandbox(home)
+
+        assert walk_plan(Host()) == [(home, DEEP_ROOT_DEPTH)]
