@@ -4942,7 +4942,7 @@ Do NOT wrap conversational replies in JSON.
         log.append(
             {
                 "tool": tool_name,
-                "check_label": verification_check_label(tool_name, tool_args),
+                "check_label": verification_check_label(tool_name, tool_args, result),
                 "failed": self._is_error_result(result),
                 "ran": check_was_executed(result),
             }
