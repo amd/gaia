@@ -161,9 +161,12 @@ def test_role_migration_failure_rolls_back_ddl_and_can_retry():
         return sqlite3.SQLITE_OK
 
     db._conn.set_authorizer(deny_drop)
-    with pytest.raises(sqlite3.DatabaseError):
-        db._migrate_autonomous_role()
-    db._conn.set_authorizer(None)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            db._migrate_autonomous_role()
+    finally:
+        # Disabling with None requires Python 3.11; CI also runs Python 3.10.
+        db._conn.set_authorizer(lambda *_args: sqlite3.SQLITE_OK)
     assert (
         db._conn.execute(
             "SELECT name FROM sqlite_master WHERE name = 'messages_history_migration'"
