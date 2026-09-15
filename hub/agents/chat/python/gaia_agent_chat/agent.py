@@ -43,6 +43,7 @@ from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     AudioToolsMixin,
     BrowserToolsMixin,
+    BrowserUseToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -201,6 +202,7 @@ class ChatAgent(
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
+    BrowserUseToolsMixin,
     FileSearchToolsMixin,
     FileIOToolsMixin,
     VLMToolsMixin,
@@ -2434,6 +2436,10 @@ No documents are currently indexed.
                 self._inline_web.close()
         except Exception as e:
             logger.error(f"Error closing inline web client during cleanup: {e}")
+        try:
+            self.cleanup_browser_use()
+        except Exception as e:
+            logger.error(f"Error closing browser during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()
