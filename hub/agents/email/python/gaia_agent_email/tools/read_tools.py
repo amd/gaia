@@ -924,6 +924,39 @@ def operatorize_query(query: str) -> str:
     return f"from:({cleaned}) OR subject:({cleaned})"
 
 
+# Matches an operator token AND its value (``from:acme``, ``from:(john
+# smith)``, ``newer_than:"14d"``) so it can be stripped before checking for
+# leftover free text -- reuses the canonical ``_GMAIL_OPERATORS`` list so
+# this never drifts from ``has_gmail_operator``'s idea of an operator.
+_OPERATOR_VALUE_RE = re.compile(
+    r"-?\b(?:" + "|".join(_GMAIL_OPERATORS) + r"):(?:\([^)]*\)|\"[^\"]*\"|\S+)",
+    re.IGNORECASE,
+)
+
+
+def _query_has_free_text(query: str) -> bool:
+    """True when ``query`` carries a term beyond Gmail structural operators.
+
+    A pure filter (``from:acme is:unread``) narrows by envelope metadata
+    only -- a hit proves nothing about body content. A query carrying a
+    bare term (``contract renewal``) only matches because Gmail searched
+    subject+body text, so its hits are a legitimate signal that the
+    caller is after content, not a count (#3773).
+    """
+    stripped = _OPERATOR_VALUE_RE.sub("", query or "")
+    stripped = re.sub(r"\b(?:OR|AND)\b", "", stripped, flags=re.IGNORECASE)
+    stripped = stripped.replace("(", "").replace(")", "")
+    return bool(stripped.strip())
+
+
+# #3773 — ceiling on how many hits an unset ``include_bodies`` may
+# auto-escalate to full bodies. A content-shaped query that still matches
+# more than this many messages falls back to metadata-only instead of
+# reproducing the #2763 overflow -- auto-escalation only ever applies to a
+# search already narrowed to a small candidate set.
+SEARCH_AUTO_BODY_CAP = 5
+
+
 def search_messages_impl(
     gmail,
     *,
@@ -932,23 +965,33 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
-    include_bodies: bool = False,
+    include_bodies: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """``include_bodies`` defaults to ``False`` (#2763): metadata-only (no
-    body decode, no per-message/envelope budget check needed -- see
-    ``_format_message_metadata_for_llm``). Live-hardware evidence showed a
-    docstring-only opt-IN (default ``True``, model sets ``False`` for a
-    counting question) is not reliable enough: a 4B-class local model did
-    not choose it on the very probe this issue is about, reproducing the
-    original overflow byte-for-byte (measured ``n_prompt_tokens`` within 1%
-    of the pre-fix run). Defaulting to the cheap, safe path and requiring an
-    explicit ``include_bodies=True`` opt-in for the expensive one means the
-    fix does not depend on the model reliably choosing a new parameter on
-    the failure path that actually destroys the conversation -- the
-    asymmetry matters: a content question that forgets to opt in gets a
-    recoverable "no body available" rather than a context-ending overflow.
-    Full bodies via ``_format_messages_within_budget`` are still available
-    with ``include_bodies=True``.
+    """``include_bodies=None`` (the default) auto-decides from the query
+    itself (#3773) rather than requiring the model to opt in: a query that
+    carries a free-text term beyond Gmail's structural operators
+    (``_query_has_free_text``) only matched because Gmail searched
+    subject+body text, so it is treated as a content search and its hits
+    are escalated to full bodies -- but ONLY when the candidate set is
+    already narrowed to ``SEARCH_AUTO_BODY_CAP`` messages or fewer, so a
+    content-shaped query that still matches many messages falls back to
+    metadata-only instead of reproducing the #2763 overflow. A pure filter
+    (``from:acme is:unread``) never auto-escalates, however few hits it
+    returns -- matching by sender/label/date proves nothing about body
+    content. ``include_bodies=True``/``False`` still override the
+    heuristic explicitly and are never capped by ``SEARCH_AUTO_BODY_CAP``.
+
+    Before #3773, ``include_bodies`` defaulted to plain ``False`` (#2763):
+    live-hardware evidence showed a docstring-only opt-IN (default
+    ``True``, model sets ``False`` for a counting question) was not
+    reliable enough -- a 4B-class local model did not choose it on the
+    very probe #2763 was about, reproducing the original overflow
+    byte-for-byte. Auto-deciding from the query shape keeps that same
+    guarantee (a forgotten opt-in can never overflow the context window)
+    while no longer requiring a content question to opt in by hand. Full
+    bodies via ``_format_messages_within_budget`` are still available
+    (unbounded by the auto-escalation cap) with an explicit
+    ``include_bodies=True``.
     """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
@@ -980,7 +1023,22 @@ def search_messages_impl(
                     stubs = listing.get("messages", [])
         finally:
             log_search_effective_query(query=query, retried_query=retried_query)
-        if include_bodies:
+
+        auto_escalated = False
+        resolved_include_bodies = include_bodies
+        if resolved_include_bodies is None:
+            # #3773: auto-decide from the EFFECTIVE query (the retried
+            # operator query when one fired) -- checking the original bare
+            # phrase would misread an already-operator-only retried query
+            # as still needing content escalation.
+            effective_query = retried_query if retried_query is not None else query
+            resolved_include_bodies = (
+                _query_has_free_text(effective_query)
+                and len(stubs) <= SEARCH_AUTO_BODY_CAP
+            )
+            auto_escalated = resolved_include_bodies
+
+        if resolved_include_bodies:
             full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
             out = _format_messages_within_budget(
                 full_msgs,
@@ -1010,11 +1068,18 @@ def search_messages_impl(
         summary: Dict[str, Any] = {"count": len(out), "truncated": truncated}
         if retried_query is not None:
             summary["operator_retry"] = retried_query
+        if auto_escalated:
+            summary["include_bodies_auto"] = True
         st["result_summary"] = summary
         return {
             "messages": out,
             "operator_retry": retried_query,
             "truncated": truncated,
+            # #3773 — True only when this call's own auto-decision (not an
+            # explicit include_bodies=True) escalated to full bodies, so a
+            # caller/test can tell "the heuristic chose to fetch bodies"
+            # apart from "the caller asked for bodies".
+            "include_bodies_auto": auto_escalated,
         }
 
 
@@ -2089,6 +2154,17 @@ def pre_scan_inbox_impl(
     is never silently dropped from ``suspicious_total``. Lets a narrow
     "anything suspicious?" caller (``check_suspicious_mail``) get an honest
     count without receiving the other, unrelated pre-scan sections.
+
+    NO MESSAGE BODY IS EVER READ ON THIS SURFACE (#3773/#2968): this call
+    passes no ``classifier=`` to ``triage_inbox_impl``, so its phase 2
+    full-body fetch never runs — every field above (category, urgency,
+    ``why``, ``suspicious``) is derived from phase 1 metadata (subject,
+    sender, labels, snippet) alone. A caller that needs a fact from inside
+    a message's actual body must use ``get_message``/``get_thread`` for a
+    known id, or ``search_messages`` (whose default auto-escalates to full
+    bodies for a small, content-shaped result set, #3773) — never this
+    tool. Wiring a bounded body-reading path into this surface is #2968,
+    intentionally not done here.
     """
     prefs = session_preferences or {}
     category_defaults = prefs.get("category_defaults") or {}
@@ -2844,7 +2920,7 @@ class ReadToolsMixin:
 
         @tool
         def search_messages(
-            query: str, max_results: int = 25, include_bodies: bool = False
+            query: str, max_results: int = 25, include_bodies: Optional[bool] = None
         ) -> str:
             """Search across ALL connected mailboxes.
 
@@ -2880,16 +2956,25 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            By DEFAULT this returns METADATA ONLY — id/subject/from/to/date/
-            label_ids/snippet, no body text — which is all a counting or
-            listing question needs ("how many emails from X", "list the
-            emails from Y this week", "do I have anything from Z"), at a
-            small fraction of the cost of a full search, so a large or
-            long-bodied result set never risks the model's context window.
-            Set ``include_bodies=True`` ONLY when the question needs what a
-            message actually SAYS — summarizing, quoting, or answering about
-            body content — since fetching bodies costs far more context and
-            can force the tool to shrink or refuse a large request.
+            By DEFAULT (``include_bodies`` omitted/``None``) this AUTO-DECIDES
+            from ``query`` (#3773): a pure filter query (only ``from:``/
+            ``is:``/``label:``/date operators, no bare term) returns METADATA
+            ONLY — id/subject/from/to/date/label_ids/snippet, no body text —
+            which is all a counting or listing question needs ("how many
+            emails from X", "list the emails from Y this week"). A query that
+            also carries a bare term (e.g. ``contract renewal deadline``) only
+            matched because Gmail searched subject+body text, so it is
+            escalated to full bodies automatically — but only when the hits
+            are already narrowed to a handful (``SEARCH_AUTO_BODY_CAP``); a
+            content-shaped query that still matches many messages stays
+            metadata-only rather than risking the model's context window. You
+            do not need to set ``include_bodies`` yourself for a content
+            question — form a query that includes the actual words you're
+            looking for and the tool escalates on its own. Set
+            ``include_bodies=True``/``False`` explicitly only to override the
+            auto-decision (e.g. force bodies for a pure ``from:`` filter, or
+            force metadata-only despite a bare term) — an explicit value is
+            never capped by ``SEARCH_AUTO_BODY_CAP``.
 
             When ``include_bodies=True``, a large ``max_results`` may shrink
             every hit's body TOGETHER (never independently, never dropping a
@@ -2908,10 +2993,13 @@ class ReadToolsMixin:
                 ``max_results`` — say "at least N", never present N as the
                 total). REPORT EVERY ENTRY in ``messages`` individually — do
                 not summarize, merge, or quietly drop entries from a long
-                list. With ``include_bodies=False`` each entry has no ``body``
-                field at all — never claim to quote or summarize content from
-                a metadata-only result; re-call with ``include_bodies=True``
-                (narrowing the query first) if content is actually needed.
+                list. When each entry has no ``body`` field at all, never
+                claim to quote or summarize content from a metadata-only
+                result — add the actual words you're looking for to ``query``
+                (or pass ``include_bodies=True`` explicitly) if content is
+                actually needed. ``include_bodies_auto`` is true when THIS
+                call escalated to full bodies on its own (rather than because
+                you passed ``include_bodies=True``).
                 If ``operator_retry`` is present, the literal query you
                 passed found nothing and this is the broadened operator query
                 that was retried instead — say the search was broadened
@@ -2937,6 +3025,7 @@ class ReadToolsMixin:
                 # being computed since inception.
                 truncated = False
                 operator_retry_query: Optional[str] = None
+                include_bodies_auto = False
                 for provider, backend in backends.items():
                     if len(merged) >= max_results:
                         break
@@ -2961,6 +3050,9 @@ class ReadToolsMixin:
                         )
                         continue
                     truncated = truncated or bool(result.get("truncated"))
+                    include_bodies_auto = include_bodies_auto or bool(
+                        result.get("include_bodies_auto")
+                    )
                     if result.get("operator_retry"):
                         operator_retry_query = result["operator_retry"]
                     for msg in result.get("messages", []):
@@ -2985,6 +3077,7 @@ class ReadToolsMixin:
                     "count": len(messages),
                     "truncated": truncated,
                     "operator_retry": operator_retry_query,
+                    "include_bodies_auto": include_bodies_auto,
                 }
                 if mailbox_errors:
                     out["mailbox_errors"] = mailbox_errors
@@ -3151,6 +3244,14 @@ class ReadToolsMixin:
             a global verdict ("nothing needs you") from a partial one. When
             ``degraded`` is true or ``mailbox_errors`` is non-empty, say
             which mailbox couldn't be scanned.
+
+            NO MESSAGE BODY IS READ for this scan (#3773) — every ``why``/
+            category/urgency signal comes from subject, sender, labels, and
+            the provider snippet alone. Never claim to quote or summarize a
+            message's actual content from this tool's output; if the user
+            asks what a specific flagged message actually says, call
+            ``get_message``/``get_thread`` on its id, or ``search_messages``
+            with the words you're looking for.
 
             The chat surface injects the triage card automatically from
             the tool result — do NOT copy, re-serialize, or paraphrase
