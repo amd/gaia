@@ -1243,6 +1243,15 @@ class LemonadeClient:
         self.active_downloads: Dict[str, DownloadTask] = {}
         self._downloads_lock = threading.Lock()
 
+        # Wall-clock seconds the most recent ``_ensure_model_loaded`` call
+        # spent actually loading the model (None when that call found the
+        # model already resident, so no load happened). Lemonade's own
+        # ``/stats`` never reports load time — this is why cold-load ttft
+        # was silently mis-reported as the warm generation-only figure
+        # (#2924). Reset at the top of every ``_ensure_model_loaded_locked``
+        # call so a later warm call never leaks a stale value.
+        self._last_model_load_seconds: Optional[float] = None
+
         # Set logging level based on verbosity
         if not verbose:
             self.log.setLevel(logging.WARNING)
@@ -3471,11 +3480,18 @@ class LemonadeClient:
     def _ensure_model_loaded_locked(self, model: str) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
+        # Reset every call: only set below when THIS call actually performs a
+        # load, so a warm call (model already resident) never reports a
+        # stale load duration from an earlier cold call (#2924).
+        self._last_model_load_seconds = None
+
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
         if self.ctx_size_override is not None:
+            _pin_load_start = time.monotonic()
             self._ensure_pinned_load(model)
+            self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
         # Determine the ctx_size GAIA expects for this model. This lookup
@@ -3582,6 +3598,7 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        _load_start = time.monotonic()
         try:
             self.load_model(
                 model, auto_download=True, prompt=False, ctx_size=expected_ctx
@@ -3597,6 +3614,10 @@ class LemonadeClient:
                 f"~/.cache/lemonade/server.log), or run `gaia init` to "
                 f"(re)install it."
             ) from e
+        # Recorded only after a successful load — a failed/cancelled load
+        # raises above and never reaches here, so it can't be misattributed
+        # as ttft on a request that never got a response.
+        self._last_model_load_seconds = time.monotonic() - _load_start
 
         # Print model ready message
         try:
@@ -4079,11 +4100,24 @@ class LemonadeClient:
         """
         Get performance statistics from the last request.
 
+        Lemonade's ``/stats`` only ever measures generation (prefill + decode)
+        — it has no notion of the model-load latency that precedes a cold
+        request, so a cold turn's ``time_to_first_token`` alone silently
+        undercounts (#2924). When THIS client itself loaded the model for
+        the request whose stats these are, ``model_load_seconds`` (measured
+        client-side around the ``/load`` call) is merged in so a caller can
+        attribute that latency instead of dropping it.
+
         Returns:
-            Dict containing performance statistics
+            Dict containing performance statistics, plus ``model_load_seconds``
+            when a model load happened as part of the most recent request.
         """
         url = f"{self.base_url}/stats"
-        return self._send_request("get", url)
+        stats = self._send_request("get", url)
+        if isinstance(stats, dict) and self._last_model_load_seconds is not None:
+            stats = dict(stats)
+            stats["model_load_seconds"] = self._last_model_load_seconds
+        return stats
 
     def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
         """
