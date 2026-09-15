@@ -203,6 +203,17 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                             >View scorecard</a></>
                                         )}
                                     </div>
+                                    {agent.eval_score_version && (
+                                        // The scorecard is only regenerated on a fresh eval, not on
+                                        // every release, so it commonly lags the package version
+                                        // shown above (#2965) — say which version it measured.
+                                        <div className="agent-detail-meta-label" style={{ marginTop: 2 }}>
+                                            measured on v{agent.eval_score_version}
+                                            {agent.version && agent.version !== agent.eval_score_version && (
+                                                <> (current: v{agent.version})</>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

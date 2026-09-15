@@ -149,6 +149,12 @@ export interface AgentInfo {
     eval_scorecard_url?: string;
     /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
     eval_score?: number;
+    /**
+     * Agent version the scorecard was actually measured at (#2965) — the
+     * scorecard is only regenerated on a fresh eval, not on every release, so
+     * this is often behind `version`. Absent when none published/parseable.
+     */
+    eval_score_version?: string;
 }
 
 /** Derived card state for the Agent Hub (issue #1097). */
