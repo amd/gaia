@@ -175,14 +175,14 @@ class TestKillProcessByPort:
         assert result["success"] is True
         assert "9001" in result["message"]
 
-    def test_no_listener_reports_failure(self, mocker):
+    def test_no_listener_is_successful_noop(self, mocker):
         mocker.patch("gaia.cli.listeners_on_port", return_value=[])
         terminate = mocker.patch("gaia.cli.terminate_pid")
 
         result = kill_process_by_port(80)
 
         terminate.assert_not_called()
-        assert result["success"] is False
+        assert result["success"] is True
         assert "No process is listening on port 80" in result["message"]
 
     def test_invalid_port_is_rejected_before_any_lookup(self, mocker):

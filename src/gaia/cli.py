@@ -4550,7 +4550,7 @@ def kill_process_by_port(port):
         return {"success": False, "message": f"Could not inspect port {port}: {e}"}
 
     if not listeners:
-        return {"success": False, "message": f"No process is listening on port {port}"}
+        return {"success": True, "message": f"No process is listening on port {port}"}
 
     killed = []
     refused = []
