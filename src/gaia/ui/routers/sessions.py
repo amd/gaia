@@ -38,6 +38,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["sessions"])
 
 
+def _is_gaia_config_error(exc: Exception) -> bool:
+    """True if exc is a GaiaConfigError.
+
+    Checked by isinstance first; falls back to matching the exception
+    class's qualified name so this still works if gaia.config ever ends up
+    imported under two different module identities (seen once in CI, not
+    yet root-caused) — a plain isinstance/except-clause match silently
+    took the generic branch instead of this one.
+    """
+    if isinstance(exc, GaiaConfigError):
+        return True
+    exc_type = type(exc)
+    return (
+        f"{exc_type.__module__}.{exc_type.__qualname__}"
+        == "gaia.config.GaiaConfigError"
+    )
+
+
 class _SystemSseEmitter:
     """Fan-out SSE broadcaster for system-level UI events."""
 
@@ -106,14 +124,15 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         return session_to_response(session)
-    except GaiaConfigError as e:
-        logger.error("Failed to create session: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="Failed to create session. Check server logs for details.",
+            detail=(
+                str(e)
+                if _is_gaia_config_error(e)
+                else "Failed to create session. Check server logs for details."
+            ),
         )
 
 
@@ -198,7 +217,9 @@ async def update_session(
             current_model = (existing or {}).get("model")
             try:
                 configured_default = resolved_default_model()
-            except GaiaConfigError as e:
+            except Exception as e:
+                if not _is_gaia_config_error(e):
+                    raise
                 raise HTTPException(status_code=500, detail=str(e))
             is_default_model = current_model in (
                 None,
