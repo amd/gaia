@@ -48,11 +48,25 @@ example paths with paths on your machine:
 | Understand a document | “Summarize ~/Documents/report.pdf and identify the main assumptions.” |
 | Explore data | “Read ~/Documents/sales.csv and show total sales by region.” |
 | Find code | “Index ~/projects/my-app and find where configuration is loaded.” |
+| Transcribe a meeting | “Transcribe ~/Recordings/meeting.mp4 and extract the action items.” |
+| Generate an image | “Create a landscape illustration and save it to ~/Pictures.” |
 | Save a preference | “Remember that I prefer concise answers.” |
 
 Check the returned evidence and tool results before relying on an answer. A tool
 may need a model, connector, or installed dependency; GAIA reports that requirement
 when it cannot complete the task.
+
+## Understand the verification footer
+
+The final answer can include a **Verification:** line derived from tools
+that ran during the turn. `verified` means the recognized tests, lint checks,
+or builds ran and passed; `partially verified` means at least one check ran, but a check failed or another
+remained blocked; `unverified` means no recognized check ran. A refused command is reported
+as not run. Reading a file or producing a summary alone does not count as a test.
+
+This line describes the checks GAIA observed, not independent proof that every
+claim in the answer is correct. Inspect the named checks and their scope when
+reviewing a code change.
 
 ## Capabilities
 

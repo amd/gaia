@@ -202,18 +202,20 @@ class MyResearchAgent(CodeIndexToolsMixin, Agent):
         self.register_code_index_tools()
 ```
 
-State is initialised lazily — calling `_init_code_index_state` is optional but recommended so the agent honours the repo path you intended.
+State is initialized lazily. Call `_init_code_index_state` to set an explicit
+starting repository. Its optional `ceiling_paths` lists the roots within which
+the agent may select repositories; by default the only root is `repo_path`.
+For a custom agent working across sibling repositories, supply their common
+workspace root (or each allowed repository) as the ceiling before registering
+tools. Indexing a second repository does not narrow that original boundary.
+Search and clear operate on the currently selected repository, not a combined
+multi-repository index. A standalone `CodeIndexSDK` instance stays tied to its
+configured repository.
 
 `CodeIndexToolsMixin` is also registered in `KNOWN_TOOLS["code_index"]` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) for dynamic composition when scaffolding agents — see the [custom-agent guide](/sdk/core/custom-agents).
 
 ## Privacy and safety
 
-- All embeddings are generated locally by Lemonade Server.
+- Embeddings go to the configured Lemonade server. Use a local server to keep source chunks on this machine. Cloud chat can still receive retrieved code as conversation context.
 - Sensitive filenames are skipped during discovery: `.env`, `.env.*`, SSH private keys, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`.
-- The SDK uses `gaia.security.PathValidator` to keep file reads scoped to the configured `repo_path`, and the `index_codebase` tool refuses any `repo_path` that isn't a sub-path of the agent's original root.
-
-## Roadmap
-
-- [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper exposing the index to external code assistants.
-- [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.
-- [#871](https://github.com/amd/gaia/issues/871) — Verilog / VHDL parsers.
+- The SDK uses `gaia.security.PathValidator` to keep file reads scoped to the configured `repo_path`, and the `index_codebase` tool checks requested repositories against the mixin's configured `ceiling_paths`.

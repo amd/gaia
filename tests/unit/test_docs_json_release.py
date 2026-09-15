@@ -104,6 +104,15 @@ def test_navigation_has_no_duplicate_pages(docs_config):
     assert not {page: count for page, count in counts.items() if count > 1}
 
 
+def test_navigation_pages_exist(docs_config):
+    missing = [
+        page
+        for page in _navigation_pages(docs_config["navigation"])
+        if not (REPO_ROOT / "docs" / f"{page}.mdx").is_file()
+    ]
+    assert not missing, f"Navigation references missing pages: {missing}"
+
+
 def test_redirects_have_unique_sources_and_existing_destinations(docs_config):
     redirects = docs_config["redirects"]
     assert len({r["source"] for r in redirects}) == len(redirects)

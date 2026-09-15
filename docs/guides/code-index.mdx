@@ -5,14 +5,14 @@ icon: "magnifying-glass-code"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/code_index/`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/) and [`src/gaia/agents/code_index/tools/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code_index/tools/mixin.py)
+  **Source Code:** [`src/gaia/code_index/`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/) and [`src/gaia/agents/tools/code_index_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/code_index_tools.py)
 </Info>
 
 <Note>
   **Looking for the API?** See the [Code Index SDK Reference](/sdk/sdks/code-index) for `CodeIndexSDK`, `CodeIndexConfig`, and `CodeIndexToolsMixin`.
 </Note>
 
-GAIA's Code Index gives you fast semantic search over a repository without sending source to the cloud. It parses files into symbol-level chunks, embeds them via Lemonade Server on AMD NPU/GPU hardware, and stores them in a local FAISS index for sub-second queries.
+GAIA's code index finds source files by meaning. It parses code into chunks, embeds them through your configured Lemonade server, and stores a FAISS index on disk. Use a local Lemonade server to keep embedding requests on your machine; cloud chat can still receive retrieved code as context.
 
 The index is exposed two ways:
 
@@ -26,34 +26,28 @@ The index is exposed two ways:
 | Aspect | Details |
 |--------|---------|
 | **Languages parsed** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++ |
-| **Embeddings** | Local AMD NPU/GPU via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
+| **Embeddings** | Via the configured Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
 | **Vector store** | FAISS `IndexFlatL2` |
 | **Cache** | `~/.gaia/code_index/<repo-hash>/` (atomic writes; incremental on file-hash) |
-| **Privacy** | All processing local; sensitive files (`.env`, `.pem`, `.key`, …) auto-excluded |
+| **Privacy** | Sensitive filenames (`.env`, `.pem`, `.key`, …) excluded; inference location follows your server configuration |
 
 ## Setup
 
-Install the `[rag]` extras (FAISS + numpy live there):
+For a Python installation, add the RAG dependencies:
 
 ```bash
-uv pip install -e '.[rag]'
+uv pip install "amd-gaia[rag]"
+gaia init
 ```
 
-Start Lemonade Server so embeddings can be generated:
+On Linux, append `--extra-index-url https://download.pytorch.org/whl/cpu` to the
+install command. From a source checkout, use `uv pip install -e ".[rag]"` with
+the same Linux option. Native terminal users can follow the setup checks in
+[the Terminal guide](/guides/terminal-hub).
 
-```bash
-lemonade-server serve
-```
-
-<Note>
-The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. A cached index (under `~/.gaia/code_index/`) records the model it was built with: re-indexing rebuilds every embedding with the new model, and searching a stale index fails loudly with a model-mismatch error until you rebuild.
-</Note>
-
-If FAISS or numpy are missing at runtime you'll see exactly:
-
-```
-code_index dependencies missing. Install with: pip install -e '.[rag]'
-```
+The configured Lemonade server must serve the embedding model. An index records
+which model created it; after changing models, rebuild before searching. Matching
+vector dimensions alone do not make embeddings from two models interchangeable.
 
 ## Using it from the flagship agent
 
@@ -72,18 +66,16 @@ whenever the agent is in a repository that has no index, so by the time a
 semantic search matters the index is often already there. Set
 `GAIA_PROJECT_MAP_AUTO_INDEX=0` to keep indexing entirely manual.
 
-### Example interaction
+Ask for a concrete repository and question:
 
+```text
+Index ~/projects/my-app and find where authentication errors are handled.
 ```
-User: Find all the places we handle authentication errors.
 
-Agent: [calls search_code_index with query="authentication error handling"]
-
-Results:
-- src/gaia/agents/base/agent.py:145 — handle_error()
-- src/gaia/llm/lemonade_client.py:89 — auth retry logic
-- tests/unit/test_auth.py:23 — test_auth_error_recovery
-```
+Review the returned paths and source before acting on a result. You can then ask
+to index another repository within the agent's allowed roots. This switches the
+active index; it does not search both repositories together. `get_index_status`
+shows which repository is active.
 
 Custom agents compose `CodeIndexToolsMixin` directly in their class declaration; it's also registered in `KNOWN_TOOLS["code_index"]` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) for dynamic resolution. For SDK-level composition see the [SDK reference](/sdk/sdks/code-index).
 
@@ -108,7 +100,7 @@ for r in sdk.search("how does the agent handle errors", top_k=5):
 
 # Inspect and manage
 print(sdk.get_status())
-sdk.clear_index()
+# Call sdk.clear_index() only when you want to remove this cached index.
 ```
 
 See the [Code Index SDK Reference](/sdk/sdks/code-index) for the full `CodeIndexConfig`, `CodeIndexSDK`, and data-type reference.
@@ -122,47 +114,20 @@ See the [Code Index SDK Reference](/sdk/sdks/code-index) for the full `CodeIndex
     └── index.faiss      # FAISS IndexFlatL2 vectors
 ```
 
-Both files are written atomically (temp file + rename). The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and search returns empty until you re-index.
+Both files are written atomically (temp file + rename). The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and search raises a `ValueError` until you re-index.
 
-## Privacy
+## Privacy and troubleshooting
 
-All processing is local. No source code is sent to external services. Sensitive filenames are skipped automatically: `.env`, `.env.*`, `.htpasswd`, SSH private keys (`id_rsa`, `id_ed25519`, …), and any `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`.
+Sensitive filenames such as `.env`, SSH private keys, and certificate/key files
+are excluded during discovery. Check the configured file scope and server before
+indexing a private repository.
 
-## Testing
+- **Missing dependencies:** install `amd-gaia[rag]` in the environment running the agent.
+- **Embedding service unavailable:** complete `gaia init` and inspect Lemonade's model status.
+- **Wrong repository:** ask for `get_index_status`, then index the intended absolute path.
+- **Path refused:** choose a repository within the agent's allowed roots. Custom agents
+  can configure `ceiling_paths`; see [mixin integration](/sdk/sdks/code-index#agent-integration-codeindextoolsmixin).
+- **Embedding model changed:** rebuild the repository index before searching again.
 
-The code-index stack has unit-test coverage in `tests/unit/test_code_index*.py` — **64 tests** spanning the SDK (cache layout, incremental re-index, atomic writes), the parsers (Python AST + the regex backends for JS/TS/Go/Rust/Java/C/C++), and the `CodeIndexToolsMixin` tool surface.
-
-Run them with:
-
-```bash
-uv run python -m pytest tests/unit/test_code_index.py tests/unit/test_code_index_sdk.py tests/unit/test_code_index_mixin.py tests/unit/test_code_index_parsers.py -xvs
-```
-
-Retrieval-quality benchmarks (precision/recall against curated queries) are tracked under [#868](https://github.com/amd/gaia/issues/868).
-
-## Real-world benchmark
-
-Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model:
-
-| Metric | Value |
-|--------|-------|
-| Source files discovered | 973 |
-| Semantic chunks indexed | 23,974 |
-| Languages parsed | Python, JavaScript, TypeScript, Go, Rust, Java, C/C++ |
-| Embedding model | `user.embeddinggemma-300m-GGUF` (via Lemonade Server) |
-| Wall-clock (remote, ngrok) | ~51 min |
-
-```python
-from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
-
-sdk = CodeIndexSDK(CodeIndexConfig(repo_path=".", embedding_model="user.embeddinggemma-300m-GGUF"))
-sdk.index_repository()
-```
-
-The 51-minute figure is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
-
-## Roadmap
-
-- [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper, so external code assistants can drive the index.
-- [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.
-- [#871](https://github.com/amd/gaia/issues/871) — Verilog / VHDL parsers for hardware-design codebases.
+For API fields, parser behavior, and cache controls, see the
+[SDK reference](/sdk/sdks/code-index).
