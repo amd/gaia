@@ -169,16 +169,24 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (12 tools). Deliberately a smaller share of the registry than
+# Always-on set (14 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
-# skill discovery, and exactly two universal entry points -- ``read_file`` and
-# ``query_documents`` -- that answer "what is in this file / what do my
-# documents say" without a round trip. Everything else, shell and the web
-# included, is a bundle: it arrives when the turn asks for it. Both entry
-# points are bundle members too, so a file-shaped or document-shaped turn pulls
-# their whole cohort in with them.
+# skill discovery, and three universal entry points -- ``read_file``,
+# ``write_file``/``edit_file``, and ``query_documents`` -- that answer "what is
+# in this file / change this file / what do my documents say" without a round
+# trip. Everything else, shell and the web included, is a bundle: it arrives
+# when the turn asks for it. All three file entry points are bundle members
+# too, so a file-shaped or document-shaped turn pulls their whole cohort in
+# with them.
+#
+# write_file/edit_file were promoted here from the file_edit bundle (#3752):
+# editing is the flagship's core job, and semantic selection lost them to
+# memory/skill/RAG tools on 5 of 7 measured coding requests -- CORE is
+# cap- and score-exempt, so promotion removes the failure mode outright
+# rather than trying to out-rank it. Doc profile is unaffected: DOC_CORE_TOOLS
+# keeps read_file only, because the doc profile is document Q&A, not editing.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
@@ -189,6 +197,8 @@ FULL_CORE_TOOLS = frozenset(
         "search_past_conversations",
         # universal entry points
         "read_file",
+        "write_file",
+        "edit_file",
         "query_documents",
         # loop control -- autonomous-turn signalling
         "set_loop_state",
