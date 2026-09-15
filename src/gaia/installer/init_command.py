@@ -1812,6 +1812,11 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
+                from gaia.llm.lemonade_client import resolve_ctx_size
+
+                min_ctx = resolve_ctx_size(
+                    model=model_id, device="npu" if self.profile == "npu" else "gpu"
+                )
                 # Force unload if already loaded to ensure recipe_options are saved
                 if client.check_model_loaded(model_id):
                     client.unload_model()
@@ -1952,7 +1957,12 @@ class InitCommand:
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
             if min_ctx and not self.skip_chat_model:
+                from gaia.llm.lemonade_client import resolve_ctx_size
                 from gaia.llm.lemonade_manager import LemonadeManager
+
+                min_ctx = resolve_ctx_size(
+                    device="npu" if self.profile == "npu" else "gpu"
+                )
 
                 self.console.print()
                 self.console.print(
