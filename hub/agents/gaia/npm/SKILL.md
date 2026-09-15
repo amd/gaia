@@ -378,6 +378,11 @@ come back as a structured error naming the file and the reason, so do not plan a
 integration around reading a credential file or editing a shell rc — perform
 those from your own code.
 
+The agent also gets its own scratch directory for throwaway scripts and
+intermediate files, so they stay out of the user's project. It is created per
+agent under the system temp dir, deleted when the agent closes, and is the only
+part of the temp dir the agent may use.
+
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
 `--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
