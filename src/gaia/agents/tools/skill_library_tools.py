@@ -487,7 +487,8 @@ class SkillLibraryToolsMixin:
                 Dictionary with the loaded skill's tier, the tools it
                 registered, and how many prompt tokens the loaded set now
                 costs. A "warning" key appears when the skill's instructions
-                depend on tools this agent does not have.
+                depend on tools this agent does not have, or on a command that
+                is not installed here.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.manager import ROOT_CLAUDE_IMPORT
@@ -555,6 +556,14 @@ class SkillLibraryToolsMixin:
                     "instructions that use them cannot run — say so instead of "
                     "improvising a substitute."
                 )
+
+            from gaia.skills import unavailable_binaries
+
+            missing = unavailable_binaries(skill.parsed_permissions())
+            if missing:
+                payload["unavailable_commands"] = [p.binary for p in missing]
+                notes = " ".join(p.unavailable_note() for p in missing)
+                payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
             return payload
 
         @tool

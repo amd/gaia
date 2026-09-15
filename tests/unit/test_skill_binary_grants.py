@@ -144,6 +144,29 @@ def test_a_missing_binary_fails_loudly_and_names_how_to_install_it(monkeypatch):
     assert BINARY_POLICIES["gh"].install_hint in message
 
 
+def test_a_missing_binary_with_a_substitute_does_not_refuse_the_skill(monkeypatch):
+    """pytest usually lives in a project's virtualenv, not on PATH. Refusing the
+    whole coding skill for it blocked 42 of 48 loads in one benchmark run."""
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert resolve_binary_policies(permissions, skill_name="coding") == []
+    assert [p.binary for p in unavailable_binaries(permissions)] == ["pytest"]
+    assert BINARY_POLICIES["pytest"].substitute
+    assert not BINARY_POLICIES["gh"].substitute, "gh has no substitute, so it refuses"
+
+
+def test_an_installed_binary_is_never_reported_unavailable(monkeypatch):
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr(
+        "gaia.skills.binaries.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert unavailable_binaries(permissions) == []
+
+
 def test_a_present_binary_resolves(monkeypatch):
     monkeypatch.setattr(
         "gaia.skills.binaries.shutil.which", lambda name: f"/usr/bin/{name}"
@@ -361,12 +384,35 @@ class _Shell(ShellToolsMixin):
     """A bare mixin host — no path validator, no agent."""
 
 
-def test_a_policed_binary_is_refused_without_a_grant():
+def test_a_policed_binary_is_refused_without_a_grant(monkeypatch):
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
     assert error is not None
     assert "shell:execute:gh" in error["error"]
+
+
+def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeypatch):
+    """The coding skill can be loaded with pytest off PATH. Telling the model to
+    "load that skill first" then sends it into a reload that changes nothing."""
+    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
+
+    error = ShellToolsMixin._validate_command(
+        "pytest", ["pytest", "-q", "tests/"], "pytest -q tests/"
+    )
+    assert error is not None
+    assert "not installed here" in error["error"]
+    assert "load that skill first" not in error["error"]
+    assert BINARY_POLICIES["pytest"].substitute in error["error"]
+
+    error = ShellToolsMixin._validate_command(
+        "gh", ["gh", "issue", "list"], "gh issue list"
+    )
+    assert error is not None
+    assert BINARY_POLICIES["gh"].install_hint in error["error"]
 
 
 def test_a_granted_binary_passes_the_shell_gate():

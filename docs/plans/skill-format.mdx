@@ -385,10 +385,14 @@ Four rules make the grant safe enough to bridge before the sandbox exists:
    write rejects `--body-file` (uploads a local file's contents), `--editor`
    (hangs a stdin-less agent), and `--web`. The flag is checked before the
    action, so a write carrying one never reaches a prompt.
-4. **The binary must be installed.** `load_skill` checks `PATH` and refuses with
-   the install command when it is missing. A skill that loads without the tool it
-   documents produces confident answers from no data — the failure this bridge
-   exists to prevent.
+4. **The binary must be installed, unless something substitutes for it.**
+   `load_skill` checks `PATH` and refuses with the install command when the
+   binary is missing. A skill that loads without the tool it documents produces
+   confident answers from no data — the failure this bridge exists to prevent.
+   The exception is a policy that names a `substitute` (today only `pytest`,
+   which usually lives in a virtualenv rather than on `PATH`). That skill loads
+   without the grant, and its prompt says the command is unavailable and what to
+   do instead — for `pytest`, call `pytest.main` from `execute_python_file`.
 
 The existing shell guardrails still apply on top: command chaining and
 redirection (`&&`, `;`, `>`, backticks, `$()`) are rejected before the policy
