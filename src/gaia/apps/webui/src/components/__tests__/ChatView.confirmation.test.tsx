@@ -29,7 +29,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import { useNotificationStore, selectActivePermissionPrompt } from '../../stores/notificationStore';
+import { useNotificationStore, selectActivePermissionPrompt, ALWAYS_ALLOW_TOOLS_KEY } from '../../stores/notificationStore';
 import type { AgentInfo, Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
 
@@ -77,6 +77,7 @@ let capturedCallbacks: api.StreamCallbacks | null = null;
 
 beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     capturedCallbacks = null;
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
@@ -258,5 +259,38 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
 
         expect(mockedApi.confirmTool).not.toHaveBeenCalled();
         expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
+    });
+});
+
+
+describe('engineering permission requests require a fresh user decision', () => {
+    for (const type of ['tool_confirm', 'permission_request'] as const) {
+        it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code'])(
+            `${type} ignores legacy always-allow for %s`, async (tool) => {
+                localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, JSON.stringify([tool]));
+                await driveSend();
+                act(() => {
+                    capturedCallbacks!.onAgentEvent({
+                        type, tool, confirm_id: 'fresh-decision', args: { context: 'selected evidence' },
+                    } as unknown as StreamEvent);
+                });
+                expect(mockedApi.confirmTool).not.toHaveBeenCalled();
+                expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
+                const prompt = selectActivePermissionPrompt(useNotificationStore.getState());
+                expect(prompt?.id).toBe('fresh-decision');
+                expect(prompt?.tool).toBe(tool);
+                expect(prompt?.toolArgs).toEqual({ context: 'selected evidence' });
+            }
+        );
+    }
+
+    it('does not let corrupt legacy preferences suppress a fresh engineering prompt', async () => {
+        localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, '{broken');
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'permission_request', tool: 'share_engineering_context', confirm_id: 'fresh' } as unknown as StreamEvent);
+        });
+        expect(selectActivePermissionPrompt(useNotificationStore.getState())?.id).toBe('fresh');
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
     });
 });

@@ -1,0 +1,306 @@
+---
+title: "Harness Engineering Mode"
+description: "MVP: a developer-mode skill and local MCP context bridge to Claude Code and Codex; a path to autonomous GAIA engineering later"
+---
+
+# Harness Engineering Mode
+
+**Status:** Architecture scope with an initial skill + MCP implementation. See the implementation boundary below; broader planned capabilities are not release claims.
+**Updated:** September 15, 2026.
+**Implementation base:** `481a0972` on refreshed `origin/main`; development and tests run in a dedicated worktree. The original architecture review inspected `70de05022b12f0076e522c19b83f478b17196340`.
+
+## Implementation boundary (this PR)
+
+The initial implementation provides developer-mode-only skill/tools and a local
+stdio MCP bridge, explicit recipient-bound **snapshots** with expiry/revocation,
+managed clone/worktrees, diagnosis/code-scope approval, native app handoff, and
+reported preview/result records. The user-facing workflow is documented in
+[Improve GAIA while using it](/guides/harness-engineering).
+
+Repeated iteration uses individually approved feedback snapshots. **Live grants,
+automatic event/trace capture, verified preview supervision/controls, a dedicated
+job-card UI, packaged build-manifest generation, and automatic release/PR lookup
+are design extensions below, not implemented capabilities.** Existing build metadata
+is reported when verifiable, otherwise unknown. The native coding app performs
+upstream research and candidate process launches; GAIA labels its returned evidence
+as reported. Persistent candidate activation and stable updates remain separate.
+
+The shared library keeps future internal execution possible. Only Claude Code and
+Codex are wired as native backends. Self-assessment and internal fixing remain v2.
+
+## 1. Decision: skill + MCP is the MVP
+
+The developer uses GAIA for daily work and can hand a problem to their existing Claude Code or Codex Mac app with the context needed to investigate it. The developer then interacts directly with that coding app, tests candidate GAIA builds, and iterates. GAIA supplies the context and tools; the coding app supplies editing, permissions, conversation, diffs, and implementation.
+
+**MVP:** a developer-mode GAIA skill, a local MCP bridge, approved task/evidence sharing, managed source/worktree helpers, and native coding-app handoff. Only Claude Code and Codex integrations are implemented. The first pilot is research tasks on this Mac, including feedback on the TUI, browser WebUI, and agent behavior.
+
+**V2:** GAIA automatically assesses friction and initiates proposals; GAIA's internal coding capabilities can diagnose, implement, and revise fixes. Build the shared operations so these can be called internally later, but do not implement an autonomous assessor, internal coding engine, or always-on orchestrator for MVP.
+
+The larger product loop remains: daily use → investigation → fix → interactive validation → reviewed contribution → maintainer merge → released fix → stable update. The MCP MVP establishes the handoff and iteration path; it does not implement every part of that loop. Stable auto-update is a separate issue, [#3898](https://github.com/amd/gaia/issues/3898).
+
+## 2. Confirmed boundaries
+
+| Area | Decision |
+|---|---|
+| Audience | Developers only; explicitly enabled mode |
+| Behavioral instructions | Bundled skill loaded at startup only in developer mode |
+| MVP trigger | Developer reports friction or asks for an improvement; automatic self-assessment is v2 |
+| Coding backends | Existing Claude Code and Codex; no agent installation or credential migration |
+| Interaction | Developer can work directly in the native coding app; GAIA need not mirror its conversation |
+| Data sharing | Disclose recipient and selected data; ask permission before sharing private context |
+| Public output | Generalize/anonymize private evidence in code, fixtures, issues, PRs, screenshots, logs and history |
+| Source | Official GAIA repository cloned into GAIA cache during developer initialization; no supplied repository option |
+| Code changes | Always in Git worktrees; never the running installation or shared source cache |
+| Diagnosis | Reproduce and investigate model/configuration causes before allocating an implementation worktree |
+| Iteration | Separate candidate TUI/WebUI/agent process, developer feedback, repeat as needed |
+| Publication | One approved contribution scope, with outgoing content review in the coding app; maintainers merge |
+| Updates | Stable auto-update handled separately; previews do not replace the stable installation |
+
+## 3. Simple developer journey
+
+1. **Enable developer mode.** GAIA loads the skill, prepares/reuses the source cache, and offers to connect Claude Code or Codex. Ordinary chat remains usable while setup runs or if setup fails.
+2. **Connect once.** Add the local GAIA MCP server to the chosen app using supported configuration. Verify it in that app with a synthetic task. Existing login remains owned by the app.
+3. **Report a problem.** From GAIA TUI or WebUI: “These citations are wrong,” “This panel is hard to use,” or “Help improve this.” GAIA summarizes expected behavior and collects available evidence locally.
+4. **Approve context sharing.** Preview the recipient, task, message/file/log categories and duration. Choose one snapshot or a bounded live share of this task. No private context is sent merely because the app is connected.
+5. **Open the coding app.** Use a supported app-specific handoff where available. The coding session reads the approved context through MCP. A prefilled prompt is not a submitted/running task; show the actual handoff status.
+6. **Investigate before coding.** The coding agent builds a reproduction against the installed harness, investigates configuration/model/service issues, and checks existing releases/issues/PRs. A verified model/configuration remedy can finish without a patch.
+7. **Prepare a worktree if needed.** After the developer accepts a code scope, the bridge creates a worktree from the cached official repo and pinned base. The coding agent follows repository rules and implements/tests there.
+8. **Try and iterate.** The coding agent builds and launches a separate candidate agent/TUI/WebUI. The developer uses it and provides feedback in the coding app or GAIA. New shared feedback is available through MCP; each tested revision is identified.
+9. **Review and contribute.** The developer reviews tests/diffs and public content in the native app. Record issue/PR links in GAIA. A backend report is not proof of merge or test success.
+10. **Return to daily use.** GAIA shows last observed status and can refresh the PR/release state. The separate updater later adopts the released fix under its own opt-in and safe-restart policy.
+
+The native app owns its session, permission prompts and revision dialogue. GAIA does not kill the entire app when a handoff ends, duplicate its UI, or promise automatic execution whenever context changes.
+
+## 4. Architecture
+
+```text
+GAIA TUI / WebUI + developer-mode skill
+                 |
+      local approved context and job records
+                 |
+      GAIA engineering library ← local stdio MCP server
+                 |                         ↑
+       source cache / worktrees      Claude Code / Codex
+                                           |
+                               native developer interaction
+                                           |
+                               separate candidate preview
+```
+
+### Components
+
+- **Skill:** The conversational procedure and decisions; no enforcement or process management by prompt alone.
+- **Shared library:** Context grants, immutable evidence snapshots, atomic job records, source/worktree operations, result and preview metadata.
+- **MCP adapter:** Thin stdio wrapper over the library; launched by the coding app. No new persistent daemon or HTTP control plane.
+- **App handoff adapter:** Detect/open the selected application through supported mechanisms. Separate from MCP.
+- **Existing coding/preview tools:** Native app tools do implementation and process launching. Reuse GAIA's existing TUI/WebUI control MCP where useful, bound to the explicit preview instance.
+
+Keep library operations independent of concrete agent, TUI, and MCP code. V2's internal GAIA coder calls the same operations without MCP. Backend registration must not automatically instantiate a GAIA coder in MVP.
+
+### What MCP does and does not do
+
+MCP lets a coding app retrieve GAIA context and invoke exposed helpers. It does not provide a universal API for creating desktop sessions, pushing chat messages, opening windows, or resuming a specific app conversation. Context updates are pulled when the agent calls the server; notifications are optional hints if supported, not a guarantee of another agent turn.
+
+For Claude, an official desktop link can open a Code composer with a folder and prefilled prompt; the developer confirms the folder and sends it. Use only a generic instruction/job identifier in the link, not private traces or secrets. [Claude desktop link documentation](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link).
+
+Codex supports MCP and separately documents app-server session APIs. App-server capability alone does not establish that an existing Mac desktop app will display/control a created session. Validate desktop handoff during the pilot; where unsupported, clearly offer opening the app and selecting the prepared task rather than inventing a deep link. [Codex MCP](https://developers.openai.com/codex/mcp/), [Codex app-server](https://developers.openai.com/codex/app-server/).
+
+Local CLI help/version checks found Claude Code 2.1.271 and app-bundled Codex 0.154.0-alpha.6.2. No login, live inference, app connection, or handoff test has run. Test MCP in the actual desktop coding surface; configuration support can differ from CLI and between app versions.
+
+## 5. Existing code and integration points
+
+| Inspected source | Reuse / change |
+|---|---|
+| `hub/agents/gaia/python/gaia_agent/agent.py` | Flagship composition; add mode-gated skill/tool integration |
+| `src/gaia/agents/base/agent.py` | Skill loading and per-turn filtering; add conditional residency without global activation |
+| `tui/internal/cli/root.go` | Existing `--dev` is diagnostic output; preserve it and add an explicit engineering-mode opt-in |
+| `tui/internal/catalog/catalog.go`, `client/factory.go` | Flagship is a persistent subprocess; retain that path |
+| `tui/internal/event/trace.go` | Existing trace capture; collect selected events rather than assuming raw traces are always present |
+| `src/gaia/mcp/servers/tui_mcp.py` | Existing TUI control bridge; use explicit preview `GAIA_TUI_HOME` and verified instance identity |
+| `src/gaia/mcp/servers/agent_ui_mcp.py` | Existing WebUI API wrapper; never default candidate controls to production |
+| `src/gaia/ui/server.py:create_app` | Accepts `db_path` and `webui_dist`; useful preview seam, not complete state isolation |
+| `tui/internal/cli/version.go`, `.github/workflows/build_tui.yml` | TUI already embeds version/commit/date |
+| `src/gaia/version.py`, flagship `packaging/freeze.py` | Extend build-time identity into frozen harness; do not identify it by runtime cwd |
+| `src/gaia/daemon/lock.py`, `paths.py` | Reuse/extract advisory-lock and atomic-write patterns, not daemon startup |
+
+Proposed source organization: `src/gaia/engineering/` containing `models.py`, `store.py`, `evidence.py`, `repository.py`, and `handoff.py`; `src/gaia/mcp/servers/engineering_mcp.py` as a thin adapter. Add a small preview module only for functionality the native app/existing GAIA tools cannot provide reliably. Avoid separate duplicate implementations of these operations in each UI.
+
+## 6. Developer-mode skill and startup
+
+Draft: [gaia-harness-engineering/SKILL.md](skills/gaia-harness-engineering/SKILL.md). It is stored outside active discovery until the runtime gate exists. Proposed shipped location: `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`.
+
+- Resolve explicit developer mode before the first interactive turn. Proposed flag: `--developer-mode`; existing `--dev`/`--debug` retain logging semantics.
+- Load the skill exactly once and keep it resident in that enabled session despite semantic skill filtering. Do not add it to unconditional `skills:` or the global default skill set.
+- Normal mode excludes its body, discovery, manual loading, skill-set overrides and restored activation. Host code enforces capability checks; a user skill or model assertion cannot enable the mode.
+- Record the bundled skill digest. Missing/invalid instructions make engineering visibly unavailable, while ordinary chat remains available. Learned overlays must not change consent or publication rules.
+- Persist backend choice and MCP setup, not automatic authorization to share later tasks. Restart mode comes from the explicit launch/configuration, not a saved skill list.
+
+On developer initialization, prepare a visible background bare clone of `https://github.com/amd/gaia.git` in GAIA cache. Reuse it on subsequent starts, fetch with bounded timeouts/freshness metadata, and serialize clone/fetch with an advisory lock. Incomplete clones use temporary destinations; never publish a partially initialized cache. Do not prune refs protecting active jobs.
+
+Detect existing Mac apps/CLIs, offer selection, preserve their authentication, and test a synthetic MCP read/report roundtrip. Do not auto-install agents, scrape credentials, or silently choose another backend. Startup clone does not authorize implementation. Offline/missing-Git/login failures remain visible and do not block ordinary work.
+
+## 7. Context sharing and privacy
+
+**The bridge controls its own returned data and helper actions; it is not a sandbox around the native coding app.** Native agents retain their existing host permissions, plugins and provider routing. An approved evidence packet limits what GAIA supplies, not everything the app could read separately. Disclose this during connection; do not promise complete filesystem or network confinement.
+
+### Sharing modes
+
+- **Snapshot:** exact approved messages, files, logs and metadata.
+- **Live task share:** explicit recipient, source task, data categories and lifetime. New events in that scope can be read without repeated permission prompts. Stop sharing immediately blocks future bridge reads. Another task/category/recipient requires a new decision.
+
+Expose sharing state in both GAIA surfaces. A registered MCP client has no task access until a grant exists. Bind grants to paired client registration, task and allowed evidence IDs, not a model-supplied client name or guessed job ID. Pilot authorization is to the selected app; do not claim cryptographic isolation between conversations inside that app. No remote endpoint or broad private-job listing in MVP.
+
+Context should include selected user corrections, expected/actual behavior, tool arguments/results, available error traces, relevant settings, model identity, running component commits, reproduction inputs and selected screenshots. Missing traces are marked unavailable. Never fabricate a trace, copy credential stores, or dump the entire environment/home directory “for completeness.”
+
+Evidence stays outside Git, in owner-only local storage. Capture locally before export; redact credentials from logs and explicitly select private content before returning it. Recheck grants on each read/reconnect, including already paginated data. Revocation cannot retract data already delivered or provider-side copies. Limit retention; show the impact of deleting evidence needed by an active investigation.
+
+The native coding workflow reviews all public code, fixtures, commit history, issue/PR text, comments, logs and images. Generalize sensitive examples and create a clean unpublished export branch when needed, without force-pushing shared history. Automated scanning assists review but does not prove anonymization. GAIA cannot enforce publication restrictions on independent native tools; it must not claim it can.
+
+## 8. Data and MCP contracts
+
+Use small versioned JSON records with atomic writes, per-job locks, expected revisions and idempotent operation IDs. SQLite, a streaming event service and a publication outbox are unnecessary for this MVP.
+
+```text
+~/.gaia/engineering/jobs/<id>/job.json
+~/.gaia/engineering/jobs/<id>/evidence/      # approved snapshots, outside Git
+~/.gaia/engineering/jobs/<id>/revisions/    # checks, feedback, preview identities
+~/.gaia/engineering/jobs/<id>/recovery/     # preserved work/patches
+~/.gaia/cache/engineering/repos/gaia.git
+~/.gaia/cache/engineering/worktrees/<id>/
+~/.gaia/cache/engineering/previews/<id>/
+```
+
+Resolve paths through GAIA's configured storage root. IDs are generated safe segments; no model-provided absolute evidence paths. Cleanup preserves active/retained worktrees, recovery files, and published references. Corrupt records fail visibly instead of being replaced with empty jobs.
+
+| Record | Required information |
+|---|---|
+| `EngineeringJob` | Schema/revision, task ID, selected backend, scope, diagnosis, optional worktree/base, last reported result, PR references |
+| `ShareGrant` | Paired client ID, task/job, snapshot/live mode, categories/evidence IDs, approved time range, expiry/revocation |
+| `EvidenceItem` | Sequence/ID, category, source turn/tool, content digest, sensitivity, local reference, capture availability |
+| `BuildIdentity` | Component/version, full source commit or explicit unknown, artifact identity, dirty/composite metadata, protocol |
+| `PreviewRevision` | Source/tree and build digests, target, process/control identity, state root, checks, feedback/acceptance |
+
+Proposed MCP tools:
+
+| Tool | Behavior and boundary |
+|---|---|
+| `get_context(job_id, after_seq)` | Approved messages/feedback/metadata since cursor; same grant checks for resources and tools |
+| `get_evidence(job_id, evidence_id)` | Bounded approved trace/file content; no arbitrary filesystem read |
+| `report_diagnosis(job_id, report)` | Record reproduction/experiments and recommendation; cannot mint code-change approval |
+| `prepare_worktree(job_id, operation_id, expected_revision)` | Require recorded accepted code scope; return worktree/branch pinned to a valid base |
+| `register_preview(job_id, revision)` | Validate registered worktree/build identity and job-owned process endpoint before exposing preview controls |
+| `report_result(job_id, result)` | Store check/artifact/PR references as reported claims, not automatically verified success |
+
+Preview start/stop/read tools can wrap existing control helpers if required; accept only a registered target/recipe, not arbitrary privileged shell strings. No bridge tool approves its own disclosure, publishes, merges, or installs a candidate. Approval is recorded through GAIA's user decision surface; contributor actions remain in the native app.
+
+Library operation boundaries should be transport-neutral. A minimal adapter interface is:
+
+```python
+from dataclasses import dataclass
+from typing import Literal, Protocol
+
+@dataclass(frozen=True)
+class HandoffRequest:
+    job_id: str
+    context_revision: int
+    working_directory: str
+    generic_prompt: str  # no private payload or credentials in URLs/argv
+
+@dataclass(frozen=True)
+class HandoffResult:
+    state: Literal["opened", "requires_user_action", "unsupported", "failed"]
+    session_id: str | None
+    detail: str
+
+class CodingAppAdapter(Protocol):
+    def detect(self) -> dict: ...
+    def open(self, request: HandoffRequest) -> HandoffResult: ...
+```
+
+This is a proposed interface, not runtime code. Internal GAIA coding in v2 can consume the same job/evidence/worktree operations through a different executor. Do not equate an opened window with a started or completed task.
+
+## 9. Diagnosis, provenance and source handling
+
+Before any implementation worktree, the selected coding agent can investigate in diagnostic scratch storage. Record a minimal repeatable input, expected/actual behavior, installed harness identity, resolved model/backend, relevant generation/tool/context limits and error evidence.
+
+Check model suitability, configuration/authentication, service health, tool behavior and missing capabilities. A small model is a hypothesis, not proof. Controlled comparisons change one variable where possible; repeat stochastic trials. Explain resource/cost/privacy consequences before a model switch. Successful non-code remediation is a complete investigation outcome, with no forced issue or patch.
+
+Reproduction uses synthetic/read-only fixtures. “Investigate” does not authorize replaying a failed send, purchase, deletion or production write. If a live mutation is essential, obtain specific test-target authorization.
+
+The TUI already embeds a Git commit; the inspected flagship version handlers expose package/API versions. Embed full build-time component identities in frozen harness artifacts and expose them through a structured response. Never use the developer's current directory's `git rev-parse` to identify a running binary. Mixed/dirty builds need a reconstructible source mapping; otherwise offer a known released baseline and reproduce again, keeping uncertainty explicit.
+
+Before new coding, use generalized upstream queries to distinguish:
+
+- Fix in compatible stable release: update/reproduce instead of duplicating work.
+- Merged but unreleased fix: wait or explicitly preview; not a stable update.
+- Matching open PR: follow/test/contribute with coordination.
+- Existing issue without implementation: reuse it after readiness checks.
+- No verified match or unavailable lookup: state evidence/freshness and uncertainty.
+
+Pin the intended base and use a dedicated worktree for all edits, tests, builds and export revisions. If a desktop app automatically creates another worktree, register and verify its actual path/common Git directory/base instead of assuming it edited the supplied folder. Never share a mutable branch between active jobs or repoint a global editable Python install. Refresh duplicate/frozen-path checks before publishing.
+
+## 10. Interactive previews and visibility
+
+The coding agent uses its native shell/preview tools and existing GAIA controls to build and spawn an updated **agent, TUI or browser WebUI** in a separate process. A custom supervisor is not required. Add a small job-scoped launcher only where existing tools cannot provide reliable instance ownership/stop behavior.
+
+Each preview has a revision, source/tree digest, component build identities, isolated state, model/config, process start identity and feedback. Snapshot build inputs so later edits do not silently change the running version. New changes create a new revision and invalidate prior acceptance. Test results and developer acceptance are distinct.
+
+- **Agent:** new process and private test context; no production memory/connectors by default.
+- **TUI:** separate PTY/terminal, explicit candidate binary and agent; unique `GAIA_TUI_HOME`; never consume the original TUI's stdin or target its control endpoint.
+- **WebUI:** separately bound loopback backend plus built frontend, explicit database/config/cache, separate browser profile/context. Different ports alone do not isolate cookies. Disable tunnels and production OAuth callbacks. Validate process/endpoint identity before presenting the URL.
+
+Verify every state path—`create_app(db_path, webui_dist)` alone does not relocate everything. Refuse a preview if it cannot keep production state untouched. Private fixture copies need consent. Keep production mutations/schedules/credentials disabled; explicitly approved test accounts are separate. If local inference would evict the daily model, queue the test or ask to pause the other session.
+
+Developer feedback can be entered in the native app or GAIA; approved live sharing delivers it when the coding agent next calls MCP. Bind it to the tested revision. The developer can Open preview, Stop, Restart, Send feedback, and Accept revision using existing surfaces where possible. A successful headless launch is not interactive validation: test the real terminal/browser experience.
+
+GAIA shows a compact job card with selected app, sharing state, diagnosis, worktree, last observed result, preview and PR/release links. Detailed tool activity/diffs remain in the coding app. Show “Handed off; last update …” if live status is unavailable. Sanitize terminal control sequences, label stale evidence, and never infer “tests passed” or “merged” from model prose or process exit. Stop sharing and stopping a preview are separate from closing the native coding session.
+
+On MCP/app disconnect, retain job artifacts. Track job-owned preview PID plus start identity, never kill by stale PID alone. Reattach to a recorded session where supported; never resume the unrelated “latest” session. Avoid claiming GAIA can terminate a process tree launched outside its ownership; report that the native app must stop it when necessary.
+
+## 11. Contributions and updates
+
+The developer and native coding agent handle review iterations under one approved contribution scope, with review of outgoing content there. Repository instructions, tests/evals, frozen paths, review chain and human merge remain mandatory. Review comments cannot authorize private data disclosure or expand scope silently.
+
+GAIA records reported PR references and verifies repository/remote state on refresh or return. Track diagnosis, native handoff, preview revision, contribution and release adoption separately. A merged PR is not a released fix; a closed-unmerged PR is not success. MVP does not implement unattended review-response polling or recreate inactive coding sessions.
+
+Stable auto-update is separately scoped in [#3898](https://github.com/amd/gaia/issues/3898). Connect release manifests to fixing commits or verified equivalent patches, then verify the running component identities after adoption and rerun a safe reproduction. Respect paused updates and pins.
+
+For simplicity, MVP local validation uses separate preview processes. The production installation changes only via the separate release updater. Persistent installation of unreleased local candidates is deferred; it requires sealed artifacts, rollback and migration compatibility, not a worktree-backed editable install. Preview launch is an explicit decision and never an in-place self-modification.
+
+## 12. Implementation slices and acceptance
+
+| Slice | Work | Exit evidence |
+|---|---|---|
+| 1 — skill + connection | Mode-gated skill, app detection, supported MCP setup, synthetic roundtrip | Both actual Mac coding apps retrieve/report synthetic context; normal mode cannot load engineering skill/tools |
+| 2 — context | Shared library/store/grants, TUI/WebUI evidence capture, MCP reads | Snapshot/live sharing correct; revocation, wrong-job requests, reconnect, missing traces and concurrent writes covered |
+| 3 — diagnosis/handoff | Guided diagnosis, build identity, upstream checks, cached repo/worktree helper, app open path | Configuration/model case resolves without worktree; real code case opens correct registered worktree and context |
+| 4 — iteration | Reuse preview/control tools, job revision/feedback/results | Developer tries agent/TUI/WebUI fixes and requests a second revision; no production-state writes or wrong-instance control |
+| 5 — contribution return | Reported/verified PR state and release linkage | Private markers absent from reviewed outgoing artifacts; merge and release states distinguished |
+| Separate | Stable updater #3898 | Compatible release adoption, safe restart, known-good rollback, worktree preservation |
+
+Unit tests cover grant evaluation, record revisions, path resolution, event cursors, repository/worktree ownership and status classification. Integration tests use a real local MCP client and temporary Git repositories; validate request/response shape and failure behavior, not mocks that merely assert invocation. Add actual desktop-app roundtrips, terminal interaction, and WebUI browser evidence for the pilot. Run serialized relevant agent evals when prompt/tool behavior changes.
+
+Before implementation assignment, refresh the baseline, check overlapping work and stop-the-line paths, pin the UX/loading contracts and satisfy consumer-critical spec requirements if labeled. This document is an implementation scope, not proof the runtime works.
+
+### Pilot gates still requiring execution
+
+- Supported MCP configuration and handoff in both installed Mac app versions; no reliance on an undocumented desktop-control API.
+- Approved live context from both GAIA surfaces, with revocation and no unrelated-task leakage through the bridge.
+- Correct frozen build identity and safe reproduction/model comparison.
+- Worktree behavior when native apps add their own isolation.
+- Separate, usable TUI/WebUI/agent previews with complete state separation and revision tracking.
+- Publication review with seeded private evidence, and eventual stable-release adoption through the separate updater.
+
+## 13. V2 extension points and exclusions
+
+V2 can add automatic detection of repeated unmet requests, corrections, tool failures and output-quality problems. Use the same evidence records to create a proposal; diagnosis and private-sharing consent still precede implementation. Rate-limit/deduplicate suggestions and honor dismissal. Do not ship a continuous assessor in MVP under the label of a skill.
+
+V2's internal GAIA coder consumes the same job/evidence/worktree/result interface and must meet comparative diagnostic/coding/iteration benchmarks. It does not inherit the fragile daily-chat model implicitly. A future automated executor may need stronger worker isolation and lifecycle control; add that only when implementing unattended execution, not to the native developer handoff.
+
+MVP excludes a new orchestration daemon, custom IPC control plane, publication proxy, duplicate coding-agent UI, recursive agents, automatic merge, coding-agent installation, production-data migrations, Electron installer engineering, and persistent unreleased candidate installation. It makes no claim to sandbox the developer's native coding app or to guarantee anonymization with a scanner.
+
+## 14. Review summary
+
+The earlier architecture introduced unnecessary supervisor, streaming and authorization machinery. Independent architecture/skill reviews and the simplified product boundary resolved the scope as a **context bridge plus native app workflow**.
+
+Retained safeguards are the ones that matter to this design: consent before bridge disclosure, honest native-permission boundaries, diagnosis before worktree allocation, immutable evidence/revision identity, explicit preview instance/state, no production edits, truthful reported-versus-verified status, and separate stable updates. Remaining app integration and preview feasibility gates above must pass before calling the feature production-ready.

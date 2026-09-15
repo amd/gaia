@@ -1118,6 +1118,20 @@ def dispatch_query(
     the LLM and are never recorded as chat turns (see _record_turn's docstring
     on why a turn's own answer is what gets kept).
     """
+    setup = getattr(agent, "_engineering_setup", None)
+    if isinstance(setup, dict):
+        setup_status = setup.get("status", "ready")
+        if setup_status != getattr(agent, "_engineering_reported_setup_status", None):
+            if setup_status == "error":
+                message = "Developer setup failed: " + str(
+                    setup.get("error", "unknown error")
+                )
+            elif setup_status == "starting":
+                message = "Developer source-cache setup is still running. Daily tasks remain available."
+            else:
+                message = "Developer source cache is ready. Ask for engineering status to connect your coding app."
+            _write({"type": "status", "message": message}, out)
+            agent._engineering_reported_setup_status = setup_status
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
         return
@@ -1158,6 +1172,12 @@ def build_parser() -> "argparse.ArgumentParser":
         "transport only ever speaks JSON lines, so it changes nothing.",
     )
     parser.add_argument(
+        "--developer-mode",
+        action="store_true",
+        default=os.environ.get("GAIA_DEVELOPER_MODE") == "1",
+        help="Enable the developer skill and consent-based coding-app handoff.",
+    )
+    parser.add_argument(
         "--dev",
         action="store_true",
         help="Developer mode: DEBUG-level logging to the log file instead of "
@@ -1192,7 +1212,11 @@ def main(argv: Optional[list] = None) -> int:
         # it the turn is silent for its whole length and the finished text lands
         # in one frame — the transport could always carry tokens, the agent just
         # never produced any.
-        config_kwargs: Dict[str, Any] = {"silent_mode": True, "streaming": True}
+        config_kwargs: Dict[str, Any] = {
+            "silent_mode": True,
+            "streaming": True,
+            "developer_mode": args.developer_mode,
+        }
         if args.model:
             config_kwargs["model_id"] = args.model
         if args.use_claude:
@@ -1210,6 +1234,14 @@ def main(argv: Optional[list] = None) -> int:
     # the wire, read as part of whichever turn the child's first Send()
     # triggers (the transport doesn't scan stdout until then), so it always
     # lands before that turn's own events.
+    if args.developer_mode:
+        _write(
+            {
+                "type": "status",
+                "message": "Developer mode enabled. Preparing source cache; ask for engineering status to connect Claude Code or Codex. Context is shared only after explicit approval.",
+            },
+            out,
+        )
     if not _write_if_wire_alive(_model_state_event(agent), out):
         # Model load is the longest window the parent has to leave in, and it
         # is gone — there is nobody left to serve.

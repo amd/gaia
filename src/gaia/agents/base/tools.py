@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
-_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
+_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout", "registry")
 
 
 # Annotation -> registry type name. Anything absent stays "unknown", which
@@ -148,6 +148,7 @@ def tool(
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
+    registry: dict[str, dict] | None = None,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -165,6 +166,10 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
+
+        registry: An explicit instance-local destination. When omitted, register
+            globally for existing callers. Passing an empty mapping is honored;
+            no entry is ever written to the global registry in this mode.
 
     Returns:
         The original function or decorator, unchanged
@@ -200,7 +205,8 @@ def tool(
             params[name] = param_info
 
         # Register the tool with atomic metadata
-        _TOOL_REGISTRY[tool_name] = {
+        destination = _TOOL_REGISTRY if registry is None else registry
+        destination[tool_name] = {
             "name": tool_name,
             "description": f.__doc__ or "",
             "parameters": params,

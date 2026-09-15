@@ -2392,6 +2392,10 @@ Examples:
         help="Display plots interactively in addition to saving images",
     )
 
+    from gaia.engineering.cli import add_parser as add_engineering_parser
+
+    add_engineering_parser(subparsers)
+
     # Add MCP (Model Context Protocol) command
     mcp_parser = subparsers.add_parser(
         "mcp",
@@ -2400,6 +2404,15 @@ Examples:
     )
     mcp_subparsers = mcp_parser.add_subparsers(
         dest="mcp_action", help="MCP action to perform"
+    )
+
+    engineering_mcp = mcp_subparsers.add_parser(
+        "engineering", help="Developer-only local coding-app context bridge"
+    )
+    engineering_mcp.add_argument("--developer-mode", action="store_true")
+    engineering_mcp.add_argument("--root", type=Path)
+    engineering_mcp.add_argument(
+        "--backend", choices=["claude", "codex"], required=True
     )
 
     # MCP start command
@@ -3206,6 +3219,14 @@ def main():
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    if args.action == "engineering":
+        from gaia.engineering.cli import run as run_engineering
+
+        try:
+            run_engineering(args)
+        except (ValueError, PermissionError, OSError, RuntimeError) as exc:
+            parser.exit(1, f"Engineering: {exc}\n")
+        return
 
     # Check if action is specified
     if not args.action:
@@ -7214,7 +7235,16 @@ def handle_mcp_command(args):
         )
         return
 
-    if args.mcp_action == "start":
+    if args.mcp_action == "engineering":
+        from gaia.mcp.servers.engineering_mcp import main as engineering_main
+
+        argv = ["--backend", args.backend]
+        if args.root is not None:
+            argv.extend(["--root", str(args.root)])
+        if args.developer_mode:
+            argv.append("--developer-mode")
+        engineering_main(argv)
+    elif args.mcp_action == "start":
         handle_mcp_start(args)
     elif args.mcp_action == "status":
         handle_mcp_status(args)

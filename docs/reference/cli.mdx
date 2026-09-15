@@ -3291,3 +3291,14 @@ Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 
 </small>
+
+## Developer engineering
+
+`gaia engineering --developer-mode` manages explicit Claude Code/Codex handoffs.
+Use `setup`, `connect <claude|codex>`, `share`, `status`, `append`, `approve-code`,
+`open`, or `revoke`; see `gaia engineering --help` and the
+[developer engineering guide](/guides/harness-engineering).
+`gaia mcp engineering --developer-mode --backend <claude|codex>` starts its local
+stdio bridge with the pairing credential supplied through its generated MCP configuration.
+Normal mode cannot start this bridge. `gaia-tui --developer-mode` enables the
+flagship skill and sharing tools; `--dev` remains diagnostic output only.
