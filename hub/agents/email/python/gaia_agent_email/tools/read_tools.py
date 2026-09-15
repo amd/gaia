@@ -3100,6 +3100,20 @@ class ReadToolsMixin:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
+            This is the DEFAULT tool for any open-ended question about what
+            in the inbox deserves attention — importance, urgency, what to
+            look at, or generic time-sensitivity that names no specific
+            meeting/invite/deadline (#2764) — regardless of the words used
+            to ask it. It is NOT limited to literal "triage"/"review"/
+            "check" phrasing. Divert to a narrower tool only when the
+            question itself narrows the target: the user's own SENT mail
+            (``check_followups`` — a different DIRECTION than this tool's
+            ``needs_you`` rows, which are inbound), a named person/thread
+            (thread/search tools), explicit calendar language (calendar
+            tools), or flagged/suspicious mail only
+            (``check_suspicious_mail``). See ``ROUTING.md`` in this package
+            for the full decision table.
+
             The result has ``kind: "email_pre_scan"`` so the chat surface
             renders the structured card component instead of plain text.
             The card's ONE worklist is ``needs_you`` (#2743) — up to
