@@ -13,9 +13,10 @@ and the single-use code is burnt for a user who did everything right.
 from __future__ import annotations
 
 import pytest
-from onboarding_fakes import FakeAgent as _FakeAgent
-from gaia.connectors import setup_routes as sr
 from gaia_agent_email.tools import setup_walkthrough as sw
+from onboarding_fakes import FakeAgent as _FakeAgent
+
+from gaia.connectors import setup_routes as sr
 
 PROVIDER = "microsoft"
 OUTLOOK_SCOPES = [
@@ -54,7 +55,9 @@ def device_flow(monkeypatch):
             "message": "Go to https://microsoft.com/devicelogin and enter ABCD-EFGH",
         }
 
-    async def poll_device_flow(provider, device_code, *, scopes, interval, expires_in, grant_agents=None):
+    async def poll_device_flow(
+        provider, device_code, *, scopes, interval, expires_in, grant_agents=None
+    ):
         state["polled"] = {
             "provider": provider,
             "device_code": device_code,
@@ -138,9 +141,7 @@ def test_grants_the_agent_after_a_successful_poll(device_flow):
     state = sw.run_device_oauth(agent, PROVIDER)
 
     assert state["account_email"] == "kalin@outlook.com"
-    assert device_flow["polled"]["grant_agents"] == {
-        "installed:email": OUTLOOK_SCOPES
-    }
+    assert device_flow["polled"]["grant_agents"] == {"installed:email": OUTLOOK_SCOPES}
     # Belt-and-suspenders explicit grant, mirroring _run_oauth's own pattern.
     assert device_flow["grants"]
     provider, agent_id, scopes = device_flow["grants"][0]
@@ -389,15 +390,141 @@ def test_a_malformed_credential_value_still_gets_the_shape_error():
     """A value that ISN'T a question (doesn't match any FAQ hint) is still
     treated as a malformed literal, not silently swallowed by the FAQ lane."""
     bogus = "xxxxxxxx-not-a-guid-at-all"
-    agent = _FakeAgent(
-        answers=["done", "done", "done", "done", bogus, _VALID_GUID]
-    )
+    agent = _FakeAgent(answers=["done", "done", "done", "done", bogus, _VALID_GUID])
 
     collected, _trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
 
     assert collected["client_id"] == _VALID_GUID
     assert sw._CLIENT_ID_SHAPE_ERROR in agent.console.info
     assert not any(bogus in m for m in agent.console.info)
+
+
+# ---------------------------------------------------------------------------
+# The Google route (#2594) — loopback sign-in, a client secret, and a
+# credential prompt that must stay hidden from the TUI's cleartext echo.
+# ---------------------------------------------------------------------------
+
+_VALID_GOOGLE_CLIENT_ID = "12345-abc.apps.googleusercontent.com"
+
+
+def test_google_walkthrough_walks_every_step_and_collects_id_and_secret():
+    steps = sr.steps_for(sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK)
+    assert [s.id for s in steps] == [
+        "project",
+        "enable_api",
+        "consent_screen",
+        "create_client",
+        "client_id",
+        "client_secret",
+    ]
+    agent = _FakeAgent(
+        answers=[
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GOOGLE_CLIENT_ID,
+            "s3cr3t",
+        ]
+    )
+
+    collected, trace = sw.run_setup_walkthrough(
+        agent, sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK
+    )
+
+    assert collected == {
+        "client_id": _VALID_GOOGLE_CLIENT_ID,
+        "client_secret": "s3cr3t",
+    }
+    assert trace[-2] == {"step_id": "client_id", "verified": True}
+    # No shape check exists for the secret — verified is never claimed for a
+    # step this driver genuinely cannot check.
+    assert trace[-1] == {"step_id": "client_secret", "verified": False}
+
+
+def test_google_client_secret_prompt_is_marked_sensitive_never_echoed():
+    agent = _FakeAgent(
+        answers=[
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GOOGLE_CLIENT_ID,
+            "s3cr3t",
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK)
+
+    secret_call = agent.console.asked[-1]
+    assert secret_call["sensitive"] is True
+    assert not any("s3cr3t" in m for m in agent.console.info)
+
+
+def test_google_client_id_prompt_is_not_sensitive():
+    """Only the secret hides — the client id is fine in cleartext."""
+    agent = _FakeAgent(
+        answers=[
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GOOGLE_CLIENT_ID,
+            "s3cr3t",
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK)
+
+    client_id_call = agent.console.asked[-2]
+    assert client_id_call["sensitive"] is False
+
+
+def test_google_client_id_shape_check_rejects_a_bad_value_without_echoing_it():
+    bogus = "not-a-google-client-id"
+    agent = _FakeAgent(
+        answers=[
+            "done",
+            "done",
+            "done",
+            "done",
+            bogus,
+            _VALID_GOOGLE_CLIENT_ID,
+            "s3cr3t",
+        ]
+    )
+
+    collected, _trace = sw.run_setup_walkthrough(
+        agent, sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK
+    )
+
+    assert collected["client_id"] == _VALID_GOOGLE_CLIENT_ID
+    assert not any(bogus in m for m in agent.console.info)
+    assert any(
+        "apps.googleusercontent.com" in m and "doesn't look like" in m
+        for m in agent.console.info
+    )
+
+
+def test_google_route_faq_is_reachable_and_confirms_the_secret_is_needed():
+    agent = _FakeAgent(
+        answers=[
+            "done",
+            "done",
+            "done",
+            "does this need a client secret?",
+            "done",
+            _VALID_GOOGLE_CLIENT_ID,
+            "s3cr3t",
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK)
+
+    route_qa = next(
+        qa for qa in sr.GOOGLE_PERSONAL.faq if "secret" in qa.question_hints
+    )
+    assert route_qa.answer in agent.console.info
 
 
 def test_credential_prompt_still_has_zero_options_with_the_faq_lane_added():
