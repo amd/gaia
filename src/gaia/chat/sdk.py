@@ -140,6 +140,33 @@ class AgentSDK:
             self.config.system_prompt,
         )
 
+    def _generate_conversation(
+        self,
+        full_prompt: str,
+        enhanced_message: str,
+        *,
+        no_history: bool = False,
+        **kwargs,
+    ):
+        """Keep custom instructions in the provider's native system channel."""
+        if not self.config.system_prompt:
+            return self.llm_client.generate(
+                full_prompt, model=self.effective_model, **kwargs
+            )
+        messages = [{"role": "system", "content": self.config.system_prompt}]
+        if not no_history:
+            for entry in self.get_formatted_history():
+                # Stored assistant prefixes can outlive a display-name change.
+                role = "user" if entry["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": entry["message"]})
+            if len(messages) > 1:
+                messages[-1] = {"role": "user", "content": enhanced_message}
+            else:
+                messages.append({"role": "user", "content": enhanced_message})
+        else:
+            messages.append({"role": "user", "content": enhanced_message})
+        return self.llm_client.chat(messages, model=self.effective_model, **kwargs)
+
     def _normalize_message_content(self, content: Any) -> str:
         """
         Convert message content into a string for prompt construction, handling structured payloads.
@@ -510,9 +537,10 @@ class AgentSDK:
                 generate_kwargs["temperature"] = self.config.temperature
 
             # Note: Retry logic is now handled at the LLM client level
-            response = self.llm_client.generate(
+            response = self._generate_conversation(
                 full_prompt,
-                model=self.effective_model,
+                enhanced_message,
+                no_history=no_history,
                 **generate_kwargs,
             )
 
@@ -584,8 +612,8 @@ class AgentSDK:
                 generate_kwargs["temperature"] = self.config.temperature
 
             full_response = ""
-            for chunk in self.llm_client.generate(
-                full_prompt, model=self.effective_model, stream=True, **generate_kwargs
+            for chunk in self._generate_conversation(
+                full_prompt, enhanced_message, stream=True, **generate_kwargs
             ):
                 full_response += chunk
                 yield AgentResponse(text=chunk, is_complete=False)
