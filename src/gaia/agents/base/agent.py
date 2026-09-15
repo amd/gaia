@@ -541,9 +541,20 @@ def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
 
 
 def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
-    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
-    value would drop all earlier tool-decision latency. None when step 1 has
-    no positive value — never a fabricated 0.0."""
+    """Turn's ttft = the FIRST step's own time_to_first_token, plus that
+    step's model-load time when the step actually cold-loaded a model.
+
+    A later step's value would drop all earlier tool-decision latency, so
+    only step 1 is ever consulted. None when step 1 has no positive
+    ``time_to_first_token`` — never a fabricated 0.0.
+
+    Lemonade's ``/stats`` measures generation only (prefill + decode); it has
+    no concept of model-load latency. Left alone, a cold turn's ttft reported
+    only the post-load prefill time — a 44.5s cold query showed ttft 7.6s,
+    the same figure a warm query reports (#2924). ``model_load_seconds`` is
+    populated client-side (see ``LemonadeClient.get_stats``) only when THIS
+    step actually loaded the model, so a warm step's ttft is unchanged.
+    """
     for entry in conversation:
         if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
             content = entry["content"]
@@ -558,14 +569,24 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
                     if isinstance(stats, dict)
                     else None
                 )
-                if (
+                if not (
                     isinstance(ttft, (int, float))
                     and not isinstance(ttft, bool)
                     and math.isfinite(ttft)
                     and ttft > 0
                 ):
-                    return float(ttft)
-                return None
+                    return None
+                load_seconds = (
+                    stats.get("model_load_seconds") if isinstance(stats, dict) else None
+                )
+                if (
+                    isinstance(load_seconds, (int, float))
+                    and not isinstance(load_seconds, bool)
+                    and math.isfinite(load_seconds)
+                    and load_seconds > 0
+                ):
+                    return float(ttft) + float(load_seconds)
+                return float(ttft)
     return None
 
 
@@ -3576,6 +3597,19 @@ Do NOT wrap conversational replies in JSON.
         out by polling ``tools.tool_cancelled()``; without that the abandoned
         worker runs to completion and a retry puts a second copy of the same
         expensive job on the same hardware (#2600).
+
+        Log isolation: the worker's log calls stay attributed to it via
+        ``AbandonedWorkerLogFilter`` (``tools.py``), which any handler wired
+        onto ``tool_cancelled()``'s thread-local flag can use to drop its
+        records after this timeout fires -- so a zombie worker's later log
+        lines cannot land in an unrelated caller's log-capture window.
+        GAIA's own root handlers (``logger.py``) get this automatically.
+
+        Shared state: this bounds log output only. A tool body that has not
+        opted into ``raise_if_cancelled()`` can still write to a DB handle,
+        cache, or other shared state after the caller gives up -- there is no
+        general mechanism here to stop that, and there isn't one planned;
+        each such tool must poll the cancellation flag around its own writes.
         """
         from gaia.agents.base.tools import set_tool_cancel_event
 
@@ -3809,16 +3843,18 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
+        # Strip whitespace before matching: a stray space fails exact match,
+        # suffix-resolve, and prefix-candidate search identically.
         # Exact name first — skill tools register with a literal hyphen
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
-        tool_name = tool_name.removesuffix("()")
+        tool_name = tool_name.strip().removesuffix("()").strip()
         if tool_name not in self._tools_registry:
             tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
-            return {"status": "error", "error": "No tool name provided"}
+            return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
         if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
@@ -4493,6 +4529,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(msg)
         return None
 
+    def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
+        """The user's message when a cloud provider refused the account itself.
+
+        Out of funds or suspended: no retry can succeed, so the turn ends as an
+        error instead of an answer.
+        """
+        from gaia.llm.providers.lemonade import LemonadeCloudAccountError
+        from gaia.ui._chat_helpers import _classify_chat_exception
+
+        classified = _classify_chat_exception(exc)
+        if isinstance(classified, LemonadeCloudAccountError):
+            return classified.user_message
+        return None
+
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -5153,6 +5203,8 @@ Do NOT wrap conversational replies in JSON.
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
+        # A refused cloud account ends the turn with nothing to verify.
+        account_refused = False
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -5699,11 +5751,23 @@ Do NOT wrap conversational replies in JSON.
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
-                            final_answer = (
-                                f"Sorry, I ran into a problem while processing your request. "
-                                f"This might be a temporary issue — try again in a moment.\n\n"
-                                f"*Technical details: {str(e)}*"
+                            # Streaming is the TUI's path; it must surface the
+                            # same typed messages the non-streaming path does.
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
                             )
+                            if typed_msg is not None:
+                                final_answer = typed_msg
+                            else:
+                                final_answer = (
+                                    f"Sorry, I ran into a problem while processing your request. "
+                                    f"This might be a temporary issue — try again in a moment.\n\n"
+                                    f"*Technical details: {str(e)}*"
+                                )
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -5854,7 +5918,13 @@ Do NOT wrap conversational replies in JSON.
                             # with the generic "try again in a moment" copy —
                             # that wrapper actively misleads users on
                             # non-retryable failures.
-                            typed_msg = self._extract_lemonade_user_message(e)
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
+                            )
                             if typed_msg is not None:
                                 final_answer = typed_msg
                             else:
@@ -7169,7 +7239,7 @@ Do NOT wrap conversational replies in JSON.
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
-        if not verification_scope_applied:
+        if not verification_scope_applied and not account_refused:
             final_answer = self._with_verification_scope(final_answer)
 
         # Return the result

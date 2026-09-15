@@ -70,9 +70,17 @@ describe('compatLevel', () => {
 });
 
 describe('mergeCatalogStatus', () => {
+    // Regression test for #2970/#3784: GET /api/agents/catalog (see
+    // gaia.hub.catalog.merge_with_registry) never sends a "version" key — only
+    // "installed_version" and "latest_version". These fixtures deliberately
+    // mirror that real wire shape (no `.version` set on the catalog side) so
+    // this test fails loudly if the mapping is ever dropped again, instead of
+    // passing against a hand-built shape the backend never produces.
     it('marks installed agents with a newer catalog version as update_available', () => {
         const installed = [agent({ id: 'chat', version: '0.1.0' })];
-        const catalog = [agent({ id: 'chat', status: 'update_available', version: '0.1.0', latest_version: '0.2.0' })];
+        const catalog = [
+            agent({ id: 'chat', status: 'update_available', installed_version: '0.1.0', latest_version: '0.2.0' }),
+        ];
         const merged = mergeCatalogStatus(installed, catalog);
         expect(merged[0].status).toBe('update_available');
         expect(merged[0].latest_version).toBe('0.2.0');
@@ -80,10 +88,24 @@ describe('mergeCatalogStatus', () => {
 
     it('marks matched-version agents as installed', () => {
         const installed = [agent({ id: 'chat' })];
-        const catalog = [agent({ id: 'chat', status: 'installed', version: '0.2.0', latest_version: '0.2.0' })];
+        const catalog = [
+            agent({ id: 'chat', status: 'installed', installed_version: '0.2.0', latest_version: '0.2.0' }),
+        ];
         const merged = mergeCatalogStatus(installed, catalog);
         expect(merged[0].status).toBe('installed');
         expect(merged[0].version).toBe('0.2.0');
+    });
+
+    it('wires the real installed_version wire field onto the display version', () => {
+        // No `.version` anywhere in this fixture — only the real wire fields.
+        // If mergeCatalogStatus ever goes back to reading `cat.version`, this
+        // assertion fails instead of silently passing.
+        const installed = [agent({ id: 'email' })];
+        const catalog = [
+            agent({ id: 'email', status: 'installed', installed_version: '0.6.0', latest_version: '0.6.0' }),
+        ];
+        const merged = mergeCatalogStatus(installed, catalog);
+        expect(merged[0].version).toBe('0.6.0');
     });
 
     it('leaves agents absent from the catalog untouched', () => {
