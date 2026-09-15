@@ -10,6 +10,7 @@ on:
       - 'cpp/**/*.md'
       - 'src/gaia/version.py'
       - 'util/check_doc_versions.py'
+      - 'util/validate_release_notes.py'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - 'cpp/**/*.md'
       - 'src/gaia/version.py'
       - 'util/check_doc_versions.py'
+      - 'util/validate_release_notes.py'
       - '.github/workflows/docs.yml'
 
 # Cancel in-progress runs when a new run is triggered
@@ -57,3 +59,15 @@ jobs:
           echo "Checking documentation version consistency..."
           python util/check_doc_versions.py
           echo "✅ Version consistency check passed"
+
+      # publish.yml runs this same validator against the tag, where a failure
+      # means the release is already half-cut. Run it on the PR instead.
+      - name: Validate release notes for the declared version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/gaia/version.py)
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read __version__ from src/gaia/version.py"
+            exit 1
+          fi
+          echo "src/gaia/version.py declares v${VERSION}"
+          python util/validate_release_notes.py "docs/releases/v${VERSION}.mdx" --tag "v${VERSION}"

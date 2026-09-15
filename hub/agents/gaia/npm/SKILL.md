@@ -327,13 +327,15 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Six of the agent's 67 tools mutate the machine and need explicit approval before
-they run. Four sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
-**`write_file`**, **`edit_file`**, **`run_shell_command`**, and
-**`execute_python_file`** — and the flagship adds two of its own,
-**`install_skill`** and **`remove_skill`**, because installing a skill writes
-third-party code under `~/.gaia/skills` and removing one deletes it. Everything
-else — reading, indexing, querying, web fetching, memory — runs without asking.
+Seven of the agent's 71 tools mutate the machine and need explicit approval
+before they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+**`write_file`**, **`edit_file`**, **`run_shell_command`**,
+**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
+child on Windows to draw the notification — and the flagship adds two of its
+own, **`install_skill`** and **`remove_skill`**, because installing a skill
+writes third-party code under `~/.gaia/skills` and removing one deletes it.
+Everything else — reading, indexing, querying, web fetching, memory — runs
+without asking.
 
 Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
 does not prompt. When the agent reaches one of those tools it emits a
@@ -350,7 +352,7 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those six tools.** If your integration needs
+So: **`/query` cannot run any of those seven tools.** If your integration needs
 that, drive the agent from a surface that can prompt — its stdio transport is the
 one that can, because its control channel carries an approval back to a turn
 already in flight (SPEC §5.5) — or perform the mutation yourself from your own
@@ -365,6 +367,16 @@ paths, and **the default is the user's home directory**. That is the honest scop
 for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
+
+**Being in scope is not the same as being safe, and two denylists apply inside
+it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
+`.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` —
+even in an allowed directory. Writes additionally refuse anything that executes
+on its own: shell startup files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Both
+come back as a structured error naming the file and the reason, so do not plan an
+integration around reading a credential file or editing a shell rc — perform
+those from your own code.
 
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
@@ -413,7 +425,32 @@ packaged sidecar (its CLI accepts only `--host` and `--port`), and an undeclared
 name raises naming the valid sets rather than falling back to a default. Beyond
 `gaia-voice`, do not design around a skill being on by default.
 
-## 11. Ports
+## 11. The project map — two things it costs you
+
+When the agent's working directory is a code repository, every task starts with
+a **project map** in the system prompt: the root, the directory shape, the
+likely entry points, which commands are installed, and the three platform
+differences that change command syntax. It exists so the agent stops burning
+round trips on "no such file" and "command not found".
+
+Two consequences an integrator needs to plan for:
+
+- **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
+  (1.8% of the NPU profile's 32K window), not a typical value — budget it
+  alongside `gaia-voice`'s 676.
+- **A background embedding pass on first contact with a new repository.** If
+  the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
+  map starts one in a background thread so semantic search is ready when it is
+  needed. On a large monorepo that is minutes of local embedding.
+  `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns it off.
+
+The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
+specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
+`GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
+a VCS checkout nor holds a recognised manifest gets **no map** — that is the
+designed answer, not a failure.
+
+## 12. Ports
 
 | Service | Port |
 |---|---|
@@ -425,7 +462,7 @@ Port **4001 is reserved repo-wide**: `spawnSidecar` throws a `RangeError` and
 speaks for the user's documents and memory and has no business on a LAN
 interface.
 
-## 12. Running in a server or long-lived app
+## 13. Running in a server or long-lived app
 
 - **`fetchAll` / `fetchBinary` are a build step**, not per request — network plus
   a full SHA-256 hash of a large artifact. Run once at install time.
@@ -457,7 +494,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The six gated tools are unreachable **over `/query`** — the agent itself can
+  The seven gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
@@ -479,7 +516,9 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up.
+  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  has no sidecar entry for this agent, which reads as a UI with a dead agent
+  rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
@@ -546,3 +585,13 @@ finish (or close an idle session) and retry the same `/query`.
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.
+
+## TUI inference providers
+
+The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
+Keys are entered in a masked field and sent directly to local Lemonade's runtime
+auth API, never as agent queries. `/model` lists supported discovered cloud and
+downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+when available. Cloud chat sends conversation history to the selected provider;
+embeddings remain on Lemonade. The status event names the actual provider and
+marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

@@ -5,6 +5,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -392,6 +393,248 @@ class TestWebClientDownload:
                 # Should not contain path traversal
                 assert ".." not in result["filename"]
                 assert "/" not in result["filename"]
+
+
+class TestWebClientDownloadDoesNotOverwrite:
+    """A download must never clobber a file the user already has.
+
+    The filename can come straight from a remote, attacker-controlled
+    Content-Disposition header, so `credentials.json` or `report.pdf` from a
+    hostile page must not be able to replace the user's own file -- and a
+    download refused by policy must not have already destroyed it.
+    """
+
+    def setup_method(self):
+        self.client = WebClient()
+
+    def teardown_method(self):
+        self.client.close()
+
+    def _response(self, body=b"hostile payload", disposition=None):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        headers = {"Content-Type": "application/octet-stream"}
+        if disposition:
+            headers["Content-Disposition"] = disposition
+        mock_response.headers = headers
+        mock_response.iter_content.return_value = [body]
+        return mock_response
+
+    def _patched(self, client, response):
+        return (
+            patch.object(client, "validate_url"),
+            patch.object(client, "_rate_limit_wait"),
+            patch.object(client._session, "get", return_value=response),
+        )
+
+    def test_refuses_to_overwrite_existing_file(self):
+        """An existing file survives a download that would land on it."""
+        response = self._response(disposition='attachment; filename="report.pdf"')
+        v, r, g = self._patched(self.client, response)
+        with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+            existing = Path(tmpdir) / "report.pdf"
+            existing.write_bytes(b"the user own report")
+
+            with pytest.raises(ValueError, match="Refusing to overwrite"):
+                self.client.download("https://evil.example/x", save_dir=tmpdir)
+
+            # Original content intact; no stray .part left behind.
+            assert existing.read_bytes() == b"the user own report"
+            assert [p.name for p in Path(tmpdir).iterdir()] == ["report.pdf"]
+
+    def test_content_disposition_cannot_target_an_existing_file(self):
+        """The remote header picks the name; it still cannot overwrite."""
+        response = self._response(disposition='attachment; filename="credentials.json"')
+        v, r, g = self._patched(self.client, response)
+        with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+            secret = Path(tmpdir) / "credentials.json"
+            secret.write_bytes(b'{"token": "real-secret"}')
+
+            with pytest.raises(ValueError, match="Refusing to overwrite"):
+                self.client.download("https://evil.example/x", save_dir=tmpdir)
+
+            assert secret.read_bytes() == b'{"token": "real-secret"}'
+
+    def test_policy_screen_runs_before_the_file_is_created(self):
+        """on_path_resolved refuses BEFORE any bytes hit the disk."""
+        response = self._response(disposition='attachment; filename="blocked.json"')
+        seen = {}
+
+        def screen(dest_path):
+            seen["path"] = dest_path
+            seen["existed_at_screen_time"] = dest_path.exists()
+            raise ValueError("blocked by security policy")
+
+        v, r, g = self._patched(self.client, response)
+        with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(ValueError, match="blocked by security policy"):
+                self.client.download(
+                    "https://evil.example/x",
+                    save_dir=tmpdir,
+                    on_path_resolved=screen,
+                )
+
+            assert seen["path"].name == "blocked.json"
+            assert seen["existed_at_screen_time"] is False
+            assert list(Path(tmpdir).iterdir()) == []
+
+    def test_successful_download_leaves_no_part_file(self):
+        """The .part file is renamed into place, not left alongside."""
+        response = self._response(disposition='attachment; filename="ok.bin"')
+        v, r, g = self._patched(self.client, response)
+        with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+            result = self.client.download("https://example.com/x", save_dir=tmpdir)
+            assert Path(result["path"]).read_bytes() == b"hostile payload"
+            assert [p.name for p in Path(tmpdir).iterdir()] == ["ok.bin"]
+
+    def test_existing_part_file_is_reported_not_deleted(self):
+        """A .part in the way is an actionable error, not a silent takeover.
+
+        Deleting it would destroy a concurrent download's in-flight file, so
+        the cleanup path must only remove the .part this call created.
+        """
+        response = self._response(disposition='attachment; filename="x.bin"')
+        v, r, g = self._patched(self.client, response)
+        with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+            # Another download is mid-flight under the same name.
+            inflight = Path(tmpdir) / "x.bin.part"
+            inflight.write_bytes(b"another download's bytes")
+
+            with pytest.raises(ValueError, match="already"):
+                self.client.download("https://example.com/x", save_dir=tmpdir)
+
+            # The other download's file is untouched.
+            assert inflight.read_bytes() == b"another download's bytes"
+
+    def test_aborted_download_leaves_nothing_behind(self):
+        """A download aborted mid-stream leaves no truncated file."""
+        client = WebClient(max_download_size=10)
+        response = self._response(
+            body=b"x" * 50, disposition='attachment; filename="big.bin"'
+        )
+        v, r, g = self._patched(client, response)
+        try:
+            with v, r, g, tempfile.TemporaryDirectory() as tmpdir:
+                with pytest.raises(ValueError, match="exceeded max size"):
+                    client.download("https://example.com/x", save_dir=tmpdir)
+                assert list(Path(tmpdir).iterdir()) == []
+        finally:
+            client.close()
+
+
+class TestDownloadFileToolScreensBeforeWriting:
+    """download_file screens the destination before the write, not after.
+
+    The old order downloaded first and reacted to a blocked filename by
+    deleting the file -- and only when a _path_validator was attached, so a
+    mixin composed without one kept the overwritten file.
+    """
+
+    def _agent_with_tools(self, validator):
+        from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+        class MockAgent(BrowserToolsMixin):
+            def __init__(self):
+                self._web_client = MagicMock()
+                self._path_validator = validator
+                self._tools = {}
+
+        registered = {}
+
+        def mock_tool(atomic=True):
+            def decorator(func):
+                registered[func.__name__] = func
+                return func
+
+            return decorator
+
+        with patch("gaia.agents.base.tools.tool", mock_tool):
+            agent = MockAgent()
+            agent.register_browser_tools()
+        return agent, registered
+
+    def test_blocked_filename_is_refused_without_writing(self):
+        """A blocked destination is rejected via the pre-write screen."""
+        validator = MagicMock()
+        validator.is_path_allowed.return_value = True
+        # The directory is fine; the FILENAME is what gets blocked.
+        validator.is_write_blocked.side_effect = lambda p: (
+            (True, "sensitive filename: credentials.json")
+            if p.replace("\\", "/").endswith("credentials.json")
+            else (False, "")
+        )
+        agent, tools = self._agent_with_tools(validator)
+
+        captured = {}
+
+        def fake_download(url, save_dir, filename=None, on_path_resolved=None):
+            captured["screen"] = on_path_resolved
+            # WebClient calls the screen once it has resolved the name, before
+            # it creates the file.
+            on_path_resolved(Path(save_dir) / "credentials.json")
+            raise AssertionError("download must not proceed past the screen")
+
+        agent._web_client.download.side_effect = fake_download
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = tools["download_file"]("https://evil.example/x", save_to=tmpdir)
+
+        assert callable(captured["screen"])
+        assert "Error" in result
+        assert "blocked by security policy" in result
+
+    def test_allowed_filename_passes_the_screen(self):
+        """An ordinary filename is not blocked."""
+        validator = MagicMock()
+        validator.is_path_allowed.return_value = True
+        validator.is_write_blocked.return_value = (False, "")
+        agent, tools = self._agent_with_tools(validator)
+
+        def fake_download(url, save_dir, filename=None, on_path_resolved=None):
+            on_path_resolved(Path(save_dir) / "report.pdf")
+            return {
+                "path": str(Path(save_dir) / "report.pdf"),
+                "size": 2048,
+                "content_type": "application/pdf",
+                "filename": "report.pdf",
+            }
+
+        agent._web_client.download.side_effect = fake_download
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = tools["download_file"]("https://example.com/x", save_to=tmpdir)
+
+        assert "Downloaded: report.pdf" in result
+        assert "Error" not in result
+
+    def test_screen_is_passed_even_without_a_path_validator(self):
+        """A mixin with no validator still gets the overwrite protection.
+
+        WebClient's own exists() check is unconditional, so an agent that
+        composes BrowserToolsMixin without a _path_validator is protected too.
+        """
+        agent, tools = self._agent_with_tools(None)
+
+        captured = {}
+
+        def fake_download(url, save_dir, filename=None, on_path_resolved=None):
+            captured["screen"] = on_path_resolved
+            # No validator -> the screen is a no-op, not an error.
+            on_path_resolved(Path(save_dir) / "anything.bin")
+            return {
+                "path": str(Path(save_dir) / "anything.bin"),
+                "size": 1,
+                "content_type": "application/octet-stream",
+                "filename": "anything.bin",
+            }
+
+        agent._web_client.download.side_effect = fake_download
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = tools["download_file"]("https://example.com/x", save_to=tmpdir)
+
+        assert callable(captured["screen"])
+        assert "Downloaded: anything.bin" in result
 
 
 # ===== BrowserToolsMixin Tests =====

@@ -22,9 +22,11 @@ on:
       - 'util/check_*.py'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
-      - '.github/workflows/lint.yml'
+      # `util/check_workflow_triggers.py` validates these, same as
+      # `check_dependabot.py` validates `.github/dependabot.yml` above.
+      - '.github/workflows/**'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/**'
@@ -36,7 +38,9 @@ on:
       - 'util/check_*.py'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
-      - '.github/workflows/lint.yml'
+      # `util/check_workflow_triggers.py` validates these, same as
+      # `check_dependabot.py` validates `.github/dependabot.yml` above.
+      - '.github/workflows/**'
   merge_group:
   workflow_dispatch:
 

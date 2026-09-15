@@ -61,6 +61,7 @@ from gaia.connectors.errors import (
     ScopeMismatchError,
     ScopeNotAllowedError,
     UnknownAgentError,
+    UnknownConnectorError,
 )
 from gaia.connectors.events import set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
@@ -83,6 +84,8 @@ from gaia.connectors.mcp_server import (
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.store import peek_connection, peek_provider_credentials
 
+from ..security import require_ui_header as _require_ui_header
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,16 +104,6 @@ forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
 # ─────────────────────────────────────────────────────────────────
 # CSRF guard (plan amendment A8)
 # ─────────────────────────────────────────────────────────────────
-
-
-def _require_ui_header(request: Request) -> None:
-    """Require ``X-Gaia-UI: 1`` header on mutating routes.
-
-    Custom request headers trigger a CORS preflight in browsers, so
-    drive-by form POSTs from malicious pages cannot forge this header.
-    """
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 def _require_mcp_server(connector_id: str) -> None:
@@ -252,6 +245,14 @@ set_emitter(_emitter)
 
 
 def _raise_http_for(exc: ConnectorsError) -> HTTPException:
+    if isinstance(exc, UnknownConnectorError):
+        return HTTPException(
+            status_code=404,
+            detail={
+                "error": "unknown_connector",
+                "connector_id": exc.connector_id,
+            },
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
@@ -978,7 +979,19 @@ async def cancel_flow_endpoint(flow_id: str) -> Response:
 async def put_grant(
     connector_id: str, agent_id: str, body: GrantRequest
 ) -> Dict[str, Any]:
-    grant_agent(connector_id, agent_id, body.scopes)
+    """Write the per-agent grant ledger for ``(connector_id, agent_id)``.
+
+    ``grants.grant_agent`` owns both authorization gates — unknown connector
+    and out-of-ceiling scopes — so this route and the CLI cannot drift. Here we
+    only translate them, via ``_raise_http_for``: 404 ``unknown_connector`` for
+    an id the catalog does not publish (matching ``_require_mcp_server`` two
+    routes down), and the same 400 ``scope_not_allowed`` body the authorize
+    route already returns.
+    """
+    try:
+        grant_agent(connector_id, agent_id, body.scopes)
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
     await _emitter.emit(
         "connector.grant.changed",
         {"connector_id": connector_id, "agent_id": agent_id, "scopes": body.scopes},
@@ -1102,32 +1115,16 @@ async def forward_connection(
     token or client secret.
 
     Required scopes are resolved from the granted agents' ``REQUIRED_CONNECTORS``
-    declarations (single source of truth). This means scope requirements
-    auto-tighten as agents add new ``ConnectorRequirement`` entries — no
-    duplication in the router.
+    declarations via the same shared ``_resolve_grant_scopes`` used by
+    ``configure``/``authorize``/``authorize-device`` (#2606) — one resolver so
+    the two surfaces cannot drift. An agent that is registered but declares no
+    requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
+    rather than silently granting it zero required scopes.
     """
+    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
     required: set[str] = set()
-    if body.grant_agents:
-        registry = getattr(request.app.state, "agent_registry", None)
-        if registry is None:
-            raise HTTPException(
-                status_code=503, detail="Agent registry not initialized"
-            )
-        by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-        unknown_agents = [nsid for nsid in body.grant_agents if nsid not in by_nsid]
-        if unknown_agents:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "unknown_agent",
-                    "agent_ids": unknown_agents,
-                },
-            )
-        for nsid in body.grant_agents:
-            reg = by_nsid[nsid]
-            for cr in reg.required_connections:
-                if cr.connector_id == provider:
-                    required.update(cr.scopes)
+    for scopes in grant_map.values():
+        required.update(scopes)
 
     try:
         summary = connections.import_forwarded_connection(

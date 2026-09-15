@@ -71,7 +71,6 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 1. **Message Handling**
    - OpenAI message format
    - System/user/assistant roles
-   - GitHub Copilot workspace extraction
    - Prompt formatting
 
 2. **Response Generation**
@@ -197,9 +196,10 @@ class ModelListResponse(BaseModel):
 ### API Endpoints
 
 ```python
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from gaia.api.local_http import build_caller_guard, cors_config
 
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -207,16 +207,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS: loopback origins only, plus GAIA_API_CORS_ORIGINS (gaia/api/local_http.py)
+app.add_middleware(CORSMiddleware, **cors_config())
+
+# Foreign browser origins -> 403; GAIA_API_KEY enforced when set
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
 )
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
@@ -497,63 +496,23 @@ async def stream_chat_completion(
 
 ## Implementation Details
 
-### Workspace Root Extraction
-
-```python
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-```
-
 ### Request Processing Flow
 
 ```python
 async def create_chat_completion(request: ChatCompletionRequest):
-    # 1. Extract workspace root (carried in the last user message's metadata).
-    workspace_root = extract_workspace_root(request.messages)
-
-    # 2. Resolve the agent. `get_agent()` takes only model_id; workspace_root
-    #    is applied afterwards (e.g., via agent.config or a per-request setter).
+    # 1. Resolve the agent. `get_agent()` takes only model_id.
     try:
         agent = registry.get_agent(request.model)
     except KeyError:
         raise HTTPException(404, f"Model not found: {request.model}")
-    if workspace_root and hasattr(agent, "set_workspace_root"):
-        agent.set_workspace_root(workspace_root)
 
-    # 3. Extract user message
+    # 2. Extract user message
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
         raise HTTPException(400, "No user message in request")
     user_message = user_messages[-1].content
 
-    # 4. Generate response
+    # 3. Generate response
     if request.stream:
         # Streaming response
         return StreamingResponse(
@@ -737,8 +696,8 @@ gaia api start
 # Background
 gaia api start --background
 
-# Custom host/port
-gaia api start --host 0.0.0.0 --port 9090
+# Custom host/port (binding beyond loopback requires GAIA_API_KEY)
+GAIA_API_KEY=$(openssl rand -hex 32) gaia api start --host 0.0.0.0 --port 9090
 
 # With debug
 gaia api start --debug --show-prompts
@@ -923,3 +882,10 @@ Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 
 </small>
+
+### VS Code client authentication
+
+Run **GAIA: Set API Key** from the VS Code command palette and enter the same value
+as the server's `GAIA_API_KEY`. The extension stores it in VS Code SecretStorage and
+uses it for model discovery and chat completions. Leave the input blank to clear
+it; cancelling preserves the existing key. Keyless loopback servers continue to work.

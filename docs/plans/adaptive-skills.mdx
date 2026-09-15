@@ -178,6 +178,19 @@ defect in shipped code, worth fixing independently of v2, and adjacent to
 
 ### Correction 4: the empirical promotion gate has no counter
 
+<Note>
+**Amended (v1 implementation).** This correction is right about `procedures` and
+wrong about GAIA. The counter it says is missing **already ships** — the email
+agent's `TrustLedger` (`hub/agents/email/python/gaia_agent_email/trust.py`)
+records real outcomes (`record_outcome`) behind a real gate
+(`is_trusted`, `min_samples=5`, `threshold=0.85`). The correct fix is therefore
+to **generalize that into `src/gaia/agents/base/`, not to build a second
+mechanism** — and the same applies to gap **B2** in the decomposition notes,
+which lists outcome attribution as uncovered. `skill_deltas` carries
+`success_count` / `attempt_count` ready to read it. v1 still gates activation on
+**user consent** rather than counters, so nothing below is load-bearing yet.
+</Note>
+
 The design's central safety claim — promote on measured track record, never on
 model judgment — rests on `success_count` / `attempt_count`. Those columns are
 **written once, at insert, from the cluster that produced the row, and never
@@ -1352,7 +1365,7 @@ settled above. What remains:
 | Counters | `success_count`/`attempt_count` written at insert, **never incremented after** | `memory_store.py:2613` (unreachable from synthesis), `skill_synthesis.py:693-704` | **Gap** — the empirical gate has no counter ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)) |
 | Success semantics | `success_count` counts tool calls that did not raise, not endorsed outcomes | `memory_store.py:2855-2858` | **Exists** — weaker signal than `MIN_SUCCESS_RATE` implies |
 | Outcome ledger shape | `TrustLedger.record_outcome(action_type, scope, positive)` | `hub/agents/email/python/gaia_agent_email/trust.py:358` | **Exists** — no link from a delta to a scope |
-| Confirmation gate | `TOOLS_REQUIRING_CONFIRMATION` ∪ agent `CONFIRMATION_REQUIRED_TOOLS` | `agent.py:152`, `hub/agents/email/python/gaia_agent_email/agent.py:453` | **Exists** — deltas inherit it, never bypass it |
+| Confirmation gate | `TOOLS_REQUIRING_CONFIRMATION` ∪ agent `CONFIRMATION_REQUIRED_TOOLS` | `agent.py:152`, `hub/agents/email/python/gaia_agent_email/agent.py:453` | **Exists** — a learned change deliberately does *not* use it; see the write-path row |
 | Tier-0 reach | 59 `@tool` registrations in the email package; **1** module consumes a learned preference | `hub/agents/email/python/gaia_agent_email/tools/read_tools.py` | **Exists** — the integration cost tier 0 hides |
 | Recall→prompt | `_build_recalled_skills_prompt` (character-offset cut) | `procedural_memory.py:334`, `:356` | **Exists** — violates atomicity ([#2676](https://github.com/amd/gaia/issues/2676)) |
 | Mid-session rebuild | `_refresh_recalled_skills` → `rebuild_system_prompt()` per turn | `procedural_memory.py:399`, `memory.py:2053` | **Exists** — breaks the KV-prefix premise |
@@ -1362,10 +1375,15 @@ settled above. What remains:
 | Local envelope | `NPU_CTX_SIZE = 32768`, `GPU_CTX_SIZE = 65536`, `DEFAULT_MODEL_NAME` | `llm/lemonade_client.py:174`, `:173`, `:124` | **Exists** |
 | Tier-0 precedent | `email_preferences` table + `set_priority_sender` | `hub/agents/email/python/gaia_agent_email/tools/preference_tools.py:63`, `:355` | **Exists** — the tier-0 worked example |
 | Empirical gate precedent | `TrustLedger(min_samples=5, threshold=0.85)`, `record_outcome` | `hub/agents/email/python/gaia_agent_email/trust.py:336`, `:358` | **Exists** — promotion shape to reuse |
-| Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | PR [#2669](https://github.com/amd/gaia/pull/2669) | **In flight — absent on `main`** |
-| Section parsing | anything that splits a `SKILL.md` body into named sections | — | **NOT FOUND** — new machinery |
+| Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | `skills/manager.py`, `agents/base/agent.py` | **Shipped** — this row previously said "absent on `main`"; that is stale |
+| Lazy skill bodies | `SkillLoader.select` collapses an off-topic loaded skill to a menu line per turn | `agents/base/skill_loader.py:62`, `:119` | **Shipped** (#2848) — an overlay is therefore only resident when its skill is |
+| Section parsing | splits a `SKILL.md` body into named, digest-anchored sections | `skills/sections.py` | **Shipped in v1** — deterministic slugs, CRLF-normalized digests, lossless round-trip |
 | Eval isolation | `GAIA_MEMORY_DISABLED` handling in `src/gaia/eval/` | — | **NOT FOUND** — pre-existing gap |
-| **`skill_deltas` / `EffectiveSkill` / delta grammar / anchorer / rebase pass / consent gate / learning budget / `gaia skill deltas`** | — | — | **Greenfield — PROPOSED** |
+| `skill_deltas` table + accessors | schema **v3 → v4**, `put_delta` / `search_deltas` / `approve_delta` / `supersede_delta` / `archive_delta` / `touch_deltas` | `memory_store.py` | **Shipped in v1** — additive, marker-bump only |
+| Delta grammar + resolver + diff | `replace_section` / `replace_snippet` / `drop_section`; `resolve_skill_body`, `validate_delta`, `preview_diff` | `agents/base/skill_deltas.py` | **Shipped in v1** — substitutive, not additive |
+| Write path | `remember_skill_lesson` — applies immediately, announces itself, `user_instruction` provenance only (derived from `Agent.turn_content_provenance`) | `agents/tools/skill_learning_tools.py` | **Shipped in v1** — the staged-consent gate below was cut; transparency + one-command undo replaced it |
+| Inspection surface | `gaia skill deltas` — list / diff / approve / revert / reset / drop-section | `skills/deltas_cli.py` | **Shipped in v1** |
+| **Rebase pass / tier-2 payloads / decay / auto-promotion on evidence** | — | — | **Deferred past v1** — anchors are recorded, never matched |
 
 ---
 

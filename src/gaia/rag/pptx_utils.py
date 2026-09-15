@@ -276,6 +276,33 @@ def _table_to_markdown(table) -> str:
 # PPTX → PDF conversion (Windows only, requires PowerPoint)
 # ---------------------------------------------------------------------------
 
+# Paths reach PowerShell through the child's environment, never as text inside
+# ``-Command``: a "'" in a filename would close the string literal and the rest
+# of the name would be parsed as PowerShell.  ``$env:`` reads are values, not
+# code, so ``PPTX_TO_PDF_PS_SCRIPT`` stays a constant no input can alter.
+PPTX_IN_ENV_VAR = "GAIA_PPTX_CONVERT_IN"
+PDF_OUT_ENV_VAR = "GAIA_PPTX_CONVERT_OUT"
+
+# MsoTriState values are raw integers to avoid needing the Office interop
+# assembly: msoTrue = -1, msoFalse = 0, ppSaveAsPDF = 32.
+PPTX_TO_PDF_PS_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'; "
+    f"$in = $env:{PPTX_IN_ENV_VAR}; "
+    f"$out = $env:{PDF_OUT_ENV_VAR}; "
+    "$ppt = New-Object -ComObject PowerPoint.Application; "
+    "try { "
+    "  $pres = $ppt.Presentations.Open($in, "
+    "    [int]-1, "  # ReadOnly = msoTrue
+    "    [int]0, "  # Untitled = msoFalse
+    "    [int]0"  # WithWindow = msoFalse
+    "  ); "
+    "  $pres.SaveAs($out, 32); "  # 32 = ppSaveAsPDF
+    "  $pres.Close(); "
+    "} finally { "
+    "  $ppt.Quit(); "
+    "}"
+)
+
 
 def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     """Convert a PPTX file to PDF using PowerPoint COM automation.
@@ -306,33 +333,20 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     pdf_name = Path(pptx_path).stem + ".pdf"
     pdf_abs = str(Path(output_dir).resolve() / pdf_name)
 
-    # PowerShell script using PowerPoint COM.  Single-quoted paths handle
-    # spaces correctly.  MsoTriState values are raw integers to avoid
-    # needing the Office interop assembly.
-    #   msoTrue = -1, msoFalse = 0, ppSaveAsPDF = 32
-    ps_script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "$ppt = New-Object -ComObject PowerPoint.Application; "
-        "try { "
-        f"  $pres = $ppt.Presentations.Open('{pptx_abs}', "
-        "    [int]-1, "  # ReadOnly = msoTrue
-        "    [int]0, "  # Untitled = msoFalse
-        "    [int]0"  # WithWindow = msoFalse
-        "  ); "
-        f"  $pres.SaveAs('{pdf_abs}', 32); "  # 32 = ppSaveAsPDF
-        "  $pres.Close(); "
-        "} finally { "
-        "  $ppt.Quit(); "
-        "}"
-    )
+    ps_env = {
+        **os.environ,
+        PPTX_IN_ENV_VAR: pptx_abs,
+        PDF_OUT_ENV_VAR: pdf_abs,
+    }
 
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
+            ["powershell", "-NoProfile", "-Command", PPTX_TO_PDF_PS_SCRIPT],
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
+            env=ps_env,
         )
 
         if result.returncode == 0 and os.path.exists(pdf_abs):

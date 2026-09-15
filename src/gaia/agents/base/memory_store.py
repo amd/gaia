@@ -5,7 +5,8 @@ MemoryStore: Unified data layer for agent memory.
 
 Agent-agnostic. Pure SQLite + FTS5. Zero imports from gaia.agents.
 
-Single database (~/.gaia/memory.db) with three tables:
+Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
+``GAIA_HOME`` relocate it) with three tables:
 - conversations: Every conversation turn, persistent across sessions
 - knowledge: Persistent facts, preferences, learnings — the "second brain"
 - tool_history: Every tool call the agent makes, auto-logged
@@ -107,16 +108,30 @@ VALID_CATEGORIES: frozenset = frozenset(
     }
 )
 
-#: Privileged categories that only an explicit memory tool / the system may
-#: write — never the LLM conversation extractor. A chat turn must not be able to
-#: mint a permission grant, a system fact, or a profile entry by emitting that
-#: category, so the extraction/consolidation paths validate against
-#: EXTRACTABLE_CATEGORIES below, not VALID_CATEGORIES.
+#: Privileged categories that only the system / an explicit admin path may
+#: write — never a chat turn. These rows lead the system prompt, so minting one
+#: from conversation is persistent prompt injection (and ``permission`` is a
+#: self-granted autonomy approval). ``store()`` and ``update()`` REJECT these
+#: unless the caller passes ``allow_privileged=True``; the paths that may are
+#: onboarding (``bootstrap.py``), system-context collection, ``gaia memory``,
+#: ``seed_bulk`` and the reviewed dashboard commits. The LLM extractor, the
+#: consolidation pass and the ``remember`` tool use EXTRACTABLE_CATEGORIES.
 _PRIVILEGED_CATEGORIES: frozenset = frozenset({"system", "profile", "permission"})
 
 #: Categories the LLM conversation extractor and consolidation pass may emit.
 #: Subset of VALID_CATEGORIES; mirrors the set advertised in _EXTRACTION_PROMPT.
 EXTRACTABLE_CATEGORIES: frozenset = VALID_CATEGORIES - _PRIVILEGED_CATEGORIES
+
+#: Categories a human-reviewed admin surface may write (the memory dashboard and
+#: the ``gaia memory`` review prompts): the chat-turn set plus ``profile``, which
+#: discovery and inference exist to build. Never ``system`` (collected, not
+#: typed) or ``permission`` (no review flow grants autonomy).
+USER_REVIEWED_CATEGORIES: frozenset = EXTRACTABLE_CATEGORIES | {"profile"}
+
+#: Minimum turns before a session is worth consolidating. Lives here rather
+#: than in memory.py because prune() needs the same threshold to decide which
+#: old turns are still queued for distillation.
+CONSOLIDATION_MIN_TURNS: int = 5
 
 #: Maximum stored content length (chars).  Longer content is truncated by
 #: callers before reaching store() so the database stays compact.
@@ -181,6 +196,39 @@ def _safe_json_loads(value) -> object:
     except (json.JSONDecodeError, TypeError):
         logger.warning("[MemoryStore] corrupt JSON column value ignored: %.80r", value)
         return None
+
+
+def _bounded_args_json(args: dict | None) -> str | None:
+    """Tool args as JSON that always parses and fits MAX_FTS_QUERY_LENGTH.
+
+    Cutting the serialized text left every large write_file/edit_file call
+    unreadable in tool history. Long values are shortened instead, keeping
+    short ones like file_path, and ``_truncated`` marks a partial result.
+    """
+    if not args:
+        return None
+    text = json.dumps(args, default=str)
+    if len(text) <= MAX_FTS_QUERY_LENGTH:
+        return text
+    for limit in (200, 60, 0):
+        shrunk: dict = {}
+        for k, v in args.items():
+            # Nested lists/dicts are shortened as their JSON text.
+            v_text = v if isinstance(v, str) else json.dumps(v, default=str)
+            shrunk[k] = v_text[:limit] + "..." if len(v_text) > limit else v
+        shrunk["_truncated"] = True
+        text = json.dumps(shrunk, default=str)
+        if len(text) <= MAX_FTS_QUERY_LENGTH:
+            return text
+    keys: list[str] = []
+    for key in sorted(str(k) for k in args):
+        if (
+            len(json.dumps({"_truncated": True, "keys": keys + [key]}))
+            > MAX_FTS_QUERY_LENGTH
+        ):
+            break
+        keys.append(key)
+    return json.dumps({"_truncated": True, "keys": keys})
 
 
 # ============================================================================
@@ -302,6 +350,39 @@ CREATE INDEX IF NOT EXISTS idx_proc_enabled ON procedures(enabled)
     WHERE enabled = 1;
 CREATE INDEX IF NOT EXISTS idx_proc_superseded ON procedures(superseded_by)
     WHERE superseded_by IS NOT NULL;
+
+-- Learned overlay on an AUTHORED skill (v4 — adaptive skills, #2674).
+-- A sibling of `procedures`, not a subtype: a procedure is standalone and
+-- recallable, a delta is an *attachment* keyed by (base identity, section
+-- anchor). It also cannot live in `procedures` mechanically — that table's
+-- when_to_use/markdown_body are NOT NULL, and the synthesis reconciler would
+-- treat a fragment as a supersede target for a whole procedure.
+CREATE TABLE IF NOT EXISTS skill_deltas (
+    id             TEXT PRIMARY KEY,
+    base_name      TEXT NOT NULL,           -- authored skill name (== its directory)
+    base_root      TEXT,                    -- discovery root that supplied the base
+    base_version   TEXT,                    -- base `version` at write time (may be NULL)
+    scope          TEXT NOT NULL,           -- namespaced agent id, or 'user' when shared
+    kind           TEXT NOT NULL,           -- replace_section | replace_snippet | drop_section
+    learn_tier     INTEGER NOT NULL DEFAULT 3,  -- NOT the security tier; see skills/tiers.py
+    anchor_section TEXT NOT NULL,           -- section slug in the authored body
+    anchor_digest  TEXT NOT NULL,           -- sha256 of that section at write time
+    payload        TEXT NOT NULL,           -- JSON, shape per `kind`
+    provenance     TEXT NOT NULL,           -- JSON {source, turns:[...]} — trust class
+    status         TEXT NOT NULL DEFAULT 'staged',  -- staged|active|archived|orphaned
+    success_count  INTEGER NOT NULL DEFAULT 0,
+    attempt_count  INTEGER NOT NULL DEFAULT 0,
+    embedding      BLOB,                    -- reserved for retrieval-gated kinds
+    superseded_by  TEXT,                    -- lineage; the row is KEPT, never deleted
+    created_at     TEXT NOT NULL,
+    approved_at    TEXT,                    -- consent-gate stamp; NULL while staged
+    last_used_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_delta_base ON skill_deltas(base_name, scope);
+CREATE INDEX IF NOT EXISTS idx_delta_active ON skill_deltas(status)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_delta_superseded ON skill_deltas(superseded_by)
+    WHERE superseded_by IS NOT NULL;
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -343,18 +424,105 @@ _V2_INDEX_SQL = [
 # ============================================================================
 
 
+def _validate_category(category: str, *, allow_privileged: bool, where: str) -> None:
+    """Reject a privileged category from a caller that did not opt in.
+
+    Unknown categories are left alone: hub agents keep their own (the email
+    agent's ``reply_behavior``), and they never render into the system prompt.
+
+    Args:
+        category: The category the caller wants to write.
+        allow_privileged: True only for admin/system callers (onboarding,
+            system-context collection, ``gaia memory``, reviewed dashboard
+            commits).
+        where: Method name, used in the error message.
+
+    Raises:
+        ValueError: The category is privileged and the caller did not opt in.
+    """
+    if category in _PRIVILEGED_CATEGORIES and not allow_privileged:
+        raise ValueError(
+            f"MemoryStore.{where}(): category={category!r} is privileged and "
+            f"the caller did not pass allow_privileged=True. Privileged rows "
+            f"lead every system prompt, so only onboarding, system-context "
+            f"collection and the memory admin paths may write them. Chat-turn "
+            f"callers (LLM extraction, consolidation, the remember tool) must "
+            f"use one of {sorted(EXTRACTABLE_CATEGORIES)}."
+        )
+
+
+MEMORY_DB_ENV = "GAIA_MEMORY_DB"
+GAIA_HOME_ENV = "GAIA_HOME"
+
+
+def resolve_memory_db_path() -> Path:
+    """Resolve the default memory DB path from the environment.
+
+    Precedence:
+
+    1. ``GAIA_MEMORY_DB`` — an explicit path to the database FILE. This is the
+       isolation switch: a test harness points it at a throwaway file so a test
+       drive never writes into the user's real second brain.
+    2. ``GAIA_HOME`` — relocates the whole ``~/.gaia`` tree; the DB lands at
+       ``$GAIA_HOME/memory.db``.
+    3. ``~/.gaia/memory.db``.
+
+    An override that names an unusable path raises. Falling back to the real
+    store on a bad override is exactly the failure this function exists to
+    prevent — a harness that thinks it is isolated but is not.
+
+    Raises:
+        ValueError: an override is set but blank, or names an existing
+            directory.
+        OSError: the override's parent directory cannot be created.
+    """
+    for env_var in (MEMORY_DB_ENV, GAIA_HOME_ENV):
+        raw = os.environ.get(env_var)
+        if raw is None:
+            continue
+        if not raw.strip():
+            raise ValueError(
+                f"{env_var} is set but empty. Point it at a writable path "
+                f"(e.g. {env_var}=/tmp/gaia-test/memory.db) or unset it to use "
+                f"the default ~/.gaia/memory.db."
+            )
+        resolved = Path(os.path.expandvars(os.path.expanduser(raw.strip())))
+        candidate = resolved / "memory.db" if env_var == GAIA_HOME_ENV else resolved
+        if candidate.is_dir():
+            raise ValueError(
+                f"{env_var}={raw!r} resolves to a directory ({candidate}), not a "
+                f"database file. Point it at a file path such as "
+                f"{candidate / 'memory.db'}."
+            )
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OSError(
+                f"{env_var}={raw!r}: cannot create the parent directory "
+                f"{candidate.parent} for the memory database: {e}"
+            ) from e
+        logger.info("[MemoryStore] using %s override: %s", env_var, candidate)
+        return candidate
+
+    gaia_dir = Path.home() / ".gaia"
+    gaia_dir.mkdir(parents=True, exist_ok=True)
+    return gaia_dir / "memory.db"
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
     def __init__(self, db_path: Path | None = None):
-        """Open/create DB at db_path. Default: ~/.gaia/memory.db
+        """Open/create DB at db_path.
+
+        When ``db_path`` is None the location comes from
+        :func:`resolve_memory_db_path` — ``GAIA_MEMORY_DB``, then ``GAIA_HOME``,
+        then ``~/.gaia/memory.db``.
 
         Uses WAL mode. Thread-safe via threading.Lock.
         """
         if db_path is None:
-            gaia_dir = Path.home() / ".gaia"
-            gaia_dir.mkdir(parents=True, exist_ok=True)
-            db_path = gaia_dir / "memory.db"
+            db_path = resolve_memory_db_path()
         else:
             db_path = Path(db_path)
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,9 +541,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v3 schema.  Existing databases at v1 or v2
-        are migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 via
-        the procedures table's CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v4 schema.  Existing databases at v1–v3 are
+        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 and
+        v3→v4 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -392,12 +560,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v3)
+            # Initialize schema_version if empty (fresh install → v4)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (3, _now_iso()),
+                    (4, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -414,10 +582,11 @@ class MemoryStore:
     def _migrate_schema_locked(self):
         """Run schema migrations if needed. Must hold self._lock.
 
-        Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and a new
-        CREATE TABLE (v2->v3), both of which SQLite applies without rewriting
-        existing rows.  Each step is guarded so a partial prior migration
-        re-runs cleanly, and the steps chain (a v1 database is taken to v3).
+        Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and new
+        CREATE TABLEs (v2->v3, v3->v4), both of which SQLite applies without
+        rewriting existing rows.  Each step is guarded so a partial prior
+        migration re-runs cleanly, and the steps chain (a v1 database is taken
+        to v4).
         """
         cursor = self._conn.execute(
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
@@ -468,6 +637,21 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v3 complete")
             current_version = 3
+
+        if current_version < 4:
+            logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
+
+            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
+            # EXISTS already ran in _init_schema(), so this only advances the
+            # marker. Additive — no existing row or read path is touched, and an
+            # older GAIA opening a v4 file still sees every table it knows.
+            self._conn.execute(
+                "UPDATE schema_version SET version = 4, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v4 complete")
+            current_version = 4
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -760,17 +944,29 @@ class MemoryStore:
         context: str = "global",
         sensitive: bool = False,
         entity: str | None = None,
+        allow_privileged: bool = False,
     ) -> str:
         """Store a knowledge entry with deduplication.
 
         >80% word overlap in same category+context → replaces with newer content.
         Validates due_at is a valid ISO 8601 string if provided.
 
+        Args:
+            allow_privileged: Opt-in required to write a category in
+                ``_PRIVILEGED_CATEGORIES`` (system/profile/permission). Only
+                onboarding, system-context collection, ``gaia memory`` and the
+                reviewed dashboard commits pass it; anything reachable from a
+                chat turn must not.
+
         Returns the knowledge ID (existing if deduped, new UUID if created).
 
         Raises:
-            ValueError: If content is empty or due_at is not valid ISO 8601.
+            ValueError: If the category is privileged without
+                ``allow_privileged``, content is empty, or due_at is not valid
+                ISO 8601.
         """
+        _validate_category(category, allow_privileged=allow_privileged, where="store")
+
         # Reject empty content early — FTS5 indexes empty strings, wasting space
         # and polluting search results with no-op entries.
         if not content or not content.strip():
@@ -1314,6 +1510,7 @@ class MemoryStore:
         due_at: str | None = None,
         reminded_at: str | None = None,
         superseded_by: str | None = None,
+        allow_privileged: bool = False,
     ) -> bool:
         """Update an existing knowledge entry. Only provided fields are changed.
 
@@ -1323,7 +1520,19 @@ class MemoryStore:
             superseded_by: ID of the newer knowledge item that replaces this one.
                 When set, this item is considered historical/inactive and will be
                 excluded from active queries (search, get_by_*, system prompt).
+            allow_privileged: Opt-in required to change an existing privileged row
+                or move a row into a privileged category — same callers as
+                :meth:`store`.
+
+        Raises:
+            ValueError: Same category rules as :meth:`store`, plus a
+                self-supersede or a malformed timestamp.
         """
+        if category is not None:
+            _validate_category(
+                category, allow_privileged=allow_privileged, where="update"
+            )
+
         # A row may never supersede itself — that would set superseded_by to its
         # own id and hide it from every active query (recall, get_by_category).
         if superseded_by is not None and superseded_by == knowledge_id:
@@ -1406,6 +1615,9 @@ class MemoryStore:
 
         with self._lock:
             try:
+                self._validate_existing_category_locked(
+                    knowledge_id, allow_privileged=allow_privileged, where="update"
+                )
                 rowcount = self._conn.execute(sql, tuple(params)).rowcount
                 if rowcount > 0:
                     # Re-sync FTS if content/category/domain changed
@@ -1439,10 +1651,26 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def delete(self, knowledge_id: str) -> bool:
-        """Delete a knowledge entry by ID. Returns False if not found."""
+    def _validate_existing_category_locked(
+        self, knowledge_id: str, *, allow_privileged: bool, where: str
+    ) -> None:
+        row = self._conn.execute(
+            "SELECT category FROM knowledge WHERE id = ?", (knowledge_id,)
+        ).fetchone()
+        if row:
+            _validate_category(row[0], allow_privileged=allow_privileged, where=where)
+
+    def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+        """Delete an entry; privileged rows require an explicit admin opt-in.
+
+        Returns False if not found. Raises ValueError for a privileged row
+        unless allow_privileged=True, with the same callers as store().
+        """
         with self._lock:
             try:
+                self._validate_existing_category_locked(
+                    knowledge_id, allow_privileged=allow_privileged, where="delete"
+                )
                 # Delete from FTS first
                 self._conn.execute(
                     "DELETE FROM knowledge_fts WHERE rowid = "
@@ -1489,8 +1717,9 @@ class MemoryStore:
 
         Used when the active embedder changes: vectors from a different model
         live in a different vector space (and possibly a different dimension),
-        so reusing them would silently corrupt similarity search. Clears both
-        knowledge and procedure embeddings. Returns the total rows cleared.
+        so reusing them would silently corrupt similarity search. Clears
+        knowledge, procedure, and skill-delta embeddings. Returns the total rows
+        cleared.
         """
         with self._lock:
             try:
@@ -1500,16 +1729,23 @@ class MemoryStore:
                 procedures = self._conn.execute(
                     "UPDATE procedures SET embedding = NULL WHERE embedding IS NOT NULL"
                 ).rowcount
+                # A delta vector left behind here would keep answering from the
+                # old embedder's space long after every other table moved.
+                deltas = self._conn.execute(
+                    "UPDATE skill_deltas SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
         logger.info(
-            "[MemoryStore] cleared embeddings (embedder change): knowledge=%d procedures=%d",
+            "[MemoryStore] cleared embeddings (embedder change): "
+            "knowledge=%d procedures=%d skill_deltas=%d",
             knowledge,
             procedures,
+            deltas,
         )
-        return knowledge + procedures
+        return knowledge + procedures + deltas
 
     #: ``meta`` key recording which embedder produced the stored vectors.
     _EMBEDDER_META_KEY = "embedder_id"
@@ -1677,11 +1913,18 @@ class MemoryStore:
         Used by the reconciliation pipeline to find near-duplicates and
         contradictions via cosine similarity on stored embeddings.
 
-        Filters: superseded_by IS NULL, embedding IS NOT NULL.
+        Filters: superseded_by IS NULL, embedding IS NOT NULL, and only
+        EXTRACTABLE_CATEGORIES. Model reconciliation must not alter trusted rows.
         Returns items with ALL fields including the embedding BLOB.
         """
-        conditions = ["superseded_by IS NULL", "embedding IS NOT NULL"]
-        params: list = []
+        categories = sorted(EXTRACTABLE_CATEGORIES)
+        placeholders = ", ".join("?" for _ in categories)
+        conditions = [
+            "superseded_by IS NULL",
+            "embedding IS NOT NULL",
+            f"category IN ({placeholders})",
+        ]
+        params: list = list(categories)
 
         if context is not None:
             conditions.append("context = ?")
@@ -1738,6 +1981,45 @@ class MemoryStore:
             cursor = self._conn.execute(sql, (min_turns, cutoff, limit))
             return [row[0] for row in cursor.fetchall()]
 
+    def get_unconsolidated_turns(self, session_id: str, limit: int = 20) -> List[Dict]:
+        """Oldest-first turns of *session_id* that have not been consolidated.
+
+        This is the window a consolidation pass distils. It is deliberately not
+        :meth:`get_history`, which returns the NEWEST ``limit`` turns — using
+        that for consolidation leaves the oldest turns of a long session
+        unconsolidated forever while the session is re-summarised on every
+        startup (and the raw turns are then pruned undistilled).
+
+        Args:
+            session_id: Session to read.
+            limit: Window size — how many turns one pass distils.
+
+        Returns:
+            Up to ``limit`` turn dicts, oldest first. Empty when the session is
+            fully consolidated.
+        """
+        sql = """
+            SELECT id, session_id, role, content, context, timestamp
+            FROM conversations
+            WHERE session_id = ? AND consolidated_at IS NULL
+            ORDER BY id ASC
+            LIMIT ?
+        """
+        with self._lock:
+            rows = self._conn.execute(sql, (session_id, limit)).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "session_id": r[1],
+                "role": r[2],
+                "content": r[3],
+                "context": r[4],
+                "timestamp": r[5],
+            }
+            for r in rows
+        ]
+
     def mark_turns_consolidated(self, turn_ids: List[int]) -> int:
         """Set ``consolidated_at`` to now on the specified conversation turn IDs.
 
@@ -1779,13 +2061,10 @@ class MemoryStore:
     ) -> None:
         """Log a tool call to tool_history."""
         now = _now_iso()
-        args_json = json.dumps(args, default=str) if args else None
-        # Truncate all text columns to MAX_FTS_QUERY_LENGTH chars.  Tool args,
+        args_json = _bounded_args_json(args)
+        # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
         # results, and error messages can all be arbitrarily large (e.g.
-        # write_file called with 100 KB content).  Storing the full payload
-        # bloats the database without adding search or observability value.
-        if args_json and len(args_json) > MAX_FTS_QUERY_LENGTH:
-            args_json = args_json[:MAX_FTS_QUERY_LENGTH]
+        # write_file called with 100 KB content).
         if result_summary and len(result_summary) > MAX_FTS_QUERY_LENGTH:
             result_summary = result_summary[:MAX_FTS_QUERY_LENGTH]
         if error and len(error) > MAX_FTS_QUERY_LENGTH:
@@ -2782,6 +3061,287 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    # ------------------------------------------------------------------
+    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # ------------------------------------------------------------------
+
+    def put_delta(
+        self,
+        base_name: str,
+        scope: str,
+        kind: str,
+        anchor_section: str,
+        anchor_digest: str,
+        payload: dict,
+        provenance: dict,
+        base_root: str | None = None,
+        base_version: str | None = None,
+        learn_tier: int = 3,
+        status: str = "staged",
+        delta_id: str | None = None,
+    ) -> str:
+        """Insert one learned delta and return its id.
+
+        Insert-only, like ``put_skill``'s reconcile path: a revised lesson is a
+        new row plus ``supersede_delta`` on the old one, so the history of what
+        an agent believed stays inspectable.
+
+        Deltas are written ``staged`` by default — stored, inert, and invisible
+        to resolution until :meth:`approve_delta` records the user's consent.
+        """
+        if not base_name or not base_name.strip():
+            raise ValueError("base_name is required")
+        if not scope or not scope.strip():
+            raise ValueError("scope is required")
+        if not anchor_section or not anchor_section.strip():
+            raise ValueError("anchor_section is required")
+
+        payload_json = json.dumps(payload or {})
+        provenance_json = json.dumps(provenance or {})
+        result_id = delta_id or f"delta_{uuid4().hex}"
+        now = _now_iso()
+
+        with self._lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO skill_deltas (
+                        id, base_name, base_root, base_version, scope, kind,
+                        learn_tier, anchor_section, anchor_digest, payload,
+                        provenance, status, success_count, attempt_count,
+                        embedding, superseded_by, created_at, approved_at,
+                        last_used_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
+                              NULL, NULL, ?, NULL, NULL)
+                    """,
+                    (
+                        result_id,
+                        base_name,
+                        base_root,
+                        base_version,
+                        scope,
+                        kind,
+                        int(learn_tier),
+                        anchor_section,
+                        anchor_digest,
+                        payload_json,
+                        provenance_json,
+                        status,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+        logger.info(
+            "[MemoryStore] skill delta stored id=%s base=%s section=%s kind=%s",
+            result_id,
+            base_name,
+            anchor_section,
+            kind,
+        )
+        return result_id
+
+    def search_deltas(
+        self,
+        base_name: str | None = None,
+        scope: str | None = None,
+        status: str | None = None,
+        delta_id: str | None = None,
+        include_superseded: bool = False,
+        limit: int | None = 200,
+    ) -> List[Dict]:
+        """Return delta rows as dicts, oldest first.
+
+        Chronological because resolution replays them in order: the last write
+        to a section is the one that wins.
+
+        ``include_superseded=False`` is the resolution view: a superseded row is
+        retained forever but never applies.
+
+        ``limit=None`` lifts the ceiling. Hitting the ceiling is logged rather
+        than passed off as a complete result: the order is oldest-first, so
+        truncation drops the *newest* deltas — the ones that win resolution.
+        """
+        clauses: List[str] = []
+        params: List[Any] = []
+        if delta_id:
+            clauses.append("id = ?")
+            params.append(delta_id)
+        if base_name:
+            clauses.append("base_name = ?")
+            params.append(base_name)
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append("superseded_by IS NULL")
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT id, base_name, base_root, base_version, scope, kind, "
+            "learn_tier, anchor_section, anchor_digest, payload, provenance, "
+            "status, success_count, attempt_count, superseded_by, created_at, "
+            "approved_at, last_used_at FROM skill_deltas "
+            f"{where} ORDER BY created_at ASC, id ASC"
+        )
+        if limit is not None:
+            # Fetch one extra so "exactly at the ceiling" and "truncated" are
+            # distinguishable — otherwise the warning cries wolf on every
+            # result that happens to land on the limit.
+            sql += " LIMIT ?"
+            params.append(limit + 1)
+
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        if limit is not None and len(rows) > limit:
+            rows = rows[:limit]
+            logger.warning(
+                "[MemoryStore] search_deltas hit its %d-row ceiling for "
+                "base_name=%r scope=%r status=%r — newer deltas are missing "
+                "from this result. Pass limit=None for the full set.",
+                limit,
+                base_name,
+                scope,
+                status,
+            )
+        return [self._row_to_delta_dict(row) for row in rows]
+
+    @staticmethod
+    def _row_to_delta_dict(row) -> Dict:
+        """Map a ``skill_deltas`` row to a dict, JSON columns decoded."""
+        return {
+            "id": row[0],
+            "base_name": row[1],
+            "base_root": row[2],
+            "base_version": row[3],
+            "scope": row[4],
+            "kind": row[5],
+            "learn_tier": row[6],
+            "anchor_section": row[7],
+            "anchor_digest": row[8],
+            "payload": json.loads(row[9]) if row[9] else {},
+            "provenance": json.loads(row[10]) if row[10] else {},
+            "status": row[11],
+            "success_count": row[12],
+            "attempt_count": row[13],
+            "superseded_by": row[14],
+            "created_at": row[15],
+            "approved_at": row[16],
+            "last_used_at": row[17],
+        }
+
+    def approve_delta(self, delta_id: str, when: str | None = None) -> bool:
+        """Record the user's consent: ``staged`` -> ``active``.
+
+        The consent gate. Until this runs, nothing the delta contains has ever
+        reached the model.
+        """
+        stamp = when or _now_iso()
+        with self._lock:
+            try:
+                # superseded_by IS NULL: a retired row can never resolve, so
+                # activating one would report consent for a change that is
+                # structurally incapable of applying.
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET status = 'active', approved_at = ? "
+                    "WHERE id = ? AND status = 'staged' "
+                    "AND superseded_by IS NULL",
+                    (stamp, delta_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def supersede_delta(self, delta_id: str, superseded_by: str) -> bool:
+        """Retire *delta_id* in favour of *superseded_by*. The row is kept.
+
+        This is what keeps repeated learning flat: a revised correction to the
+        same section retires the previous one instead of stacking with it.
+
+        Already-retired rows are left alone and return ``False``: overwriting an
+        existing ``superseded_by`` would rewrite the lineage the audit trail is
+        for.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET superseded_by = ? "
+                    "WHERE id = ? AND superseded_by IS NULL",
+                    (superseded_by, delta_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def archive_delta(
+        self,
+        delta_id: str,
+        base_name: str | None = None,
+        scope: str | None = None,
+    ) -> bool:
+        """Retire a delta without a replacement (``gaia skill deltas --revert``).
+
+        Archive, never delete — the row stays inspectable. User-initiated
+        *erasure* is a separate path and genuinely deletes; this is not it.
+
+        Pass *base_name* / *scope* to bind the id to the object the user named,
+        so an id belonging to another skill cannot be archived under it. Returns
+        ``False`` when nothing changed — an already-archived row included, so no
+        caller can print a receipt for a retirement that had already happened.
+
+        A superseded row is refused for the same reason: it already cannot
+        apply, and archiving it would only move it out of the views that list
+        it — so the receipt would point at nothing.
+        """
+        clauses = ["id = ?", "status != 'archived'", "superseded_by IS NULL"]
+        params: List[Any] = [delta_id]
+        if base_name:
+            clauses.append("base_name = ?")
+            params.append(base_name)
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET status = 'archived' "
+                    f"WHERE {' AND '.join(clauses)}",
+                    params,
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def touch_deltas(self, delta_ids: List[str], when: str | None = None) -> int:
+        """Stamp ``last_used_at`` on deltas that applied this session."""
+        if not delta_ids:
+            return 0
+        stamp = when or _now_iso()
+        placeholders = ",".join("?" for _ in delta_ids)
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    f"UPDATE skill_deltas SET last_used_at = ? WHERE id IN ({placeholders})",
+                    (stamp, *delta_ids),
+                ).rowcount
+                self._conn.commit()
+                return rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def iter_sessions(self, since: str | None = None, min_steps: int = 3) -> List[Dict]:
         """Return per-session successful tool spans + the session goal (DETECT).
 
@@ -2908,12 +3468,36 @@ class MemoryStore:
         )
         return rowcount
 
-    def prune(self, days: int = 90) -> Dict:
+    def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict:
         """Prune old tool_history and conversation entries.
 
-        Returns counts of deleted rows.
+        Args:
+            days: Retention window. Rows older than this are eligible.
+            keep_unconsolidated: Keep old turns that a session is still queued
+                to distil — i.e. the session is long enough to consolidate
+                (``CONSOLIDATION_MIN_TURNS``) and has turns with
+                ``consolidated_at IS NULL``. Deleting those loses the
+                conversation before anything was learned from it. Sessions too
+                short to ever be consolidated are pruned normally. All turns
+                older than twice ``days`` are deleted even if consolidation
+                never succeeds. Pass False only for an explicit purge.
+
+        Returns counts of deleted rows, plus ``conversations_retained`` — old
+        turns kept because their session is still awaiting consolidation.
         """
-        cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
+        now = datetime.now().astimezone()
+        cutoff = (now - timedelta(days=days)).isoformat()
+        absolute_cutoff = (now - timedelta(days=2 * days)).isoformat()
+
+        # Sessions still queued for consolidation. The whole session is held:
+        # deleting only its consolidated turns could drop it below the min-turn
+        # threshold and strand the rest undistilled.
+        _pending_sessions_sql = """
+            SELECT session_id FROM conversations
+            GROUP BY session_id
+            HAVING COUNT(*) >= ?
+               AND SUM(CASE WHEN consolidated_at IS NULL THEN 1 ELSE 0 END) > 0
+        """
 
         with self._lock:
             try:
@@ -2923,9 +3507,29 @@ class MemoryStore:
                 ).rowcount
 
                 # Prune conversations (delete FTS entries via trigger)
-                conv_deleted = self._conn.execute(
-                    "DELETE FROM conversations WHERE timestamp < ?", (cutoff,)
-                ).rowcount
+                conv_retained = 0
+                if keep_unconsolidated:
+                    conv_retained = self._conn.execute(
+                        f"""
+                        SELECT COUNT(*) FROM conversations
+                        WHERE timestamp < ? AND timestamp >= ?
+                          AND session_id IN ({_pending_sessions_sql})
+                        """,
+                        (cutoff, absolute_cutoff, CONSOLIDATION_MIN_TURNS),
+                    ).fetchone()[0]
+                    conv_deleted = self._conn.execute(
+                        f"""
+                        DELETE FROM conversations
+                        WHERE timestamp < ?
+                          AND (timestamp < ?
+                               OR session_id NOT IN ({_pending_sessions_sql}))
+                        """,
+                        (cutoff, absolute_cutoff, CONSOLIDATION_MIN_TURNS),
+                    ).rowcount
+                else:
+                    conv_deleted = self._conn.execute(
+                        "DELETE FROM conversations WHERE timestamp < ?", (cutoff,)
+                    ).rowcount
 
                 # Prune low-confidence knowledge
                 knowledge_deleted = self._conn.execute(
@@ -2948,8 +3552,8 @@ class MemoryStore:
                 # with SQLITE_BUSY if a reader holds a snapshot — best-effort.
                 try:
                     self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception:
-                    pass
+                except sqlite3.OperationalError as e:
+                    logger.debug("[MemoryStore] prune: WAL checkpoint skipped: %s", e)
             except Exception:
                 # Roll back the whole prune transaction so that a failure in
                 # _rebuild_knowledge_fts_locked() (e.g. disk full) does not
@@ -2964,10 +3568,23 @@ class MemoryStore:
             conv_deleted,
             knowledge_deleted,
         )
+        if conv_retained:
+            # Loud, not silent: a growing number here means consolidation is
+            # not keeping up (LLM unreachable, or more backlog than the
+            # per-startup budget), and the turns are being kept instead of
+            # distilled.
+            logger.warning(
+                "[MemoryStore] prune: kept %d conversation turn(s) older than "
+                "%d days because their session has not been consolidated yet; "
+                "they are retained rather than lost undistilled",
+                conv_retained,
+                days,
+            )
         return {
             "tool_history_deleted": tool_deleted,
             "conversations_deleted": conv_deleted,
             "knowledge_deleted": knowledge_deleted,
+            "conversations_retained": conv_retained,
         }
 
     def rebuild_fts(self) -> None:

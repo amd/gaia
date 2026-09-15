@@ -285,9 +285,20 @@ jobs:
           fi
 
       - name: Run backend tests
+        # No silent fallback (CLAUDE.md "No Silent Fallbacks"): this is the only
+        # pytest run on the release path -- test_unit.yml triggers on pushes to
+        # main, not on a v* tag -- so a swallowed failure here publishes a broken
+        # build. The `|| echo` and `2>/dev/null` this replaces made the step green
+        # whether the tests passed, failed, or never ran at all.
+        #
+        # [api] as well as [dev]: gaia.ui imports fastapi, which only the api/ui
+        # extras declare, so `pip install -e ".[dev]"` cannot even collect these
+        # tests. That is what the old `|| pip install -e .` fallback was papering
+        # over -- it dropped pytest itself, and the pytest failure was swallowed
+        # in turn.
         run: |
-          pip install -e ".[dev]" 2>/dev/null || pip install -e .
-          python -m pytest tests/unit/chat/ui/ -x --tb=short 2>/dev/null || echo "Backend tests skipped (dependencies not available)"
+          pip install -e ".[dev,api]"
+          python -m pytest tests/unit/chat/ui/ -x --tb=short
 
       - name: Upload built frontend
         uses: actions/upload-artifact@v7

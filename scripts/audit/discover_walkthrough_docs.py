@@ -6,7 +6,7 @@
 Emits a JSON array of {"path": ..., "slug": ...} for every doc the
 walkthrough should walk. Glob-based (not a hardcoded list) so a new guide is
 picked up automatically -- same extensibility principle as
-claude-weekly-audit.yml's dimension matrix. stdlib only: this runs before any
+claude-nightly-audit.yml's dimension matrix. stdlib only: this runs before any
 venv exists.
 """
 

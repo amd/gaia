@@ -21,8 +21,9 @@ title: "API Server"
 from gaia.api.openai_server import app
 import uvicorn
 
-# Run server (app is a module-level FastAPI instance)
-uvicorn.run(app, host="0.0.0.0", port=8080)
+# Run server (app is a module-level FastAPI instance). Keep it on loopback;
+# see "Authentication" below before binding anything wider.
+uvicorn.run(app, host="127.0.0.1", port=8080)
 
 # Now accessible via the OpenAI SDK. The flagship ships registered as "gaia";
 # add more in AGENT_MODELS (see below):
@@ -51,6 +52,38 @@ Setting the variable to `*` opens the API to all origins but disables
 credentialed requests — wildcard origins combined with credentials are
 forbidden by the Fetch spec and would let any website the user visits call
 the local API.
+
+### Authentication
+
+`POST /v1/chat/completions` runs the agent loop, so a caller that reaches it can
+make the agent read files and call tools. Set `GAIA_API_KEY` to require a key:
+
+```bash
+export GAIA_API_KEY=$(openssl rand -hex 32)
+gaia api start
+curl -H "Authorization: Bearer $GAIA_API_KEY" http://localhost:8080/v1/chat/completions ...
+```
+
+| `GAIA_API_KEY` | Bind | Behaviour |
+|---|---|---|
+| set | any | Every chat completion must send `Authorization: Bearer <key>`; otherwise **401** |
+| unset | loopback (`localhost`, `127.0.0.1`) | Allowed, with one startup warning. A future release will require a key |
+| unset | anything else (`0.0.0.0`, a LAN IP) | **Refused at startup** — the agent loop would be open to the network |
+
+Browser requests from an origin outside the CORS allowlist are refused with
+**403** before the agent runs, whether or not a key is set.
+
+The `/v1/<agent>/*` relay is stricter: it is disabled (**503**) until
+`GAIA_API_KEY` is set.
+
+Agents served with `--api` through the framework's generic server
+(`gaia.agents.base.server.AgentServer`) apply the same policy to every route
+except `/health`.
+
+<Note>
+The VSCode extension sends a fixed key (`Bearer gaia`). It keeps working while
+`GAIA_API_KEY` is unset; once you set a key, the extension's requests get 401.
+</Note>
 
 ### High-risk tools are refused
 
