@@ -1783,6 +1783,34 @@ Do NOT wrap conversational replies in JSON.
             self._loaded_skills = {}
         return self._loaded_skills
 
+    #: The tool a ``shell:execute:<binary>`` grant is exercised through.
+    _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
+
+    def _loaded_skill_tools(self) -> List[str]:
+        """Tools the loaded skills need in the prompt, deduped, in load order.
+
+        Each skill's ``tools_required``, plus the shell tool when it holds a
+        ``shell:execute:<binary>`` grant — a granted binary is useless without
+        the tool that runs it. Feeds the tool loader's SKILL signal, so a loaded
+        skill's tools arrive without a separate ``load_tools`` round trip.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return []
+        from gaia.skills.binaries import binary_permissions
+
+        tools: List[str] = []
+        seen: set = set()
+        for skill in skills.values():
+            names = list(skill.gaia.tools_required)
+            if binary_permissions(skill.parsed_permissions()):
+                names.append(self._SKILL_SHELL_TOOL)
+            for name in names:
+                if name not in seen:
+                    seen.add(name)
+                    tools.append(name)
+        return tools
+
     @property
     def granted_binaries(self) -> "BinaryGrants":
         """CLIs this **instance's** loaded skills may run (``shell:execute:gh``).

@@ -247,10 +247,11 @@ class ToolLoader:
         Args:
             query: The selection query (previous + current user message).
             registry: The live tool registry (source of truth for execution).
-            skill_tools: The SKILL signal — exact tool names from a learned
-                procedure the host recalled for this goal (#1451), in recall
-                order. Plain strings (the loader never imports memory). Admitted
-                after CORE and **ahead of** the semantic candidates (precedence
+            skill_tools: The SKILL signal — exact tool names declared by the
+                host's loaded skills and by any learned procedure it recalled
+                for this goal (#1451), in priority order. Plain strings (the
+                loader never imports memory). Admitted after CORE and **ahead
+                of** the semantic candidates (precedence
                 ``CORE > SKILL > SEMANTIC``), cap-bound and with no bundle
                 pull-in. ``None`` / empty is the graceful-absence path: the
                 loaded set and the ``TOOL_LOADER`` log are byte-identical to a
