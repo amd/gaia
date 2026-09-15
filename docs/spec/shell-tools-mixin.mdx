@@ -233,27 +233,31 @@ if cmd_base not in ALLOWED_COMMANDS:
         "status": "error",
         "error": f"Command '{cmd_base}' is not in the allowed list",
         "hint": "Only read-only, informational commands are allowed",
-        "examples": "ls, cat, grep, find, git status, etc."
+        "examples": "ls, cat, grep, find, etc."
     }
 ```
 
 ### Git Command Filtering
 
+`git` is no longer special-cased here. It has a full three-tier policy in
+[`skills/binaries.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/binaries.py)
+`BINARY_POLICIES`, and that policy carries its own read-only floor for an agent
+with no skill loaded — the same subcommands this branch used to allow. One table
+describes the binary, so the two cannot drift apart.
+
 ```python
-if cmd_base == "git":
-    safe_git_commands = {
-        "status", "log", "show", "diff", "branch",
-        "remote", "ls-files", "ls-tree", "describe",
-        "rev-parse", "config", "help"
-    }
-    git_subcmd = cmd_parts[1].lower()
-    if git_subcmd not in safe_git_commands:
-        return {
-            "status": "error",
-            "error": f"Git command '{git_subcmd}' is not allowed",
-            "allowed_git_commands": list(safe_git_commands)
-        }
+policy = BINARY_POLICIES.get(normalize_binary(cmd_base))
+if policy is not None:
+    granted = binary in granted_binaries
+    classify = classify_invocation if granted else classify_ungranted_invocation
+    decision = classify(policy, cmd_parts)
+    if decision.outcome == REFUSE:
+        return {"status": "error", "error": decision.message, ...}
 ```
+
+Matching on the subcommand alone, as the old branch did, also let
+`git branch -D main` and `git remote add` through unprompted; the policy table
+reads the flags too.
 
 ### Path Traversal Prevention
 
