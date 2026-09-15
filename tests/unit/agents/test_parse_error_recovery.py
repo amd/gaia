@@ -21,6 +21,7 @@ import pytest
 
 from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
 from gaia.agents.base.verification import strip_verification_scope
+from gaia.security import PathValidator
 
 
 class _DummyAgent(Agent):
@@ -58,6 +59,58 @@ class TestParseLLMResponseRaisesOnMalformed:
         )
         with pytest.raises(ValueError, match="Malformed native tool_calls"):
             agent._parse_llm_response(bad)
+
+    def test_empty_response_lists_files_modified_before_failure(self, agent, tmp_path):
+        """Empty-turn recovery reports files tracked from a successful edit."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.agents.tools.file_tools import FileSearchToolsMixin
+
+        mixin = FileSearchToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        mixin._path_validator = None
+        saved_registry = dict(_TOOL_REGISTRY)
+        _TOOL_REGISTRY.clear()
+        try:
+            mixin.register_file_search_tools()
+            target = tmp_path / "edited.py"
+            target.write_text("value = 1\n")
+            responses = iter(
+                [
+                    json.dumps(
+                        {
+                            "thought": "Edit the file.",
+                            "tool": "edit_file",
+                            "tool_args": {
+                                "file_path": str(target),
+                                "old_content": "value = 1",
+                                "new_content": "value = 2",
+                            },
+                        }
+                    ),
+                    "",
+                ]
+            )
+            chat = MagicMock()
+
+            def send_messages(*_, **__):
+                response = MagicMock()
+                response.text = next(responses)
+                response.stats = {}
+                return response
+
+            chat.send_messages.side_effect = send_messages
+            agent.chat = chat
+            with patch.object(agent, "_tool_requires_confirmation", return_value=False):
+                result = agent.process_query("Edit the file", max_steps=2)
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved_registry)
+
+        answer = result["result"]
+        assert "Files modified before the turn failed:" in answer
+        assert str(target) in answer
+        backup_path = next(target.parent.glob("edited.*.bak.py"))
+        assert str(backup_path) in answer
 
 
 class TestProcessQueryRecoversOnParseError:
