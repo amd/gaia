@@ -7219,7 +7219,15 @@ Do NOT wrap conversational replies in JSON.
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        return f"Task completed with {tool_name}. No further action needed."
+        # A loop break is evidence of neither outcome: the work may be done
+        # (the model kept re-verifying it) or never started (it had no tool for
+        # the job). Say which is unknown instead of claiming either (#3750).
+        return (
+            f"I stopped after calling `{tool_name}` {consecutive_count} times "
+            "in a row without making progress, so I can't confirm the task is "
+            "finished. Please check the result before relying on it, or "
+            "rephrase the request."
+        )
 
     def _dedup_mutation_call(
         self,
