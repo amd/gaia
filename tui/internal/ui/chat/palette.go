@@ -35,6 +35,7 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/bypass", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 }
@@ -393,8 +394,8 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 
 	lines := paletteBodyLines(query, items, selected, inner)
 	if len(lines)+paletteChromeRows > height {
-		// No scrolling here (unlike help): the list is 7 commands long at
-		// most, so a window too short to hold it is too short for a usable
+		// No scrolling here (unlike help): the list is a handful of commands,
+		// so a window too short to hold it is too short for a usable
 		// palette at all — leave the composer visible instead of clipping.
 		return "", false
 	}
@@ -453,7 +454,9 @@ func paletteHitTest(query string, items []paletteCommand, selected, width, heigh
 // typed filter text, a blank line, then one row per matching command.
 func paletteBodyLines(query string, items []paletteCommand, selected, inner int) []string {
 	lines := []string{
-		paletteTitleStyle.Render("Slash Commands"),
+		// Truncated like every other line: at a narrow width the title wrapped
+		// onto two rows and pushed the box past the window.
+		ansi.Truncate(paletteTitleStyle.Render("Slash Commands"), inner, "…"),
 		dividerStyle.Render(strings.Repeat("─", inner)),
 		ansi.Truncate(paletteQueryStyle.Render(query)+"▏", inner, "…"),
 		"",

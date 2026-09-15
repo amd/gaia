@@ -104,6 +104,7 @@
                     "pages": [
                       "guides/email",
                       "guides/email-integration",
+                      "guides/slack",
                       "guides/telegram-adapter"
                     ]
                   },
@@ -403,6 +404,7 @@
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
               "plans/messaging-integrations-plan",
+              "plans/slack-tui-integration",
               "plans/autonomy-engine"
             ]
           },

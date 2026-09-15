@@ -297,6 +297,13 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 			// one command the palette offers.
 			base = "/bypass"
 		}
+		if strings.HasPrefix(cmd, "/slack") {
+			// /slack setup|skip|never are the three answers to the setup
+			// offer, which names them itself. One palette row, same as
+			// /bypass -- listing them at the top level would put two rows
+			// nobody asked for above the command that explains them.
+			base = "/slack"
+		}
 		seen[base] = true
 		if !known[base] {
 			t.Errorf("submit now handles %q but paletteCommands (palette.go) does not offer %q — add it", cmd, base)
