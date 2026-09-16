@@ -109,8 +109,12 @@ class TestParseLLMResponseRaisesOnMalformed:
         answer = result["result"]
         assert "Files modified before the turn failed:" in answer
         assert str(target) in answer
-        backup_path = next(target.parent.glob("edited.*.bak.py"))
-        assert str(backup_path) in answer
+
+        edited_files = agent._turn_file_edits
+        assert len(edited_files) == 1
+        backup_path = edited_files[0]["backup_path"]
+        assert backup_path is not None
+        assert backup_path in answer
 
 
 class TestProcessQueryRecoversOnParseError:
