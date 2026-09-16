@@ -4402,7 +4402,7 @@ class LemonadeClient:
         and provides real-time progress updates via SSE streaming.
 
         Args:
-            agent: Agent name (chat, code, rag, etc.) or "all" for all models
+            agent: Agent name (gaia, chat, email, etc.) or "all" for all models
 
         Returns:
             Dict with download results:
@@ -4632,7 +4632,7 @@ class LemonadeClient:
         so we don't validate model availability during initialization.
 
         Args:
-            agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+            agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
             ctx_size: Override context size (default: 32768 for most agents)
             auto_start: Automatically start server if not running
             timeout: Timeout in seconds for server startup
@@ -5014,7 +5014,7 @@ def initialize_lemonade(
     profiles. It creates a temporary client and runs initialization.
 
     Args:
-        agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+        agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
         ctx_size: Override context size
         auto_start: Automatically start server if not running
         timeout: Timeout for server startup

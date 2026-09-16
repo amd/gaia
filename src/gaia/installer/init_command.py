@@ -674,8 +674,8 @@ class InitCommand:
         # `"agent": "chat"` (they resolve to the same standalone wheel), so
         # keying off the declared agent -- not a hardcoded profile-name
         # literal -- naturally covers both without a special case, and never
-        # touches profiles for other hub agents (sd/code/analyst/email/...),
-        # each of which has its own, separately-owned install lifecycle.
+        # touches profiles for other hub agents (gaia/email/...), each of
+        # which has its own, separately-owned install lifecycle.
         has_hub_agent_check = profile_config.get("agent") in HUB_INSTALL_AGENTS
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
