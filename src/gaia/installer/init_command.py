@@ -844,7 +844,14 @@ class InitCommand:
                 config.default_device = "npu" if self.profile == "npu" else "gpu"
                 config.save()
             except Exception as e:
-                log.warning(f"Failed to save config: {e}")
+                self._print_error(
+                    f"Failed to save profile '{self.profile}' to "
+                    f"~/.gaia/config.json: {e}. Setup otherwise completed, but "
+                    "GAIA will fall back to its default profile until this is "
+                    "fixed -- re-run `gaia init` or `gaia config set profile "
+                    f"{self.profile}` once the cause is resolved."
+                )
+                return 1
 
             # A hard Agent UI build failure means the profile's UI isn't
             # usable -- don't report plain success for it. verify_setup and
