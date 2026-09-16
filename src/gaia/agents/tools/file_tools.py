@@ -234,8 +234,6 @@ class FileSearchToolsMixin:
                         ".sh",
                     }
 
-                import re as _re
-
                 matching_files = []
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
@@ -248,8 +246,8 @@ class FileSearchToolsMixin:
                 _compiled_re = None
                 if is_regex:
                     try:
-                        _compiled_re = _re.compile(pattern_lower, _re.IGNORECASE)
-                    except _re.error:
+                        _compiled_re = re.compile(pattern_lower, re.IGNORECASE)
+                    except re.error:
                         is_regex = False  # Fall back if invalid regex
                 # Glob: simple wildcards only when not already a regex pattern
                 is_glob = not is_regex and ("*" in file_pattern or "?" in file_pattern)
@@ -259,14 +257,10 @@ class FileSearchToolsMixin:
                 # Each alternative is a set of words that must ALL appear in the filename.
                 # Stop words ("the", "a", "an") are stripped from each alternative.
                 _QUERY_STOP_WORDS = {"the", "a", "an"}
-                if (
-                    not is_glob
-                    and not is_regex
-                    and _re.search(r"\bor\b", pattern_lower)
-                ):
+                if not is_glob and not is_regex and re.search(r"\bor\b", pattern_lower):
                     _alternatives = [
                         [w for w in alt.strip().split() if w not in _QUERY_STOP_WORDS]
-                        for alt in _re.split(r"\bor\b", pattern_lower)
+                        for alt in re.split(r"\bor\b", pattern_lower)
                         if alt.strip()
                     ]
                 else:
@@ -281,7 +275,7 @@ class FileSearchToolsMixin:
                     name_lower = file_path.name.lower()
                     stem_lower = file_path.stem.lower()
                     # Normalize separators so "employ.*book" matches "employee_handbook"
-                    name_normalized = _re.sub(r"[_\-.]", "", name_lower)
+                    name_normalized = re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
                         name_match = fnmatch.fnmatch(name_lower, pattern_lower)
                     elif is_regex and _compiled_re:
@@ -835,8 +829,6 @@ class FileSearchToolsMixin:
 
                 # Markdown file - extract structure
                 elif ext == ".md":
-                    import re
-
                     result["file_type"] = "markdown"
 
                     # Extract headers
@@ -937,13 +929,11 @@ class FileSearchToolsMixin:
                 ctx = max(0, int(context_lines))
 
                 # Support regex (like real grep) — fall back to plain substring if invalid
-                import re as _re
-
-                _flags = 0 if case_sensitive else _re.IGNORECASE
+                _flags = 0 if case_sensitive else re.IGNORECASE
                 try:
-                    _regex = _re.compile(pattern, _flags)
+                    _regex = re.compile(pattern, _flags)
                     _use_regex = True
-                except _re.error:
+                except re.error:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
 
