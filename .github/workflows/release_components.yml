@@ -214,7 +214,17 @@ jobs:
   deploy-worker:
     name: Deploy Agent Hub Worker
     needs: [version, worker-check]
-    if: needs.version.outputs.dry_run == 'false'
+    # Neither ancestor is conditionally skippable today, so this is not a live
+    # bug -- but the bare comparison below has no status-check function, which
+    # means GitHub Actions implicitly ANDs it with success() (the same pattern
+    # that broke redeploy-website, #3929). Making that explicit here means a
+    # future change that makes either ancestor conditional can't silently
+    # reintroduce the ancestor-skip bug.
+    if: |
+      !cancelled()
+      && needs.version.outputs.dry_run == 'false'
+      && needs.version.result == 'success'
+      && needs.worker-check.result == 'success'
     runs-on: ubuntu-latest
     environment: worker-deploy
     steps:
