@@ -468,7 +468,13 @@ jobs:
   post-publish-smoke:
     name: Post-Publish Smoke Test
     needs: [validate, publish-pypi]
-    if: needs.publish-pypi.result == 'success'
+    # Missing !cancelled() cascaded a skip through github-release and
+    # refresh-context7 too on the v0.24.0 retag, even though publish-pypi
+    # itself succeeded — same bug as #3915/#3916, on the one job the sweep
+    # for it missed. See publish-pypi's comment for the full explanation.
+    if: >-
+      !cancelled() &&
+      needs.publish-pypi.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
