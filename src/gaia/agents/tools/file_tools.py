@@ -651,7 +651,7 @@ class FileSearchToolsMixin:
 
                 # os.path.exists() is true for a directory too, so without this
                 # check open() below raises IsADirectoryError into the generic
-                # except Exception handler as a raw errno string (amd/gaia#3891).
+                # except Exception handler as a raw errno string (amd/gaia#3890).
                 if os.path.isdir(file_path):
                     return {
                         "status": "error",
