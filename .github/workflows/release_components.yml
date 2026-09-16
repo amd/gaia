@@ -601,7 +601,19 @@ jobs:
   redeploy-website:
     name: Redeploy website
     needs: [version, terminal-hub, agent-ui]
-    if: needs.version.outputs.dry_run == 'false'
+    # No status-check function in `needs.version.outputs...` means GitHub
+    # implicitly ANDs this with success() -- so a 'skipped' terminal-hub or
+    # agent-ui (e.g. worker-check failed, or tui's binaries were not ok) would
+    # silently skip this too, with no error, even on a real release. That
+    # happened to be the desired outcome so far by accident, not by the
+    # explicit intent below: redeploy only on a real (non-dry-run) release
+    # where both components actually published, and never leave a cancelled
+    # run's ambiguous state silently wired through.
+    if: |
+      !cancelled()
+      && needs.version.outputs.dry_run == 'false'
+      && needs.terminal-hub.result == 'success'
+      && needs.agent-ui.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write
