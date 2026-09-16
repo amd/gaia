@@ -33,8 +33,8 @@
       }
     },
     "tui": {
-      "componentVersion": "0.24.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.24.0",
+      "componentVersion": "0.24.1",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.24.1",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-win-x64.exe",

@@ -1,13 +1,15 @@
 ---
-title: "v0.24.0"
+title: "v0.24.1"
 description: "The flagship agent triages email, draws images, and orients itself before acting; one command now installs and runs it; and this release closes several security gaps, from a cross-origin Agent UI hole to a Telegram bot open to anyone."
 ---
 
-# GAIA v0.24.0 Release Notes
+# GAIA v0.24.1 Release Notes
+
+v0.24.0 was tagged, but a CI bug blocked its GitHub Release until npm already had that version published. v0.24.1 is identical content, republished under a version npm accepts.
 
 ## Breaking Changes
 
-- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, `summarize` are now a `SKILL.md` on the flagship. Installing one by id fails — use `gaia hub install gaia --trust` and load the matching skill. (PR [#2995](https://github.com/amd/gaia/pull/2995))
+- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, `summarize` are now a `SKILL.md` on the flagship. Installing one by id fails; use `gaia hub install gaia --trust` and load the matching skill. (PR [#2995](https://github.com/amd/gaia/pull/2995))
 - **The TUI control API dropped its hub-browser fields** — `view` is now `splash | preflight | chat`; `hub_tab`, `hub_tab_index`, `selected_agent_id`, `visible_agent_ids`, `filtering`, `can_return_to_hub` are gone, replaced by `blocker`. Anyone driving the TUI over it needs to update. (PR [#3120](https://github.com/amd/gaia/pull/3120))
 - **`@tool(name=..., description=...)` no longer works** — the decorator rejects unrecognized keywords instead of discarding them silently. Use `@tool()`; name/description come from the function. (PR [#3252](https://github.com/amd/gaia/pull/3252))
 - **`gaia telegram start` now requires `--allowed-users`**, no opt-out — it used to start (and reply to anyone) without one. (PR [#3306](https://github.com/amd/gaia/pull/3306))
@@ -19,9 +21,9 @@ description: "The flagship agent triages email, draws images, and orients itself
 
 - **`triage my inbox` now works on the flagship agent** — read-only, so mail and documents no longer need separate agents; sending and drafting stay on the standalone email agent for now. (PR [#3331](https://github.com/amd/gaia/pull/3331))
 
-- **`summarize this meeting: standup.mp4` now works — fully local, no PyTorch or gated downloads** — a speaker-diarized transcript, a brief with decisions and action items, and follow-up Q&A with verbatim quotes. 94.1% word-level match against a WhisperX+pyannote reference on a real 46-minute meeting, all 4 speakers correctly identified. (PR [#3597](https://github.com/amd/gaia/pull/3597))
+- **`summarize this meeting: standup.mp4` now works — fully local, no PyTorch or gated downloads** — a speaker-diarized transcript, a brief with decisions and action items, and follow-up Q&A with verbatim quotes. 94.1% word-level match against a WhisperX+pyannote reference, all speakers correctly identified. (PR [#3597](https://github.com/amd/gaia/pull/3597))
 
-- **The agent draws pictures, orients itself, and its skills load themselves** — "draw me a red bicycle" reaches the image tools; every task scans the project before acting; a skill is matched to your question instead of you naming it. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3405](https://github.com/amd/gaia/pull/3405), [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
+- **The agent draws pictures, orients itself, and its skills load themselves** — "draw me a red bicycle" reaches the image tools; every task scans the project before acting; a skill matches your question instead of you naming it. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3405](https://github.com/amd/gaia/pull/3405), [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
 
 - **Every answer states whether it was checked, and `--trace` records the proof** — the agent names what it ran and what passed instead of just claiming success; `--trace` in the TUI logs every tool call for replay. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
 
@@ -33,7 +35,7 @@ description: "The flagship agent triages email, draws images, and orients itself
 
 ## Security
 
-- **Any web page you visited could drive GAIA's local servers** — a cross-origin request could start a tunnel, poison your RAG store, or send mail; a document link could reach cloud metadata or the daemon's loopback API. `Origin`/`Host` checks are now enforced everywhere. (PRs [#3366](https://github.com/amd/gaia/pull/3366), [#3612](https://github.com/amd/gaia/pull/3612))
+- **Any web page you visited could drive GAIA's local servers** — a cross-origin request could start a tunnel, poison your RAG store, or send mail; a document link could reach cloud metadata or the daemon's loopback API. `Origin`/`Host` checks are enforced everywhere now. (PRs [#3366](https://github.com/amd/gaia/pull/3366), [#3612](https://github.com/amd/gaia/pull/3612))
 - **A Telegram bot with no allowlist replied to anyone** (the documented default) — off-allowlist users are refused before a session or model call now; the bot's tool surface is chat-only. (PR [#3306](https://github.com/amd/gaia/pull/3306))
 - **Attaching a document could silently widen the agent's read scope to its whole parent directory** — the grant is the file itself now; reads gained a credential denylist, and writes refuse rc files, PowerShell profiles, and git hooks. (PR [#3594](https://github.com/amd/gaia/pull/3594))
 - **A chat turn could plant `system`/`permission` rows into every future prompt** — only onboarding/admin paths write them now. (PR [#3614](https://github.com/amd/gaia/pull/3614))
@@ -77,11 +79,18 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**245 commits** since v0.23.0:
+**252 commits** since v0.23.0:
 
 <details>
-<summary>Expand full changelog (245 commits)</summary>
+<summary>Expand full changelog (252 commits)</summary>
 
+- `511a4d1f7` — Release v0.24.1
+- `c53c4ea04` — fix(ci): post-publish-smoke was missing the !cancelled() guard too (#3917)
+- `2dc319400` — fix(ci): add the missing !cancelled() guard #3915 needed but didn't have (#3916)
+- `0a0b50ec3` — fix(ci): stop a disabled email-eval from silently skipping the whole publish chain (#3915)
+- `e2c74fe75` — ci(email): disable the email-agent eval suite going forward (#3914)
+- `36f46bb4e` — fix(release): v0.24.0 notes follow-up, agent-pkg-gaia 0.2.0 bump, trim unit-test matrix (#3913)
+- `391cfc210` — Release v0.24.0 (#3781)
 - `481a09720` — feat(email,skills): read-only inbox triage on the flagship agent (#3331)
 - `1921e1c58` — fix(agent): always load the edit tools so coding requests can change files (#3755)
 - `995bafb25` — fix(eval): read past thinking blocks in the Claude judge response (#3885)
@@ -329,4 +338,4 @@ Thanks to the community members who contributed to this release:
 - `1beb714f3` — release(agent-email): 0.6.0 (#2933)
 </details>
 
-Full Changelog: [v0.23.0...v0.24.0](https://github.com/amd/gaia/compare/v0.23.0...v0.24.0)
+Full Changelog: [v0.23.0...v0.24.1](https://github.com/amd/gaia/compare/v0.23.0...v0.24.1)
