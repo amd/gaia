@@ -591,7 +591,8 @@ _SCORE_REGRESSION_THRESHOLD = 2.0
 # "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
 # death scores 0.0 (or null), which is indistinguishable from a model that
 # answered badly, so comparing the two reports infrastructure as a regression.
-# Kept in sync with the buckets in scorecard.py::build_scorecard.
+# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
+# integrity gate also counts blocked/skipped outcomes as incomplete.
 _NO_MEASUREMENT_STATUSES = frozenset(
     {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
 )
@@ -1097,7 +1098,10 @@ def run_scenario_subprocess(
                     "status": "ERRORED",
                     "overall_score": None,
                     "turns": [],
-                    "error": f"JSON parse error: {e}. stdout: {proc.stdout[:300]}",
+                    "error": (
+                        f"JSON parse error: {e}. stdout: {proc.stdout[:300]}"
+                        f"\nstderr: {proc.stderr[:300]}"
+                    ),
                     "elapsed_s": elapsed,
                     "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
                 }
@@ -1110,6 +1114,7 @@ def run_scenario_subprocess(
             "status": "TIMEOUT",
             "overall_score": None,
             "turns": [],
+            "error": f"subprocess exceeded {timeout}s timeout",
             "elapsed_s": elapsed,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }

@@ -519,7 +519,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'needs_confirmation', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
 ]);
 
 export function sendMessageStream(
@@ -726,6 +726,17 @@ export async function confirmToolExecution(
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
+/** Answer a pending mid-run `needs_input` question (#2595). The agent
+ *  blocks server-side until this call lands, so the run continues once it
+ *  resolves. */
+export async function respondToInput(
+    sessionId: string,
+    requestId: string,
+    value: string,
+): Promise<{ status: string; request_id: string }> {
+    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
 
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */

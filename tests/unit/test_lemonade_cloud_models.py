@@ -184,6 +184,8 @@ def test_discovered_custom_cloud_avoids_local_load(client):
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
+        (402, "spending limit"),
+        (412, "spending limit"),
         (500, "Check the provider"),
     ],
 )
@@ -400,6 +402,8 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
+        (402, "spending limit"),
+        (412, "spending limit"),
         (500, "Check the provider"),
     ],
 )
