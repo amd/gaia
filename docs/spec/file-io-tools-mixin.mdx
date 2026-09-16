@@ -503,7 +503,9 @@ from gaia.agents.base.tools import tool
 
 ## Testing Requirements
 
-**File:** `tests/agents/code/test_file_io.py`
+Coverage for this mixin lives under `tests/unit/` (e.g.
+`test_file_editing_prompt.py`, `test_file_access_scope.py`,
+`test_file_write_guardrails.py`), not a single dedicated file:
 
 ```python
 def test_read_python_file(tmp_path):
