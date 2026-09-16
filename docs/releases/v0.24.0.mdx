@@ -7,33 +7,35 @@ description: "The flagship agent triages email, draws images, and orients itself
 
 ## Breaking Changes
 
-- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, `summarize`; it's a `SKILL.md` on the flagship now. Installing one by id fails — use `gaia hub install gaia --trust` and load the matching skill. (PR [#2995](https://github.com/amd/gaia/pull/2995))
-- **The TUI control API dropped its hub-browser fields** — `view` is now `splash | preflight | chat`; `hub_tab`, `hub_tab_index`, `selected_agent_id`, `visible_agent_ids`, `filtering`, `can_return_to_hub` are gone, replaced by `blocker`. Anyone driving the TUI over the API needs to update. (PR [#3120](https://github.com/amd/gaia/pull/3120))
+- **Thirteen per-task agents were removed** — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, `summarize` are now a `SKILL.md` on the flagship. Installing one by id fails — use `gaia hub install gaia --trust` and load the matching skill. (PR [#2995](https://github.com/amd/gaia/pull/2995))
+- **The TUI control API dropped its hub-browser fields** — `view` is now `splash | preflight | chat`; `hub_tab`, `hub_tab_index`, `selected_agent_id`, `visible_agent_ids`, `filtering`, `can_return_to_hub` are gone, replaced by `blocker`. Anyone driving the TUI over it needs to update. (PR [#3120](https://github.com/amd/gaia/pull/3120))
 - **`@tool(name=..., description=...)` no longer works** — the decorator rejects unrecognized keywords instead of discarding them silently. Use `@tool()`; name/description come from the function. (PR [#3252](https://github.com/amd/gaia/pull/3252))
 - **`gaia telegram start` now requires `--allowed-users`**, no opt-out — it used to start (and reply to anyone) without one. (PR [#3306](https://github.com/amd/gaia/pull/3306))
 - **`gaia api --host` beyond loopback with no key refuses to start**, and `GAIA_API_KEY` gates chat completions too. (PR [#3612](https://github.com/amd/gaia/pull/3612))
 
 ## What's New
 
-- **`gaia hub install gaia --trust` actually installs and runs the flagship agent** — the daemon had no sidecar entry for it, the installers didn't ship its binary, and `gaia init` set up the wrong agent. (PRs [#3031](https://github.com/amd/gaia/pull/3031), [#3146](https://github.com/amd/gaia/pull/3146), [#3330](https://github.com/amd/gaia/pull/3330), [#3125](https://github.com/amd/gaia/pull/3125), [#3120](https://github.com/amd/gaia/pull/3120))
+- **`gaia hub install gaia --trust` finally installs and runs the flagship agent** — the daemon had no sidecar entry for it, the installers didn't ship its binary, and `gaia init` set up the wrong agent. (PRs [#3031](https://github.com/amd/gaia/pull/3031), [#3146](https://github.com/amd/gaia/pull/3146), [#3330](https://github.com/amd/gaia/pull/3330), [#3125](https://github.com/amd/gaia/pull/3125), [#3120](https://github.com/amd/gaia/pull/3120))
 
-- **`triage my inbox` now works on the flagship agent** — read-only triage is built in now, so mail and documents no longer need separate agents; sending and drafting stay on the standalone email agent for now. (PR [#3331](https://github.com/amd/gaia/pull/3331))
+- **`triage my inbox` now works on the flagship agent** — read-only, so mail and documents no longer need separate agents; sending and drafting stay on the standalone email agent for now. (PR [#3331](https://github.com/amd/gaia/pull/3331))
 
-- **The agent draws pictures, summarizes meetings, and orients itself first** — "draw me a red bicycle" reaches the image tools; `summarize this meeting: standup.mp4` returns a transcript with action items; every task scans the project first, and skills load themselves. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3597](https://github.com/amd/gaia/pull/3597), [#3405](https://github.com/amd/gaia/pull/3405), [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
+- **`summarize this meeting: standup.mp4` now works — fully local, no PyTorch or gated downloads** — a speaker-diarized transcript, a brief with decisions and action items, and follow-up Q&A with verbatim quotes. 94.1% word-level match against a WhisperX+pyannote reference on a real 46-minute meeting, all 4 speakers correctly identified. (PR [#3597](https://github.com/amd/gaia/pull/3597))
 
-- **Every answer states whether it was checked** — the agent names what it ran and what passed, not just reporting success; `--trace` in the TUI records every tool call for replay. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
+- **The agent draws pictures, orients itself, and its skills load themselves** — "draw me a red bicycle" reaches the image tools; every task scans the project before acting; a skill is matched to your question instead of you naming it. (PRs [#3073](https://github.com/amd/gaia/pull/3073), [#3405](https://github.com/amd/gaia/pull/3405), [#3010](https://github.com/amd/gaia/pull/3010), [#3023](https://github.com/amd/gaia/pull/3023))
 
-- **The TUI takes the mouse, draws to full width, and can go cloud** — wheel-scroll, clickable links, no 80-column wrapping, and a local, Fireworks, or AMD Gateway model via Lemonade. (PRs [#3699](https://github.com/amd/gaia/pull/3699), [#3006](https://github.com/amd/gaia/pull/3006), [#3672](https://github.com/amd/gaia/pull/3672))
+- **Every answer states whether it was checked, and `--trace` records the proof** — the agent names what it ran and what passed instead of just claiming success; `--trace` in the TUI logs every tool call for replay. (PRs [#3397](https://github.com/amd/gaia/pull/3397), [#3579](https://github.com/amd/gaia/pull/3579))
 
-- **Run Lemonade without the machine-wide installer** — `gaia lemonade embedded start` runs your own Lemonade Server. (PR [#3121](https://github.com/amd/gaia/pull/3121))
+- **The TUI takes the mouse and can go cloud** — wheel-scroll and clickable links; point it at a local, Fireworks, or AMD Gateway model via Lemonade. (PRs [#3699](https://github.com/amd/gaia/pull/3699), [#3006](https://github.com/amd/gaia/pull/3006), [#3672](https://github.com/amd/gaia/pull/3672))
+
+- **`gaia lemonade embedded start` runs your own Lemonade Server** — no machine-wide installer. (PR [#3121](https://github.com/amd/gaia/pull/3121))
 
 - **Mine your own Claude Code sessions for usage stats** — a deterministic, LLM-free pipeline turns your `~/.claude/projects/` transcripts into tool-usage, failure, and cost reports. See the [Session Analytics guide](/reference/session-analytics). (PRs [#3111](https://github.com/amd/gaia/pull/3111), [#3782](https://github.com/amd/gaia/pull/3782))
 
 ## Security
 
-- **Any web page you visited could drive GAIA's local servers** — a cross-origin request could start a tunnel, poison your RAG store, or send mail; a document link could make the chat agent fetch cloud metadata or the daemon's loopback API. Middleware now enforces `Origin`/`Host` checks everywhere, and web tools refuse private/loopback redirects. (PRs [#3366](https://github.com/amd/gaia/pull/3366), [#3612](https://github.com/amd/gaia/pull/3612))
+- **Any web page you visited could drive GAIA's local servers** — a cross-origin request could start a tunnel, poison your RAG store, or send mail; a document link could reach cloud metadata or the daemon's loopback API. `Origin`/`Host` checks are now enforced everywhere. (PRs [#3366](https://github.com/amd/gaia/pull/3366), [#3612](https://github.com/amd/gaia/pull/3612))
 - **A Telegram bot with no allowlist replied to anyone** (the documented default) — off-allowlist users are refused before a session or model call now; the bot's tool surface is chat-only. (PR [#3306](https://github.com/amd/gaia/pull/3306))
-- **Attaching a document could silently widen the agent's read scope to its whole parent directory** — the grant is the file itself now; reads gained a credential denylist, and writes refuse shell rc files, PowerShell profiles, and git hooks. (PR [#3594](https://github.com/amd/gaia/pull/3594))
+- **Attaching a document could silently widen the agent's read scope to its whole parent directory** — the grant is the file itself now; reads gained a credential denylist, and writes refuse rc files, PowerShell profiles, and git hooks. (PR [#3594](https://github.com/amd/gaia/pull/3594))
 - **A chat turn could plant `system`/`permission` rows into every future prompt** — only onboarding/admin paths write them now. (PR [#3614](https://github.com/amd/gaia/pull/3614))
 
 ## Bug Fixes
