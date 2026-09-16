@@ -353,13 +353,16 @@ jobs:
 
   approve-publish:
     name: Approve Publishing
+    # email-eval dropped from the gate: the email agent's capability is moving
+    # into the core flagship agent (#3329), so its eval suite no longer blocks
+    # a core release. (The job is also disabled at its source in
+    # test_email_agent_eval.yml — if: false — so this isn't the only guard.)
     needs: [build-pypi, build-npm, build-desktop-installers, email-eval]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success' &&
-      needs.email-eval.result == 'success'
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
