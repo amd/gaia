@@ -379,6 +379,13 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: approve-publish
+    # Explicit `if:` on purpose, not the default: GitHub's implicit success()
+    # check walks the FULL ancestor chain (including email-eval, disabled and
+    # reporting 'skipped'), not just this job's direct `needs:` — so without
+    # this, a clean approve-publish success still gets silently skipped
+    # downstream. approve-publish already carries its own explicit override;
+    # this one has to carry its own too, independently.
+    if: needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -404,6 +411,8 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: approve-publish
+    # See publish-pypi's comment: explicit if, same reason.
+    if: needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: npm
@@ -691,6 +700,10 @@ jobs:
   refresh-context7:
     runs-on: ubuntu-latest
     needs: [github-release]
+    # See publish-pypi's comment: explicit if, same reason — github-release
+    # succeeding doesn't stop the default ancestor check further down the
+    # chain from still seeing email-eval's 'skipped' and cascading it here.
+    if: needs.github-release.result == 'success'
     steps:
       - name: Refresh Context7
         run: |
