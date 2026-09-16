@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.1",
+  "agentVersion": "0.2.0",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
+      "componentVersion": "0.2.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.2.0",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-agent-win32-x64.exe",
@@ -33,8 +33,8 @@
       }
     },
     "tui": {
-      "componentVersion": "0.23.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "componentVersion": "0.24.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.24.0",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-win-x64.exe",
