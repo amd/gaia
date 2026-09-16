@@ -28,15 +28,17 @@ tools_count: 78
 
 language: python
 # 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise
-# this sidecar at all; 0.24.0 is the first tagged core that can (#2932).
-min_gaia_version: "0.24.0"
+# this sidecar at all; 0.24.0 was tagged but never got a completed release
+# (a CI gate bug blocked it — see #3915-#3917), so 0.24.1 is the first
+# actually-released core that can (#2932).
+min_gaia_version: "0.24.1"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.24.0"
+    - "amd-gaia>=0.24.1"
     - "gaia-agent-chat>=0.1.0"
 
 interfaces:
