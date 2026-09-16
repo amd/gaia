@@ -105,6 +105,12 @@ class EngineeringService:
         return {
             **self.status(job["id"]),
             "connection": connection,
+            "delivery": {
+                "state": "snapshot_available",
+                "task_created": False,
+                "connection_verified": False,
+                "detail": "Snapshot saved locally for approved MCP reads. Nothing was posted to a coding app. Configure the client and start its task before claiming an investigation is running.",
+            },
             "handoff_prompt": f"Investigate GAIA engineering job {job['id']} using the gaia-engineering MCP server. Read get_context first. Diagnose configuration/model issues before proposing a code change. Private evidence must not appear in public output.",
         }
 

@@ -41,6 +41,9 @@ async def test_real_client_roundtrip_and_revocation(tmp_path, backend):
     token = find_token(raw)
     assert token
     job = service.share(backend, "Synthetic citation issue", "violet-otter-92")
+    assert job["delivery"]["state"] == "snapshot_available"
+    assert job["delivery"]["task_created"] is False
+    assert job["delivery"]["connection_verified"] is False
     params = StdioServerParameters(
         command=sys.executable,
         args=[

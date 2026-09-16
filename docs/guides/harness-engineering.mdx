@@ -189,6 +189,10 @@ no unattended approval switch. The MCP server cannot grant itself either approva
   the generated MCP configuration's explicit developer flag.
 - **No active grant:** check the job ID, chosen backend, expiry and revocation. Pairing
   a second backend does not transfer the first backend's access.
+- **Nothing appeared in Codex:** this integration opens the app only. Create a new
+  task, select the returned handoff directory, paste the returned prompt and send
+  it. No composer is prefilled. Verify the MCP entry is installed in Codex; merely
+  generating GAIA's connection file does not install it in the coding app.
 - **Job changed:** reread context and use its current revision before a mutating call.
 - **Cache initialization failed:** check Git/network access and retry `setup`. No
   incomplete clone is used as a worktree source.

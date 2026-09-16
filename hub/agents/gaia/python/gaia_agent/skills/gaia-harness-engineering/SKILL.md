@@ -24,6 +24,11 @@ assess friction or start coding. Keep GAIA available for daily work.
    `open_engineering_app` only when asked to open the app. An opened app or
    prefilled composer is not a submitted or running task. The developer may
    interact directly in their existing coding app.
+   For Codex specifically, opening only brings the app forward: it does not
+   create a task, select a folder or prefill a composer. Say this explicitly,
+   then show the returned directory and exact prompt to paste into a new task.
+   Never say "posted to Codex", "sent", or "look for the prefilled composer".
+   A generated MCP config is not an installed or verified client connection.
 4. Diagnose before editing: reproduce safely using synthetic or read-only
    inputs, inspect configuration/model limits and actual build identities,
    check releases and existing issues/PRs. Do not replay destructive tools or

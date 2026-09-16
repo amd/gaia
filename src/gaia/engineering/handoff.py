@@ -90,7 +90,16 @@ def open_app(backend: str, job_id: str, working_directory: Path) -> dict:
     )
     return {
         "state": "requires_user_action",
-        "detail": "App opened. Confirm/select the folder and submit the generic prompt; no coding task was started automatically.",
+        "backend": backend,
+        "task_created": False,
+        "prompt_prefilled": backend == "claude",
+        "directory_selected": False,
+        "connection_verified": False,
+        "detail": (
+            "Requested Claude composer prefill. Confirm the folder and submit the prompt; no task was started automatically."
+            if backend == "claude"
+            else "Opened Codex only. No task was created, no prompt was prefilled, and no folder was selected. Create a new task manually, select the directory below, paste the exact prompt below and send it. Verify gaia-engineering MCP is configured first. Do not tell the user it was posted or that a composer is prefilled."
+        ),
         "prompt": prompt,
         "directory": str(working_directory.resolve()),
     }

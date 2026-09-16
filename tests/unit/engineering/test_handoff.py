@@ -49,3 +49,10 @@ def test_codex_launch_is_manual(tmp_path, monkeypatch):
     result = handoff.open_app("codex", "b" * 32, tmp_path)
     assert calls == [["open", "-a", "/Applications/Codex.app"]]
     assert result["state"] == "requires_user_action"
+    assert result["backend"] == "codex"
+    assert result["task_created"] is False
+    assert result["prompt_prefilled"] is False
+    assert result["directory_selected"] is False
+    assert result["connection_verified"] is False
+    assert "Create a new task manually" in result["detail"]
+    assert "b" * 32 in result["prompt"]
