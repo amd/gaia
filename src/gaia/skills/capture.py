@@ -336,14 +336,17 @@ def capture_skill(
             )
 
         destination_root.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            shutil.rmtree(target)
         # The bundle and its lock entry land together or not at all. The lock
         # is what marks a capture untrusted, so a bundle on disk WITHOUT one
         # reads as an ordinary skill and its tools.py would import on the next
         # load — a half-finished capture must never fail open into a trusted
         # one. Any failure below removes the directory and re-raises.
         try:
+            # Inside the try: a force-replace removes the previous bundle, so a
+            # failure after this point has to drop its lock entry too or the
+            # lock is left naming a directory that no longer exists.
+            if target.exists():
+                shutil.rmtree(target)
             if source_dir is not None:
                 # The WHOLE bundle lands — tools.py/scripts included — so
                 # promote trusts exactly the bytes that were audited.
@@ -376,6 +379,9 @@ def capture_skill(
             lock.save()
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
+            stale = SkillLock.load(destination_root)
+            if stale.forget(final_name):
+                stale.save()
             raise
 
     has_scripts = (target / "scripts").is_dir()

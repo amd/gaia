@@ -113,4 +113,9 @@ class TestCaptureLandsAtomically:
 
         src = inspect.getsource(cap.capture_skill)
         assert "shutil.rmtree(target, ignore_errors=True)" in src
-        assert "raise" in src.split("shutil.rmtree(target, ignore_errors=True)")[1][:40]
+        # The handler may clean up more than the directory (a force-replace
+        # also drops the stale lock entry), so pin the ORDER — cleanup, then a
+        # bare re-raise — rather than a character distance between them.
+        after = src.split("shutil.rmtree(target, ignore_errors=True)")[1]
+        handler = after.split("\n\n")[0]
+        assert [ln.strip() for ln in handler.splitlines() if ln.strip()][-1] == "raise"

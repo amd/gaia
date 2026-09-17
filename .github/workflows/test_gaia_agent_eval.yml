@@ -105,7 +105,7 @@ on:
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 12)'
+        description: 'Comma-separated gaia_* categories to run (default: all 13)'
         required: false
         default: ''
       enforce:
@@ -127,7 +127,7 @@ on:
   workflow_call:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 12)'
+        description: 'Comma-separated gaia_* categories to run (default: all 13)'
         required: false
         type: string
         default: ''
@@ -472,7 +472,7 @@ jobs:
             Add-Summary "| --- | ---: |"
 
             # PR subset: tier-filtered cheap categories. Everything else: the
-            # category list from the dispatch/call input (default all 12).
+            # category list from the dispatch/call input (default all 13).
             if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
               $runs = @(
                 @{ cat = 'gaia_core';           extra = @('--tag','t1_basic','--tag','t2_compound') },

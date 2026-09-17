@@ -141,6 +141,28 @@ class TestCaptureFromText:
             capture_skill(_markdown(), manager=manager)
         capture_skill(_markdown(), manager=manager, force=True)
 
+    def test_a_failed_force_replace_leaves_no_lock_entry_behind(self, manager, monkeypatch):
+        """The replaced bundle is gone, so its lock entry must go with it.
+
+        Otherwise the next reload finds a locked-but-absent skill: `gaia skill
+        list` shows a skill whose directory does not exist, and the next
+        capture of that name reasons about a stale entry.
+        """
+        from gaia.skills.lock import SkillLock
+
+        capture_skill(_markdown(), manager=manager)
+        assert "meeting-notes" in SkillLock.load(manager.user_root)
+
+        def boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("gaia.skills.capture.reset_security_tier", boom)
+        with pytest.raises(OSError):
+            capture_skill(_markdown(), manager=manager, force=True)
+
+        assert not (manager.user_root / "meeting-notes").exists()
+        assert "meeting-notes" not in SkillLock.load(manager.user_root)
+
     def test_garbage_single_line_source_gets_an_actionable_error(self, manager):
         with pytest.raises(SkillCaptureError, match="not an existing"):
             capture_skill(r"C:\no\such\skill-folder", manager=manager)

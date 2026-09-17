@@ -44,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories (default: all 12 — the only profile allowed to commit; a subset run never commits)'
+        description: 'Comma-separated gaia_* categories (default: all 13 — the only profile allowed to commit; a subset run never commits)'
         required: false
         default: ''
       eval_model:
