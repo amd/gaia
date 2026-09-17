@@ -59,6 +59,7 @@ from gaia.skills.format import (
     reset_security_tier,
     split_frontmatter,
 )
+from gaia.skills.naming import skill_directory
 from gaia.skills.permissions import refuse_unbridged_permissions
 
 log = get_logger(__name__)
@@ -920,7 +921,11 @@ def install_migrated(
         )
 
     skill = outcome.skill
-    target = Path(destination_root) / skill.name
+    # skill.name came out of a foreign vendor's manifest; --force rmtrees this
+    # path, so it is validated as a bare name inside the root before it is used.
+    target = skill_directory(
+        destination_root, skill.name, source=f"migrate {outcome.source}"
+    )
     source_dir = outcome.source.parent if outcome.source.is_file() else None
     if target.exists():
         if (

@@ -77,7 +77,8 @@ def tool(
     func: Callable = None,
     *,
     atomic: bool = False,
-    **kwargs  # Ignored, for backward compatibility
+    display_label: str | None = None,
+    timeout: float | None = None,
 ) -> Callable:
     """
     Decorator to register a function as an agent tool.
@@ -93,7 +94,9 @@ def tool(
         atomic: If True, marks this tool as suitable for direct execution
                 without multi-step planning. Use for simple, self-contained
                 operations (default: False)
-        **kwargs: Optional arguments (ignored)
+        display_label: Optional user-facing label for UI progress strips
+        timeout: Per-tool execution limit in seconds, or ``None`` for the
+                 global default
 
     Returns:
         Original function, unchanged
@@ -113,6 +116,10 @@ def tool(
             return {"results": [...]}
     """
 ```
+
+Unsupported keyword arguments raise ``TypeError`` when the function is
+decorated. The error names the tool, the invalid argument, and the accepted
+arguments (``atomic``, ``display_label``, and ``timeout``).
 
 ### Tool Registry
 

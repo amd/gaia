@@ -235,7 +235,7 @@ def test_provision_503_unreachable_streams_body_through():
     resp = _StreamResp(
         [
             b"Lemonade Server is not reachable\n",
-            b"Start it with lemonade-server serve\n",
+            b"Install and start it with `gaia init`\n",
         ],
         status=503,
     )
@@ -244,7 +244,7 @@ def test_provision_503_unreachable_streams_body_through():
     status, _media_type, chunks = proxy.provision()
     assert status == 503
     assert b"".join(chunks) == (
-        b"Lemonade Server is not reachable\nStart it with lemonade-server serve\n"
+        b"Lemonade Server is not reachable\nInstall and start it with `gaia init`\n"
     )
 
 
@@ -323,6 +323,36 @@ def test_schema21_post_routes_forward_to_real_endpoints(method, path):
     out = getattr(proxy, method)({"x": 1})
     assert out == envelope
     assert sess.posts[0] == (f"http://127.0.0.1:9100{path}", {"x": 1})
+
+
+def test_respond_query_posts_request_id_and_value_to_run_scoped_route():
+    # (#2595) delivering a needs_input answer must hit the run-scoped
+    # /respond route with exactly {request_id, value} — not a generic payload
+    # passthrough like the schema-2.1 routes above.
+    envelope = {
+        "run_id": "rid-1",
+        "request_id": "req-1",
+        "accepted": True,
+        "status": "ok",
+    }
+    sess = _Session(envelope)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    out = proxy.respond_query("rid-1", "req-1", "gmail")
+    assert out == envelope
+    assert sess.posts[0] == (
+        "http://127.0.0.1:9100/v1/email/query/rid-1/respond",
+        {"request_id": "req-1", "value": "gmail"},
+    )
+
+
+def test_respond_query_raises_loudly_on_non_2xx():
+    # A 409 (question no longer pending) must surface as SidecarHTTPError,
+    # never be swallowed into a fake "accepted".
+    sess = _Session({}, resp=_Resp({"detail": "no such pending question"}, status=409))
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as exc_info:
+        proxy.respond_query("rid-1", "req-stale", "gmail")
+    assert exc_info.value.status_code == 409
 
 
 def test_pre_scan_inbox_forwards_prescan_envelope_unchanged():

@@ -284,8 +284,18 @@ python util/lint.py --flake8      # flake8
 python util/lint.py --mypy        # type checking
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
+python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
 ```
+
+<Note>
+`--workflow-triggers` blocks a `branches:` filter under a workflow's
+`on.pull_request`. That key matches the PR's **base** branch, so `branches: [ main ]`
+means "only when merging into main" — every PR stacked on a feature branch skips the
+workflow, with nothing on its checks page to say so
+([#2767](https://github.com/amd/gaia/issues/2767)). Scope a workflow with `paths:`
+instead.
+</Note>
 
 ### Running Tests
 
@@ -293,6 +303,22 @@ python util/lint.py --doc-versions # verify versions in docs match src/gaia/vers
 python -m pytest tests/unit/        # Unit tests only
 python -m pytest tests/ -xvs        # All tests, verbose
 python -m pytest tests/ --hybrid    # Cloud + local testing
+```
+
+The packaged email-agent tests are hermetic and must not invoke an interactive
+OS keychain. Run them with the null keyring backend (the email test package's
+`conftest.py` and CI workflow apply this setting automatically):
+
+```bash
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+  python -m pytest hub/agents/email/python/tests/
+```
+
+On PowerShell, set the equivalent environment variable first:
+
+```powershell
+$env:PYTHON_KEYRING_BACKEND = "keyring.backends.null.Keyring"
+python -m pytest hub/agents/email/python/tests/
 ```
 
 Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,

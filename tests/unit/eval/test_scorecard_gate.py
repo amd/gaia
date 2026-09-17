@@ -742,3 +742,35 @@ class TestEnvCtxSizePublicHelper:
     def test_non_dict_environment_returns_none(self):
         parsed = {"recipe": {"environment": None}}
         assert env_ctx_size(parsed) is None
+
+
+# ---------------------------------------------------------------------------
+# --expected-version (#2965) — release-time guard that fails when the
+# candidate SCORECARD.md's own front-matter version does not match the
+# package version being released, so a stale scorecard drift (e.g. the email
+# agent shipping 0.6.0 with a scorecard still stamped 0.5.0) is a loud release
+# failure instead of a silently-published mismatch.
+# ---------------------------------------------------------------------------
+
+
+class TestExpectedVersionGuard:
+    def test_matching_version_passes(self, tmp_path):
+        cand = _write_card(tmp_path, "0.6.0", accuracy=0.8)
+        assert main(["--scorecard", str(cand), "--expected-version", "0.6.0"]) == 0
+
+    def test_mismatched_version_fails(self, tmp_path, capsys):
+        # Reproduces the real #2965 drift: package released at 0.6.0, but the
+        # committed scorecard still records the last version it was actually
+        # measured at (0.5.0).
+        cand = _write_card(tmp_path, "0.5.0", accuracy=0.8)
+        result = main(["--scorecard", str(cand), "--expected-version", "0.6.0"])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "0.5.0" in out
+        assert "0.6.0" in out
+
+    def test_omitted_flag_does_not_check_version(self, tmp_path):
+        # Backward compatible: existing callers that never pass
+        # --expected-version are unaffected by a version mismatch.
+        cand = _write_card(tmp_path, "0.5.0", accuracy=0.8)
+        assert main(["--scorecard", str(cand)]) == 0

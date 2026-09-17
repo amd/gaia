@@ -274,6 +274,18 @@ def main(argv=None) -> int:
             "(--min-aggregate / --min-urgent-recall) still apply."
         ),
     )
+    parser.add_argument(
+        "--expected-version",
+        default=None,
+        help=(
+            "Package version being released (#2965). Fails the release if the "
+            "candidate SCORECARD.md's 'agent.version' front-matter field does not "
+            "equal this. The scorecard is only regenerated when a fresh eval "
+            "runs, not on every release, so it silently drifts behind the "
+            "package version unless this is checked — this makes that drift a "
+            "loud release-time failure instead of a stale published number."
+        ),
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -306,6 +318,23 @@ def main(argv=None) -> int:
             + "\n".join(f"  - {e}" for e in errors)
         )
         return 1
+
+    # --- Step 1a2: candidate version must match the package being released (#2965) ---
+    if args.expected_version is not None:
+        scorecard_version = candidate_parsed.get("agent", {}).get("version")
+        if scorecard_version != args.expected_version:
+            print(
+                f"ERROR: SCORECARD.md version does not match the release (#2965).\n"
+                f"  {candidate_path}: agent.version = {scorecard_version!r}\n"
+                f"  Package being released: {args.expected_version!r}\n"
+                f"  The scorecard is only regenerated when a fresh eval runs, not on "
+                f"every release — this one is stale for this release. Either "
+                f"regenerate it (gen_scorecard.py) against the new version, or, if "
+                f"the score still applies, update its 'agent.version' front-matter "
+                f"field and generated_at only after confirming nothing eval-affecting "
+                f"changed since it was measured."
+            )
+            return 1
 
     # --- Step 1a: ctx-stamp requirement (#1892) ---
     cand_ctx = env_ctx_size(candidate_parsed)

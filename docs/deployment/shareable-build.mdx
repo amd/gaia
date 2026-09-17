@@ -1,0 +1,72 @@
+---
+title: "Shareable Terminal Build"
+description: "Package the GAIA terminal UI and agent into one Windows .exe you can hand to someone with no Python, no Go and no clone."
+---
+
+## What you get
+
+One per-user `.exe`. The person you send it to double-clicks, then runs `gaia-tui` —
+no Python, no Go, no clone, no admin rights. It installs two binaries and a sentinel
+file, and nothing else.
+
+Lemonade and the models are deliberately **not** bundled. They are gigabytes, and
+`gaia init` already owns downloading them on first run.
+
+## Build it
+
+The packaging script packages binaries — it does not build them. Build both first:
+
+```powershell
+cd tui; go build -o bin/gaia-tui.exe ./cmd/gaia; cd ..
+python hub/agents/gaia/python/packaging/freeze.py --onefile
+.\installer\scripts\build-gaia-installer.ps1
+```
+
+The result lands in `dist/installer/gaia-setup-<version>.exe`.
+
+You need NSIS 3.x (`winget install NSIS.NSIS`). Every other input is checked before
+`makensis` runs, so a missing binary fails with the exact command that produces it
+rather than a link error deep in the NSIS log.
+
+<Warning>
+  The frozen agent ignores `PYTHONPATH`. Whatever is in your working tree when you
+  run `freeze.py` is what ships — so build the agent **after** your last source
+  change, not before. A binary frozen from an older tree looks identical and behaves
+  like the old code.
+</Warning>
+
+## Where it installs
+
+| Path | What |
+|---|---|
+| `%LOCALAPPDATA%\Programs\GAIA\gaia-tui.exe` | The terminal UI. Its folder is added to the **user** PATH — no admin rights anywhere in this install. |
+| `%USERPROFILE%\.gaia\agents\gaia\gaia-agent.exe` | The frozen flagship, in the hub install root the TUI searches. One copy, not two. |
+| `%USERPROFILE%\.gaia\agents\gaia\.installed` | The install sentinel. **Load-bearing**: without it the TUI treats the agent as an unverified install and refuses to spawn it (`catalog.findInstalledBinaryIn`, #3062). |
+
+## Verify before you share it
+
+Run the binary the way your recipient will — with no repo on `PATH` and no
+`PYTHONPATH` — and confirm it reaches the model server:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  | gaia-agent | head -1
+```
+
+`lemonade_reachable` must be `true` and `lemonade_base_url` must name the server you
+expect. A frozen binary that resolves the wrong address reports a connection refusal
+and tells the user to run `gaia init` — on a machine where the server is already
+running and healthy.
+
+<Note>
+  If you run GAIA's own embedded server (`gaia lemonade embedded`), it binds a port
+  chosen at start time and records it in `~/.gaia/lemonade/state.json`. Clients find
+  it through `resolve_lemonade_base_url()`; anything that hardcodes the packaged
+  default port cannot see it.
+</Note>
+
+## Related
+
+- [Installer directory layout](https://github.com/amd/gaia/blob/main/installer/README.md) — the build scripts, version helpers, and platform assets
+- [Agent UI installer](/deployment/ui) — the Electron desktop app, a separate artifact
+- [Code signing](/deployment/code-signing)

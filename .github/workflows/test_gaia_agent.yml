@@ -16,23 +16,25 @@ on:
     paths:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
-      - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/skills/**'
-      - 'src/gaia/code_index/**'
+      # The flagship composes providers, RAG, connectors and the UI's stdio
+      # adapters; restricting this to agent modules misses runtime regressions.
+      - 'src/gaia/**'
+      - 'hub/skills/**'
+      - 'tests/**'
       - 'setup.py'
+      - 'pyproject.toml'
       - '.github/workflows/test_gaia_agent.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/chat/python/**'
-      - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/skills/**'
-      - 'src/gaia/code_index/**'
+      - 'src/gaia/**'
+      - 'hub/skills/**'
+      - 'tests/**'
       - 'setup.py'
+      - 'pyproject.toml'
       - '.github/workflows/test_gaia_agent.yml'
   merge_group:
   workflow_dispatch:
@@ -95,8 +97,24 @@ jobs:
           # the starter-pack honesty guards, and the binary policies — run
           # their framework-side suites in the same environment.
           python -m pytest \
+            tests/unit/test_flagship_ci.py \
             tests/unit/test_skill_loader.py \
             tests/unit/test_agent_lazy_skill_prompt.py \
             tests/unit/test_starter_skills.py \
             tests/unit/test_skill_sets.py \
+            -v --tb=short
+
+      - name: Run Command-Injection Regression Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "================================================================"
+          echo "              COMMAND-INJECTION REGRESSION TESTS"
+          echo "================================================================"
+          # notify_desktop lives in the chat package, so its half of this file
+          # only executes where that package is installed — this lane. The
+          # PPTX-filename half needs no agent package and also runs in
+          # test_unit.yml; running the whole file here keeps both guarded.
+          python -m pytest \
+            tests/unit/test_powershell_command_injection.py \
             -v --tb=short

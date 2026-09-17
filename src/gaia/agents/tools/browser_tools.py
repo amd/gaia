@@ -248,6 +248,9 @@ class BrowserToolsMixin:
             PDFs, CSVs, images, or any file from the web for local analysis.
             After downloading, use read_file or index_document to process it.
 
+            Never replaces a file that already exists: if the destination is
+            taken the download fails, so pass filename= to choose a free name.
+
             Args:
                 url: Direct URL to the file to download
                 save_to: Local directory to save the file (default: ~/Downloads)
@@ -273,36 +276,35 @@ class BrowserToolsMixin:
                 if is_blocked:
                     return f"Error: {reason}"
 
+            # Screen the *resolved file path* (not just the directory) against
+            # the sensitive-filename guardrail before a single byte is written.
+            # The directory check above catches blocked dirs, but the final
+            # filename (from Content-Disposition or URL) could be something
+            # like `credentials.json` that is_write_blocked would reject for
+            # write_file. WebClient.download calls this before creating the
+            # file, so a blocked download leaves the filesystem untouched.
+            def _screen_destination(dest_path: Path) -> None:
+                validator = getattr(mixin, "_path_validator", None)
+                if not validator:
+                    return
+                is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                if is_blocked:
+                    raise ValueError(
+                        f"Downloaded file blocked by security policy: {reason}"
+                    )
+
             try:
                 result = mixin._web_client.download(
                     url=url,
                     save_dir=save_to,
                     filename=filename,
+                    on_path_resolved=_screen_destination,
                 )
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
                 logger.error(f"Error downloading {url}: {e}")
                 return f"Error downloading file: {e}"
-
-            # Post-download: check the *resolved file path* (not just the
-            # directory) against the sensitive-filename guardrail. The
-            # directory check above catches blocked dirs, but the final
-            # filename (from Content-Disposition or URL) could be something
-            # like `credentials.json` or `.env` that is_write_blocked
-            # would reject for write_file.  Delete the file if blocked.
-            if hasattr(mixin, "_path_validator") and mixin._path_validator:
-                saved_path = result.get("path", "")
-                is_blocked, reason = mixin._path_validator.is_write_blocked(saved_path)
-                if is_blocked:
-                    try:
-                        Path(saved_path).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    return (
-                        f"Error: Downloaded file blocked by security policy: "
-                        f"{reason}"
-                    )
 
             # Format file size
             size_bytes = result["size"]

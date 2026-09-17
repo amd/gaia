@@ -10,7 +10,7 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 import ast
 import csv
 import fnmatch
-import logging
+import heapq
 import mimetypes
 import os
 import platform
@@ -19,7 +19,36 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List
 
-logger = logging.getLogger(__name__)
+from gaia.agents.tools.file_edit import (
+    apply_unique_replacement,
+    record_read,
+    record_write,
+)
+from gaia.agents.tools.search_scope import (
+    DEEP_ROOT_DEPTH,
+    root_depth,
+    search_roots,
+)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _python_syntax_error(source: str, filename: str) -> str | None:
+    """The SyntaxError *source* would raise on import, or None if it is valid.
+
+    Uses ``compile`` rather than ``ast.parse``: the parser accepts a dedented
+    ``return``, a stray ``yield``/``await``, ``break`` outside a loop and
+    duplicate argument names — all of which fail at import. #3733's own
+    corruption (``return 0`` dedented out of ``main()``) is one of them.
+    Grammar is the running interpreter's, so syntax newer than the host
+    Python reads as invalid.
+    """
+    try:
+        compile(source, filename, "exec")
+    except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
+        return str(e)
+    return None
 
 
 class FileSearchToolsMixin:
@@ -61,6 +90,10 @@ class FileSearchToolsMixin:
             self, "_path_validator", None
         )
 
+    def _search_roots(self) -> List[Path]:
+        """Where a filesystem search should look — see ``search_scope`` (#3576)."""
+        return search_roots(self)
+
     def _read_access_error(self, path: str):
         """Enforce the ``--allowed-paths`` sandbox on read operations.
 
@@ -70,15 +103,20 @@ class FileSearchToolsMixin:
         through the read tools (CWE-862). ``FileIOToolsMixin`` already
         gates its reads this way; this mirrors it.
 
-        Returns an error dict when ``path`` is outside the sandbox, or
-        ``None`` when the read is permitted (or no validator is attached).
+        The allowlist alone is not the whole gate: ``validate_read`` also
+        refuses secrets sitting *inside* an allowed directory, so a scope that
+        legitimately covers ``$HOME`` still cannot read ``~/.ssh/id_rsa``.
+
+        Returns an error dict when ``path`` is outside the sandbox or is a
+        credential file, or ``None`` when the read is permitted (or no
+        validator is attached).
         """
         validator = self._get_path_validator()
-        if validator is not None and not validator.is_path_allowed(path):
-            return {
-                "status": "error",
-                "error": f"Access denied: '{path}' is not in allowed paths",
-            }
+        if validator is None:
+            return None
+        is_allowed, reason = validator.validate_read(path)
+        if not is_allowed:
+            return {"status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -87,46 +125,26 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_file",
-            description=(
-                "Search for files by filename keywords. Searches CWD (recursively) and common folders. "
-                "RULE: Use document-type keywords, NOT the user's question topic. "
-                "HR/policy questions → try 'handbook', 'employee', 'policy', 'HR'. "
-                "Sales/finance questions → try 'sales', 'budget', 'revenue', 'report'. "
-                "REQUIRED STRATEGY: "
-                "1. First call: use doc-type keyword (e.g. 'handbook' for PTO/remote work/HR questions). "
-                "2. If no results: try alternate keywords ('policy', 'employee', 'manual', 'guide'). "
-                "3. If 2+ searches fail: call browse_files to see all available files. "
-                "NEVER give up after just 1-2 failed searches."
-            ),
-            parameters={
-                "file_pattern": {
-                    "type": "str",
-                    "description": "Filename keyword(s) to search. Use document-type words: 'handbook', 'policy', 'report', 'manual'. NOT question topics like 'PTO' or 'remote work'. Supports plain text, globs (*.pdf), regex (employ.*book), OR syntax ('handbook OR policy').",
-                    "required": True,
-                },
-                "deep_search": {
-                    "type": "bool",
-                    "description": "If True, extends search to all drives (slower). Use if CWD+common-folders search found nothing. Default: False",
-                    "required": False,
-                },
-                "file_types": {
-                    "type": "str",
-                    "description": "Comma-separated file extensions to filter (e.g., 'pdf,docx,txt'). Default: all document types",
-                    "required": False,
-                },
-            },
         )
         def search_file(
-            file_pattern: str, deep_search: bool = False, file_types: str = None
+            file_pattern: str,
+            directory: str = None,
+            deep_search: bool = False,
+            file_types: str = None,
         ) -> Dict[str, Any]:
             """
-            Search for files with intelligent prioritization.
+            Find files by name or pattern.
 
-            Strategy:
-            1. Quick search: CWD + common document locations (fast)
-            2. Deep search: entire drive(s) (only when deep_search=True)
-            3. Filter by document file types for speed
+            Args:
+                file_pattern: name, substring, glob ("*.go") or regex to match.
+                directory: WHERE to look. Pass it whenever the user names a
+                    folder ("in tui/internal", "under docs") — without it the
+                    search covers the whole workspace and common document
+                    folders, which is slower and can match the wrong file.
+                deep_search: search entire drives. Slow; only after a normal
+                    search found nothing.
+                file_types: comma-separated extensions to restrict to, e.g.
+                    "go,md". Defaults to common document and source types.
             """
             try:
                 # Document file extensions to search
@@ -290,55 +308,117 @@ class FileSearchToolsMixin:
 
                     search_recursive(location, 0)
 
-                # Phase 0+1: Search CWD AND common locations together
-                # (always search both before returning, so Documents/Downloads
-                # files aren't missed just because CWD had some matches)
-                cwd = Path.cwd()
                 home = Path.home()
 
-                # Show progress to user
-                if hasattr(self, "console") and hasattr(self.console, "start_progress"):
-                    self.console.start_progress(
-                        f"🔍 Searching current directory ({cwd.name}) for '{file_pattern}'..."
-                    )
+                # An explicit directory is the whole scope: the user named a
+                # place, so searching anywhere else can only return the wrong
+                # file. It is sandbox-checked and must exist — a search that
+                # silently skipped it would report an honest-looking zero.
+                if directory:
+                    # Resolve BEFORE the sandbox check: "tui/internal" means a
+                    # folder in the user's workspace, not one under whatever
+                    # directory this process happens to have been spawned in.
+                    scope = Path(directory).expanduser()
+                    workspace = self._search_roots()
+                    if not scope.is_absolute():
+                        matched = next(
+                            (r for r in workspace if (r / scope).is_dir()), None
+                        )
+                        if matched is None:
+                            # No root holds it. Say that, rather than resolving
+                            # against this process's cwd and reporting "access
+                            # denied" for an absolute path the user never typed
+                            # — a typo'd folder should read as a typo. Safe to
+                            # be specific: no absolute path was supplied, so
+                            # this is not an existence oracle.
+                            listed = ", ".join(str(r) for r in workspace)
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"Directory not found: '{directory}' is not "
+                                    f"under any workspace root ({listed}). "
+                                    "Nothing was searched — this is not an "
+                                    "empty result."
+                                ),
+                                "searched_paths": [],
+                                "workspace_roots": [str(r) for r in workspace],
+                            }
+                        scope = matched / scope
+                    scope = scope.resolve()
+                    # Sandbox before the existence probe, so an out-of-sandbox
+                    # path cannot be used as a directory-existence oracle
+                    # (same order as read_file / search_file_content).
+                    denied = self._read_access_error(str(scope))
+                    if denied:
+                        return denied
+                    if not scope.is_dir():
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Directory not found: '{directory}'. Nothing was "
+                                "searched — this is not an empty result."
+                            ),
+                            "searched_paths": [],
+                        }
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            f"🔍 Searching {scope} for '{file_pattern}'..."
+                        )
+                    search_location(scope, max_depth=DEEP_ROOT_DEPTH)
+                    roots = [scope]
+                else:
+                    # Phase 0+1: the agent's allowed paths AND common document
+                    # locations (always both, so a Documents file isn't missed
+                    # just because a workspace root had some matches).
+                    roots = self._search_roots()
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            f"🔍 Searching the workspace for '{file_pattern}'..."
+                        )
+                    logger.debug("Phase 0: searching %s", [str(r) for r in roots])
+                    for root in roots:
+                        # Only the project gets an exhaustive walk. The rest of
+                        # the sandbox is approvals that accumulated over time,
+                        # and a zero-result search would traverse all of them.
+                        search_location(root, max_depth=root_depth(root, roots))
 
-                logger.debug(
-                    f"Phase 0: Deep search of current directory for '{file_pattern}'..."
-                )
-                logger.debug(f"Current directory: {cwd}")
+                    # Always also search common locations (Documents, Downloads, etc.)
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            "🔍 Searching common folders (Documents, Downloads, Desktop)..."
+                        )
 
-                # Search current directory thoroughly (unlimited depth)
-                search_location(cwd, max_depth=999)
+                    logger.debug("Phase 1: Searching common document locations...")
 
-                # Always also search common locations (Documents, Downloads, etc.)
-                if hasattr(self, "console") and hasattr(self.console, "start_progress"):
-                    self.console.start_progress(
-                        "🔍 Searching common folders (Documents, Downloads, Desktop)..."
-                    )
+                    common_locations = [
+                        home / "Documents",
+                        home / "Downloads",
+                        home / "Desktop",
+                        home / "OneDrive",
+                        home / "Google Drive",
+                        home / "Dropbox",
+                    ]
 
-                logger.debug("Phase 1: Searching common document locations...")
-
-                common_locations = [
-                    home / "Documents",
-                    home / "Downloads",
-                    home / "Desktop",
-                    home / "OneDrive",
-                    home / "Google Drive",
-                    home / "Dropbox",
-                ]
-
-                for location in common_locations:
-                    if len(matching_files) >= 20:
-                        break
-                    # Skip if already searched as part of CWD
-                    try:
-                        if location.resolve() == cwd.resolve() or str(
-                            location.resolve()
-                        ).startswith(str(cwd.resolve())):
-                            continue
-                    except (OSError, ValueError):
-                        pass
-                    search_location(location, max_depth=5)
+                    for location in common_locations:
+                        if len(matching_files) >= 20:
+                            break
+                        # Skip anything already covered by a searched root
+                        try:
+                            resolved = location.resolve()
+                            if any(
+                                resolved == root or str(resolved).startswith(str(root))
+                                for root in roots
+                            ):
+                                continue
+                        except (OSError, ValueError):
+                            pass
+                        search_location(location, max_depth=5)
 
                 # Deduplicate results (CWD and common locations may overlap)
                 unique_files = []
@@ -368,18 +448,32 @@ class FileSearchToolsMixin:
                         "display_message": f"✓ Found {len(limited_files)} file(s)",
                     }
 
-                # Quick search found nothing
-                if not deep_search:
-                    # Return with hint that deep search is available
+                # Quick search found nothing. A named directory is the WHOLE
+                # scope: a drive-wide sweep would answer about somewhere else,
+                # which is the same wrong answer in a softer form — and the
+                # deep_search docstring tells the model to reach for it after
+                # exactly this result.
+                if not deep_search or directory:
+                    # Name the places that were searched. A bare zero reads as
+                    # "there are none", and the model relays it that way (#3576).
+                    where = ", ".join(str(r) for r in roots) or "nowhere"
                     return {
                         "status": "success",
                         "files": [],
                         "count": 0,
                         "total_locations_searched": len(searched_locations),
-                        "search_context": "common_locations",
-                        "display_message": f"No files found matching '{file_pattern}' in common locations",
-                        "deep_search_available": True,
-                        "suggestion": "I can do a deep search across all drives if you'd like (this may take a minute).",
+                        "searched_paths": [str(p) for p in searched_locations],
+                        "search_context": "directory" if directory else "workspace",
+                        "display_message": (
+                            f"No files matching '{file_pattern}' under {where}"
+                        ),
+                        "deep_search_available": not directory,
+                        "suggestion": (
+                            "Zero here means zero UNDER THE PATHS LISTED IN "
+                            "searched_paths, not zero on the machine. Say where you "
+                            "looked. If the user named a folder, pass it as "
+                            "`directory`."
+                        ),
                     }
 
                 # Phase 2: Deep drive search (only when explicitly requested)
@@ -423,26 +517,13 @@ class FileSearchToolsMixin:
                         "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
                     }
                 else:
-                    # Build helpful message about what was searched
-                    search_summary = []
-                    if str(cwd) in searched_locations:
-                        search_summary.append(f"current directory ({cwd.name})")
-                    if len(searched_locations) > 1:
-                        search_summary.append(
-                            f"{len(searched_locations)} total locations"
-                        )
-
-                    searched_str = (
-                        ", ".join(search_summary)
-                        if search_summary
-                        else f"{len(searched_locations)} locations"
-                    )
-
+                    searched_str = f"{len(searched_locations)} locations"
                     return {
                         "status": "success",
                         "files": [],
                         "count": 0,
                         "total_locations_searched": len(searched_locations),
+                        "searched_paths": [str(p) for p in searched_locations],
                         "search_summary": searched_str,
                         "display_message": f"❌ No files found matching '{file_pattern}'",
                         "searched": f"Searched {searched_str}",
@@ -463,25 +544,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_directory",
-            description="Search for a directory by name starting from a root path. Use when user asks to find or index 'my data folder' or similar.",
-            parameters={
-                "directory_name": {
-                    "type": "str",
-                    "description": "Name of directory to search for (e.g., 'data', 'documents')",
-                    "required": True,
-                },
-                "search_root": {
-                    "type": "str",
-                    "description": "Root path to start search from (default: user's home directory)",
-                    "required": False,
-                },
-                "max_depth": {
-                    "type": "int",
-                    "description": "Maximum depth to search (default: 4)",
-                    "required": False,
-                },
-            },
         )
         def search_directory(
             directory_name: str, search_root: str = None, max_depth: int = 4
@@ -559,15 +621,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="read_file",
-            description="Read any file and intelligently analyze based on file type. Supports Python, Markdown, and other text files.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file to read",
-                    "required": True,
-                }
-            },
         )
         def read_file(file_path: str) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
@@ -611,6 +664,19 @@ class FileSearchToolsMixin:
                             f"File not found: {file_path}.{hint}"
                             f" Try using search_file with pattern '{file_name}'"
                             " to locate it elsewhere."
+                        ),
+                    }
+
+                # os.path.exists() is true for a directory too, so without this
+                # check open() below raises IsADirectoryError into the generic
+                # except Exception handler as a raw errno string (amd/gaia#3890).
+                if os.path.isdir(file_path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"'{file_path}' is a directory, not a file. Use "
+                            "search_directory to list its contents, then call "
+                            "read_file on a file inside it."
                         ),
                     }
 
@@ -671,6 +737,9 @@ class FileSearchToolsMixin:
                         "is_binary": True,
                         "size_bytes": len(content_bytes),
                     }
+
+                # Anchor later edits to what the agent actually saw.
+                record_read(file_path, content)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -752,40 +821,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="search_file_content",
-            description=(
-                "Search for text patterns within files on disk (like grep). "
-                "Searches actual file contents, not indexed documents. "
-                "Use context_lines=5 when you need to see surrounding content after finding a section header "
-                "(e.g., search 'Section 52' with context_lines=5 to see the content below the heading)."
-            ),
-            parameters={
-                "pattern": {
-                    "type": "str",
-                    "description": "Text pattern or keyword to search for",
-                    "required": True,
-                },
-                "directory": {
-                    "type": "str",
-                    "description": "Directory to search in (default: current directory)",
-                    "required": False,
-                },
-                "file_pattern": {
-                    "type": "str",
-                    "description": "File pattern to filter (e.g., '*.py', '*.txt'). Default: all text files",
-                    "required": False,
-                },
-                "case_sensitive": {
-                    "type": "bool",
-                    "description": "Whether search should be case-sensitive (default: False)",
-                    "required": False,
-                },
-                "context_lines": {
-                    "type": "int",
-                    "description": "Lines of context to show before and after each match (like grep -C). Default: 0",
-                    "required": False,
-                },
-            },
         )
         def search_file_content(
             pattern: str,
@@ -814,6 +849,17 @@ class FileSearchToolsMixin:
                     return {
                         "status": "error",
                         "error": f"Directory not found: {directory}",
+                    }
+
+                # rglob over a file yields nothing, which would read as
+                # "no matches" instead of "you passed the wrong path".
+                if not directory.is_dir():
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"Path is not a directory: {directory}. Pass the folder "
+                            "to search, or use read_file for a single file."
+                        ),
                     }
 
                 # Text file extensions to search
@@ -908,8 +954,9 @@ class FileSearchToolsMixin:
                                         if len(matches) >= 100:
                                             return False
                         return True
-                    except Exception:
-                        return True  # Continue searching
+                    except (OSError, UnicodeError) as exc:
+                        logger.warning("Could not search %s: %s", file_path, exc)
+                        return True
 
                 # Search files
                 for file_path in directory.rglob("*"):
@@ -977,25 +1024,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="write_file",
-            description="Write content to any file with security guardrails. Creates parent directories if needed. Validates path access, blocks writes to system directories and sensitive files.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path where to write the file",
-                    "required": True,
-                },
-                "content": {
-                    "type": "str",
-                    "description": "Content to write to the file",
-                    "required": True,
-                },
-                "create_dirs": {
-                    "type": "bool",
-                    "description": "Whether to create parent directories (default: True)",
-                    "required": False,
-                },
-            },
         )
         def write_file(
             file_path: str, content: str, create_dirs: bool = True
@@ -1056,6 +1084,7 @@ class FileSearchToolsMixin:
                 # Write the file
                 with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(resolved_path), content)
 
                 # Audit the successful write
                 if path_validator is not None:
@@ -1305,25 +1334,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="edit_file",
-            description="Edit a file by replacing specific content. Finds old_content in the file and replaces it with new_content. Creates a backup before editing.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file to edit",
-                    "required": True,
-                },
-                "old_content": {
-                    "type": "str",
-                    "description": "Exact content to find and replace in the file",
-                    "required": True,
-                },
-                "new_content": {
-                    "type": "str",
-                    "description": "New content to replace the old content with",
-                    "required": True,
-                },
-            },
         )
         def edit_file(
             file_path: str, old_content: str, new_content: str
@@ -1333,6 +1343,10 @@ class FileSearchToolsMixin:
 
             Similar to Claude Code's Edit tool — performs a partial string replacement
             rather than overwriting the entire file. Includes all security guardrails.
+
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1395,21 +1409,50 @@ class FileSearchToolsMixin:
                 # Read current content
                 current_content = resolved_path.read_text(encoding="utf-8")
 
-                # Check if old_content exists in file
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": f"Content to replace not found in {resolved_path}",
-                        "operation": "edit_file",
-                    }
+                updated_content, edit_error = apply_unique_replacement(
+                    str(resolved_path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(resolved_path), 0, "denied", edit_error["error"]
+                        )
+                    return {**edit_error, "operation": "edit_file"}
+
+                # Validate Python syntax before editing. Existing syntax errors
+                # are allowed so an edit can repair a broken file incrementally.
+                if resolved_path.suffix.lower() == ".py":
+                    was_broken = _python_syntax_error(
+                        current_content, str(resolved_path)
+                    )
+                    if was_broken is not None:
+                        logger.debug(
+                            "Allowing edit to already-invalid Python file %s: %s",
+                            resolved_path,
+                            was_broken,
+                        )
+                    else:
+                        would_break = _python_syntax_error(
+                            updated_content, str(resolved_path)
+                        )
+                        if would_break is not None:
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"Edit refused: it would leave {resolved_path} "
+                                    f"with invalid Python syntax ({would_break}). "
+                                    f"The file is unchanged — fix the replacement "
+                                    f"text and retry."
+                                ),
+                                "syntax_errors": [would_break],
+                                "file_path": str(resolved_path),
+                                "operation": "edit_file",
+                            }
 
                 # Create backup before editing
                 backup_path = None
                 if path_validator is not None:
                     backup_path = path_validator.create_backup(str(resolved_path))
-
-                # Replace content (first occurrence only)
-                updated_content = current_content.replace(old_content, new_content, 1)
 
                 # Generate diff for logging/display
                 diff = "\n".join(
@@ -1423,6 +1466,7 @@ class FileSearchToolsMixin:
 
                 # Write updated content
                 resolved_path.write_text(updated_content, encoding="utf-8")
+                record_write(str(resolved_path), updated_content)
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -1441,6 +1485,7 @@ class FileSearchToolsMixin:
 
                 result = {
                     "status": "success",
+                    "operation": "edit_file",
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
@@ -1465,25 +1510,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="browse_directory",
-            description="List files and folders in a directory. Use for navigating the filesystem to help users find files.",
-            parameters={
-                "directory_path": {
-                    "type": "str",
-                    "description": "Directory path to browse (default: user's home directory)",
-                    "required": False,
-                },
-                "show_hidden": {
-                    "type": "bool",
-                    "description": "Whether to show hidden files/folders (default: False)",
-                    "required": False,
-                },
-                "sort_by": {
-                    "type": "str",
-                    "description": "Sort by: 'name', 'size', 'modified', 'type' (default: 'name')",
-                    "required": False,
-                },
-            },
         )
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
@@ -1636,15 +1662,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="get_file_info",
-            description="Get detailed information about a file including size, type, dates, and content preview. Use before deciding how to process a file.",
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the file",
-                    "required": True,
-                },
-            },
         )
         def get_file_info(file_path: str) -> Dict[str, Any]:
             """
@@ -1807,41 +1824,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="analyze_data_file",
-            description=(
-                "Parse and analyze CSV, Excel, or tabular data files with full row-level aggregation. "
-                "Reads the ENTIRE file (all rows) and computes statistics, group-by aggregations, and top-N rankings. "
-                "Use this tool for: best-selling product by revenue, top salesperson by sales, "
-                "total revenue by category, GROUP BY queries on any column, date-filtered aggregations. "
-                "Perfect for sales data, financial reports, bank statements, and any CSV with numeric metrics."
-            ),
-            parameters={
-                "file_path": {
-                    "type": "str",
-                    "description": "Path to the data file (CSV, XLSX, XLS, TSV)",
-                    "required": True,
-                },
-                "analysis_type": {
-                    "type": "str",
-                    "description": "Type of analysis: 'summary' (column stats), 'spending' (categorize expenses), 'trends' (time patterns), 'full' (all). Default: 'summary'",
-                    "required": False,
-                },
-                "columns": {
-                    "type": "str",
-                    "description": "Comma-separated column names to focus analysis on. If not specified, all columns are analyzed.",
-                    "required": False,
-                },
-                "group_by": {
-                    "type": "str",
-                    "description": "Column name to group rows by, then sum numeric columns per group and rank by the first numeric column. Example: group_by='product' with columns='revenue' returns revenue per product sorted descending. Use for 'top product by revenue', 'best salesperson', etc.",
-                    "required": False,
-                },
-                "date_range": {
-                    "type": "str",
-                    "description": "Filter rows by date before aggregating. Formats: '2025-03' (one month), '2025-Q1' (Q1 = Jan-Mar), '2025-01 to 2025-03' (range). Requires a date/time column in the file.",
-                    "required": False,
-                },
-            },
         )
         def analyze_data_file(
             file_path: str,
@@ -2570,30 +2552,6 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            name="list_recent_files",
-            description="Find recently modified files in common locations (Documents, Downloads, Desktop). Useful for finding files the user recently worked with.",
-            parameters={
-                "location": {
-                    "type": "str",
-                    "description": "Where to search: 'all', 'documents', 'downloads', 'desktop' (default: 'all')",
-                    "required": False,
-                },
-                "file_types": {
-                    "type": "str",
-                    "description": "Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf'). Default: all common types",
-                    "required": False,
-                },
-                "max_results": {
-                    "type": "int",
-                    "description": "Maximum number of results (default: 20)",
-                    "required": False,
-                },
-                "days": {
-                    "type": "int",
-                    "description": "Only show files modified within this many days (default: 30)",
-                    "required": False,
-                },
-            },
         )
         def list_recent_files(
             location: str = "all",
@@ -2610,13 +2568,19 @@ class FileSearchToolsMixin:
             Args:
                 location: 'all', 'documents', 'downloads', or 'desktop'
                 file_types: Comma-separated extensions to filter
-                max_results: Maximum number of results to return
+                max_results: Maximum results across all output fields (1-200)
                 days: Only show files modified within this many days
 
             Returns:
                 Dictionary with list of recent files sorted by modification time
             """
             try:
+                if (
+                    not isinstance(max_results, int)
+                    or isinstance(max_results, bool)
+                    or not 1 <= max_results <= 200
+                ):
+                    raise ValueError("max_results must be an integer between 1 and 200")
                 home = Path.home()
 
                 # Determine directories to scan
@@ -2677,6 +2641,7 @@ class FileSearchToolsMixin:
 
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
+                total_found = 0
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
@@ -2703,37 +2668,33 @@ class FileSearchToolsMixin:
                                 if modified_dt < cutoff:
                                     continue
 
-                                recent_files.append(
-                                    {
-                                        "file_name": item.name,
-                                        "file_path": str(item),
-                                        "size_bytes": stat_info.st_size,
-                                        "size": _human_readable_size(stat_info.st_size),
-                                        "modified": modified_dt.strftime(
-                                            "%Y-%m-%d %H:%M"
-                                        ),
-                                        "modified_ago": _relative_time(modified_dt),
-                                        "extension": item.suffix.lower(),
-                                        "directory": str(item.parent),
-                                    }
-                                )
-                            except (PermissionError, OSError):
+                                total_found += 1
+                                item_info = {
+                                    "file_name": item.name,
+                                    "file_path": str(item),
+                                    "size_bytes": stat_info.st_size,
+                                    "size": _human_readable_size(stat_info.st_size),
+                                    "modified": modified_dt.strftime("%Y-%m-%d %H:%M"),
+                                    "modified_ago": _relative_time(modified_dt),
+                                    "extension": item.suffix.lower(),
+                                    "directory": str(item.parent),
+                                }
+                                entry = (stat_info.st_mtime_ns, total_found, item_info)
+                                if len(recent_files) < max_results:
+                                    heapq.heappush(recent_files, entry)
+                                else:
+                                    heapq.heappushpop(recent_files, entry)
+                            except (PermissionError, OSError) as exc:
+                                logger.debug("Could not inspect %s: %s", item, exc)
                                 continue
 
                     except (PermissionError, OSError) as e:
                         logger.debug(f"Could not scan {scan_dir}: {e}")
                         continue
 
-                # Sort by modification time (most recent first)
-                recent_files.sort(key=lambda x: x["modified"], reverse=True)
-
-                total_found = len(recent_files)
+                shown = [entry[2] for entry in sorted(recent_files, reverse=True)]
                 locations_searched = [d.name for d in dirs_to_scan if d.exists()]
-
-                # Return all files — first batch shown directly, rest in a
-                # collapsible section so the LLM doesn't truncate them.
-                shown = recent_files[:max_results]
-                extra = recent_files[max_results:]
+                truncated = total_found > len(shown)
 
                 # Build display_message with collapsible extra files
                 loc_str = ", ".join(locations_searched)
@@ -2742,18 +2703,16 @@ class FileSearchToolsMixin:
                 ]
                 for f in shown:
                     display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                if extra:
+                if truncated:
                     display_parts.append(
-                        f"\n<details><summary>+{len(extra)} more files</summary>\n"
+                        f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
+                        "files omitted. Narrow location, file_types, or days to see other matches."
                     )
-                    for f in extra:
-                        display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                    display_parts.append("</details>")
 
                 return {
                     "status": "success",
-                    "files": recent_files[:max_results],
-                    "all_files": recent_files,
+                    "files": shown,
+                    "truncated": truncated,
                     "count": len(shown),
                     "total_found": total_found,
                     "locations_searched": locations_searched,

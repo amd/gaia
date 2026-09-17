@@ -419,10 +419,11 @@ class AgentServer:
         """
         self._ensure_interface(INTERFACE_API)
 
-        from fastapi import FastAPI, HTTPException
+        from fastapi import Depends, FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import StreamingResponse
 
+        from gaia.api.local_http import build_caller_guard, cors_config
         from gaia.api.schemas import (
             ChatCompletionChoice,
             ChatCompletionRequest,
@@ -433,18 +434,15 @@ class AgentServer:
             UsageInfo,
         )
 
+        # App-wide, so a route mounted later (``/v1/<id>/init``) is guarded too.
+        caller_guard = build_caller_guard(self.api_surface)
         app = FastAPI(
             title=f"GAIA {self.name} API",
             description=f"OpenAI-compatible API for the {self.name} agent",
             version="1.0.0",
+            dependencies=[Depends(caller_guard)],
         )
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        app.add_middleware(CORSMiddleware, **cors_config())
 
         def _estimate_tokens(text: str) -> int:
             if isinstance(self.agent, ApiAgent):
@@ -638,6 +636,11 @@ class AgentServer:
                 status_code=200,
             )
 
+    @property
+    def api_surface(self) -> str:
+        """Human-readable name of this agent's REST surface, for logs/errors."""
+        return f"the {self.name} REST API (--api)"
+
     def _sse_stream(self, prompt: str):
         """Minimal OpenAI-compatible SSE: role chunk, content chunk, done."""
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -666,6 +669,9 @@ class AgentServer:
         self._ensure_interface(INTERFACE_API)
         import uvicorn
 
+        from gaia.api.local_http import assert_bind_is_authenticated
+
+        assert_bind_is_authenticated(host, self.api_surface)
         app = self.build_api_app()
         print(
             f"🚀 Serving {self.name} on http://{host}:{port} (model: {self.model_id})"

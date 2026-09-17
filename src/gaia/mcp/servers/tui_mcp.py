@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import requests
 
 from gaia.logger import get_logger
+from gaia.mcp.ports import TUI_MCP_PORT
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
     from mcp.server import MCPServer
@@ -92,7 +93,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 #: proxied — it would hand the bearer token and the screen text to the proxy.
 NO_PROXY: Dict[str, Any] = {"http": None, "https": None}
 
-MCP_DEFAULT_PORT = 8767  # 8765 is agent_ui_mcp, 8766 is the MCP bridge (cli.py)
+MCP_DEFAULT_PORT = TUI_MCP_PORT  # 8765 is the MCP bridge, 8766 is agent_ui_mcp (cli.py)
 MCP_DEFAULT_HOST = "localhost"
 
 

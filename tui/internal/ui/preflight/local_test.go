@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +16,50 @@ import (
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
+
+func TestCloudPreflightStillRequiresEmbeddingReadiness(t *testing.T) {
+	for _, model := range []string{"fireworks.gemma-4-31b-it", "amd.gpt-4.1"} {
+		t.Run(model, func(t *testing.T) {
+			r := localRunner{opts: LocalOptions{Model: model}}
+			if !r.skipChatModel() {
+				t.Fatal("cloud setup would download the local chat model")
+			}
+			stubGaiaInit(t, func() (string, error) { return exitStub(t, 1), nil })
+			row := r.checkModels(context.Background(), localCfg())
+			if row.State != StateFailed || row.Fix != FixRunSetup || !strings.Contains(row.Remedy.Command, "--skip-chat-model") {
+				t.Fatalf("missing embedder did not block with cloud-compatible setup: %+v", row)
+			}
+			stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
+			row = r.checkModels(context.Background(), localCfg())
+			if row.State != StateOK || !strings.Contains(row.Line, "embedder downloaded") || !strings.Contains(row.Line, model) {
+				t.Fatalf("ready cloud state is incorrect: %+v", row)
+			}
+		})
+	}
+	if (localRunner{opts: LocalOptions{Model: "user.embeddinggemma-300m-GGUF"}}).skipChatModel() {
+		t.Fatal("a dotted local id was mistaken for cloud inference")
+	}
+}
+
+func TestCloudPreflightNeedsAuthenticatedLemonadeRouter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") != "Bearer isolated-router-key" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	t.Setenv(lemonadeBaseURLEnv, server.URL)
+	t.Setenv("LEMONADE_API_KEY", "isolated-router-key")
+	r := localRunner{opts: LocalOptions{Model: "fireworks.gemma-4-31b-it"}}
+	if row := r.checkLemonade(context.Background(), localCfg()); row.State != StateOK {
+		t.Fatalf("authenticated router was rejected: %+v", row)
+	}
+	server.Close()
+	if row := r.checkLemonade(context.Background(), localCfg()); row.State != StateFailed {
+		t.Fatalf("cloud chat was allowed without its Lemonade router: %+v", row)
+	}
+}
 
 // isolateHome points the install-root lookup at a temp dir, so a developer box
 // with a real ~/.gaia/agents cannot make a "nothing is installed" test pass or

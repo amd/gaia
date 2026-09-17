@@ -387,6 +387,7 @@ class TestExportImportSecurityGuards:
         app_with_registry.dependency_overrides[_require_localhost] = lambda: None
         try:
             client = TestClient(app_with_registry)
+            client.headers.pop("x-gaia-ui", None)  # opt out of the conftest default
             resp = client.post("/api/agents/export")  # no X-Gaia-UI header
             assert resp.status_code == 403
         finally:
@@ -398,6 +399,7 @@ class TestExportImportSecurityGuards:
         app_with_registry.dependency_overrides[_require_localhost] = lambda: None
         try:
             client = TestClient(app_with_registry)
+            client.headers.pop("x-gaia-ui", None)  # opt out of the conftest default
             resp = client.post(
                 "/api/agents/import",
                 files={"bundle": ("x.zip", b"", "application/zip")},

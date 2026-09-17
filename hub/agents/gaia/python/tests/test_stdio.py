@@ -705,7 +705,7 @@ def test_model_switch_unknown_local_id_is_refused_not_accepted(monkeypatch):
 
     events = _events(out)
     assert len(events) == 1 and events[0]["type"] == "error"
-    assert "Unknown local model" in events[0]["detail"]
+    assert "Unknown Lemonade model" in events[0]["detail"]
     assert "Gemma-4-E4B-it-GGUF" in events[0]["detail"]
     assert agent.chat.llm_client is previous_client
     assert agent.rebuild_count == 0
@@ -946,6 +946,63 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
         assert "lemonade-server serve" in str(exc)
     finally:
         fake.error = None
+
+
+@pytest.mark.parametrize(
+    "provider,name", [("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")]
+)
+def test_cloud_model_switch_preserves_session_and_reports_remote(
+    monkeypatch, stub_lemonade, provider, name
+):
+    model = f"{provider}.gemma-4-31b-it"
+    stub_lemonade.catalog = {
+        "data": [{"id": model, "recipe": "cloud", "downloaded": False}]
+    }
+    client = object()
+    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: client)
+    agent = _ModelSwitchAgent()
+    history = [{"role": "user", "content": "remember this"}]
+    agent.chat.history = history
+    embedder = object()
+    agent.embedder = embedder
+
+    events = _events(_model_run(agent, f"/model {model}"))
+
+    assert [event["type"] for event in events] == ["status", "final"]
+    assert events[0]["model_backend"] == provider
+    assert events[0]["model_remote"] is True
+    assert name in events[1]["answer"]
+    assert "this conversation is sent to" in events[1]["answer"]
+    assert agent.chat.history is history
+    assert agent.embedder is embedder
+    assert agent.chat.llm_client is client
+    assert agent._use_claude is False
+
+
+def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
+    stub_lemonade.catalog = {
+        "data": [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
+            {"id": "fireworks.gemma-4-31b-it", "downloaded": False},
+            {"id": "amd.gemma", "downloaded": False},
+            {"id": "fireworks.embedding", "labels": ["embeddings"]},
+            {"id": "other.gemma", "recipe": "cloud", "cloud_provider": "other"},
+        ]
+    }
+    answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
+    assert answer.index("Local (Lemonade") < answer.index("Gemma-4-E4B-it-GGUF")
+    assert answer.index("Fireworks AI") < answer.index("fireworks.gemma-4-31b-it")
+    assert answer.index("AMD LLM Gateway") < answer.index("amd.gemma")
+    assert "fireworks.embedding" not in answer
+    assert "other.gemma" not in answer
+
+
+def test_undiscovered_cloud_model_is_refused_without_changing_session(stub_lemonade):
+    agent = _ModelSwitchAgent()
+    previous = agent.chat.llm_client
+    events = _events(_model_run(agent, "/model fireworks.not-discovered"))
+    assert [event["type"] for event in events] == ["error"]
+    assert agent.chat.llm_client is previous
 
 
 # ---------------------------------------------------------------------------

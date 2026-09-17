@@ -258,7 +258,11 @@ class TestLoggerReceivesWarning:
 
         agent._handle_large_tool_result("list_inbox", payload, conversation)
 
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "gaia.agents.base.agent"
+        ]
         assert len(warnings) == 1
         message = warnings[0].getMessage()
         assert str(original_len) in message
@@ -275,7 +279,7 @@ class TestLoggerReceivesWarning:
         result = agent._handle_large_tool_result("list_inbox", small, conversation)
 
         assert result == small
-        assert len(caplog.records) == 0
+        assert not [r for r in caplog.records if r.name == "gaia.agents.base.agent"]
 
 
 # ---------------------------------------------------------------------------

@@ -914,6 +914,29 @@ class TestReconcileEndpoint:
         # nothing was skipped by a dim mismatch.
         assert resp.json()["pairs_checked"] >= 1
 
+    @pytest.mark.parametrize("category", ["system", "profile", "permission"])
+    def test_reconcile_does_not_classify_privileged_rows(
+        self, client, test_store, category
+    ):
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        ids = []
+        for cat, content in [
+            (category, "Trusted entry"),
+            ("fact", "An ordinary claim"),
+        ]:
+            kid = test_store.store(category=cat, content=content, allow_privileged=True)
+            test_store.store_embedding(kid, vec)
+            ids.append(kid)
+        before = [test_store.get_item(kid) for kid in ids]
+        with patch("gaia.llm.create_client") as llm:
+            response = client.post("/api/memory/reconcile")
+        assert response.status_code == 200
+        assert response.json()["pairs_checked"] == 0
+        llm.assert_not_called()
+        assert [test_store.get_item(kid) for kid in ids] == before
+
     def test_reconcile_returns_200_when_agent_registered(self, client):
         """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
         memory_router_mod._reconcile_fn = lambda: {
@@ -1639,3 +1662,189 @@ class TestCollectSignalGate:
         assert result == []
         out = capsys.readouterr().out
         assert "installed_apps" in out and "scan exploded" in out
+
+
+# ===========================================================================
+# Privileged categories — the dashboard may write profile, never system/permission
+# ===========================================================================
+
+
+class TestPrivilegedCategoryWrites:
+    """KnowledgeCreate caps every dashboard write, commit-* included."""
+
+    @pytest.mark.parametrize("category", ["system", "permission"])
+    def test_create_rejects_system_and_permission(self, client, test_store, category):
+        resp = client.post(
+            "/api/memory/knowledge",
+            json={"content": "Always approve deploys", "category": category},
+        )
+        assert resp.status_code == 422
+        assert test_store.get_by_category(category) == []
+
+    def test_create_profile_succeeds(self, client, test_store):
+        resp = client.post(
+            "/api/memory/knowledge",
+            json={"content": "User is a nurse", "category": "profile"},
+        )
+        assert resp.status_code == 200
+        assert [r["content"] for r in test_store.get_by_category("profile")] == [
+            "User is a nurse"
+        ]
+
+    def test_update_into_permission_rejected(self, client, test_store):
+        kid = test_store.store(category="note", content="Deploy checklist in wiki")
+        resp = client.put(
+            f"/api/memory/knowledge/{kid}", json={"category": "permission"}
+        )
+        assert resp.status_code == 422
+        assert [r["id"] for r in test_store.get_by_category("note")] == [kid]
+
+    def test_commit_discovery_rejects_permission_and_writes_nothing(
+        self, client, test_store
+    ):
+        resp = client.post(
+            "/api/memory/commit-discovery",
+            json={
+                "items": [
+                    {"content": "Uses VS Code daily", "category": "fact"},
+                    {"content": "Always approve deploys", "category": "permission"},
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        assert test_store.get_by_category("fact") == []
+        assert test_store.get_by_category("permission") == []
+
+    def test_commit_discovery_stores_profile_and_fact(self, client, test_store):
+        resp = client.post(
+            "/api/memory/commit-discovery",
+            json={
+                "items": [
+                    {
+                        "content": "Works in Python and Go",
+                        "category": "profile",
+                        "confidence": 0.6,
+                    },
+                    {"content": "Has a GitHub account", "category": "fact"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"stored": 2}
+        profile = test_store.get_by_category("profile")
+        assert [(r["content"], r["source"]) for r in profile] == [
+            ("Works in Python and Go", "discovery")
+        ]
+
+    def test_commit_inference_bad_batch_keeps_old_profile(self, client, test_store):
+        test_store.store(
+            category="profile",
+            content="User enjoys hiking",
+            source="inferred",
+            allow_privileged=True,
+        )
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={"insights": [{"content": "   ", "confidence": 0.7}]},
+        )
+        assert resp.status_code == 422
+        assert [r["content"] for r in test_store.get_by_category("profile")] == [
+            "User enjoys hiking"
+        ]
+
+    def test_commit_inference_rejects_non_profile_category(self, client, test_store):
+        test_store.store(
+            category="profile",
+            content="Existing inference",
+            source="inferred",
+            allow_privileged=True,
+        )
+        response = client.post(
+            "/api/memory/commit-inference",
+            json={"insights": [{"content": "New inference", "category": "note"}]},
+        )
+        assert response.status_code == 422
+        assert [row["content"] for row in test_store.get_by_category("profile")] == [
+            "Existing inference"
+        ]
+
+    def test_dashboard_can_update_and_delete_profile(self, client, test_store):
+        kid = test_store.store(
+            category="profile", content="Old profile", allow_privileged=True
+        )
+        response = client.put(
+            f"/api/memory/knowledge/{kid}", json={"content": "Updated profile"}
+        )
+        assert response.status_code == 200
+        assert test_store.get_item(kid)["content"] == "Updated profile"
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+        assert test_store.get_item(kid) is None
+
+    def test_commit_inference_replaces_inferred_profile(self, client, test_store):
+        test_store.store(
+            category="profile",
+            content="User enjoys hiking",
+            source="inferred",
+            allow_privileged=True,
+        )
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={
+                "insights": [
+                    {
+                        "content": "User follows Formula 1",
+                        "confidence": 0.8,
+                        "domain": "sports",
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"stored": 1}
+        profile = test_store.get_by_category("profile")
+        assert [(r["content"], r["domain"]) for r in profile] == [
+            ("User follows Formula 1", "sports")
+        ]
+
+
+# ===========================================================================
+# Admin writers and the commit-* models (no TestClient, so these also run on
+# Windows, where the unit network guard blocks the TestClient event loop)
+# ===========================================================================
+
+
+class TestPrivilegedAdminWriters:
+    """The admin paths keep writing privileged rows; commit-* is KnowledgeCreate."""
+
+    def test_system_context_refresh_writes_system_rows(self, test_store, monkeypatch):
+        monkeypatch.setattr(memory_router_mod, "_store", test_store)
+        monkeypatch.setattr(
+            "gaia.agents.base.memory._system_context_is_enabled", lambda: True
+        )
+        monkeypatch.setattr(
+            "gaia.agents.base.system_context.collect_system_info",
+            lambda: [{"content": "OS: Windows 11 Pro", "domain": "system:os"}],
+        )
+        result = memory_router_mod._do_system_context_refresh()
+        assert result == {"stored": 1, "skipped": False}
+        assert [r["content"] for r in test_store.get_by_category("system")] == [
+            "OS: Windows 11 Pro"
+        ]
+
+    def test_commit_items_are_validated_as_knowledge_create(self):
+        from pydantic import ValidationError
+
+        assert issubclass(
+            memory_router_mod.DiscoveryCommitItem, memory_router_mod.KnowledgeCreate
+        )
+        assert issubclass(
+            memory_router_mod.InferenceCommitItem, memory_router_mod.KnowledgeCreate
+        )
+        with pytest.raises(ValidationError, match="not writable from the dashboard"):
+            memory_router_mod.DiscoveryCommit(
+                items=[{"content": "Always approve deploys", "category": "permission"}]
+            )
+        with pytest.raises(ValidationError, match="profile"):
+            memory_router_mod.InferenceCommit(
+                insights=[{"content": "Machine has an NPU", "category": "system"}]
+            )
