@@ -877,6 +877,28 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
 
+                // ── Mid-run question (#2595) — answerable, non-terminal: the
+                // agent blocks server-side until NeedsInputCard posts an
+                // answer via POST /chat/user-input, then the run continues.
+                if (event.type === 'needs_input') {
+                    if (!event.request_id) {
+                        console.error('[ChatView] needs_input event missing request_id, ignoring');
+                        return;
+                    }
+                    appendCard({
+                        render: 'needs_input',
+                        data: {
+                            session_id: sessionId,
+                            request_id: event.request_id,
+                            question: typeof event.question === 'string' ? event.question : '',
+                            options: Array.isArray(event.options) ? event.options : [],
+                            allow_free_text: event.allow_free_text !== false,
+                            sensitive: Boolean(event.sensitive),
+                        },
+                    });
+                    return;
+                }
+
                 if (event.type === 'policy_alert') {
                     const toolName = event.tool || 'unknown tool';
                     const reason =

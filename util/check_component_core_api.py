@@ -94,8 +94,9 @@ FIRST_CORE_RELEASE_WITH_DAEMON = (0, 22, 0)
 RELEASED_DAEMON_API: dict[tuple[int, ...], str] = {
     (0, 22, 0): "1",
     (0, 23, 0): "1.1",
+    (0, 24, 1): "1.1",
 }
-LATEST_CORE_RELEASE = (0, 23, 0)
+LATEST_CORE_RELEASE = (0, 24, 1)
 
 # Which daemon host API each hub component needs. "tui" reads the floor from the
 # Go constants the terminal hub enforces at runtime, so the guard cannot drift

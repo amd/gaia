@@ -184,6 +184,27 @@ def agent_dev_src_dir(repo_root: Path, agent_id: str) -> Path:
     return repo_root / "hub" / "agents" / agent_id / "python"
 
 
+def _dev_src_dir_tail(agent_id: str) -> Tuple[str, str, str, str]:
+    """The expected ``hub/agents/<agent_id>/python`` path tail, as parts.
+
+    Single owner of the literal shape so :func:`repo_root_from_agent_dev_src_dir`
+    and :func:`resolve_caller_dev_src_dir` can't independently drift on what
+    counts as a validly-shaped dev-src-dir.
+    """
+    return ("hub", "agents", agent_id, "python")
+
+
+def _matches_dev_src_dir_shape(path: Path, agent_id: str) -> bool:
+    expected_tail = _dev_src_dir_tail(agent_id)
+    parts = path.parts
+    tail = parts[-len(expected_tail) :] if len(parts) >= len(expected_tail) else ()
+    # Case-insensitive by design, unlike the identity comparison elsewhere in
+    # this module: this matches a path's SHAPE against fixed literals, not
+    # two independent user paths for equality, so it isn't the case-folding
+    # hazard that comparison must avoid.
+    return tuple(p.lower() for p in tail) == tuple(t.lower() for t in expected_tail)
+
+
 def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
     """Invert :func:`agent_dev_src_dir`: recover the repo root a per-agent
     dev-mode source dir was joined from.
@@ -199,22 +220,19 @@ def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
         DevSrcDirResolutionError: *dev_src_dir* does not end in
             ``hub/agents/<agent_id>/python`` — guessing a repo root from an
             unexpected shape (e.g. an explicit ``--dev-src-dir`` pointed
-            somewhere else entirely) would be worse than refusing.
+            somewhere else entirely) would be worse than refusing. This should
+            be unreachable in practice: :func:`resolve_caller_dev_src_dir`
+            rejects a mis-shaped ``--dev-src-dir`` before it ever reaches the
+            daemon.
     """
-    expected_tail = ("hub", "agents", agent_id, "python")
-    parts = dev_src_dir.parts
-    tail = parts[-len(expected_tail) :] if len(parts) >= len(expected_tail) else ()
-    # Case-insensitive by design, unlike the identity comparison elsewhere in
-    # this module: this matches a path's SHAPE against fixed literals, not
-    # two independent user paths for equality, so it isn't the case-folding
-    # hazard that comparison must avoid.
-    if tuple(p.lower() for p in tail) != tuple(t.lower() for t in expected_tail):
+    if not _matches_dev_src_dir_shape(dev_src_dir, agent_id):
         raise DevSrcDirResolutionError(
             f"'{dev_src_dir}' does not end in the expected "
             f"hub/agents/{agent_id}/python layout, so no repo root can be "
             "derived from it to name in a restart remedy."
         )
-    return Path(*parts[: -len(expected_tail)])
+    expected_tail = _dev_src_dir_tail(agent_id)
+    return Path(*dev_src_dir.parts[: -len(expected_tail)])
 
 
 def _default_email_src_dir() -> Path:
@@ -282,12 +300,21 @@ def resolve_caller_dev_src_dir(
     ``.expanduser().resolve()``d so it compares correctly, as a ``Path``
     object, against the daemon's own ``spec.dev_src_dir``.
 
+    *explicit* is validated client-side against the ``hub/agents/<agent_id>/
+    python`` shape (issue #2742) before it is ever sent to the daemon — a repo
+    root passed by mistake fails here, naming the exact corrected path,
+    instead of reaching the daemon and failing with
+    :func:`repo_root_from_agent_dev_src_dir`'s internal "restart remedy"
+    wording.
+
     Raises:
         DevSrcDirResolutionError: *explicit* is not an absolute path (a
             relative path would resolve against whichever process reads it
-            next, which is the bug wearing a new hat), or the caller's *cwd*
-            is not inside a git work tree (no ``git`` on PATH, or the command
-            fails) — there is no silent guess in either case.
+            next, which is the bug wearing a new hat); *explicit* does not end
+            in ``hub/agents/<agent_id>/python`` (e.g. a repo root was passed
+            instead of the agent's source dir); or the caller's *cwd* is not
+            inside a git work tree (no ``git`` on PATH, or the command fails)
+            — there is no silent guess in any case.
     """
     if explicit is not None:
         candidate = Path(explicit)
@@ -297,7 +324,15 @@ def resolve_caller_dev_src_dir(
                 "relative path would resolve against whichever process reads "
                 "it, which is exactly the ambiguity this flag exists to avoid."
             )
-        return candidate.expanduser().resolve()
+        resolved = candidate.expanduser().resolve()
+        if not _matches_dev_src_dir_shape(resolved, agent_id):
+            corrected = agent_dev_src_dir(resolved, agent_id)
+            raise DevSrcDirResolutionError(
+                f"--dev-src-dir must point at the hub/agents/{agent_id}/python "
+                f"directory inside a checkout, not the checkout root. Got "
+                f"'{resolved}'; pass '{corrected}' instead."
+            )
+        return resolved
 
     resolved_cwd = cwd or Path.cwd()
     try:
