@@ -1109,6 +1109,8 @@ def test_an_exotic_separator_is_not_treated_as_a_line_break():
     text = "before\x0cafter"
 
     assert strip_verification_scope(text) == text
+
+
 @pytest.mark.parametrize(
     "stdout,stderr,code,label",
     [
