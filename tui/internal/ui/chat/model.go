@@ -1736,12 +1736,13 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AnswerEvent:
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
-		rendered := components.RenderMarkdown(e.Content)
+		content := StripVerificationScope(e.Content)
+		rendered := components.RenderMarkdown(content)
 		// Off the event, not off m.ttft: nothing on this side measures these
 		// any more, so reading a model field here would print a zero forever.
 		m.messages = append(m.messages, Message{
 			Role:      RoleAssistant,
-			Content:   e.Content,
+			Content:   content,
 			Rendered:  rendered,
 			Duration:  duration,
 			TTFT:      time.Duration(e.TTFT * float64(time.Second)),

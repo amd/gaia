@@ -721,14 +721,29 @@ def codework_table(traces: List[dict]) -> str:
             "how much context one file costs |"
         ),
         (
-            f"| Median / p90 search result | {med_s:,} / {p90_s:,} chars | "
-            "searches return little; they are probes |"
+            (
+                f"| Median / p90 search result | {med_s:,} / {p90_s:,} chars | "
+                "searches return little; they are probes |"
+            )
+            if searches
+            # A corpus can reach for `grep` through the shell and never call the
+            # search tools. Rendering that as "0 / 0 chars" invents a finding out
+            # of an empty population.
+            else (
+                "| Search-tool results | — | no Grep/Glob calls in this corpus; "
+                "searching went through the shell |"
+            )
         ),
         (
-            f"| Searches returning nothing | {empty_search:,} | "
-            f"{_pct(empty_search, len(searches))} of searches were a miss |"
+            (
+                f"| Searches returning nothing | {empty_search:,} | "
+                f"{_pct(empty_search, len(searches))} of searches were a miss |"
+            )
+            if searches
+            else None
         ),
     ]
+    lines = [x for x in lines if x is not None]
 
     # Verification: which commands are run to check work, and how often they fail.
     verify = {
@@ -963,7 +978,9 @@ def distribution_table(stats: dict) -> str:
         "",
         "_Duration is elapsed wall-clock, not time worked: p90 of "
         f"{d['p90']:.0f} min is a session left open, not one being used. Only "
-        "the median is meaningful._",
+        "the median is meaningful, so its max is left blank rather than "
+        "printed — as is p75 for user turns, which a handful of sessions "
+        "dominate._",
     ]
     return "\n".join(out)
 
@@ -1588,13 +1605,16 @@ tool result. Nothing is sampled: every transcript in the period is read. Files w
 assistant activity (aborted or metadata-only runs) are skipped, since they
 contain no work to measure.
 
-**The pipeline.** Three deterministic stages, no LLM and no network:
+**The pipeline.** Deterministic stages, no LLM and no network:
 
 | Stage | Module | What it does |
 |---|---|---|
 | Parse | `harvest/reader.py` | JSONL to a normalized `Trace` — ordered tool calls, outcomes, token usage, subagents attached to their parent |
 | Aggregate | `harvest/scan.py` | Corpus-wide counts, token totals, per-model cost |
-| Render | `harvest/report.py` | Every table in Part 1 |
+| Analyse | `harvest/analyze.py` | Effectiveness and friction proxies — corrections, thrash, repair loops, error classes |
+| Render | `harvest/report.py` | Every table in this report |
+| Context | `harvest/context.py` | Per-request prompt size and local KV-cache memory (`context.md`) |
+| Savings | `harvest/savings.py` | Token/dollar savings per proposed mechanism (`savings.md`) |
 
 **The one LLM step.** Assigning each session to a use-case (`pr_lifecycle`, `code_review`,
 …) was done by classifying the opening instruction with an LLM, single-pass, against a
@@ -1619,8 +1639,8 @@ corpus-wide including subagents; "{cd_pct} of shell commands start with `cd`" is
 {n_cmds:,} shell commands only. When two figures seem to disagree, check which population each is
 over.
 
-**Reproducing it.** Re-running the two commands at the top of Part 1 regenerates every
-table. It will not reproduce these figures *exactly* — the corpus grows while it is being
+**Reproducing it.** `python -m gaia.factory.harvest.scan` followed by
+`python -m gaia.factory.harvest.report` regenerates every table above. It will not reproduce these figures *exactly* — the corpus grows while it is being
 analysed, since the session doing the analysis is itself being recorded. Counts drift by
 tens of calls between runs; the shape is stable."""
 
