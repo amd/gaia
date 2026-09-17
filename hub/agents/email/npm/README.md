@@ -168,9 +168,11 @@ Full architecture, the complete API, authentication, and every endpoint are in
 
 ## How good is the triage?
 
-Scores **84.53 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
+Scores **84.53 / 100**, measured on **v0.5.0** — see the **Scorecard** tab (or
 [`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SCORECARD.md))
-for the full breakdown, and the **Evaluation** tab for how it's measured.
+for the full breakdown and the version/commit it was measured at, and the
+**Evaluation** tab for how it's measured. The scorecard is only regenerated when
+a fresh eval runs, not on every release, so it can lag the package version above.
 
 ## Reference
 
