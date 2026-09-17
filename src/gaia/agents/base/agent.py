@@ -541,9 +541,20 @@ def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
 
 
 def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
-    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
-    value would drop all earlier tool-decision latency. None when step 1 has
-    no positive value — never a fabricated 0.0."""
+    """Turn's ttft = the FIRST step's own time_to_first_token, plus that
+    step's model-load time when the step actually cold-loaded a model.
+
+    A later step's value would drop all earlier tool-decision latency, so
+    only step 1 is ever consulted. None when step 1 has no positive
+    ``time_to_first_token`` — never a fabricated 0.0.
+
+    Lemonade's ``/stats`` measures generation only (prefill + decode); it has
+    no concept of model-load latency. Left alone, a cold turn's ttft reported
+    only the post-load prefill time — a 44.5s cold query showed ttft 7.6s,
+    the same figure a warm query reports (#2924). ``model_load_seconds`` is
+    populated client-side (see ``LemonadeClient.get_stats``) only when THIS
+    step actually loaded the model, so a warm step's ttft is unchanged.
+    """
     for entry in conversation:
         if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
             content = entry["content"]
@@ -558,14 +569,24 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
                     if isinstance(stats, dict)
                     else None
                 )
-                if (
+                if not (
                     isinstance(ttft, (int, float))
                     and not isinstance(ttft, bool)
                     and math.isfinite(ttft)
                     and ttft > 0
                 ):
-                    return float(ttft)
-                return None
+                    return None
+                load_seconds = (
+                    stats.get("model_load_seconds") if isinstance(stats, dict) else None
+                )
+                if (
+                    isinstance(load_seconds, (int, float))
+                    and not isinstance(load_seconds, bool)
+                    and math.isfinite(load_seconds)
+                    and load_seconds > 0
+                ):
+                    return float(ttft) + float(load_seconds)
+                return float(ttft)
     return None
 
 

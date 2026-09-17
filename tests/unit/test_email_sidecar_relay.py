@@ -138,7 +138,20 @@ class TestRelayQueryRequestBody:
             "query": "hello",
             "run_id": "rid-1",
             "context": ctx,
+            "can_answer_questions": True,
         }
+
+    def test_declares_can_answer_questions_true(self):
+        # (#2595 review) the sidecar's own QueryRequest.can_answer_questions
+        # defaults to False -- omitting this field silently makes ask() (in
+        # gaia_agent_email/question.py) refuse every mid-run question, even
+        # though this relay DOES render needs_input and answer it. A
+        # response-mocking test can never catch a missing outgoing field
+        # like this; assert the request body itself carries it.
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(_events({"type": "final", "answer": "ok"}))
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert proxy.query_stream_calls[0]["body"]["can_answer_questions"] is True
 
     def test_includes_model_and_max_steps_when_given(self):
         handler = _FakeHandler()
@@ -214,6 +227,26 @@ class TestActiveRelayResponseWiring:
         # (which runs at the top of the scripted generator) already observed it.
         assert captured["during"] is marker
         assert handler.active_relay_response is None
+
+    def test_active_relay_proxy_and_run_id_set_during_run_and_reset_after(self):
+        # (#2595) a later POST /api/chat/user-input must be able to find
+        # where to deliver a needs_input answer while the run is live, and
+        # never after it ends.
+        handler = _FakeHandler()
+        captured = {}
+
+        def _source_with_probe():
+            captured["proxy_during"] = handler.active_relay_proxy
+            captured["run_id_during"] = handler.active_relay_run_id
+            yield {"type": "final", "answer": "done"}
+
+        proxy = _ScriptedProxy(_source_with_probe)
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-9")
+
+        assert captured["proxy_during"] is proxy
+        assert captured["run_id_during"] == "rid-9"
+        assert handler.active_relay_proxy is None
+        assert handler.active_relay_run_id is None
 
 
 # --- Canonical event -> UI event shape table --------------------------------
@@ -380,6 +413,54 @@ class TestCanonicalEventShapes:
             "action": "send_now",
             "summary": "send to a@b.com",
         }
+
+    def test_needs_input_emitted_with_full_payload_and_loop_continues(self):
+        # (#2595) unlike needs_confirmation, needs_input must NOT terminate
+        # the relay loop -- the sidecar run stays blocked mid-stream until an
+        # answer arrives, so a `final`/`error` after it is still expected.
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_input",
+                    "request_id": "req-1",
+                    "question": "Which mailbox?",
+                    "options": [
+                        {"value": "gmail", "label": "Gmail", "description": ""},
+                    ],
+                    "allow_free_text": True,
+                    "sensitive": False,
+                    "timeout_seconds": 240,
+                },
+                {"type": "final", "answer": "Used Gmail."},
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        types = [e["type"] for e in handler.events]
+        assert types == ["needs_input", "answer"]
+        assert handler.events[0] == {
+            "type": "needs_input",
+            "request_id": "req-1",
+            "question": "Which mailbox?",
+            "options": [{"value": "gmail", "label": "Gmail", "description": ""}],
+            "allow_free_text": True,
+            "sensitive": False,
+            "timeout_seconds": 240,
+        }
+
+    def test_needs_input_defaults_missing_optional_fields(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events(
+                {"type": "needs_input", "request_id": "req-2", "question": "Proceed?"},
+                {"type": "final", "answer": "done"},
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        event = handler.events[0]
+        assert event["options"] == []
+        assert event["allow_free_text"] is True
+        assert event["sensitive"] is False
 
     def test_final_emits_answer_and_terminates(self):
         handler = _FakeHandler()
