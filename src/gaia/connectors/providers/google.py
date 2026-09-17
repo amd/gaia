@@ -147,16 +147,18 @@ class GoogleOAuthProvider:
         - ``prompt=consent`` — force the consent screen on every connect, so
           we always receive a refresh token (Google issues a refresh token
           ONLY on the first consent unless ``prompt=consent`` is set).
-
-        Deliberately NOT setting ``include_granted_scopes=true`` (#2603): it
-        would make ``flow.py``'s persisted ``scopes`` (what was requested)
-        diverge from what Google actually granted, which ``flow.py`` never
-        reconciles (it persists ``flow.scopes`` and never reads back
-        ``payload.get("scope")``) — GAIA's recorded scope metadata would
-        under-report real token access. See #2605 for the reconciliation
-        this needs before turning the flag on.
+        - ``include_granted_scopes=true`` — fold in scopes already granted
+          under other connections for this client, instead of limiting the
+          grant to just this request. Safe now that ``flow.py``'s
+          ``_resolve_granted_scopes`` (#2730 D6) reads back the token
+          response's actual ``scope`` field and persists that, not the
+          requested set (#2605).
         """
-        return {"access_type": "offline", "prompt": "consent"}
+        return {
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+        }
 
     def authorization_url(
         self,

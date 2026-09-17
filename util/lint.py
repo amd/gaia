@@ -609,6 +609,38 @@ def check_workflow_triggers() -> CheckResult:
     return CheckResult("Workflow Triggers", True, False, 0, "")
 
 
+def check_workflow_ancestor_skip() -> CheckResult:
+    """Warn on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
+    print("\nChecking workflow job conditions for ancestor-skip risk...")
+    print("-" * 40)
+
+    try:
+        from check_workflow_ancestor_skip import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_workflow_ancestor_skip import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_workflow_ancestor_skip.py: {exc}")
+            return CheckResult("Workflow Ancestor-Skip", False, True, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Workflow Ancestor-Skip",
+            False,
+            True,
+            1,
+            "See output above; each flagged job needs an explicit "
+            "!cancelled()/always() guard once triaged (#3929, #3922).",
+        )
+
+    return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
     print("\n[12/12] Checking documentation version consistency...")
@@ -795,6 +827,11 @@ def main():
         help="Reject on.pull_request.branches filters, which silence stacked PRs",
     )
     parser.add_argument(
+        "--workflow-ancestor-skip",
+        action="store_true",
+        help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -819,6 +856,7 @@ def main():
             args.agents,
             args.dependabot,
             args.workflow_triggers,
+            args.workflow_ancestor_skip,
             args.doc_versions,
             args.all,
         ]
@@ -876,6 +914,9 @@ def main():
 
     if args.workflow_triggers or run_all:
         results.append(check_workflow_triggers())
+
+    if args.workflow_ancestor_skip or run_all:
+        results.append(check_workflow_ancestor_skip())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())

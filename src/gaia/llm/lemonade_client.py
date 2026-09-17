@@ -718,7 +718,13 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
     return None
 
 
-def _cloud_request_error(status: Optional[int]) -> LemonadeClientError:
+#: Where a user adds funds, for cloud providers whose billing page is known.
+_CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
+
+
+def _cloud_request_error(
+    status: Optional[int], provider: Optional[str] = None
+) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies."""
     if status in {401, 403}:
         return LemonadeAuthError(
@@ -738,6 +744,20 @@ def _cloud_request_error(status: Optional[int]) -> LemonadeClientError:
             "Cloud rate limit reached (HTTP 429). Wait before retrying; "
             "check your provider's usage limits and account in the TUI "
             "provider settings."
+        )
+    if status in {402, 412}:
+        # Fireworks answers a suspended or over-limit account with 412.
+        name, billing = _CLOUD_BILLING.get(
+            provider or "",
+            (f"The {provider} provider" if provider else "The cloud provider", None),
+        )
+        where = f"at {billing}" if billing else "in your provider's billing console"
+        return LemonadeClientError(
+            f"{name} refused the request (HTTP {status}): the account may be "
+            "suspended, out of credit, or over its spending limit. Retrying will "
+            f"not help. Add funds or raise the limit {where}, then send your "
+            "message again, or switch to a local model in the TUI provider "
+            "settings to keep working now."
         )
     code = f" (HTTP {status})" if status is not None else ""
     return LemonadeClientError(
@@ -1222,6 +1242,15 @@ class LemonadeClient:
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
         self._downloads_lock = threading.Lock()
+
+        # Wall-clock seconds the most recent ``_ensure_model_loaded`` call
+        # spent actually loading the model (None when that call found the
+        # model already resident, so no load happened). Lemonade's own
+        # ``/stats`` never reports load time — this is why cold-load ttft
+        # was silently mis-reported as the warm generation-only figure
+        # (#2924). Reset at the top of every ``_ensure_model_loaded_locked``
+        # call so a later warm call never leaks a stale value.
+        self._last_model_load_seconds: Optional[float] = None
 
         # Set logging level based on verbosity
         if not verbose:
@@ -1984,7 +2013,9 @@ class LemonadeClient:
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
-                    raise _cloud_request_error(response.status_code)
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /chat/completions. "
                     "Verify LEMONADE_API_KEY is correct (currently "
@@ -1993,7 +2024,9 @@ class LemonadeClient:
 
             if response.status_code != 200:
                 if self.cloud_model_provider(model):
-                    raise _cloud_request_error(response.status_code)
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 error_msg = (
                     f"Error in chat completions "
                     f"(status {response.status_code}): {response.text}"
@@ -2227,7 +2260,9 @@ class LemonadeClient:
             )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
-                raise _cloud_request_error(_cloud_error_status(e)) from None
+                raise _cloud_request_error(
+                    _cloud_error_status(e), self.cloud_model_provider(model)
+                ) from None
             error_type = e.__class__.__name__
             error_msg = str(e)
             self.log.error(f"OpenAI {error_type}: {error_msg}")
@@ -3445,11 +3480,18 @@ class LemonadeClient:
     def _ensure_model_loaded_locked(self, model: str) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
+        # Reset every call: only set below when THIS call actually performs a
+        # load, so a warm call (model already resident) never reports a
+        # stale load duration from an earlier cold call (#2924).
+        self._last_model_load_seconds = None
+
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
         if self.ctx_size_override is not None:
+            _pin_load_start = time.monotonic()
             self._ensure_pinned_load(model)
+            self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
         # Determine the ctx_size GAIA expects for this model. This lookup
@@ -3556,6 +3598,7 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        _load_start = time.monotonic()
         try:
             self.load_model(
                 model, auto_download=True, prompt=False, ctx_size=expected_ctx
@@ -3571,6 +3614,10 @@ class LemonadeClient:
                 f"~/.cache/lemonade/server.log), or run `gaia init` to "
                 f"(re)install it."
             ) from e
+        # Recorded only after a successful load — a failed/cancelled load
+        # raises above and never reaches here, so it can't be misattributed
+        # as ttft on a request that never got a response.
+        self._last_model_load_seconds = time.monotonic() - _load_start
 
         # Print model ready message
         try:
@@ -4053,11 +4100,24 @@ class LemonadeClient:
         """
         Get performance statistics from the last request.
 
+        Lemonade's ``/stats`` only ever measures generation (prefill + decode)
+        — it has no notion of the model-load latency that precedes a cold
+        request, so a cold turn's ``time_to_first_token`` alone silently
+        undercounts (#2924). When THIS client itself loaded the model for
+        the request whose stats these are, ``model_load_seconds`` (measured
+        client-side around the ``/load`` call) is merged in so a caller can
+        attribute that latency instead of dropping it.
+
         Returns:
-            Dict containing performance statistics
+            Dict containing performance statistics, plus ``model_load_seconds``
+            when a model load happened as part of the most recent request.
         """
         url = f"{self.base_url}/stats"
-        return self._send_request("get", url)
+        stats = self._send_request("get", url)
+        if isinstance(stats, dict) and self._last_model_load_seconds is not None:
+            stats = dict(stats)
+            stats["model_load_seconds"] = self._last_model_load_seconds
+        return stats
 
     def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
         """
@@ -4342,7 +4402,7 @@ class LemonadeClient:
         and provides real-time progress updates via SSE streaming.
 
         Args:
-            agent: Agent name (chat, code, rag, etc.) or "all" for all models
+            agent: Agent name (gaia, chat, email, etc.) or "all" for all models
 
         Returns:
             Dict with download results:
@@ -4572,7 +4632,7 @@ class LemonadeClient:
         so we don't validate model availability during initialization.
 
         Args:
-            agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+            agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
             ctx_size: Override context size (default: 32768 for most agents)
             auto_start: Automatically start server if not running
             timeout: Timeout in seconds for server startup
@@ -4954,7 +5014,7 @@ def initialize_lemonade(
     profiles. It creates a temporary client and runs initialization.
 
     Args:
-        agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+        agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
         ctx_size: Override context size
         auto_start: Automatically start server if not running
         timeout: Timeout for server startup

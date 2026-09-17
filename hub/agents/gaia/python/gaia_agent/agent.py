@@ -43,6 +43,7 @@ unchanged.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
@@ -61,8 +62,10 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.email_tools import MAIL_SCOPES, EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,7 +81,16 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
 #: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-_HUB_SKILLS_DIR = Path(__file__).resolve().parents[4] / "skills"
+#:
+#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
+#: (Linux's is shallow enough that parents[4] raises IndexError at import
+#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
+#: correct there since the freeze already bundles the pack as --add-data.
+_HUB_SKILLS_DIR = (
+    _SKILLS_DIR
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[4] / "skills"
+)
 
 
 def _bundled_skill_roots() -> List[str]:
@@ -169,7 +181,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 12 CORE (FULL_CORE_TOOLS) + 14 dynamic slots. The inherited 14 was sized
+    # 13 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries: 22 cut
@@ -231,11 +243,22 @@ class GaiaAgent(
     SkillLibraryToolsMixin,
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
+    EmailToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
+
+    # Declared, not acquired: the user consents once via `gaia connectors`, and
+    # nothing here reaches a mailbox until an email tool is actually called.
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
+        ConnectorRequirement(
+            connector_id="microsoft",
+            scopes=list(MAIL_SCOPES),
+            reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        ),
+    ]
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
     # removing one deletes it, so both are gated the way file mutation is.
@@ -271,8 +294,8 @@ class GaiaAgent(
 
         Skill-library tools go first: ChatAgent's registration ends with
         ``_snapshot_tools()``, and anything registered after that snapshot is
-        absent from this instance's registry. Code-index tools join them for the
-        same reason.
+        absent from this instance's registry. Code-index and email tools join
+        them for the same reason.
 
         Semantic code search is what makes this agent usable ON a codebase
         rather than merely in one: grep finds a string, this finds the function
@@ -302,8 +325,12 @@ class GaiaAgent(
         # Through the mixin, so both read the one cached resolution and can
         # never end up describing two different trees.
         index_root = self._project_map_root() or allowed[0]
-        self._init_code_index_state(repo_path=index_root)
+        # The project root is where code search STARTS; allowed_paths is how far
+        # it may reach. Passing one value for both locked a session that began
+        # inside a repo to that repo (#3544).
+        self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
+        self.register_email_tools()
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────

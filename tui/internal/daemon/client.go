@@ -250,6 +250,13 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
+		if evidence := findInstalledButUnresolvable(); evidence != "" {
+			return nil, &StartError{Reason: fmt.Sprintf(
+				"GAIA appears to be installed (%s), but the `gaia` CLI is not resolvable "+
+					"on this process's PATH, so the daemon cannot be launched. "+
+					"Add its directory to PATH, or launch this TUI from a shell where "+
+					"`gaia --version` already works, then retry.", evidence)}
+		}
 		return nil, &StartError{Reason: "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
 			"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 			"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
@@ -257,6 +264,44 @@ func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 			"From a clone of the repo, `pip install -e .` works too"}
 	}
 	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
+}
+
+// findInstalledButUnresolvable looks for filesystem evidence that GAIA is
+// already installed even though `gaia` didn't resolve on PATH, so the error
+// above can stop telling an existing user to (re)install it. It never runs
+// Python or trusts PATH again — only direct, deterministic file checks:
+//
+//   - $VIRTUAL_ENV/bin/gaia (or Scripts\gaia.exe on Windows): the interpreter
+//     that ran this process activated a venv, but the venv's script dir
+//     itself isn't on this process's PATH.
+//   - ~/.gaia/config.json: `gaia config` and `gaia init` both write here
+//     (see docs/reference/cli.mdx), so its presence means a `gaia` binary
+//     ran successfully on this machine before, just not in this environment.
+//
+// Returns a human-readable description of what was found, or "" if neither
+// check found anything (i.e. GAIA genuinely looks uninstalled).
+func findInstalledButUnresolvable() string {
+	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		dir := "bin"
+		if runtime.GOOS == "windows" {
+			dir = "Scripts"
+		}
+		candidate := filepath.Join(venv, dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return fmt.Sprintf("found %s in the active virtualenv", candidate)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		configPath := filepath.Join(home, ".gaia", "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			return fmt.Sprintf("found %s from a previous `gaia init`/`gaia config`", configPath)
+		}
+	}
+	return ""
 }
 
 // spawnAndWait launches the daemon and polls until a live instance registers.
