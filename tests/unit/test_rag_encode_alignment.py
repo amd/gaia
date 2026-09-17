@@ -33,7 +33,7 @@ def test_full_batch_stays_aligned():
 
 def test_short_batch_raises():
     sdk = _sdk(lambda texts, **kw: _vectors(texts[:-1]))
-    with pytest.raises(RuntimeError, match="2/3 usable"):
+    with pytest.raises(RuntimeError, match=r"returned 2/3 vectors"):
         sdk._encode_texts(["a", "bb", "ccc"])
 
 
@@ -43,15 +43,15 @@ def test_hollow_vector_raises():
         data["data"][1]["embedding"] = []
         return data
 
-    with pytest.raises(RuntimeError, match="2/3 usable"):
+    with pytest.raises(RuntimeError, match=r"empty or inconsistent vector"):
         _sdk(embeddings)._encode_texts(["a", "bb", "ccc"])
 
 
-def test_one_by_one_skip_raises_instead_of_shifting_chunks():
+def test_an_empty_batch_raises_instead_of_shifting_chunks():
     def embeddings(texts, **kw):
         if len(texts) > 1:
             return {"data": []}  # whole batch came back empty
         return {"data": []} if texts == ["bb"] else _vectors(texts)
 
-    with pytest.raises(RuntimeError, match="2/3 usable"):
+    with pytest.raises(RuntimeError, match=r"returned 0/3 vectors"):
         _sdk(embeddings)._encode_texts(["a", "bb", "ccc"])
