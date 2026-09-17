@@ -169,16 +169,19 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (12 tools). Deliberately a smaller share of the registry than
+# Always-on set (13 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
-# skill discovery, and exactly two universal entry points -- ``read_file`` and
+# skill discovery, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
-# documents say" without a round trip. Everything else, shell and the web
-# included, is a bundle: it arrives when the turn asks for it. Both entry
-# points are bundle members too, so a file-shaped or document-shaped turn pulls
-# their whole cohort in with them.
+# documents say" without a round trip, and the two file-edit tools. Editing is
+# always on because semantic selection cannot rank it: on explicit edit
+# requests the edit tools lost the dynamic slots to unrelated bundles (#3752).
+# Everything else, shell and the web included, is a bundle: it arrives when the
+# turn asks for it. ``query_documents`` is a bundle member too, so a
+# document-shaped turn pulls its whole cohort in with it; the ``file_edit``
+# cohort is now entirely CORE.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
@@ -190,6 +193,9 @@ FULL_CORE_TOOLS = frozenset(
         # universal entry points
         "read_file",
         "query_documents",
+        # file editing -- ranked out of the dynamic slots on edit requests (#3752)
+        "write_file",
+        "edit_file",
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
@@ -406,6 +412,19 @@ FULL_BUNDLES = [
         members=frozenset({"set_loop_state", "request_user_input"}),
         description="Control the autonomous loop and ask the user questions.",
     ),
+    ToolBundle(
+        name="email",
+        members=frozenset(
+            {
+                "check_mailbox_access",
+                "list_inbox",
+                "search_email",
+                "read_email",
+                "list_mail_folders",
+            }
+        ),
+        description="Read a connected mailbox: list, search, and read messages.",
+    ),
     # The description carries the file extensions deliberately: a real turn
     # says "summarize this meeting: <path>.mp4" and never says "transcribe",
     # so an extension-shaped query needs something to score against. Without
@@ -479,6 +498,11 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "search_skill_hub",
         "install_skill",
         "remove_skill",
+        "check_mailbox_access",
+        "list_inbox",
+        "search_email",
+        "read_email",
+        "list_mail_folders",
         "generate_image",
         "list_sd_models",
         "get_generation_history",

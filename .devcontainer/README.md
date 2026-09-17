@@ -31,10 +31,10 @@ A fully configured dev container for GAIA with Python 3.12, Claude Code, and AMD
 ## Running GAIA
 
 ```bash
-# The image does not ship Lemonade. Either install it in the container
-# with `gaia init`, or point LEMONADE_BASE_URL at a server on the host
-# (see "Lemonade Server not starting" below — that is the NPU path).
-gaia init
+# Start Lemonade on the host, then connect from this container.
+# The image does not ship Lemonade or a systemd service manager.
+# See "Lemonade Server not starting" below for host access and NPU setup.
+export LEMONADE_BASE_URL=http://host.docker.internal:13305/api/v1
 
 # Test LLM connectivity
 gaia llm "Hello"

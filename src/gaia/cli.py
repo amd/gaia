@@ -3390,7 +3390,9 @@ def main():
                     if resp.status == 200 and body == "ok":
                         print(f"Telegram adapter: healthy ({url})")
                         return
-            except urllib.error.URLError:
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                # ConnectionError catches http.client.RemoteDisconnected, which
+                # is not a URLError - see AbstractHTTPHandler.do_open.
                 pass
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
@@ -7717,7 +7719,7 @@ def handle_mcp_status(args):
                                 print("⚠️  Server is running but may not be healthy")
                     else:
                         raise
-                except urllib.error.URLError:
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
                     print("⚠️  Server is running but status endpoint not accessible")
                     print("   Server may be starting up or using an older version")
             except Exception as e:
@@ -7753,7 +7755,7 @@ def handle_mcp_test(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7816,6 +7818,8 @@ def handle_mcp_test(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
@@ -7849,7 +7853,7 @@ def handle_mcp_agent(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7946,6 +7950,8 @@ def handle_mcp_agent(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
