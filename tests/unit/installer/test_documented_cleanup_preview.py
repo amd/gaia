@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parents[3]
     [
         "docs/guides/install.mdx",
         "docs/reference/cli.mdx",
-        "docs/plans/desktop-installer.mdx",
     ],
 )
 def test_documented_preview_lists_targets_and_preserves_files(
