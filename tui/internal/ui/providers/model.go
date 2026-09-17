@@ -52,12 +52,6 @@ type Model struct {
 	activity      string
 	note          string
 	width, height int
-	// existingEnvKey/existingRuntimeKey reflect the chosen provider's
-	// Provider.EnvKey/RuntimeKey at the moment setup() ran, so the setup
-	// screen can tell the user a credential is already active instead of
-	// silently expecting them to know a blank field is safe to submit.
-	existingEnvKey     bool
-	existingRuntimeKey bool
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -74,6 +68,19 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg { p, e := c.Providers(m.ctx); return loadedMsg{source: c, providers: p, err: e} }
 }
 func (m Model) chosen() string { return names[m.selected] }
+
+// keyStatus reports whether the chosen provider already has a credential,
+// read live from m.providers rather than a value snapshotted at setup() time
+// — so it stays correct across a key clear (Ctrl+D) or a provider chosen
+// before the initial Providers() fetch has landed.
+func (m Model) keyStatus() (env, runtime bool) {
+	for _, p := range m.providers {
+		if p.Name == m.chosen() {
+			return p.EnvKey, p.RuntimeKey
+		}
+	}
+	return false, false
+}
 func (m Model) fetchModels() tea.Cmd {
 	c, p := m.client, m.chosen()
 	return func() tea.Msg { models, e := c.Models(m.ctx, p); return modelsMsg{source: c, models: models, err: e} }
@@ -105,12 +112,10 @@ func (m Model) setup() Model {
 	}
 	m.fields[3].EchoMode = textinput.EchoPassword
 	m.fields[3].EchoCharacter = '•'
-	m.existingEnvKey = p.EnvKey
-	m.existingRuntimeKey = p.RuntimeKey
-	switch {
-	case p.EnvKey:
+	switch env, runtime := m.keyStatus(); {
+	case env:
 		m.fields[3].Placeholder = "Blank uses the environment key"
-	case p.RuntimeKey:
+	case runtime:
 		m.fields[3].Placeholder = "Blank keeps the saved key"
 	default:
 		m.fields[3].Placeholder = "Paste API key"
@@ -197,6 +202,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = v.err.Error()
 		} else {
 			m.note = "Runtime key cleared. An environment key, if set, remains active."
+			// Reflect the clear immediately rather than waiting on the
+			// m.Init() refresh below to land — otherwise the "key already
+			// configured" notice keeps claiming a key that was just removed
+			// for however long that request takes.
+			for i := range m.providers {
+				if m.providers[i].Name == m.chosen() {
+					m.providers[i].RuntimeKey = false
+				}
+			}
 		}
 		return m, m.Init()
 	case tea.KeyMsg:
@@ -373,12 +387,17 @@ func (m Model) View() string {
 		if m.height >= 22 {
 			lines = append(lines, "Keys stay in Lemonade memory until it restarts.", "Provider settings are shared by clients of this Lemonade server.")
 		}
-		switch {
-		case m.existingEnvKey:
-			lines = append(lines, lipgloss.NewStyle().Foreground(theme.Success).Render(
+		success := lipgloss.NewStyle().Foreground(theme.Success)
+		switch env, runtime := m.keyStatus(); {
+		case env && m.height < 22:
+			lines = append(lines, success.Render("Environment key active — blank keeps it."))
+		case runtime && m.height < 22:
+			lines = append(lines, success.Render("Key already saved — blank keeps it."))
+		case env:
+			lines = append(lines, success.Render(
 				"An environment key is already active for "+lemonade.Label(m.chosen())+" and takes precedence over any key entered below — leave API key blank to keep using it."))
-		case m.existingRuntimeKey:
-			lines = append(lines, lipgloss.NewStyle().Foreground(theme.Success).Render(
+		case runtime:
+			lines = append(lines, success.Render(
 				"A key is already configured for "+lemonade.Label(m.chosen())+" — leave API key blank to keep using it, or paste a new one to replace it."))
 		}
 		lines = append(lines, "")
