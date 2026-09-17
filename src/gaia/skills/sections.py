@@ -28,12 +28,23 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 #: A Markdown ATX heading. Setext (``===`` underlines) is deliberately not
 #: supported — no shipped skill uses it, and accepting both would make the slug
 #: for a given heading depend on which form the author picked.
+#:
+#: Unanchored leading whitespace is also deliberate: an indented line is a code
+#: block in CommonMark, so ``    # Heading`` is content, not a split point.
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$")
+
+#: A fenced-code delimiter: three or more backticks or tildes, indented up to
+#: three spaces (four would make it an indented code block), with an optional
+#: info string. Skills describe their output by *showing* it, and a Markdown
+#: template shown that way is full of ``#`` lines that are examples rather than
+#: structure — so a parser blind to fences hands back sections that do not
+#: exist, and a delta anchored to one edits the wrong text.
+_FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
 
 #: Slug for the text before the first heading. Not a legal slug otherwise (the
 #: slugger strips leading dashes), so it can never collide with a real one.
@@ -88,6 +99,33 @@ class Section:
         return self.slug == PREAMBLE_SLUG
 
 
+def _next_fence_state(line: str, fence: Optional[str]) -> Optional[str]:
+    """Return the fence marker still open after *line*.
+
+    *fence* is the currently-open delimiter, or ``None`` outside a code block.
+    CommonMark's rules, kept because authors write real Markdown: a closing
+    fence uses the same character, is at least as long as the one that opened
+    it, and carries no info string — so ```` ```markdown ```` inside a ``~~~``
+    block is content, not a close. An unterminated fence runs to the end of the
+    document, which makes a malformed skill parse as one big section rather
+    than silently regaining the phantom splits this guards against.
+    """
+    match = _FENCE_RE.match(line)
+    if match is None:
+        return fence
+    marker = match.group("marker")
+    info = match.group("info")
+    if fence is None:
+        # Backtick fences may not carry a backtick in their info string; that
+        # spelling is inline code, not a block.
+        if marker[0] == "`" and "`" in info:
+            return None
+        return marker
+    if marker[0] == fence[0] and len(marker) >= len(fence) and not info.strip():
+        return None
+    return fence
+
+
 def parse_sections(body: str) -> List[Section]:
     """Split *body* into :class:`Section` spans, in document order.
 
@@ -101,6 +139,11 @@ def parse_sections(body: str) -> List[Section]:
 
     Duplicate headings are disambiguated by appending ``-2``, ``-3``, … in
     document order, so every slug in the result is unique and stable.
+
+    A ``#`` line inside a fenced code block is content, not a heading. Skills
+    show their output format by printing it, so that line is usually an example
+    the author never meant to be addressable — and splitting on it puts the
+    author's real text in a section named after their sample data.
     """
     lines = body.split("\n")
     sections: List[Section] = []
@@ -127,8 +170,9 @@ def parse_sections(body: str) -> List[Section]:
             Section(slug=slug, level=cur_level, heading=cur_heading, text=text)
         )
 
+    fence: Optional[str] = None
     for line in lines:
-        match = _HEADING_RE.match(line)
+        match = _HEADING_RE.match(line) if fence is None else None
         if match:
             flush()
             cur_level = len(match.group(1))
@@ -137,17 +181,81 @@ def parse_sections(body: str) -> List[Section]:
             buf = [line]
         else:
             buf.append(line)
+            fence = _next_fence_state(line, fence)
     flush()
 
     return sections
 
 
 def find_section(sections: List[Section], slug: str) -> Optional[Section]:
-    """Return the section with *slug*, or ``None``."""
+    """Return the section with *slug*, or ``None``.
+
+    A spelling that is really the heading resolves to its slug: ``Brief shape``
+    and ``Brief_Shape`` both find ``brief-shape``. Exact matches are tried
+    first, and the normalization is the slugger's own, so it can only map a
+    name onto the slug that name would have produced — never onto a different
+    section. The caller is usually a model, and a model writes a heading the
+    way headings are written.
+    """
+    wanted = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
     for section in sections:
         if section.slug == slug:
             return section
+    for section in sections:
+        if section.slug == wanted:
+            return section
     return None
+
+
+#: One or more whitespace characters — the only difference between a paragraph
+#: as the file wraps it and the same paragraph as a reader quotes it back.
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def find_snippet_spans(text: str, snippet: str) -> List[Tuple[int, int]]:
+    """Return ``(start, end)`` spans of *snippet* in *text*.
+
+    Exact occurrences win outright. Only when there are none does this fall
+    back to treating every whitespace run as interchangeable, which is what
+    lets a quote survive a different line wrap.
+
+    That fallback is the difference between the feature working and not. A
+    skill body is hard-wrapped at around 80 columns; the model reads it as
+    prose and quotes it back as one line, so a byte-exact match fails on every
+    paragraph that spans two lines — the correction is refused for a reason the
+    user cannot see and the model cannot fix by trying harder.
+    """
+    if not snippet:
+        return []
+    # Non-overlapping, like the ``str.replace`` this stands in for: scanning
+    # from start+1 would make "aa" match twice in "aaa" and the two spans would
+    # corrupt each other on replacement.
+    exact = []
+    start = text.find(snippet)
+    while start != -1:
+        exact.append((start, start + len(snippet)))
+        start = text.find(snippet, start + len(snippet))
+    if exact:
+        return exact
+    parts = [re.escape(p) for p in _WHITESPACE_RUN.split(snippet.strip()) if p]
+    if not parts:
+        return []
+    pattern = re.compile(r"\s+".join(parts))
+    return [m.span() for m in pattern.finditer(text)]
+
+
+def replace_snippet(text: str, snippet: str, replacement: str) -> str:
+    """Return *text* with every span of *snippet* replaced by *replacement*.
+
+    Replaces all occurrences, matching what a plain ``str.replace`` did before
+    reflow tolerance existed — a quote that appears twice was always ambiguous,
+    and resolving it silently to the first hit would be a new behaviour, not a
+    safer one.
+    """
+    spans = find_snippet_spans(text, snippet)
+    for start, end in reversed(spans):
+        text = text[:start] + replacement + text[end:]
+    return text
 
 
 def render_sections(sections: List[Section]) -> str:

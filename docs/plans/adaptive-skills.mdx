@@ -1377,7 +1377,7 @@ settled above. What remains:
 | Empirical gate precedent | `TrustLedger(min_samples=5, threshold=0.85)`, `record_outcome` | `hub/agents/email/python/gaia_agent_email/trust.py:336`, `:358` | **Exists** — promotion shape to reuse |
 | Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | `skills/manager.py`, `agents/base/agent.py` | **Shipped** — this row previously said "absent on `main`"; that is stale |
 | Lazy skill bodies | `SkillLoader.select` collapses an off-topic loaded skill to a menu line per turn | `agents/base/skill_loader.py:62`, `:119` | **Shipped** (#2848) — an overlay is therefore only resident when its skill is |
-| Section parsing | splits a `SKILL.md` body into named, digest-anchored sections | `skills/sections.py` | **Shipped in v1** — deterministic slugs, CRLF-normalized digests, lossless round-trip |
+| Section parsing | splits a `SKILL.md` body into named, digest-anchored sections | `skills/sections.py` | **Shipped in v1** — deterministic slugs, CRLF-normalized digests, lossless round-trip; a `#` line inside a fenced code block is content, not a heading |
 | Eval isolation | `GAIA_MEMORY_DISABLED` handling in `src/gaia/eval/` | — | **NOT FOUND** — pre-existing gap |
 | `skill_deltas` table + accessors | schema **v3 → v4**, `put_delta` / `search_deltas` / `approve_delta` / `supersede_delta` / `archive_delta` / `touch_deltas` | `memory_store.py` | **Shipped in v1** — additive, marker-bump only |
 | Delta grammar + resolver + diff | `replace_section` / `replace_snippet` / `drop_section`; `resolve_skill_body`, `validate_delta`, `preview_diff` | `agents/base/skill_deltas.py` | **Shipped in v1** — substitutive, not additive |

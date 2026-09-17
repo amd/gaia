@@ -342,7 +342,8 @@ FULL_BUNDLES = [
         ),
         description=(
             "List, load, and unload the skills installed on this machine, and "
-            "correct a loaded skill's instructions when they are wrong."
+            "change a loaded skill's instructions — when they are wrong, or "
+            "when the user wants its output a different way."
         ),
     ),
     ToolBundle(

@@ -48,7 +48,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from gaia.skills.sections import Section, parse_sections, render_sections
+from gaia.skills.sections import (
+    Section,
+    find_snippet_spans,
+    parse_sections,
+    render_sections,
+    replace_snippet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +380,7 @@ def _apply_bucket(
     for delta in [d for d in bucket if d.kind == KIND_REPLACE_SNIPPET]:
         old = str(delta.payload.get("old", ""))
         new = str(delta.payload.get("new", ""))
-        if not old or old not in text:
+        if not old or not find_snippet_spans(text, old):
             notes.append(
                 ResolutionNote(
                     delta.id,
@@ -384,7 +390,7 @@ def _apply_bucket(
                 )
             )
             continue
-        text = text.replace(old, new)
+        text = replace_snippet(text, old, new)
         notes.append(
             ResolutionNote(delta.id, section.slug, "applied", "snippet replaced")
         )
@@ -462,11 +468,15 @@ def validate_delta(
                 f"{KIND_REPLACE_SNIPPET} needs a non-empty 'old' value — the "
                 "exact text to replace."
             )
-        if old not in section.text:
+        if not find_snippet_spans(section.text, old):
+            # The old message said "quote it exactly" without showing what to
+            # quote, so the only way out was to guess again. Line breaks are
+            # already tolerated by the matcher, which leaves genuinely absent
+            # text — and for that the section itself is the answer.
             raise DeltaRefused(
-                f"the text to replace was not found verbatim in section "
-                f"{delta.anchor_section!r}. Quote it exactly as it appears in "
-                "the skill, whitespace included."
+                f"the text to replace is not in section {delta.anchor_section!r}. "
+                "Line breaks do not have to match, but the words do. The "
+                f"section reads:\n\n{section.text.strip()}"
             )
 
     # A section's span carries its own heading line, so an edit that removes it
@@ -478,8 +488,8 @@ def validate_delta(
         if delta.kind == KIND_REPLACE_SECTION:
             produced = str(payload.get("body", ""))
         else:
-            produced = section.text.replace(
-                str(payload.get("old", "")), str(payload.get("new", ""))
+            produced = replace_snippet(
+                section.text, str(payload.get("old", "")), str(payload.get("new", ""))
             )
         parsed = parse_sections(produced)
         if not parsed or parsed[0].is_preamble:
