@@ -22,6 +22,9 @@ import (
 // stream.
 func liveRun(t *testing.T, f *fakeRelay) (*SSEClient, func()) {
 	t.Helper()
+	// 2.13 is the contract that introduced /tool_decision and /bypass; below it
+	// the client refuses to call them at all.
+	f.contractVersion = "2.13"
 	started := make(chan struct{})
 	release := make(chan struct{})
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
@@ -199,4 +202,68 @@ func TestBypassBeforeTheConversationStartsExplainsItself(t *testing.T) {
 	if !strings.Contains(err.Error(), "Send a message first") {
 		t.Errorf("the user just pressed a key; say what to do, got: %v", err)
 	}
+}
+
+// An older sidecar has neither route. Its plain 404 reads as "the run already
+// finished", which sends the user looking for the wrong problem — so the client
+// refuses before calling, and names the real cause.
+
+func TestAnOlderAgentIsNotAskedForPermission(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.12"
+	c, done := liveRunAtContract(t, f, "2.12")
+	defer done()
+
+	err := c.RespondToolPermission("c1", PermissionAllow)
+	if err == nil {
+		t.Fatal("a 2.12 agent has no tool_decision route; calling it must be refused")
+	}
+	if !strings.Contains(err.Error(), "2.13") {
+		t.Errorf("the error must name the contract that added it, got: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.decisions) != 0 {
+		t.Errorf("nothing may be sent to an agent that cannot answer: %+v", f.decisions)
+	}
+}
+
+func TestAnOlderAgentIsNotAskedToBypass(t *testing.T) {
+	f := newFakeRelay(t)
+	c, done := liveRunAtContract(t, f, "2.12")
+	defer done()
+
+	err := c.SetBypassPermissions(true)
+	if err == nil {
+		t.Fatal("a 2.12 agent has no bypass route; calling it must be refused")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.bypasses) != 0 {
+		t.Errorf("nothing may be sent: %+v", f.bypasses)
+	}
+}
+
+// liveRunAtContract is liveRun with the peer advertising a chosen contract.
+func liveRunAtContract(t *testing.T, f *fakeRelay, version string) (*SSEClient, func()) {
+	t.Helper()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.contractVersion = version
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+	c := f.client(t)
+	ch, err := c.Send(context.Background(), "do a gated thing")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the status event before answering")
+	}
+	<-started
+	return c, func() { close(release); c.Close() }
 }

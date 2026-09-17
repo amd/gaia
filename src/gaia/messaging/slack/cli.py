@@ -152,7 +152,11 @@ def run_start(
     background: bool = False,
     emit: Callable[[str], None] = print,
 ) -> int:
-    """Start the bridge. Blocks until interrupted unless ``background``."""
+    """Start the bridge. Blocks until interrupted.
+
+    ``background`` only records a pid file so ``gaia slack stop`` can find this
+    process; it does not detach.
+    """
     from gaia.messaging.slack.adapter import (
         SlackAdapter,
         SlackAllowlistError,
@@ -460,7 +464,10 @@ def main(args) -> int:
     action = getattr(args, "slack_action", None)
     if action == "setup":
         if getattr(args, "print_url", False):
-            return run_setup(print_url_only=True)
+            return run_setup(
+                print_url_only=True,
+                open_browser=not getattr(args, "no_browser", False),
+            )
         return run_setup(open_browser=not getattr(args, "no_browser", False))
     if action == "start":
         return run_start(

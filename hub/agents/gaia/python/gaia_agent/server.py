@@ -54,13 +54,14 @@ AGENT_ID = "gaia"
 
 #: Bumped when the wire surface changes. The TUI's ``negotiate.go`` gates
 #: optional request fields on this, so it must reflect real capability.
-API_VERSION = "2.12"
+#: 2.13 added ``/query/{run_id}/tool_decision`` and ``/sessions/{id}/bypass``,
+#: and the ``claude`` provider value.
+API_VERSION = "2.13"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
 _HEARTBEAT_SECONDS = 10.0
 
-#: Local inference only — the flagship runs against Lemonade.
 #: Inference backends ``/query`` accepts. ``claude`` sends the conversation to
 #: Anthropic's API instead of the local Lemonade server — the stdio transport
 #: has always allowed that via ``--use-claude``, and refusing it here was what
@@ -574,8 +575,8 @@ async def query(request: QueryRequest):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"provider {request.provider!r} is not supported: the {AGENT_ID} agent "
-                f"runs local inference only. Allowed: {sorted(_ALLOWED_PROVIDERS)}."
+                f"provider {request.provider!r} is not supported by the "
+                f"{AGENT_ID} agent. Allowed: {sorted(_ALLOWED_PROVIDERS)}."
             ),
         )
 

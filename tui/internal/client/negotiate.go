@@ -61,6 +61,15 @@ const (
 	sessionContractMinor = 12
 )
 
+// toolDecisionContract is the contract version that introduced
+// `POST /query/{run_id}/tool_decision` and `POST /sessions/{id}/bypass`
+// (schema 2.13). A peer below it has no such route, and its plain 404 reads as
+// "the run already finished" rather than "this agent is too old to be asked".
+const (
+	toolDecisionContractMajor = 2
+	toolDecisionContractMinor = 13
+)
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -75,6 +84,17 @@ type peerContract struct {
 	canAnswerQuestions bool
 	// supportsSession is true only when the peer is provably >= 2.12.
 	supportsSession bool
+	// supportsToolDecision is true only when the peer is provably >= 2.13, and
+	// so has the routes that answer a permission prompt and toggle bypass.
+	supportsToolDecision bool
+}
+
+// versionLabel names the peer's contract for an error a user reads.
+func (p peerContract) versionLabel() string {
+	if p.version == "" {
+		return "an unknown version"
+	}
+	return p.version
 }
 
 // negotiate resolves the peer's contract once per client and caches it.
@@ -148,12 +168,14 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession)
+	supportsDecision := contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, tool decisions: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsDecision)
 	return peerContract{
-		version:            payload.APIVersion,
-		canAnswerQuestions: supports,
-		supportsSession:    supportsSession,
+		version:              payload.APIVersion,
+		canAnswerQuestions:   supports,
+		supportsSession:      supportsSession,
+		supportsToolDecision: supportsDecision,
 	}
 }
 

@@ -923,6 +923,16 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 			"there is no live '%s' run to answer — it had already ended. Nothing was sent either way",
 			s.agentID)
 	}
+	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
+		// Without this the peer's plain 404 surfaces as "the run had already
+		// finished", which sends the user looking for the wrong problem.
+		return fmt.Errorf(
+			"this '%s' agent cannot be asked for permission over the daemon: it speaks "+
+				"contract %s, and %d.%d added the route. Update the agent with "+
+				"`gaia agent install %s`. Nothing was sent",
+			s.agentID, peer.versionLabel(),
+			toolDecisionContractMajor, toolDecisionContractMinor, s.agentID)
+	}
 
 	payload, err := json.Marshal(toolDecisionRequest{Decision: wire, ConfirmID: confirmID})
 	if err != nil {
@@ -977,6 +987,14 @@ func (s *SSEClient) SetBypassPermissions(enabled bool) error {
 		return fmt.Errorf(
 			"the '%s' agent is not connected yet, so bypass could not be changed. "+
 				"Send a message first", s.agentID)
+	}
+	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
+		return fmt.Errorf(
+			"this '%s' agent cannot toggle bypass over the daemon: it speaks contract "+
+				"%s, and %d.%d added the route. Update the agent with "+
+				"`gaia agent install %s`. Nothing was changed",
+			s.agentID, peer.versionLabel(),
+			toolDecisionContractMajor, toolDecisionContractMinor, s.agentID)
 	}
 
 	payload, err := json.Marshal(bypassRequest{Enabled: enabled})

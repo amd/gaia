@@ -392,3 +392,28 @@ def test_start_with_two_members_is_refused_with_the_reason(monkeypatch):
     lines = []
     assert cli.run_start(allowed_users="U0AAAAAAA,U0BBBBBBB", emit=lines.append) == 2
     assert any("share one history" in line for line in lines)
+
+
+def test_print_url_honours_no_browser(monkeypatch):
+    """Only main()'s wiring can catch this — the run_setup test passes
+    open_browser explicitly, so it cannot see a default leaking through."""
+    import argparse
+
+    seen = {}
+    monkeypatch.setattr(cli, "run_setup", lambda **kw: seen.update(kw) or 0)
+
+    args = argparse.Namespace(slack_action="setup", print_url=True, no_browser=True)
+    assert cli.main(args) == 0
+
+    assert seen == {"print_url_only": True, "open_browser": False}
+
+
+def test_print_url_still_opens_a_browser_by_default(monkeypatch):
+    import argparse
+
+    seen = {}
+    monkeypatch.setattr(cli, "run_setup", lambda **kw: seen.update(kw) or 0)
+
+    cli.main(argparse.Namespace(slack_action="setup", print_url=True, no_browser=False))
+
+    assert seen["open_browser"] is True
