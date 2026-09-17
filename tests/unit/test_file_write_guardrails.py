@@ -17,6 +17,7 @@ for all file mutation operations across agents. These tests verify:
 All tests are designed to run without LLM or external services.
 """
 
+import ast
 import os
 import platform
 from pathlib import Path
@@ -884,6 +885,74 @@ class TestChatAgentEditFileGuardrails:
 
         assert result["status"] == "error"
         assert "syntax" in result["error"].lower()
+        assert target.read_text() == original
+
+    @pytest.mark.parametrize(
+        "name,original,old_content,new_content",
+        [
+            # The literal corruption from #3733: `    return 0` inside main()
+            # dedented to a top-level `return`. ast.parse accepts this; only
+            # compile() reports "'return' outside function".
+            (
+                "return outside function",
+                "def main():\n    print('hello')\n    return 0\n",
+                "    return 0",
+                "return 0",
+            ),
+            (
+                "yield outside function",
+                "def main():\n    print('hello')\n    yield 1\n",
+                "    yield 1",
+                "yield 1",
+            ),
+            (
+                "await outside async def",
+                "async def main():\n    await go()\n",
+                "async def main():",
+                "def main():",
+            ),
+            (
+                "duplicate argument",
+                "def main(a, b):\n    return a\n",
+                "def main(a, b):",
+                "def main(a, a):",
+            ),
+            (
+                "break outside loop",
+                "for i in range(3):\n    break\n",
+                "for i in range(3):\n    break",
+                "if True:\n    break",
+            ),
+        ],
+    )
+    def test_edit_python_file_rejects_compile_only_errors(
+        self, mixin_and_registry, tmp_path, name, original, old_content, new_content
+    ):
+        """Reject edits the parser accepts but the compiler rejects (#3733).
+
+        ast.parse() builds a tree without running the symtable pass, so a
+        dedented return, a stray yield/await, a duplicate argument name and
+        break outside a loop all parse cleanly and still fail at import.
+        """
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text(original)
+
+        # Precondition: the parser alone would wave this through.
+        broken = original.replace(old_content, new_content)
+        ast.parse(broken)
+        with pytest.raises(SyntaxError):
+            compile(broken, str(target), "exec")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content=old_content,
+            new_content=new_content,
+        )
+
+        assert result["status"] == "error", f"{name} was accepted: {result}"
+        assert "syntax" in result["error"].lower()
+        assert str(target) in result["error"]
         assert target.read_text() == original
 
     def test_edit_python_file_can_repair_existing_syntax_error(

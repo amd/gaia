@@ -33,6 +33,23 @@ from gaia.agents.tools.search_scope import (
 logger = logging.getLogger(__name__)
 
 
+def _python_syntax_error(source: str, filename: str) -> str | None:
+    """The SyntaxError *source* would raise on import, or None if it is valid.
+
+    Uses ``compile`` rather than ``ast.parse``: the parser accepts a dedented
+    ``return``, a stray ``yield``/``await``, ``break`` outside a loop and
+    duplicate argument names — all of which fail at import. #3733's own
+    corruption (``return 0`` dedented out of ``main()``) is one of them.
+    Grammar is the running interpreter's, so syntax newer than the host
+    Python reads as invalid.
+    """
+    try:
+        compile(source, filename, "exec")
+    except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
+        return str(e)
+    return None
+
+
 class FileSearchToolsMixin:
     """
     Mixin providing shared file search and read operations.
@@ -1390,22 +1407,30 @@ class FileSearchToolsMixin:
                 # Validate Python syntax before editing. Existing syntax errors
                 # are allowed so an edit can repair a broken file incrementally.
                 if resolved_path.suffix.lower() == ".py":
-                    try:
-                        ast.parse(current_content)
-                    except SyntaxError as e:
+                    was_broken = _python_syntax_error(
+                        current_content, str(resolved_path)
+                    )
+                    if was_broken is not None:
                         logger.debug(
                             "Allowing edit to already-invalid Python file %s: %s",
                             resolved_path,
-                            e,
+                            was_broken,
                         )
                     else:
-                        try:
-                            ast.parse(updated_content)
-                        except SyntaxError as e:
+                        would_break = _python_syntax_error(
+                            updated_content, str(resolved_path)
+                        )
+                        if would_break is not None:
                             return {
                                 "status": "error",
-                                "error": "Edit would result in invalid Python syntax",
-                                "syntax_errors": [str(e)],
+                                "error": (
+                                    f"Edit refused: it would leave {resolved_path} "
+                                    f"with invalid Python syntax ({would_break}). "
+                                    f"The file is unchanged — fix the replacement "
+                                    f"text and retry."
+                                ),
+                                "syntax_errors": [would_break],
+                                "file_path": str(resolved_path),
                                 "operation": "edit_file",
                             }
 
