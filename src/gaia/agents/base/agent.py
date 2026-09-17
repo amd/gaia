@@ -7242,7 +7242,13 @@ Do NOT wrap conversational replies in JSON.
     _LOOP_CONNECTION_RE = re.compile(
         r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
         r"|unreachable|could not connect|failed to establish|max retries exceeded"
-        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out",
+        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
+        # Windows words a refused connection as "no connection could be made
+        # because the target machine actively refused it" (WinError 10061).
+        # That matches none of the patterns above but does match "refus" in
+        # _LOOP_NOT_PERMITTED_RE, so without these a dead service is reported
+        # to the user as a permissions problem.
+        r"|no connection could be made|actively refused|connection attempt failed",
         re.IGNORECASE,
     )
     _LOOP_NOT_PERMITTED_RE = re.compile(

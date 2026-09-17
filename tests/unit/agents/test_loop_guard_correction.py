@@ -267,6 +267,27 @@ def test_summary_for_a_connection_error_keeps_the_service_hint(agent):
     assert _SERVICE_HINT in summary
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        "[WinError 10061] No connection could be made because the target "
+        "machine actively refused it",
+        "[WinError 10060] A connection attempt failed because the connected "
+        "party did not properly respond after a period of time",
+    ],
+)
+def test_summary_reads_a_windows_socket_error_as_a_connection_failure(agent, error):
+    """Windows says "actively refused" for a dead service, not a policy refusal.
+
+    That wording matches none of the connection patterns but does match
+    ``refus`` in the not-permitted set, so it used to tell the user to split
+    the task into steps when the fix was to start the service.
+    """
+    summary = _summary(agent, {"status": "error", "error": error})
+    assert _SERVICE_HINT in summary
+    assert "not permitted here" not in summary
+
+
 def test_summary_for_a_plain_failure_does_not_blame_a_service(agent):
     summary = _summary(agent, {"status": "error", "error": "404 Not Found"})
     assert "kept failing: 404 Not Found" in summary
