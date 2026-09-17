@@ -17,11 +17,13 @@ All file/network/subprocess calls are mocked — no real LLM or Agent UI needed.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
+from gaia.eval import runner
 from gaia.eval.runner import (
     _SCORE_WEIGHTS,
     _aggregate_performance,
@@ -707,3 +709,124 @@ class TestJudgeMismatchWarning:
         result = compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
 
         assert len(result["regressed"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# MCP config resolution (#3981)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveMcpConfig:
+    """The tracked config is a template; the interpreter is resolved per run."""
+
+    def test_resolved_config_names_the_running_interpreter(self, tmp_path):
+        resolved = runner.resolve_mcp_config(tmp_path)
+
+        config = json.loads(resolved.read_text(encoding="utf-8"))
+        assert config["mcpServers"]["gaia-agent-ui"]["command"] == sys.executable
+
+    def test_resolved_copy_lands_in_the_run_dir(self, tmp_path):
+        resolved = runner.resolve_mcp_config(tmp_path)
+
+        assert resolved.parent == tmp_path
+        assert resolved != runner.MCP_CONFIG
+
+    def test_template_on_disk_is_left_untouched(self, tmp_path):
+        before = runner.MCP_CONFIG.read_bytes()
+
+        runner.resolve_mcp_config(tmp_path)
+
+        assert runner.MCP_CONFIG.read_bytes() == before
+        assert json.loads(before)["mcpServers"]["gaia-agent-ui"]["command"] == "python"
+
+    def test_falls_back_to_a_temp_file_without_a_run_dir(self):
+        resolved = runner.resolve_mcp_config()
+        try:
+            config = json.loads(resolved.read_text(encoding="utf-8"))
+            assert config["mcpServers"]["gaia-agent-ui"]["command"] == sys.executable
+        finally:
+            resolved.unlink(missing_ok=True)
+
+    def test_non_python_commands_are_preserved(self, tmp_path, monkeypatch):
+        template = tmp_path / "mcp-config.json"
+        template.write_text(
+            json.dumps({"mcpServers": {"node-server": {"command": "npx"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        resolved = runner.resolve_mcp_config(tmp_path / "run")
+
+        config = json.loads(resolved.read_text(encoding="utf-8"))
+        assert config["mcpServers"]["node-server"]["command"] == "npx"
+
+    @pytest.mark.parametrize(
+        "command", ["python", "python3", "python3.12", "/usr/bin/python3"]
+    )
+    def test_generic_interpreter_names_are_resolved(self, command):
+        assert runner._resolve_mcp_command(command) == sys.executable
+
+    @pytest.mark.parametrize("command", ["npx", "node", "uv", "gaia-mcp"])
+    def test_other_commands_are_not_resolved(self, command):
+        assert runner._resolve_mcp_command(command) == command
+
+
+class TestMcpServerCommandPreflight:
+    """A missing MCP command must fail at startup, not mid-run."""
+
+    def test_passes_with_the_real_template(self):
+        assert runner._check_mcp_server_commands() == []
+
+    def test_errors_actionably_when_the_command_is_missing(self, tmp_path, monkeypatch):
+        template = tmp_path / "mcp-config.json"
+        template.write_text(
+            json.dumps(
+                {"mcpServers": {"node-server": {"command": "definitely-not-installed"}}}
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        errors = runner._check_mcp_server_commands()
+
+        assert len(errors) == 1
+        message = errors[0]
+        assert "node-server" in message
+        assert "definitely-not-installed" in message
+        assert str(template) in message
+        assert "INFRA_ERROR" in message
+
+    def test_errors_when_a_server_has_no_command(self, tmp_path, monkeypatch):
+        template = tmp_path / "mcp-config.json"
+        template.write_text(
+            json.dumps({"mcpServers": {"broken": {}}}), encoding="utf-8"
+        )
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        errors = runner._check_mcp_server_commands()
+
+        assert len(errors) == 1
+        assert "broken" in errors[0]
+        assert "no 'command'" in errors[0]
+
+    def test_errors_on_a_malformed_template(self, tmp_path, monkeypatch):
+        template = tmp_path / "mcp-config.json"
+        template.write_text("{not json", encoding="utf-8")
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        errors = runner._check_mcp_server_commands()
+
+        assert len(errors) == 1
+        assert "not valid JSON" in errors[0]
+
+    def test_preflight_surfaces_the_command_check(self, tmp_path, monkeypatch):
+        template = tmp_path / "mcp-config.json"
+        template.write_text(
+            json.dumps({"mcpServers": {"ghost": {"command": "no-such-binary-xyz"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        errors = runner.preflight_check("http://127.0.0.1:1")
+
+        assert any("no-such-binary-xyz" in e for e in errors)

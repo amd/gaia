@@ -5,6 +5,7 @@
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -60,7 +61,12 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
     assert command[:2] == ["/test/claude", "-p"]
     assert ("--bare" in command) == bool(api_key)
     assert "--strict-mcp-config" in command
-    assert Path(command[command.index("--mcp-config") + 1]) == runner.MCP_CONFIG
+    # The subprocess gets the *resolved* copy, never the tracked template.
+    mcp_config = Path(command[command.index("--mcp-config") + 1])
+    assert mcp_config != runner.MCP_CONFIG
+    assert mcp_config.is_file()
+    resolved = json.loads(mcp_config.read_text(encoding="utf-8"))
+    assert resolved["mcpServers"]["gaia-agent-ui"]["command"] == sys.executable
     assert runner.MCP_CONFIG.is_file()
     assert run.call_args.kwargs["cwd"] == str(runner.REPO_ROOT)
     assert run.call_args.kwargs["timeout"] == 30
@@ -74,12 +80,13 @@ def test_configured_mcp_launcher_imports_real_server(tmp_path, monkeypatch):
     assert launcher.is_file()
     assert "--stdio" in server["args"]
     monkeypatch.setenv("GAIA_MCP_LOG_DIR", str(tmp_path))
-    # The configured command, not sys.executable: the eval spawns whatever
-    # `command` resolves to on PATH, so running this under pytest's own
-    # interpreter would stay green while the real launch failed at spawn.
-    command = server["command"]
-    assert shutil.which(command), (
-        f"the eval's MCP config spawns {command!r}, which is not on PATH — "
+    # The command the runner will actually spawn — the template names a generic
+    # interpreter, and the runner resolves it before handing the config to
+    # `claude -p`. Asserting on the raw template would fail on every host
+    # without a bare `python` (macOS, most Linux distros) — see #3981.
+    command = runner._resolve_mcp_command(server["command"])
+    assert shutil.which(command) or Path(command).is_file(), (
+        f"the eval's MCP config spawns {command!r}, which is not executable — "
         "the eval would fail at spawn time"
     )
     result = subprocess.run(
