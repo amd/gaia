@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -961,6 +962,12 @@ func TestDoFailsWhenTheRefreshedTokenIsAlsoRejected(t *testing.T) {
 // that leads with `pip install -e .` points at a workflow they cannot perform.
 func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	// Isolate from any real install evidence on the box running this test
+	// (a dev machine's own ~/.gaia or active venv), so the "genuinely
+	// uninstalled" branch is the one exercised here.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("VIRTUAL_ENV", "")
 
 	_, err := gaiaDaemonStart(context.Background())
 	if err == nil {
@@ -985,6 +992,76 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	if repoPath >= 0 && repoPath < installer {
 		t.Errorf("the repo-only remediation leads the message:\n%s", msg)
 	}
+}
+
+// TestGaiaDaemonStartInstalledButUnresolvable guards the other half of #2539:
+// someone who already has GAIA installed (a venv whose bin dir isn't on this
+// process's PATH, or a machine with a prior `gaia init`) must not be told to
+// (re)install it — the curl/pip remediation is actively wrong advice there.
+func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
+	t.Run("active venv missing from PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		venv := t.TempDir()
+		binDir := filepath.Join(venv, "bin")
+		if runtime.GOOS == "windows" {
+			binDir = filepath.Join(venv, "Scripts")
+		}
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("VIRTUAL_ENV", venv)
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with an installed venv should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "installed") || !strings.Contains(msg, venv) {
+			t.Errorf("message should name the venv it found as evidence:\n%s", msg)
+		}
+	})
+
+	t.Run("prior gaia init leaves ~/.gaia/config.json", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("VIRTUAL_ENV", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		gaiaDir := filepath.Join(home, ".gaia")
+		if err := os.MkdirAll(gaiaDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gaiaDir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with a prior `gaia init` should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "config.json") {
+			t.Errorf("message should name the config file it found as evidence:\n%s", msg)
+		}
+	})
 }
 
 // TestVersionErrorNamesBothVersions pins the two halves of a skew message.

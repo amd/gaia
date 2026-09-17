@@ -17,6 +17,7 @@ for all file mutation operations across agents. These tests verify:
 All tests are designed to run without LLM or external services.
 """
 
+import ast
 import os
 import platform
 from pathlib import Path
@@ -519,20 +520,44 @@ class TestCreateBackup:
 
         assert backup_path is not None
         backup_name = os.path.basename(backup_path)
-        # Should match pattern: report.YYYYMMDD_HHMMSS.bak.txt
-        assert backup_name.startswith("report.")
-        assert ".bak" in backup_name
-        assert backup_name.endswith(".txt")
+        # report.txt.YYYYMMDD_HHMMSS.bak — the full original name, then the
+        # stamp, then ".bak" last.
+        assert backup_name.startswith("report.txt.")
+        assert backup_name.endswith(".bak")
 
-    def test_backup_preserves_extension(self, validator, tmp_path):
-        """Verify backup preserves the original file extension."""
+    def test_backup_keeps_the_original_name_but_not_its_extension(
+        self, validator, tmp_path
+    ):
+        """A backup must not still look like a file of the original type.
+
+        Keeping ".py" on the end made a backup of a test module importable-
+        looking: pytest collected ``test_x.<stamp>.bak.py``, failed on the
+        dotted module name, and took the whole suite down with it (#3747). The
+        original name is still there to read; the extension is not (#3747).
+        """
         original = tmp_path / "script.py"
         original.write_text("print('hello')")
 
         backup_path = validator.create_backup(str(original))
 
         assert backup_path is not None
-        assert backup_path.endswith(".py")
+        assert not backup_path.endswith(".py")
+        assert os.path.basename(backup_path).startswith("script.py.")
+
+    def test_a_backup_of_a_test_file_is_not_collectable(self, validator, tmp_path):
+        """The regression itself: pytest must not try to import the backup."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        original = tests_dir / "test_thing.py"
+        original.write_text("def test_ok():\n    assert True\n")
+
+        backup_path = validator.create_backup(str(original))
+
+        assert backup_path is not None
+        name = os.path.basename(backup_path)
+        assert not (
+            name.startswith("test_") and name.endswith(".py")
+        ), f"{name} matches pytest's test_*.py glob and will break collection"
 
     def test_backup_nonexistent_file_returns_none(self, validator, tmp_path):
         """Verify create_backup returns None for a nonexistent file."""
@@ -840,7 +865,128 @@ class TestChatAgentEditFileGuardrails:
             new_content="GAIA",
         )
         assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
         assert target.read_text() == "Hello, GAIA!"
+
+    def test_edit_python_file_rejects_invalid_syntax(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify edit_file refuses Python edits that break syntax."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        original = "def main():\n    print('hello')\n"
+        target.write_text(original)
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="print('broken')\nreturn",
+        )
+
+        assert result["status"] == "error"
+        assert "syntax" in result["error"].lower()
+        assert target.read_text() == original
+
+    @pytest.mark.parametrize(
+        "name,original,old_content,new_content",
+        [
+            # The literal corruption from #3733: `    return 0` inside main()
+            # dedented to a top-level `return`. ast.parse accepts this; only
+            # compile() reports "'return' outside function".
+            (
+                "return outside function",
+                "def main():\n    print('hello')\n    return 0\n",
+                "    return 0",
+                "return 0",
+            ),
+            (
+                "yield outside function",
+                "def main():\n    print('hello')\n    yield 1\n",
+                "    yield 1",
+                "yield 1",
+            ),
+            (
+                "await outside async def",
+                "async def main():\n    await go()\n",
+                "async def main():",
+                "def main():",
+            ),
+            (
+                "duplicate argument",
+                "def main(a, b):\n    return a\n",
+                "def main(a, b):",
+                "def main(a, a):",
+            ),
+            (
+                "break outside loop",
+                "for i in range(3):\n    break\n",
+                "for i in range(3):\n    break",
+                "if True:\n    break",
+            ),
+        ],
+    )
+    def test_edit_python_file_rejects_compile_only_errors(
+        self, mixin_and_registry, tmp_path, name, original, old_content, new_content
+    ):
+        """Reject edits the parser accepts but the compiler rejects (#3733).
+
+        ast.parse() builds a tree without running the symtable pass, so a
+        dedented return, a stray yield/await, a duplicate argument name and
+        break outside a loop all parse cleanly and still fail at import.
+        """
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text(original)
+
+        # Precondition: the parser alone would wave this through.
+        broken = original.replace(old_content, new_content)
+        ast.parse(broken)
+        with pytest.raises(SyntaxError):
+            compile(broken, str(target), "exec")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content=old_content,
+            new_content=new_content,
+        )
+
+        assert result["status"] == "error", f"{name} was accepted: {result}"
+        assert "syntax" in result["error"].lower()
+        assert str(target) in result["error"]
+        assert target.read_text() == original
+
+    def test_edit_python_file_can_repair_existing_syntax_error(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify an invalid Python file can be repaired incrementally."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "broken.py"
+        target.write_text("def main(:\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="def main(:",
+            new_content="def main():",
+        )
+
+        assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
+        assert target.read_text() == "def main():\n    print('hello')\n"
+
+    def test_edit_python_file_accepts_valid_syntax(self, mixin_and_registry, tmp_path):
+        """Verify edit_file accepts Python edits that remain syntactically valid."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text("def main():\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="    print('updated')",
+        )
+
+        assert result["status"] == "success"
+        assert target.read_text() == "def main():\n    print('updated')\n"
 
     def test_edit_sensitive_file_blocked(self, mixin_and_registry, tmp_path):
         """Verify editing a sensitive file is blocked."""

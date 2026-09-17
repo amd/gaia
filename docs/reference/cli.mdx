@@ -615,12 +615,11 @@ automatically:
 
 ```bash From PyPI (pip)
 pip install gaia-agent-email          # one agent
-pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
 <Note>
 PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
-[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+[#2240](https://github.com/amd/gaia/issues/2240)), so the command above doesn't
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
@@ -2656,7 +2655,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
-| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the

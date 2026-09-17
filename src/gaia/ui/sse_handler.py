@@ -248,6 +248,12 @@ class SSEOutputHandler(OutputHandler):
         # cancel path can force a blocked read to error out by closing it from
         # another thread. None outside an active email-relay turn.
         self.active_relay_response: Optional[Any] = None
+        # Proxy + run_id for that same in-flight email /query relay (#2595), so
+        # a needs_input answer posted to /api/chat/user-input can be delivered
+        # to the run that's actually waiting on it. None outside an active
+        # email-relay turn, in lockstep with active_relay_response.
+        self.active_relay_proxy: Optional[Any] = None
+        self.active_relay_run_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -1307,6 +1313,22 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._user_input_results[request_id] = response
             evt.set()
+        return True
+
+    def resolve_relay_input(self, request_id: str, value: str) -> bool:
+        """Deliver an answer to a pending ``needs_input`` question on an
+        in-flight email-relay run (#2595). Returns ``False`` when there is no
+        active relay run to answer (already finished, or never one) so the
+        caller can 404 rather than report an accepted answer nothing reads.
+        Any sidecar rejection (e.g. the question is no longer pending)
+        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        never swallowed.
+        """
+        proxy = self.active_relay_proxy
+        run_id = self.active_relay_run_id
+        if proxy is None or run_id is None:
+            return False
+        proxy.respond_query(run_id, request_id, value)
         return True
 
     def signal_done(self):
