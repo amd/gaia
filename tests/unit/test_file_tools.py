@@ -1142,3 +1142,72 @@ class TestAnalyzeDataFileDateRange:
 
         assert result["status"] == "error"
         assert "no date column" in result["error"]
+@pytest.mark.parametrize("limit", [1, 20, 200])
+def test_recent_files_bounds_every_output_field(tmp_path, monkeypatch, limit):
+    import os
+    import time
+    from unittest.mock import patch
+
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    now = time.time()
+    for index in range(205):
+        path = documents / f"report_{index:03}.txt"
+        path.write_text("fact")
+        os.utime(path, (now - index, now - index))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](max_results=limit)
+    assert result["status"] == "success"
+    assert result["total_found"] == 205
+    assert result["count"] == limit
+    assert result["truncated"] is True
+    assert "all_files" not in result
+    assert len(result["files"]) == limit
+    assert [item["file_name"] for item in result["files"]] == [
+        f"report_{index:03}.txt" for index in range(limit)
+    ]
+    assert "report_204.txt" not in result["display_message"]
+    assert f"Showing {limit} of 205" in result["display_message"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, 201, True])
+def test_recent_files_rejects_invalid_limit(limit):
+    from unittest.mock import patch
+
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](max_results=limit)
+    assert result["status"] == "error"
+    assert "1 and 200" in result["error"]
+
+
+def test_recent_files_below_limit_is_complete(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Documents" / "only.txt").write_text("fact")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert result["total_found"] == result["count"] == 1
+    assert result["truncated"] is False
+    assert "omitted" not in result["display_message"]
+
+
+def test_unreadable_content_search_reports_reason(tmp_path, caplog):
+    from unittest.mock import patch
+
+    target = tmp_path / "readme.txt"
+    target.write_text("find me")
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        with patch(
+            "builtins.open", side_effect=PermissionError("test permission denial")
+        ):
+            _TOOL_REGISTRY["search_file_content"]["function"](
+                "find", directory=str(tmp_path)
+            )
+    assert "test permission denial" in caplog.text

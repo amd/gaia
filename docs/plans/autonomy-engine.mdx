@@ -1,119 +1,190 @@
 ---
 title: "Autonomy Engine"
-description: "Background service, heartbeat scheduler, event hooks, and system tray integration"
+description: "Event-driven, cost-aware autonomy on top of the existing daemon scheduler"
 icon: "clock"
 ---
 
-# Autonomy Engine -- Background Service, Heartbeat Scheduler & Event Hooks
+# Autonomy Engine -- Event-Driven, Intention-Gated Autonomy
 
-> **⚠️ Reconcile with Agent UI v2** ([agent-ui.mdx](/plans/agent-ui) +
-> [agent-ui-agent-capabilities-plan.md](/plans/agent-ui-agent-capabilities-plan) §0).
-> This doc's "always-on background service" **is** the v2 **headless custody daemon**
-> — don't build a second one. The daemon (§0.0, §0.25) owns the single scheduler
-> clock (§0.22) that this engine describes; jobs fire into the owning agent sidecar
-> via `/query`, not into an in-process loop. Read v2 §0 and treat the heartbeat/event
-> hooks below as capabilities *of the daemon*, not a separate service.
-
-> **Date:** 2026-04-01
+> **⚠️ Reconciled 2026-09-17 against the shipped daemon.** The "always-on background
+> service" this doc originally proposed **is** the daemon (`src/gaia/daemon/`), which now
+> exists: one process, one `DaemonClock` (`daemon/scheduler/clock.py`), sidecars per
+> agent. Don't build a second one. What's below is corrected to match what's actually
+> there today, not what was planned in April — see §3 for the current-state audit and
+> §14 for what changed.
 >
-> **Status:** Planning (0% implemented)
+> **The load-bearing finding of this update: the scheduler ships with zero executors.**
+> `DaemonClock` can track a due job, but nothing fires when one comes due
+> (`server.py:271`'s own docstring says so) — every capability in this doc downstream of
+> "a job runs" is blocked on that one piece of wiring, not on any of the fancier ideas
+> (event hooks, self-scheduling, connector triggers) layered on top.
+
+> **Date:** 2026-04-01 (original) · updated 2026-09-17
+>
+> **Status:** Partially implemented. Foundation shipped (daemon, `DaemonClock`,
+> `KIND_ONE_SHOT`/`KIND_RECURRING` job kinds, `EmailTriageAgent`'s trust-gated heartbeat
+> as a working precedent). Everything else in this doc — a registration surface, an
+> executor, self-scheduling, event/connector triggers, the tray app — is still 0%.
 >
 > **Milestone:** v0.23.0 -- Autonomous Agent Infrastructure
 >
-> **Prerequisites:** v0.20.0 Memory & Bootstrap must ship first (MemoryStore, MemoryMixin)
+> **Prerequisites:** Memory (MemoryStore, MemoryMixin) — shipped. Daemon + `DaemonClock`
+> — shipped. Stall-time / temporal grounding (#3969) — proposed, complementary: it's the
+> cheapest signal for "has the user gone quiet long enough to consider a follow-up."
 >
 > **Related plans:**
-> - [Agent UI](/plans/agent-ui) -- Phase C (autonomous infra)
-> - [Messaging Integrations](/plans/messaging-integrations-plan) -- Messaging adapters depend on this service
-> - [Security Model](/plans/security-model) -- Tool guardrails and dangerous mode
+> - [Agent UI](/plans/agent-ui) -- Phase C (autonomous infra), still future, re-cast under
+>   the daemon per its own v2 crosswalk note
+> - [Email Full Autonomy](/plans/email-full-autonomy) -- **shipped precedent.** Read this
+>   before building anything else here; it already solves "decide when to act, not just
+>   on a fixed schedule" for one agent, and the general engine should generalize its
+>   mechanism rather than invent a second one (§9).
+> - [Security Model](/plans/security-model) -- Dangerous Mode design (still "Planning");
+>   itself flagged partially superseded under the sidecar architecture
+> - [Messaging Integrations](/plans/messaging-integrations-plan) -- Messaging adapters
+>   depend on this service
 
 ---
 
 ## 1. What We're Building
 
-The Autonomy Engine is GAIA's always-on background service that turns the agent from a
-reactive chat tool into a proactive assistant. It runs as a separate process from the
-Electron UI or CLI, executing scheduled checks, responding to file system events, and
-delivering desktop notifications -- all powered by local inference at zero API cost.
+The Autonomy Engine turns the agent from a reactive chat tool into a proactive one:
+something other than a typed message can start a turn, and the agent decides for itself
+whether that turn is worth having — not every trigger deserves an LLM call, and not every
+LLM call deserves interrupting the user.
 
-The engine has three pillars:
+Four trigger sources, not one:
 
-1. **Heartbeat Scheduler** -- cron-based recurring tasks that run cheap deterministic checks
-   first and escalate to the LLM only when something interesting is found.
-2. **Event Hooks** -- file system watchers, webhook receivers, and system event triggers
-   that fire agent actions in response to real-world changes.
-3. **Autonomous Loop** -- a think-act-schedule cycle where the agent can plan follow-up
-   actions and schedule its own future executions.
+1. **Schedule fires** -- cron/interval jobs, the daemon's own clock (§4).
+2. **Tool-result triggers** -- a long-running or background tool finishes and the result
+   itself is the reason to act (§6).
+3. **Connector events** -- a connected service (Gmail, GitHub, an MCP server) has
+   something new (§6).
+4. **System signals** -- file changes, login, network state, other local conditions (§6).
 
-**Design principle:** Cheap-first. Deterministic checks (file stat, git status, disk space)
-cost zero LLM tokens. Only escalate to the 0.6B model for triage, and only invoke the full
-30B model when the agent needs to take meaningful action.
+**Design principle, unchanged from the original doc and reinforced by the one thing that
+has actually shipped (email autonomy):** cheap-first, intention-gated. A deterministic,
+zero-token check runs before any model loads. A cheap model triages whether it's worth
+telling the user about. Only then does the full agent turn happen. **This is not
+optional polish — it's the difference between "fully autonomous" and "a background
+process that quietly burns tokens and API budget in a loop nobody asked for."**
 
 ---
 
 ## 2. GitHub Issue Cross-References
 
-| Issue | Title | Component |
-|-------|-------|-----------|
-| #634 | Always-on agent: heartbeat, scheduler, and event hooks | Core engine |
-| #550 | Scheduled Autonomy: recurring task scheduler for Agent UI | Scheduler — **shipped** (Agent UI Schedule Manager, salvaged from #517; NL intervals, `/api/schedules`, run history per session) |
-| #555 | Autonomous mode: agent schedules follow-up messages | Autonomous loop |
-| #557 | Autonomous loop: think-act-schedule cycle | Autonomous loop |
-| #558 | Agent Activity feed: sidebar timeline | Activity feed |
-| #559 | Dangerous mode: opt-in guardrail bypass | Guardrails |
-| #560 | One-shot delayed execution: single-fire tasks | Scheduler |
-| #643 | System tray app + background agent service | Background service |
-| #415--#424 | Tray app: core agent, manager, marketplace, permissions, dashboard, terminal, notifications, interactive interface, auto-start, testing/CI | System tray |
+| Issue | Title | Component | Status |
+|-------|-------|-----------|--------|
+| #634 | Always-on agent: heartbeat, scheduler, and event hooks (autonomy engine) | Core engine (epic) | Open — updated alongside this doc |
+| #550 | Scheduled Autonomy: recurring task scheduler for Agent UI | Scheduler | **Closed/shipped**, pre-daemon; superseded by `DaemonClock` |
+| #555 | Autonomous mode: agent schedules follow-up messages | Autonomous loop | Open |
+| #557 | Autonomous loop: think-act-schedule cycle | Autonomous loop | Open |
+| #558 | Agent Activity feed: sidebar timeline | Activity feed | Open — no code exists yet (§3.6) |
+| #559 | Dangerous mode: opt-in guardrail bypass | Guardrails | Open — design unchanged, see §9 |
+| #560 | One-shot delayed execution: single-fire tasks | Scheduler | Open — `KIND_ONE_SHOT` exists in the model layer; no executor (§3.2) |
+| #643 | System tray app + background agent service | Background service | Open |
+| #415--#424 | Tray app: core agent, manager, marketplace, permissions, dashboard, terminal, notifications, interactive interface, auto-start, testing/CI | System tray | Open |
+| #3969 | Give the agent loop temporal grounding (stall time) | Related, not a component of this engine | Open — feeds §5's "should I follow up" decision |
 
 ---
 
-## 3. Architecture Overview
+## 3. Current-State Audit (2026-09-17)
 
-```
-+--------------------------------------------------+
-|           GAIA Autonomy Engine (background proc)  |
-|                                                   |
-|  +---------------+   +------------------------+  |
-|  | Heartbeat     |   | Event Hooks            |  |
-|  | Scheduler     |   | (file system, webhooks)|  |
-|  +-------+-------+   +------------+-----------+  |
-|          +-------------+-----------+              |
-|                        v                          |
-|          +----------------------------+           |
-|          | Task Executor              |           |
-|          | Tier 0: deterministic      |           |
-|          | Tier 1: triage (0.6B)      |           |
-|          | Tier 2: action (30B)       |           |
-|          +-------------+--------------+           |
-|                        v                          |
-|          +----------------------------+           |
-|          | Session Manager            |           |
-|          | (new sessions, never       |           |
-|          |  interrupts active ones)   |           |
-|          +-------------+--------------+           |
-+------------------------+-------------------------+
-                         |
-        +----------------+----------------+
-        v                v                v
-  Notifications    Activity Log     Electron UI
-  (desktop)        (SQLite)         (activity feed)
-```
+Before adding anything, here's what's actually there, so this doc stops describing a
+service that no longer needs to be built and starts describing the gaps in the one that
+exists.
 
-The engine runs as a **separate OS-level process** so the UI can be closed without stopping
-background tasks, it can auto-start at boot, and crashes are isolated. Communication with
-the UI uses a local HTTP API (same pattern as the MCP bridge on `:8765`).
+### 3.1 The daemon is the always-on process — this part is done
 
-**File layout:** `~/.gaia/heartbeat.yaml` (config), `~/.gaia/autonomy/` (PID file,
-rotating log, SQLite activity DB, pending/results task directories).
+`src/gaia/daemon/` is a single loopback-bound FastAPI process, self-started and tracked
+via `instance.json` (`daemon/server.py:208-318`). It already has the four subsystems this
+doc originally invented a diagram for:
+
+- **Custody** (`daemon/custody/`) — reverse-contract API for a running sidecar to call
+  back into the daemon (memory scope, RAG queries).
+- **Broker** (`daemon/broker.py`) — arbitrates Lemonade's single model slot across
+  processes by priority (interactive beats background).
+- **Scheduler** (`daemon/scheduler/`) — one persistent, SQLite-backed clock. This is the
+  "one clock, not four" outcome this doc's original banner asked for, and it shipped.
+- **Sidecars** (`daemon/sidecars/`) — spawns, health-checks, and relays to per-agent
+  processes.
+
+No second background service needs building. The system tray app (§7, #643) is a UI
+surface onto this, not a new process.
+
+### 3.2 The scheduler clock exists; nothing is wired to fire
+
+`KIND_ONE_SHOT`/`KIND_RECURRING` are real job kinds (`daemon/scheduler/models.py:21-24`),
+and `store.register_job()` (`store.py:98-132`) genuinely persists a job with either
+`fire_at` (epoch, one-shot) or `interval_seconds` (recurring) — **no cron-expression
+support today**, unlike the CLI's `gaia schedule` (which uses `croniter` in a separate,
+unmigrated store).
+
+Two gaps block everything downstream:
+
+- **No registration surface.** `register_job()` has exactly one caller in the whole
+  codebase: the legacy-scheduler migration path (`daemon/scheduler/migration.py:63`).
+  There is no REST endpoint and no agent tool that lets anything — a human, the TUI, or
+  the agent itself — register a new job today.
+- **No executors.** `_build_clock()` (`server.py:131-143`) is wired with **zero**
+  executors in production; the docstring says so directly. `DaemonClock.fire_due()`
+  (`clock.py:130-140`) marks any due job `failed: no executor registered for job kind`.
+  A job can be due and still do nothing.
+
+**This is the actual next milestone**, ahead of event hooks or self-scheduling: wire one
+executor (even just "recurring job → POST a fixed prompt to a named agent's `/query`")
+and expose one way to register a job. Everything else in this doc is downstream of that.
+
+### 3.3 A sidecar invocation is a full agent turn — no lighter path exists
+
+When something does eventually call a sidecar for a scheduled job, the shape is
+`daemon/agent_query.py:run_query()` → the relay → `/v1/<agent>/query`, the same canonical
+SSE-streamed, full LLM/tool loop as an interactive call
+(`hub/agents/email/python/gaia_agent_email/agent.py:1214`). There is no "just run a
+deterministic check" fast path in the daemon itself — the cheap-first tiering this doc
+wants has to be built either as a pre-check *before* the daemon ever calls the sidecar, or
+inside the agent's own `on_heartbeat`-style entry point (which is exactly how email does
+it — see §9).
+
+### 3.4 Governance already gates tool execution, generically
+
+`GovernedAgentMixin` (`src/gaia/governance/mixin.py:67-174`) intercepts
+`Agent._execute_tool` and drives ALLOW/BLOCK/REVIEW through a pluggable adapter, with
+checkpoint confirmation that **fails closed** if nothing is attached to review it
+(`mixin.py:330-346`). It applies the same way whether the turn was started by a human
+message or (once wired) a scheduler fire — good, reusable, no changes needed for
+autonomy specifically. What it does *not* have: any rate-limiting or
+frequency-of-autonomous-action knob. That's still a gap (§14).
+
+### 3.5 Connectors are pull-only — there is no push trigger today
+
+No webhook receiver, subscription, or event-push mechanism exists for Gmail, GitHub, or
+MCP-server connectors (`src/gaia/connectors/`). The only event fan-out that exists
+(`connectors/activation_watcher.py`, `connectors/events.py`) is a 1-second poll of a
+local JSON ledger for **UI-facing** connector-activation state, not external data events.
+An agent has to call a tool to check for new mail or a new PR — nothing notifies it.
+"Connector has an event" as a trigger source (§6) is genuinely new work, not a rename of
+something that exists.
+
+### 3.6 The activity feed and "new session, never interrupts" concept don't exist in code
+
+No `origin: "autonomy"` session metadata, no activity-feed table, no timeline UI. The one
+real, narrower analog: `src/gaia/ui/agent_loop.py:457-459` saves autonomous ticks as
+session messages tagged `role="autonomous"`, hidden from the UI by default. Sections 7,
+10, and 11 below are still aspirational design, not a correction — just flagging that
+"session management" (§10) is 0% built, not partially.
 
 ---
 
 ## 4. Heartbeat Scheduler
 
-### Configuration
+The original design here is still the right shape; it just needs to be built *as an
+executor on the daemon's existing clock*, not a second scheduler. Config format,
+cheap-first tiers, and built-in checks are unchanged from the original plan (kept below
+for reference) — what changed is that they now have a concrete home: `DaemonClock` +
+one or more registered executors, not a bespoke YAML-driven loop in a separate process.
 
-The scheduler reads `~/.gaia/heartbeat.yaml`. Created with sensible defaults on first
-enable, editable by hand or through the Settings UI.
+### Configuration
 
 ```yaml
 # ~/.gaia/heartbeat.yaml
@@ -131,10 +202,10 @@ quiet_hours:
 
 tasks:
   - name: "Project watcher"
-    schedule: "*/30 * * * *"       # Every 30 minutes (cron syntax)
-    enabled: true
-    checks:
-      - check_git_changes
+    schedule: "*/30 * * * *"       # Cron syntax -- NOTE: the daemon clock only takes
+    enabled: true                  # fire_at/interval_seconds today (§3.2); a cron
+    checks:                        # front-end has to translate to one of those, or
+      - check_git_changes          # the clock needs cron support added.
       - check_new_files
       - summarize_if_needed        # Escalates to LLM only if changes found
     watch_paths:
@@ -153,8 +224,6 @@ resource_limits:
   defer_if_user_active: true
 ```
 
-Cron expressions use standard five-field syntax, parsed by `croniter`.
-
 ### Built-in Checks
 
 Phase 1 ships with deterministic (zero-token) checks: `check_git_changes` (git status/log
@@ -164,9 +233,16 @@ checks (`check_calendar`, `check_email`) are also zero-cost. LLM-backed checks
 (`summarize_if_needed`, `daily_summary`, `generate_daily_brief`) only run when prior checks
 find changes or on explicit schedule.
 
-### Cheap-First Execution Pattern
+**Four hub skills already implement the reporting half of this pattern in prompt form**
+— `price-watch` and `source-watch` (`hub/skills/{price-watch,source-watch}/SKILL.md`)
+recall prior state, fetch, compare, and only report or remember if something changed.
+They do **not** have a deterministic zero-token pre-check yet: every run still costs a
+full LLM pass just to conclude "nothing changed," because none of them can self-schedule
+today (each explicitly states `--skill` is rejected by `gaia schedule` at creation time).
+Wiring an executor (§3.2) that runs a cheap check before invoking these skills at all is
+a concrete, scoped near-term win.
 
-Every task runs through a three-tier escalation:
+### Cheap-First Execution Pattern
 
 - **Tier 0 -- Deterministic** (zero cost): Run checks. If nothing found, log "all clear"
   and stop. No LLM is loaded.
@@ -180,101 +256,153 @@ On a quiet day with no changes, the heartbeat costs zero LLM tokens.
 
 ---
 
-## 5. Autonomous Loop (Think-Act-Schedule)
+## 5. Autonomous Loop (Think-Act-Schedule), Including Self-Scheduling From Conversation State
 
-The autonomous loop allows an agent to plan multi-step work across time. After completing
-an action, the agent can schedule a follow-up check. Example workflows:
+The autonomous loop lets an agent plan multi-step work across time — and lets it decide,
+on its own, that a follow-up is warranted, not just execute a follow-up a human
+pre-configured.
 
-- "Monitor this PR and notify me when CI passes" (schedule check every 5 minutes)
-- "Remind me about this in 2 hours"
-- "Run this analysis overnight and have results ready by morning"
+### Two ways a follow-up gets created
+
+1. **User-requested** (unchanged from the original doc): "Monitor this PR and notify me
+   when CI passes," "remind me in 2 hours." The agent calls `schedule_followup` as part
+   of executing an explicit ask.
+2. **Agent-initiated, from conversation state** (new in this update, per the "GAIA should
+   manage its own cron job based on conversation/engagement" ask): the agent notices it's
+   *waiting on something* — a tool call still running, a confirmation the user hasn't
+   answered, a question it asked that got no reply — and schedules its own check-back,
+   without being asked to. This is the same shape as case 1 mechanically
+   (`schedule_followup`), but the trigger is the agent's own judgment instead of an
+   explicit instruction.
+
+**Stall time (#3969) is the cheapest signal for case 2.** Once that lands, "the agent's
+last reply was N minutes ago and the user hasn't answered" is already computed — the
+autonomous loop can read it instead of re-deriving idle time itself. This doc doesn't
+depend on #3969 to ship, but the two should land compatibly: don't build a second
+last-reply-time tracker.
 
 ### Cycle: THINK -> ACT -> SCHEDULE -> COMPLETE
 
-1. **Think:** Analyze trigger and findings, plan next action.
+1. **Think:** Analyze trigger and findings (or, for case 2, notice the stall), plan next
+   action.
 2. **Act:** Execute tools, write files, call APIs.
 3. **Schedule:** Optionally create a follow-up task via `schedule_followup` tool.
 4. **Complete:** Log result, notify if needed, yield.
-
-The agent receives a structured planning prompt with the trigger type, findings summary,
-and available tools. It responds with an assessment, actions to take, an optional
-follow-up schedule, and whether to notify the user.
 
 ### Self-Scheduling Constraints
 
 - Maximum 24-hour delay (longer recurrence belongs in `heartbeat.yaml`).
 - Maximum 10 pending follow-ups at any time (prevents runaway scheduling).
-- Each follow-up runs at most once (one-shot, not recurring).
+- Each follow-up runs at most once (one-shot, not recurring) — an agent that wants to
+  keep checking back schedules its *next* one-shot when the previous one completes, it
+  doesn't create a recurring job for itself. Recurring jobs stay human-configured
+  (`heartbeat.yaml`) so a misjudging agent can't wind up a runaway clock.
 - Follow-ups inherit the dangerous-mode setting of the creating session.
+- **A follow-up must justify itself before it fires, not just because it's due** — it
+  still goes through Tier 0/Tier 1 cheap-first checks (§4) before spending a full turn.
+  "I scheduled a check-in" is not a bypass of "is this worth acting on."
 
-One-shot tasks ("do X at time Y") are persisted as JSON files in
-`~/.gaia/autonomy/tasks/pending/` so they survive engine restarts.
+One-shot tasks are persisted so they survive engine restarts. On the current daemon this
+is `KIND_ONE_SHOT` in the scheduler's own SQLite store (`daemon/scheduler/models.py`),
+not a separate `~/.gaia/autonomy/tasks/pending/` JSON directory — the original doc
+predates the daemon's own persistence and should defer to it rather than duplicate it.
 
 ---
 
-## 6. Event Hooks
+## 6. Triggers: Schedule, Tool Result, Connector Event, System Signal
 
-### File System Triggers
+Four trigger sources feed the same Tier-0/Tier-1/Tier-2 pipeline (§4). None of them
+should be allowed to skip Tier 0/1 just because they're "an event, not a poll" — an
+event firing is not the same claim as "this is worth an LLM call."
 
-The engine uses `watchdog` (cross-platform) to monitor directories and fire agent actions.
-Example: watch `~/Downloads` for new PDFs and auto-index into RAG, or watch `~/.ssh` for
-any change and send an alert. Configured as `event_hooks` entries in `heartbeat.yaml`.
+### Schedule fires
 
-### Webhook Receiver
+Cron/interval jobs via the daemon clock (§3.2, §4). The most mechanically simple trigger
+and the one blocking everything else on wiring an executor.
 
-A localhost-only HTTP endpoint accepts inbound webhooks from external services (GitHub,
-Slack, etc.). Payloads are validated (HMAC/token) before being passed to the agent.
+### Tool-result triggers (new)
 
-### System Event Triggers
+A tool call that runs long or asynchronously (a background shell command, an install, a
+long-running search) completing is itself a reason to resume a turn or start a new one —
+"the build finished" is exactly the kind of thing a heartbeat-style deterministic check
+could otherwise only discover by polling. No existing mechanism reports this today; it
+needs a way for a tool's completion to enqueue a (Tier-0-gated) wake, rather than the
+agent having to poll "is it done yet" on its own schedule.
 
-Platform-specific triggers (user login, network connected, USB attach, screen unlock)
-using native APIs (Task Scheduler / WMI on Windows, systemd / D-Bus on Linux, launchd /
-IOKit on macOS). Phase 1 supports user login and network connected; others are stretch
-goals.
+### Connector events (new)
+
+"A connector has something new" — new email, new PR comment, a calendar event about to
+start. **Connectors are pull-only today (§3.5)** — this is genuinely new infrastructure,
+not a rename. Two paths, in order of how much new surface they require:
+
+- **Cheaper, ships first:** a scheduled job (§4) that calls the connector's existing pull
+  API on an interval and only escalates past Tier 0 if something's actually new — reuses
+  everything, adds no push infrastructure, at the cost of latency (checks on an interval,
+  not the instant something happens).
+- **More capable, more work:** an actual webhook/subscription receiver per connector
+  (Gmail push notifications, GitHub webhooks), which needs a public or tunneled endpoint,
+  payload validation, and per-connector wiring. Worth it for latency-sensitive cases;
+  should not be the default answer for every connector.
+
+### System signal triggers
+
+File system watchers (`watchdog`), and platform-native triggers (login, network
+connected, USB attach, screen unlock) via Task Scheduler/WMI, systemd/D-Bus, or
+launchd/IOKit depending on platform. Unchanged from the original plan; still 0% built.
 
 ---
 
 ## 7. System Tray App
 
-The system tray app is the user-facing control surface for all background processes,
-integrated into the existing Electron app (`src/gaia/electron/`). It provides:
-
-- **Status indicator** -- icon color reflects engine state (green = running, yellow =
-  service error, red = stopped, blue pulsing = new findings, gray = quiet hours).
-- **Quick actions** -- open GAIA Chat, pause/resume heartbeat, view activity log.
-- **Running services** -- at-a-glance list of Lemonade Server, API Server, Autonomy
-  Engine, and MCP Bridge with their status.
-- **Settings and quit** -- access to autonomy configuration and clean shutdown.
-
-The tray app uses Electron's `Tray` and `Menu` APIs for native context menus on all
-platforms.
+Unchanged from the original plan. The tray app is the user-facing control surface for
+background processes — status indicator, quick actions, running-services list, settings —
+built on Electron's `Tray`/`Menu` APIs. Given §3.1, this is a UI onto the existing
+daemon, not a new process to manage.
 
 ---
 
 ## 8. Desktop Notifications
 
-Notifications use Electron's `Notification` API when the app is running, with a fallback
-to platform-native notifications (`plyer` / `win10toast`) in headless/CLI mode. Types:
-heartbeat findings, reminders, event hook alerts, follow-up results, and errors. Each
-notification links back to the relevant activity entry or chat session.
-
-During quiet hours, notifications are suppressed but tasks still execute and log.
+Unchanged from the original plan: Electron `Notification` API with `plyer`/`win10toast`
+fallback in headless mode, suppressed (not skipped — tasks still run and log) during
+quiet hours.
 
 ---
 
-## 9. Dangerous Mode and Safety
+## 9. Intention-Gating: Generalize the Trust Pattern Email Autonomy Already Proved
 
-### Safe Mode (Default)
+This is the section that answers "how do we make sure GAIA only engages with intention,
+not just because a timer fired." **Don't design this from scratch — it's already shipped
+once**, for `EmailTriageAgent` (`docs/plans/email-full-autonomy.mdx`):
 
-- Heartbeat checks run freely (they are read-only).
-- Any action that modifies files, runs shell commands, or sends messages requires
-  user confirmation via a desktop notification with Accept/Reject/Review buttons.
-- The agent cannot self-schedule tasks that bypass confirmation.
+- `on_heartbeat` runs a **zero-token delta-check** first (has anything actually changed
+  since last time) — the real Tier-0 in production, today, not a plan.
+- A `TrustPolicy` decides `auto | draft | suggest | confirm` **per action and per scope**,
+  not a single global switch — email can auto-file a newsletter but still always confirm
+  before sending, forwarding, deleting, or RSVPing (an inviolable confirm-floor, not
+  configurable away).
+- A `TrustLedger` of past correction/outcome history lets trust *earn up* over time for a
+  given action/scope, rather than being a static permission the user sets once — the
+  agent's autonomy increases as it demonstrates it deserves it, and a correction can pull
+  it back down.
+- This rides the daemon's single `DaemonClock` already — no bespoke scheduler.
 
-### Dangerous Mode (Opt-In)
+**The generalization this doc proposes:** extract `TrustPolicy`/`TrustLedger` out of the
+email package into something any agent's heartbeat/event handler can use, with the same
+inviolable-floor concept (some actions are never auto-approved regardless of earned
+trust — the general engine needs its own list of those, not email's). This turns "engage
+with intention" from a principle into a mechanism every autonomous trigger in §6 can
+call before acting, instead of five different ad hoc "should I bother the user" checks
+per trigger type.
 
-Dangerous mode removes the confirmation step. It is off by default, per-task configurable,
-session-scoped, and all actions are prominently logged with a warning indicator.
+### Safe Mode / Dangerous Mode
+
+Unchanged in spirit from the original doc and from `security-model.mdx` §10 (still
+"Planning," not shipped): safe mode requires confirmation for any write/shell/message
+action; dangerous mode is opt-in, per-task, session-scoped, and prominently logged. What's
+new here: this should compose with the generalized trust policy above rather than being a
+separate on/off switch — dangerous mode is "skip the confirm step trust would otherwise
+still require," not a separate axis.
 
 ```yaml
 tasks:
@@ -286,35 +414,24 @@ tasks:
       - auto_commit_if_ready
 ```
 
-For comprehensive security analysis, see [security-model.mdx](/plans/security-model).
-
 ---
 
 ## 10. Session Management
 
-When a heartbeat escalates to Tier 2 (full agent action), it creates a **new chat session**
-rather than injecting into an existing conversation. Key guarantees:
-
-- **Non-interruption:** If the user has an active session, heartbeat results are queued
-  and the user is notified. Messages are never injected into active conversations.
-- **Session origin metadata:** Autonomous sessions carry metadata (`origin: "autonomy"`,
-  trigger type, task name) so the UI can distinguish them.
-- **Activity feed:** All autonomous activity is logged to the SQLite activity database
-  and surfaced in the Electron UI sidebar as a timeline of cards.
+Design unchanged from the original doc (new session per Tier-2 escalation, never inject
+into an active conversation, session-origin metadata, activity feed). Per §3.6, **none of
+this exists in code yet** — the only real analog is `role="autonomous"` hidden session
+messages in `src/gaia/ui/agent_loop.py:457-459`. Treat this section as fully unbuilt, not
+partially.
 
 ---
 
 ## 11. Cross-Platform Background Service
 
-| Platform | Auto-Start Mechanism | Service Manager |
-|----------|---------------------|-----------------|
-| Windows | Registry Run key or Task Scheduler "At log on" trigger | System tray process |
-| Linux | systemd user service (`~/.config/systemd/user/gaia-autonomy.service`) | systemctl --user |
-| macOS | launchd plist (`~/Library/LaunchAgents/ai.amd.gaia.autonomy.plist`) | launchctl |
-
-The engine abstracts platform differences behind a `PlatformService` interface with
-`install()`, `uninstall()`, `start()`, `stop()`, and `is_running()` methods, with concrete
-implementations for each OS.
+Unchanged — `PlatformService` abstraction (`install`/`uninstall`/`start`/`stop`/
+`is_running`) over Registry/Task Scheduler (Windows), systemd user service (Linux),
+launchd (macOS). This describes making the *existing* daemon auto-start at boot/login,
+not standing up a second service.
 
 ---
 
@@ -337,45 +454,67 @@ gaia autonomy tasks
 gaia autonomy cancel <task_id>
 ```
 
+Whoever builds §3.2's registration surface should decide whether this becomes a thin
+wrapper over the daemon scheduler's (currently nonexistent) registration API, or whether
+`gaia autonomy` and `gaia schedule` (the existing, separate, cron-capable CLI surface)
+should be reconciled into one command instead of two competing ones.
+
 ---
 
 ## 13. Key Design Decisions
 
-1. **Separate process, not a thread.** The engine runs as its own OS process so the UI
-   can be closed without stopping background work, and crashes are isolated.
+1. **One process, not a second one.** Confirmed correct and shipped: the daemon is the
+   always-on process; nothing here should stand up another.
 
-2. **Cheap-first, not LLM-first.** Deterministic checks run before any model is loaded.
-   Most heartbeats on quiet days cost zero tokens.
+2. **Cheap-first, not LLM-first.** Still the right call, still unbuilt at the
+   infrastructure level (§3.3) — proven at the application level by email autonomy (§9).
+   Generalize that, don't reinvent it per trigger type.
 
-3. **New sessions, not injection.** Autonomous actions create new chat sessions rather
-   than injecting into active conversations. Users are never surprised by messages
-   appearing mid-conversation.
+3. **New sessions, not injection.** Unchanged; unbuilt (§3.6, §10).
 
-4. **Safe by default.** All write actions require user confirmation unless dangerous
-   mode is explicitly enabled per-task.
+4. **Safe by default, trust earned per action/scope, not granted globally.** Updated from
+   the original "safe by default" decision to match what email autonomy actually proved:
+   a single dangerous-mode toggle is cruder than a per-action trust ledger with an
+   inviolable floor. Generalize the latter.
 
-5. **YAML config, not database.** Scheduler configuration lives in a human-editable
-   YAML file, not in a database. This makes it version-controllable and inspectable.
+5. **YAML config for what's schedule-shaped; the daemon's own store for what's job-shaped.**
+   Heartbeat *definitions* (what to check, how often, in human-editable form) still belong
+   in YAML. Job *state* (is it due, has it fired, what's its next fire time) belongs in
+   the daemon scheduler's existing SQLite store — don't build a second persistence layer
+   for that half.
 
-6. **Local HTTP API for IPC.** The engine communicates with the UI via a local HTTP
-   API, following the same pattern as the MCP bridge.
+6. **The daemon's existing HTTP surface is the IPC mechanism.** Unchanged; no new
+   transport needed.
 
 ---
 
 ## 14. Open Questions
 
-1. **Model preloading:** Should the triage model (0.6B) be kept warm in Lemonade at all
-   times, or loaded on demand? Warm = faster heartbeats but ~600MB always used.
+Original five questions (model preloading, multi-agent heartbeats, memory integration,
+messaging-adapter delivery, MCP rate limiting) are all still open and unchanged from the
+April draft. Added from this update's audit:
 
-2. **Multi-agent heartbeats:** Should different heartbeat tasks be able to invoke different
-   agents (e.g., CodeAgent for repo watching, GaiaAgent for email triage)?
+6. **Who builds the first executor, and for which job kind?** This is the actual
+   unblocking task (§3.2) — everything else in this doc is downstream of it. Recommend
+   scoping it as its own issue, narrow: one `KIND_RECURRING` executor that POSTs a fixed
+   prompt to one named agent, plus one registration path (even CLI-only at first) to
+   create such a job. Prove the wiring before generalizing to heartbeat YAML, self-
+   scheduling, or connector triggers.
 
-3. **Memory integration:** How deeply should the heartbeat integrate with the v0.20.0
-   Memory system? Options: (a) heartbeat findings written to daily memory automatically,
-   (b) heartbeat can read memory for context, (c) both.
+7. **Cron vs. interval in the daemon clock.** `gaia schedule` (the CLI) supports cron via
+   `croniter`; the daemon clock only supports `fire_at`/`interval_seconds`. Does the
+   daemon clock gain cron support, or does everything above it (heartbeat YAML, `/loop`
+   in the TUI — #3960) translate cron into intervals before calling the daemon?
 
-4. **Messaging adapter delivery:** Should heartbeat notifications be deliverable through
-   messaging adapters (Telegram, Discord) in addition to desktop notifications?
+8. **Where does the generalized trust policy (§9) live?** As a new mixin next to
+   `GovernedAgentMixin`, or folded into governance itself? It needs to be usable by any
+   agent's heartbeat handler, not just email's.
 
-5. **Rate limiting for external MCP calls:** If heartbeat checks invoke MCP servers that
-   call external APIs (calendar, email), how do we rate-limit to avoid quota exhaustion?
+9. **Rate limiting for autonomous triggers broadly**, not just external MCP calls as the
+   original question framed it — a misbehaving tool-result or connector-event trigger
+   could fire far more often than a cron schedule ever would. Governance today
+   (`governance/config.py`) has no frequency knobs at all (§3.4).
+
+10. **Connector events: polling-based (cheap, reuses everything) or push-based (webhook/
+    subscription, lower latency, real new infrastructure)?** §6 recommends shipping the
+    polling path first and treating push as a per-connector upgrade, not a prerequisite.
