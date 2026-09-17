@@ -1456,9 +1456,27 @@ async function installBackend(opts = {}) {
     "--python",
     GAIA_PYTHON_BIN,
   ];
-  // A local GAIA wheel still downloads PyTorch and its transitive dependencies.
+  // A local GAIA wheel still downloads PyTorch and its transitive dependencies,
+  // so the CPU index is needed either way — without it PyPI serves the CUDA
+  // build and the download balloons.
+  //
+  // `--index-strategy unsafe-best-match` is required WITH it, not optional:
+  // uv gives an --extra-index-url priority over PyPI and, by default, takes
+  // every version of a package from the first index that carries it at all.
+  // download.pytorch.org carries its own pinned `requests` (2.28.1), so the
+  // default strategy resolved `requests` there, never consulted PyPI, and
+  // failed the whole install against gaia's `requests>=2.32.3`. The strategy
+  // flag makes uv consider both indexes and pick the best version. The
+  // dependency-confusion risk it normally guards against does not apply
+  // between PyPI and a first-party, curated PyTorch index that accepts no
+  // third-party uploads.
   if (!IS_WINDOWS) {
-    pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
+    pipArgs.push(
+      "--extra-index-url",
+      "https://download.pytorch.org/whl/cpu",
+      "--index-strategy",
+      "unsafe-best-match"
+    );
   }
 
   // Retry the install on transient PyPI/network failures. The heavy
