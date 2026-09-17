@@ -91,19 +91,20 @@ Get a working agent running to understand the basic flow.
     Choose your installation path:
 
     <Tabs>
-      <Tab title="PyPI (Recommended)">
-        Create a new project folder and install from PyPI:
+      <Tab title="Core + ChatAgent Source">
+        Create a new project folder. Install GAIA core from PyPI and ChatAgent from GitHub (requires Git):
 
         ```bash
         mkdir my-chat-agent
         cd my-chat-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[agent-chat,rag]"
+        uv pip install "amd-gaia[rag]"
+        uv pip install "gaia-agent-chat @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/chat/python"
         ```
 
         <Info>
-        This is the recommended path for most users. You'll create your agent scripts in this folder. The `agent-chat` extra pulls in the standalone `gaia-agent-chat` wheel that provides `ChatAgent`; `rag` adds the document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. The standalone `gaia-agent-chat` wheel provides `ChatAgent`; its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. GAIA has no `agent-chat` extra. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
         </Info>
       </Tab>
 
@@ -128,8 +129,8 @@ Get a working agent running to understand the basic flow.
 
   <Step title="Start Lemonade Server">
     ```bash
-    # Start local LLM server with AMD NPU/iGPU acceleration
-    lemonade-server serve
+    # Install and start Lemonade with the chat models
+    gaia init
     ```
 
     <Info>
