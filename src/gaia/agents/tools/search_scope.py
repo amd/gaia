@@ -98,16 +98,32 @@ def _is_gaia_install_dir(path: Path) -> bool:
     )
 
 
+def is_broad_root(path: Path) -> bool:
+    """True for a root so wide that walking it exhaustively is the #3889 bug.
+
+    Only ``$HOME`` and a filesystem root qualify. A project-sized sandbox, even
+    one several levels above the cwd, stays deep — demoting it would silently
+    put its own deeply-nested files out of reach.
+    """
+    path = Path(path)
+    try:
+        home = Path.home().resolve()
+    except RuntimeError:
+        home = None
+    return path == home or path == Path(path.anchor)
+
+
 def walk_plan(host: Any) -> List[Tuple[Path, int]]:
     """``(root, max_depth)`` pairs for a search with no ``directory`` given.
 
-    Normally :func:`search_roots` with :func:`root_depth`. When the process cwd
-    sits strictly inside an allowed root — the sandbox is ``$HOME`` and the user
-    launched from a project under it — the cwd is walked deep first and the
-    root containing it drops to :data:`SHALLOW_ROOT_DEPTH`, so a lookup cannot
-    turn into a walk of the whole home folder (#3889). A cwd that is not inside
-    the sandbox, or is GAIA's own install/package directory, is ignored: that
-    is how the process was launched, not where the user's work is (#3576).
+    Normally :func:`search_roots` with :func:`root_depth`. Only when the cwd
+    sits inside a root as broad as ``$HOME`` or a filesystem root is the cwd
+    walked deep first and that root dropped to :data:`SHALLOW_ROOT_DEPTH`, so a
+    lookup cannot turn into a walk of the whole home folder (#3889). A
+    project-sized sandbox keeps its full depth: it is small enough to walk, and
+    demoting it would hide its own deeply-nested files. A cwd that is not
+    inside the sandbox, or is GAIA's own install/package directory, is ignored:
+    that is how the process was launched, not where the user's work is (#3576).
     """
     roots = search_roots(host)
     plan = [(root, root_depth(root, roots)) for root in roots]
@@ -117,6 +133,8 @@ def walk_plan(host: Any) -> List[Tuple[Path, int]]:
         return plan
     container = next((r for r in resolved if r in cwd.parents), None)
     if container is None or _is_gaia_install_dir(cwd):
+        return plan
+    if not is_broad_root(container):
         return plan
     return [(cwd, DEEP_ROOT_DEPTH)] + [
         (root, SHALLOW_ROOT_DEPTH if res == container else depth)

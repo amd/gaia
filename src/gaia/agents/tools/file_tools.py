@@ -245,32 +245,43 @@ class FileSearchToolsMixin:
                         started=time.monotonic(),
                         entries=0,
                         truncated=False,
+                        reason="",
                     )
 
                 def budget_exhausted() -> bool:
                     if budget["truncated"]:
                         return True
-                    if (
-                        budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET
-                        or time.monotonic() - budget["started"]
+                    if budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET:
+                        budget["reason"] = "entries"
+                    elif (
+                        time.monotonic() - budget["started"]
                         >= search_scope.SEARCH_TIME_BUDGET_S
                     ):
-                        budget["truncated"] = True
-                        logger.info(
-                            "search_file stopped after %d entries / %.1f s",
-                            budget["entries"],
-                            time.monotonic() - budget["started"],
-                        )
-                    return budget["truncated"]
+                        budget["reason"] = "time"
+                    else:
+                        return False
+                    budget["truncated"] = True
+                    logger.info(
+                        "search_file stopped (%s budget) after %d entries / %.1f s",
+                        budget["reason"],
+                        budget["entries"],
+                        time.monotonic() - budget["started"],
+                    )
+                    return True
 
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
                     if not budget["truncated"]:
                         return result
-                    secs = time.monotonic() - budget["started"]
                     where = "a narrower `directory`" if directory else "`directory`"
+                    if budget["reason"] == "entries":
+                        stopped = (
+                            f"after examining {budget['entries']:,} files and folders"
+                        )
+                    else:
+                        stopped = f"after {time.monotonic() - budget['started']:.1f} s"
                     hint = (
-                        f"Search stopped after {secs:.1f} s — pass {where} to "
+                        f"Search stopped {stopped} — pass {where} to "
                         "search a specific folder."
                     )
                     result["truncated"] = True
@@ -282,7 +293,7 @@ class FileSearchToolsMixin:
                         )
                         result["suggestion"] = (
                             "This is NOT a complete zero: the search ran out of "
-                            f"time before covering searched_paths. {hint}"
+                            f"budget before covering searched_paths. {hint}"
                         )
                     return result
 
