@@ -157,6 +157,13 @@ the recorded errors; the base class initializes this history at construction and
 does not clear it automatically for each query. Hosts reusing an instance must
 account for that when interpreting status. Not every failure becomes a result:
 initialization errors and some backend recovery errors can raise to the caller.
+A call counts as a check when the tool is one of `run_tests`, `run_lint`,
+`typecheck`, or `build`, or when its `command` argument names a known runner
+(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
+classifier also recognizes completed `execute_python_file` results containing a
+pytest summary or unittest run summary and an integer exit code. Reading a file
+containing test output, a refusal, or an ordinary script exit does not establish
+that tests ran. Other unrecognized runners remain `unverified`.
 
 ## Conversation and context ownership
 
