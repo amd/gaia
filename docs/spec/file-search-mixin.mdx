@@ -331,12 +331,15 @@ class FileSearchToolsMixin:
     def list_recent_files(
         location: str = "all",
         file_types: str = None,
-        limit: int = 20,
+        max_results: int = 20,
+        days: int = 30,
     ) -> Dict[str, Any]:
         """
-        Return recently-modified files across common user locations
-        (Desktop/Documents/Downloads/CWD). `location` may be a specific folder
-        name or "all".
+        Return recently-modified files in Documents, Downloads, Desktop, and
+        OneDrive. location is documents, downloads, desktop, or all.
+        max_results (1-200) bounds files and display_message. The redundant all_files field is removed.
+        total_found counts all matches; truncated reports omitted matches.
+        Narrow location, file_types, or days to retrieve other matches.
         """
         pass
 ```
