@@ -554,6 +554,9 @@ class _Gated(ShellToolsMixin):
     CONFIRMATION_REQUIRED_TOOLS: tuple = ()
     _tools_registry: dict = {}
     confirmation_required_tools = _Agent.confirmation_required_tools
+    # __dict__ so the classmethod rebinds to _Gated's MRO and picks up the
+    # mixin's own CONFIRMATION_HOOKS, not Agent's.
+    confirmation_hooks = _Agent.__dict__["confirmation_hooks"]
     _call_is_pre_authorized = _Agent._call_is_pre_authorized
     _tool_requires_confirmation = _Agent._tool_requires_confirmation
 
