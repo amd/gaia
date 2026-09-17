@@ -958,6 +958,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Same rationale for the per-turn record of edited files (#3733).
+        self._turn_file_edits: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3248,11 +3250,43 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Empty LLM response received")
             self.error_history.append("Empty LLM response")
 
+            edited_files = self._turn_file_edits
+            if edited_files:
+                lines = ["Files modified before the turn failed:"]
+                seen = set()
+
+                for edit in edited_files:
+                    file_path = edit.get("file_path")
+                    if not file_path or file_path in seen:
+                        continue
+
+                    seen.add(file_path)
+                    backup_path = edit.get("backup_path")
+
+                    if backup_path:
+                        lines.append(f"- {file_path} (backup: {backup_path})")
+                    else:
+                        lines.append(f"- {file_path} (backup unavailable)")
+
+                edit_summary = "\n".join(lines)
+            else:
+                edit_summary = ""
+
             # Provide more helpful error message based on context
             if hasattr(self, "api_mode") and self.api_mode:  # pylint: disable=no-member
-                answer = "I encountered an issue processing your request. This might be due to a connection problem with the language model. Please try again."
+                answer = (
+                    "I encountered an issue processing your request. "
+                    "This might be due to a connection problem with the language model. "
+                    "Please try again."
+                )
             else:
-                answer = "I apologize, but I received an empty response from the language model. Please try again."
+                answer = (
+                    "I apologize, but I received an empty response from the language model. "
+                    "Please try again."
+                )
+
+            if edit_summary:
+                answer += f"\n\n{edit_summary}"
 
             return {
                 "thought": "LLM returned empty response",
@@ -5086,6 +5120,9 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Files edited this turn, so an empty response can name what it left
+        # behind (#3733). Per-turn: an instance persists across queries.
+        self._turn_file_edits: List[Dict[str, Any]] = []
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -5260,6 +5297,18 @@ Do NOT wrap conversational replies in JSON.
 
                     # Store full result for parameter substitution in subsequent plan steps
                     step_results.append(tool_result)
+                    if (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") == "success"
+                        and tool_result.get("operation") == "edit_file"
+                        and tool_result.get("file_path")
+                    ):
+                        self._turn_file_edits.append(
+                            {
+                                "file_path": tool_result["file_path"],
+                                "backup_path": tool_result.get("backup_path"),
+                            }
+                        )
 
                     # Share tool output with subsequent LLM calls
                     messages.append(
@@ -6510,6 +6559,18 @@ Do NOT wrap conversational replies in JSON.
                 # canonical ``image_path`` — without this append, the
                 # legacy single-tool path leaves them empty-handed.
                 step_results.append(tool_result)
+                if (
+                    isinstance(tool_result, dict)
+                    and tool_result.get("status") == "success"
+                    and tool_result.get("operation") == "edit_file"
+                    and tool_result.get("file_path")
+                ):
+                    self._turn_file_edits.append(
+                        {
+                            "file_path": tool_result["file_path"],
+                            "backup_path": tool_result.get("backup_path"),
+                        }
+                    )
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.
