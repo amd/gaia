@@ -1539,8 +1539,18 @@ async function installBackend(opts = {}) {
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
       }\nThen restart GAIA. See https://amd-gaia.ai/docs/quickstart#cli-install`;
     }
+    // Carry pip's own last words. Without them the only record of a failed
+    // install is an exit code, which is not something a user or a CI log can
+    // act on.
+    const tail = output
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .slice(-20)
+      .join("\n");
     throw new InstallError(
-      `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
+      `Failed to install ${pipPackage} (pip exit ${installResult.code}).` +
+        (tail ? `\npip said:\n${tail}` : ""),
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
