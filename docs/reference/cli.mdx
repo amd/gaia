@@ -375,7 +375,7 @@ gaia uninstall [OPTIONS]
 
 <CodeGroup>
 ```bash Preview
-gaia uninstall --dry-run
+gaia uninstall --purge --dry-run
 ```
 
 ```bash Remove Python Environment Only
@@ -397,7 +397,7 @@ gaia uninstall --purge --purge-lemonade --yes
 
 <Warning>
 `--purge` permanently deletes your chat history, uploaded documents, configuration,
-and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
+and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
 
 <Note>

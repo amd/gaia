@@ -75,6 +75,10 @@ _DENIED_STATUS = "denied"
 #: Leading blockquote markers, headings, list bullets and emphasis runs, so a
 #: model's ``> **Verification:** …`` or ``## Verification: …`` is recognised as
 #: the same line.
+#:
+#: The TUI's no-op-only strip (tui/internal/ui/chat/verification.go,
+#: verificationScopeRE) is a hand-kept copy of this pattern, narrowed to the
+#: "unverified" case only — update both if this changes.
 _SCOPE_MARKUP_RE = re.compile(
     r"^[ \t]*(?:>[ \t]*)*(?:\#{1,6}[ \t]+)?(?:(?:[-*+]|\d{1,3}[.)])[ \t]+)?[*_~`]*[ \t]*"
 )
