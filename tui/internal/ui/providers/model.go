@@ -52,6 +52,12 @@ type Model struct {
 	activity      string
 	note          string
 	width, height int
+	// existingEnvKey/existingRuntimeKey reflect the chosen provider's
+	// Provider.EnvKey/RuntimeKey at the moment setup() ran, so the setup
+	// screen can tell the user a credential is already active instead of
+	// silently expecting them to know a blank field is safe to submit.
+	existingEnvKey     bool
+	existingRuntimeKey bool
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -99,7 +105,16 @@ func (m Model) setup() Model {
 	}
 	m.fields[3].EchoMode = textinput.EchoPassword
 	m.fields[3].EchoCharacter = '•'
-	m.fields[3].Placeholder = "Paste API key (blank uses existing key)"
+	m.existingEnvKey = p.EnvKey
+	m.existingRuntimeKey = p.RuntimeKey
+	switch {
+	case p.EnvKey:
+		m.fields[3].Placeholder = "Blank uses the environment key"
+	case p.RuntimeKey:
+		m.fields[3].Placeholder = "Blank keeps the saved key"
+	default:
+		m.fields[3].Placeholder = "Paste API key"
+	}
 	m.focus = 3
 	if p.Name == "amd" && p.BaseURL == "" {
 		m.focus = 0
@@ -357,6 +372,14 @@ func (m Model) View() string {
 		}
 		if m.height >= 22 {
 			lines = append(lines, "Keys stay in Lemonade memory until it restarts.", "Provider settings are shared by clients of this Lemonade server.")
+		}
+		switch {
+		case m.existingEnvKey:
+			lines = append(lines, lipgloss.NewStyle().Foreground(theme.Success).Render(
+				"An environment key is already active for "+lemonade.Label(m.chosen())+" and takes precedence over any key entered below — leave API key blank to keep using it."))
+		case m.existingRuntimeKey:
+			lines = append(lines, lipgloss.NewStyle().Foreground(theme.Success).Render(
+				"A key is already configured for "+lemonade.Label(m.chosen())+" — leave API key blank to keep using it, or paste a new one to replace it."))
 		}
 		lines = append(lines, "")
 		labels := []string{"Gateway URL", "Auth header", "Prefix (include trailing space for Bearer)", "API key"}

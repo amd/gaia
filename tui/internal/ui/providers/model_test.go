@@ -173,6 +173,47 @@ func TestNarrowProviderNoticeWrapsAtWords(t *testing.T) {
 	}
 }
 
+func TestSetupNoticesExistingEnvironmentKey(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	m.providers = []lemonade.Provider{{Name: "fireworks", EnvKey: true}}
+	m = m.setup()
+	view := m.View()
+	if !strings.Contains(view, "environment key is already active") {
+		t.Fatal("existing environment key was not surfaced to the user", view)
+	}
+	if !strings.Contains(m.fields[3].Placeholder, "environment key") {
+		t.Fatal("key field placeholder does not mention the environment key", m.fields[3].Placeholder)
+	}
+}
+
+func TestSetupNoticesExistingRuntimeKey(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 2
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	m = m.setup()
+	view := m.View()
+	if !strings.Contains(view, "already configured for AMD LLM Gateway") {
+		t.Fatal("existing runtime key was not surfaced to the user", view)
+	}
+	if strings.Contains(view, "environment key is already active") {
+		t.Fatal("runtime-only key incorrectly reported as an environment key", view)
+	}
+}
+
+func TestSetupWithNoExistingKeyShowsNoNotice(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	m = m.setup()
+	view := m.View()
+	if strings.Contains(view, "already active") || strings.Contains(view, "already configured for") {
+		t.Fatal("notice shown despite no existing credential", view)
+	}
+	if m.fields[3].Placeholder != "Paste API key" {
+		t.Fatalf("placeholder should be plain with no existing key, got %q", m.fields[3].Placeholder)
+	}
+}
+
 func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 	m := New("", 48, 18)
 	m.selected = 2
