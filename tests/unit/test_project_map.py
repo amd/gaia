@@ -725,8 +725,6 @@ def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
 def test_root_ancestor_search_includes_exact_four_level_boundary(
     tmp_path, monkeypatch, depth
 ):
-    from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
-
     root = tmp_path / "project"
     (root / ".git").mkdir(parents=True)
     nested = root.joinpath(*[f"level{i}" for i in range(depth)])
