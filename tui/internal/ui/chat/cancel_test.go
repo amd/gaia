@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -335,6 +336,62 @@ func TestSecondEscWhileCancelPendingDoesNotQuit(t *testing.T) {
 	}
 	if m.cancelPending {
 		t.Error("cancelPending must clear once the second Esc forces a local abort")
+	}
+}
+
+// TestSecondEscAbandonsRatherThanRestoresAQueuedFollowUp is the #2917
+// decision: the FIRST Esc/Ctrl+C (requestCancel) still restores a queued
+// follow-up to the composer -- see TestEscOnAQueuedLineDoesBothThingsTheRowPromises
+// in queuedrow_test.go -- because it means "stop, but send this once you do".
+// A SECOND press while the cancel is still pending (forceLocalAbort) means the
+// user has given up on this turn entirely; auto-firing the follow-up into a
+// session whose lock the daemon has not confirmed releasing would reproduce
+// the exact freeze the user just escaped. It must be abandoned, not restored
+// -- but named in the status line, since nothing typed may vanish silently.
+func TestSecondEscAbandonsRatherThanRestoresAQueuedFollowUp(t *testing.T) {
+	c := &cancelingClient{}
+	m := NewChatModel(c, "email", "", false)
+	m.width, m.height = 100, 30
+	m.streaming = true
+	m.cancelFn = func() {}
+	ch := make(chan interface{})
+	m.events = ch
+
+	// First Esc: pending, and (per requestCancel) any already-queued follow-up
+	// moves back to the composer. Retype it and queue it again, the way a user
+	// would while watching "cancelling..." sit there.
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	updated, _ = m.Update(cmd())
+	m = updated.(ChatModel)
+	if !m.cancelPending {
+		t.Fatal("test setup: cancelPending must be true after the first Esc")
+	}
+	m.input.SetValue("never mind, do this instead")
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(ChatModel)
+	if len(m.queued) != 1 {
+		t.Fatalf("test setup: the retyped follow-up must queue behind the still-pending cancel, got %q", m.queued)
+	}
+
+	// Second Esc, still pending: forceLocalAbort.
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+
+	if len(m.queued) != 0 {
+		t.Errorf("the queue must be cleared, not carried into the next turn: %q", m.queued)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Errorf("the abandoned follow-up must not silently repopulate the composer: %q", got)
+	}
+	var named bool
+	for _, msg := range m.messages {
+		if msg.Role == RoleStatus && strings.Contains(msg.Content, "never mind, do this instead") {
+			named = true
+		}
+	}
+	if !named {
+		t.Error("the abandoned follow-up must be named in the transcript, not dropped silently")
 	}
 }
 

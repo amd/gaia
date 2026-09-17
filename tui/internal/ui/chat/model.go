@@ -63,6 +63,23 @@ type channelReadyMsg struct{ ch <-chan interface{} }
 // run's own channel does that.
 type cancelRequestFailedMsg struct{ err error }
 
+// queuedSendTimeout bounds how long a follow-up drained from the queue (#2917)
+// may run before this surfaces an actionable nudge. It sits below the SSE
+// client's absolute 300s read-idle watchdog (sse.go's defaultReadTimeout) —
+// a normal local turn takes 60-120s (see
+// TestTheComposerAcceptsTypingWhileTheAgentWorks) — so this fires only once a
+// queued follow-up is clearly running long, while leaving the same Esc/
+// Ctrl+C escape hatch every other turn already has.
+const queuedSendTimeout = 180 * time.Second
+
+// queuedSendStalledMsg fires when a follow-up drained from the queue has been
+// running, as its own turn, for queuedSendTimeout with no terminal signal.
+// Unlike a turn the user just pressed Enter to start and is watching, a
+// queued follow-up fired itself while the user had moved on — a hang here is
+// easy to miss until it has been silent a while, so this names it instead of
+// leaving the spinner to run out the general 300s watchdog with no word.
+type queuedSendStalledMsg struct{ turnSeq int }
+
 // preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
 // result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
 // attention fetch) — a side-channel read, never a chat turn, so it carries
@@ -616,7 +633,23 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	query := next.queued[0]
 	next.queued = append([]string(nil), next.queued[1:]...)
 	sent, sendCmd := next.submit(query)
+
+	// Only a real turn gets the watchdog — a queued slash command (submit's
+	// other branches) never sets streaming and settles synchronously, so
+	// there is nothing here that could stall.
+	if sentModel, ok := sent.(ChatModel); ok && sentModel.streaming {
+		sendCmd = tea.Batch(sendCmd, queuedSendWatchdog(sentModel.turnSeq))
+	}
 	return sent, tea.Batch(cmd, sendCmd)
+}
+
+// queuedSendWatchdog schedules queuedSendStalledMsg for the turn identified by
+// turnSeq. Delivered late (the turn already settled, or a newer one started),
+// it is a no-op — see the queuedSendStalledMsg handling in update().
+func queuedSendWatchdog(turnSeq int) tea.Cmd {
+	return tea.Tick(queuedSendTimeout, func(time.Time) tea.Msg {
+		return queuedSendStalledMsg{turnSeq: turnSeq}
+	})
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -779,6 +812,22 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.drainPendingPreScan()
 		m.activity = nil
+		m.updateViewport()
+		return m, nil
+
+	case queuedSendStalledMsg:
+		if msg.turnSeq != m.turnSeq || !m.streaming {
+			// Already resolved, or superseded by a newer turn — nothing to say.
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: fmt.Sprintf(
+				"[!] the queued follow-up has been running for over %s with no "+
+					"response. Press Esc (or Ctrl+C) to stop waiting, or check "+
+					"`gaia daemon status` if this keeps happening.",
+				queuedSendTimeout),
+		})
 		m.updateViewport()
 		return m, nil
 
@@ -1284,6 +1333,17 @@ func (m ChatModel) cancelHint() string {
 // that the run may still be finishing server-side — a following Enter can
 // legitimately land on the actionable 409 the AgentCanceler branch above
 // already produces a clear message for.
+//
+// Unlike the first Esc/Ctrl+C (requestCancel), this abandons rather than
+// restores a queued follow-up (#2917). The first press means "stop, but I
+// still want to send this once it does" — restoring it to the composer fits
+// that. This second press means the user has given up waiting on this turn
+// entirely; auto-firing the follow-up into the same still-uncertain session
+// (the run may still be live server-side, per the message below) would be
+// the exact race requestCancel's doc comment describes, and silently
+// re-queuing it behind that uncertainty would just move the freeze one turn
+// later instead of resolving it. Named here rather than dropped silently, so
+// nothing typed vanishes without a word.
 func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	if m.cancelFn != nil {
 		m.cancelFn()
@@ -1295,13 +1355,17 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.question = nil
 	m.confirmation = nil
 	m.activity = nil
-	// Same reasoning as requestCancel: what was queued behind this turn was
-	// written expecting it to finish. Give it back rather than sending it.
-	m.restoreQueuedToComposer()
+	abandoned := m.queued
+	m.queued = nil
 	content := "gave up waiting locally — the run may still be finishing on the server; " +
 		"a retry may briefly answer \"already in progress\""
 	if s, ok := m.client.(client.LocalAgentStopper); ok && s.AbortStopsAgent() {
 		content = "stopped the agent process — it restarts on your next message"
+	}
+	if len(abandoned) > 0 {
+		content += fmt.Sprintf("; abandoned %d queued follow-up(s) rather than "+
+			"fire them into that uncertainty — retype below to send again: %q",
+			len(abandoned), strings.Join(abandoned, " / "))
 	}
 	m.messages = append(m.messages, Message{Role: RoleStatus, Content: content})
 	m.updateViewport()
@@ -1672,12 +1736,13 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AnswerEvent:
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
-		rendered := components.RenderMarkdown(e.Content)
+		content := StripVerificationScope(e.Content)
+		rendered := components.RenderMarkdown(content)
 		// Off the event, not off m.ttft: nothing on this side measures these
 		// any more, so reading a model field here would print a zero forever.
 		m.messages = append(m.messages, Message{
 			Role:      RoleAssistant,
-			Content:   e.Content,
+			Content:   content,
 			Rendered:  rendered,
 			Duration:  duration,
 			TTFT:      time.Duration(e.TTFT * float64(time.Second)),
@@ -2738,9 +2803,18 @@ func (m ChatModel) renderQueuedRow() string {
 	if n := len(m.queued); n > 1 {
 		prefix = fmt.Sprintf("⏎ %d queued · ", n)
 	}
-	hint := "  Esc stops the turn and puts this back"
+	// Once a cancel is already pending, the NEXT Esc/Ctrl+C is forceLocalAbort
+	// (#2917), which abandons a queued follow-up rather than restoring it —
+	// see its doc comment for why. The row must say that, not the first
+	// press's promise, or a user pressing it a second time because nothing
+	// visibly happened loses their draft to a hint that was no longer true.
+	one, many := "  Esc stops the turn and puts this back", "  Esc stops the turn and puts these back"
+	if m.cancelPending {
+		one, many = "  Esc again abandons this", "  Esc again abandons these"
+	}
+	hint := one
 	if len(m.queued) > 1 {
-		hint = "  Esc stops the turn and puts these back"
+		hint = many
 	}
 
 	suffix := hint

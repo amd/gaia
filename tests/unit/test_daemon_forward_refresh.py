@@ -94,7 +94,10 @@ def test_tick_one_sidecar_failure_does_not_stop_the_others(caplog):
     # Both attempted even though 'email' raised.
     assert sorted(fwd.calls) == ["email", "toy"]
     # The failing agent is logged loudly, not swallowed silently.
-    assert any("email" in rec.getMessage() for rec in caplog.records)
+    assert any(
+        "email" in rec.getMessage() and rec.name == "gaia.daemon.forward_refresh"
+        for rec in caplog.records
+    )
 
 
 def test_tick_logs_warning_when_summary_reports_provider_errors(caplog):
@@ -103,7 +106,9 @@ def test_tick_logs_warning_when_summary_reports_provider_errors(caplog):
     with caplog.at_level(logging.WARNING):
         _refresher(reg, fwd).tick()
     assert any(
-        "email" in rec.getMessage() and rec.levelno >= logging.WARNING
+        "email" in rec.getMessage()
+        and rec.levelno >= logging.WARNING
+        and rec.name == "gaia.daemon.forward_refresh"
         for rec in caplog.records
     )
 
