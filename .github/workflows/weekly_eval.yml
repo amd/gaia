@@ -22,10 +22,13 @@
 name: Weekly Eval
 
 on:
-  # Sundays 08:17 UTC — off the nightly's 07:00 slot; the callee's concurrency
-  # group serializes them if they ever overlap.
-  schedule:
-    - cron: '17 8 * * 0'
+  # Schedule removed: the callee (test_email_agent_eval.yml) is disabled
+  # (if: false) since the email agent's capability is moving into the core
+  # flagship agent (#3329). A disabled callee reports 'skipped', not
+  # 'success' (see open-issue-on-failure's own comment below), which would
+  # otherwise file a bogus "did not pass" issue every week for a suite that
+  # never ran on purpose. workflow_dispatch is kept for manual use if this
+  # suite is ever revived.
   workflow_dispatch:
 
 concurrency:
@@ -72,7 +75,12 @@ jobs:
     # of evicting the pending run, but a manual cancel or GitHub's 24h job-queue
     # limit still produces 'cancelled'. A week with no eval is a week with no
     # evidence; say so out loud.
-    if: ${{ always() && needs.email-eval.result != 'success' }}
+    #
+    # 'skipped' is now excluded too: the callee is intentionally disabled
+    # (if: false in test_email_agent_eval.yml) while the email agent's
+    # capability moves into the core flagship agent (#3329), so a skip here
+    # is the expected state, not a missing week of evidence.
+    if: ${{ always() && needs.email-eval.result != 'success' && needs.email-eval.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -166,28 +166,39 @@ class AgentSDK:
         """
         Ensure messages are safe to send to the LLM.
 
-        Tool messages are converted to user-role messages in send_messages /
-        send_messages_stream, so no extra "continue" sentinel is needed here —
-        the tool result itself already forms a valid user turn for the LLM to
-        respond to.
+        Tool messages become provider-appropriate history in send_messages /
+        send_messages_stream, so no extra "continue" sentinel is needed here.
         """
         if not messages:
             return []
 
         return list(messages)
 
-    def _flatten_tool_call_turn(self, msg: Dict[str, Any]) -> str:
-        """Textual stand-in for an assistant turn that only called tools.
-
-        Without it the flattened history shows ``None`` where the model called
-        a tool, so it can't correlate the tool results that follow.
-        """
-        calls = ", ".join(
-            f"{(tc.get('function') or {}).get('name', 'tool')}"
-            f"({(tc.get('function') or {}).get('arguments') or ''})"
-            for tc in msg.get("tool_calls", [])
-        )
-        return f"[Called tools: {calls}]"
+    def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert one history entry to the active provider's message shape."""
+        role = msg.get("role", "user")
+        content = self._normalize_message_content(msg.get("content", ""))
+        if self.config.use_claude and role == "assistant" and msg.get("tool_calls"):
+            return {
+                "role": "assistant",
+                "content": content if msg.get("content") else None,
+                "tool_calls": msg["tool_calls"],
+            }
+        if self.config.use_claude and role == "tool":
+            return {
+                "role": "tool",
+                "content": content,
+                "name": msg.get("name", "tool"),
+                "tool_call_id": msg.get("tool_call_id"),
+            }
+        if role == "tool":
+            # Local/OpenAI-compatible backends receive tool results as user text.
+            # The native Claude path above preserves the IDs Anthropic requires.
+            return {
+                "role": "user",
+                "content": f"[Tool result: {msg.get('name', 'tool')}] {content}",
+            }
+        return {"role": role, "content": content}
 
     # ── per-turn performance recording (dev mode, opt-in) ──────────────────
     #
@@ -280,34 +291,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages so that the LLM
-                    # receives a proper user turn to reply to.  Converting them to
-                    # "assistant" caused the previously-injected "continue" sentinel
-                    # to become the visible user message, making the model think it
-                    # was asked to "continue" rather than respond to the real query.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -400,31 +384,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages — same reasoning
-                    # as in send_messages above.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -498,6 +458,8 @@ class AgentSDK:
         """
         Send a message and get a complete response with conversation history.
 
+        Failed turns restore the conversation history to its pre-call state.
+
         Args:
             message: The message to send
             no_history: When True, bypass stored chat history and send only this prompt
@@ -506,6 +468,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -570,17 +534,26 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
@@ -589,6 +562,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -643,11 +618,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """
@@ -946,7 +929,7 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return self.rag.index_document(document_path)
+        return bool(self.rag.index_document(document_path).get("success"))
 
     def _estimate_tokens(self, text: str) -> int:
         """

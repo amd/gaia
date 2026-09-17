@@ -310,3 +310,8 @@ eval/results/gaia-local-tui-validation/tui-home/
 eval/results/gaia-local-tui-validation/
 eval/results/gaia-haiku-scorecard/
 docs/plans/flagship-architecture-findings.md
+
+# Local frozen-agent build (packaging/freeze.py)
+.venv-freeze/
+hub/agents/*/python/packaging/dist/
+hub/agents/*/python/packaging/build/

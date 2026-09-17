@@ -54,6 +54,22 @@ func (h *HelpState) HandleKey(msg tea.KeyMsg, width, height int) bool {
 	return true
 }
 
+// HandleWheel scrolls the panel by one wheel tick, reporting whether it
+// consumed the event. The panel is drawn OVER the transcript, so a wheel the
+// panel ignores would scroll content the reader cannot see — and land them
+// somewhere else entirely once they close it.
+func (h *HelpState) HandleWheel(up bool, width, height int) bool {
+	if !h.Open {
+		return false
+	}
+	delta := 1
+	if up {
+		delta = -1
+	}
+	h.Scroll = clampInt(h.Scroll+delta, 0, HelpMaxScroll(h.Ctx, width, height))
+	return true
+}
+
 // Render composites the panel over base, or returns base untouched when closed.
 func (h HelpState) Render(base string, width, height int) string {
 	if !h.Open {

@@ -27,3 +27,9 @@ hub/agents/email/python/CHANGELOG.md merge=union
 # fixture-hub zips — they are built and signed per run into _prepared/, which
 # .gitignore excludes, so none is ever tracked.)
 tests/fixtures/gaia/fake_gh/gh eol=lf
+# The dev launch scripts and the gaia-agent shim are executed by a POSIX shell
+# and located by the TUI on PATH. A CRLF checkout breaks the shebang ("bad
+# interpreter"), and both must stay executable or exec.LookPath cannot find
+# them — which silently sends the TUI to the last INSTALLED agent instead.
+scripts/dev/run-tui.sh text eol=lf
+scripts/dev/bin/gaia-agent text eol=lf

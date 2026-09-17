@@ -1003,3 +1003,31 @@ func TestWaitAcceptsTheBlockerMatcher(t *testing.T) {
 		t.Errorf("status = %d, want 408 (%v)", status, body)
 	}
 }
+
+func TestInputDiagnosticsOmitBothTextAndKeyContents(t *testing.T) {
+	srv, state := newTestServer(t)
+	var lines []string
+	debug := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	srv.debugf = debug
+	// /text emits a single character per key; test the recorder separately
+	// because a fake test model is allowed to render the injected text.
+	status, _ := request(t, srv, http.MethodPost, "/text", map[string]any{"text": "secret-test"}, srv.Token())
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, _ = request(t, srv, http.MethodPost, "/keys", map[string]any{"keys": []string{"s", "e", "c", "r", "e", "t"}}, srv.Token())
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	state.debugf = debug
+	recorder := NewRecorder(newTestModel(), state)
+	recorder.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("secret-test")})
+	for _, line := range lines {
+		if strings.Contains(line, "secret-test") || strings.Contains(line, "[s e c r e t]") {
+			t.Fatal("input content present in diagnostics")
+		}
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "content omitted") {
+		t.Fatal("diagnostics missing")
+	}
+}

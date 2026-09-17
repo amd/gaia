@@ -9,7 +9,8 @@ npx @amd-gaia/gaia
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
 you into the terminal UI. No Python to install, no repo to clone, no build step.
-Everything runs locally on your machine; nothing you type or index leaves it. The
+Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
+LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
 terminal UI's `--use-claude` flag, which would send a conversation to the
 Anthropic API, is refused for the agent this package installs — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
@@ -36,8 +37,10 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI on `PATH` for the daemon the terminal UI starts. Install it
-  with `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
+- The `gaia` Python CLI **0.23.1 or newer** on `PATH` for the daemon the terminal
+  UI starts. Earlier cores start a daemon that has no entry for this agent, so the
+  UI comes up with nothing behind it. Install it with
+  `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
   `irm https://amd-gaia.ai/install.ps1 | iex`).
 
 ## Supported platforms

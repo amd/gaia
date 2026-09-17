@@ -193,8 +193,11 @@ class SSEOutputHandler(OutputHandler):
     blocking_confirmation = True
 
     #: How long to wait for a decision. A host that can actually deliver one
-    #: sets this to ``None`` (wait for the human); left bounded, an unattended
-    #: host still fails closed instead of parking the run forever.
+    #: raises this — a person reading a prompt routinely takes longer than a
+    #: minute — but must not set it to ``None``: an unanswerable question with
+    #: no bound is a turn that never ends, which reads as a hang rather than as
+    #: the refusal it effectively is. See ``gaia_agent.stdio.PermissionState``,
+    #: whose backstop deliberately outlasts its client's own bound.
     #:
     #: Class-level so a handler built with ``__new__`` — which callers that only
     #: need the confirmation gate do, to skip the queue setup — still has a
@@ -245,6 +248,12 @@ class SSEOutputHandler(OutputHandler):
         # cancel path can force a blocked read to error out by closing it from
         # another thread. None outside an active email-relay turn.
         self.active_relay_response: Optional[Any] = None
+        # Proxy + run_id for that same in-flight email /query relay (#2595), so
+        # a needs_input answer posted to /api/chat/user-input can be delivered
+        # to the run that's actually waiting on it. None outside an active
+        # email-relay turn, in lockstep with active_relay_response.
+        self.active_relay_proxy: Optional[Any] = None
+        self.active_relay_run_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -607,6 +616,7 @@ class SSEOutputHandler(OutputHandler):
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
     ):
         if answer:
             scope_line = ""
@@ -654,6 +664,11 @@ class SSEOutputHandler(OutputHandler):
             and ttft_seconds > 0
         ):
             event["ttft"] = round(ttft_seconds, 3)
+        # And for the generation rate: the backend's own measurement or
+        # nothing. A rate derived from the turn's wall clock would count tool
+        # time as generation time and read an order of magnitude low.
+        if tok_per_s is not None and math.isfinite(tok_per_s) and tok_per_s > 0:
+            event["tok_per_s"] = round(tok_per_s, 1)
         # Dev-mode only. Gated on the same env var that produced the record, so
         # an ordinary turn's payload stays byte-identical to before this existed.
         record, self._turn_metrics = self._turn_metrics, None
@@ -944,11 +959,14 @@ class SSEOutputHandler(OutputHandler):
         user allows, ``False`` otherwise.
 
         *timeout* defaults to ``self.confirm_timeout_seconds``. ``None`` waits
-        indefinitely, which is what a host with a live decision channel and a
-        modal on screen wants: a person reading a prompt routinely takes longer
-        than a minute, and expiring under them denies work they were in the
-        middle of approving. Waiting is safe because it is interruptible —
-        ``cancelled`` still breaks the loop, so Ctrl+C ends the run either way.
+        indefinitely and no host sets it: a prompt the user never saw then
+        produces a turn nothing can end, which is worse than either answer. A
+        host with a live decision channel gives itself a generous bound instead
+        — long enough that reading is never a way to lose the call, finite so
+        the turn always ends saying why. Expiry denies; it never approves.
+
+        The wait is interruptible either way — ``cancelled`` breaks the loop, so
+        Ctrl+C and a closed stdin both end the run before any bound is reached.
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
@@ -1295,6 +1313,22 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._user_input_results[request_id] = response
             evt.set()
+        return True
+
+    def resolve_relay_input(self, request_id: str, value: str) -> bool:
+        """Deliver an answer to a pending ``needs_input`` question on an
+        in-flight email-relay run (#2595). Returns ``False`` when there is no
+        active relay run to answer (already finished, or never one) so the
+        caller can 404 rather than report an accepted answer nothing reads.
+        Any sidecar rejection (e.g. the question is no longer pending)
+        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        never swallowed.
+        """
+        proxy = self.active_relay_proxy
+        run_id = self.active_relay_run_id
+        if proxy is None or run_id is None:
+            return False
+        proxy.respond_query(run_id, request_id, value)
         return True
 
     def signal_done(self):
