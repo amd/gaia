@@ -148,6 +148,12 @@ These are not optional; the analysis is worthless without them.
 
 ## Privacy
 
+`scan` covers **every Claude Code project on the machine**, not just the current repo:
+`~/.claude/projects/` holds one subdirectory per project, and there is no per-project
+filter — `--root` relocates the scan, it cannot narrow it. `tables.md` never breaks the
+count down by project, so check `top_projects` in `stats.json` to see the mix before
+sharing anything.
+
 Transcripts contain absolute paths, branch names, repository content, and any secret
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a report is
 shared, put it somewhere private and scrub paths first. Nothing derived from a corpus

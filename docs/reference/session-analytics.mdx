@@ -135,6 +135,11 @@ run Claude Code.
 | `classify` | `--cache`, `--out`, `--batch`, `--model`, `--timeout`, `--claude-bin` |
 | `synthesize` | `--cache`, `--model`, `--timeout`, `--claude-bin` |
 
+`--root` relocates the scan, it does not narrow it. The path it takes is the
+directory *holding* your projects — sessions are read as `<root>/<project>/*.jsonl`
+— so pointing it at one project directory matches nothing and exits with the
+"no sessions found" error. There is no supported way to scan a single project.
+
 ## Output files
 
 | File | Contents |
@@ -214,6 +219,12 @@ with citations, not a verified one.
   itself being recorded. Timestamp the snapshot you're reporting on.
 
 ## Privacy
+
+By default, `scan` covers **every Claude Code project on your machine** — not just
+this repo — because `~/.claude/projects/` holds one subdirectory per project you've
+ever used Claude Code in, and there's no per-project filter. `tables.md` doesn't
+break the count down by project; check the `top_projects` field in `stats.json` if
+you want to see the mix before sharing anything.
 
 Transcripts contain absolute paths, branch names, repository content, and anything
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a
