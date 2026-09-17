@@ -714,6 +714,8 @@ class SlackAdapter:
             action, summary, str(event.get("always_scope") or "")
         )
         for block in blocks:
+            if block.get("type") != "actions":
+                continue
             for element in block.get("elements", []):
                 # The decision has to name WHICH prompt it answers, or a late
                 # click resolves whatever confirmation replaced the one it was
