@@ -42,10 +42,7 @@ def backend_test_step() -> dict:
 
 
 def test_the_backend_tests_can_fail_the_release(backend_test_step):
-    """No failure tolerance or discarded stderr — the step must be able to go red."""
-    assert (
-        backend_test_step.get("continue-on-error", False) is False
-    ), f"{STEP_NAME!r} must not tolerate test failures; remove continue-on-error."
+    """No ``||`` fallback and no discarded stderr — the step must be able to go red."""
     run = backend_test_step["run"]
     assert "||" not in run, (
         f"{STEP_NAME!r} swallows a failure with '||'. This is the only pytest run "

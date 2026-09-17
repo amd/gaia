@@ -204,3 +204,102 @@ def strip_verification_scope(text: str) -> str:
     if not isinstance(text, str) or VERIFICATION_SCOPE_PREFIX not in text:
         return text
     return _SCOPE_LINE_RE.sub("", text)
+
+
+#: Phrasings that claim a file was produced, as opposed to merely mentioning it.
+#: Kept narrow on purpose: "see config.py" or "config.py defines X" must not
+#: trip this, or every answer that names a file gets a warning nobody reads.
+_WROTE_PATTERNS = (
+    r"\b(?:wrote|written|saved|created|generated|produced)\b[^.\n]{0,60}?"
+    r"[`'\"]([\w./\-]+\.[A-Za-z0-9]{1,8})[`'\"]",
+    r"[`'\"]([\w./\-]+\.[A-Za-z0-9]{1,8})[`'\"][^.\n]{0,40}?"
+    r"\b(?:was|is|has been)\s+(?:written|saved|created|generated)\b",
+)
+
+
+def claimed_written_files(answer: str) -> List[str]:
+    """Files the answer says it produced, in the order claimed.
+
+    Reads the agent's own words rather than its tool log, because that is where
+    the failure lives: an agent can write a script, narrate running it, and stop
+    without ever executing it. The tool log looks clean; the claim is false.
+    """
+    import re
+
+    if not answer:
+        return []
+    seen, found = set(), []
+    for pattern in _WROTE_PATTERNS:
+        for match in re.finditer(pattern, answer, re.IGNORECASE):
+            name = match.group(1)
+            if name not in seen:
+                seen.add(name)
+                found.append(name)
+    return found
+
+
+def unwritten_claims(answer: str, workspace: Optional[str] = None) -> List[str]:
+    """Of the files the answer claims to have written, those that do not exist.
+
+    An empty file counts as missing: "generated orders.json" followed by a
+    zero-byte file is the same broken promise as no file at all.
+    """
+    import os
+
+    missing = []
+    for name in claimed_written_files(answer):
+        path = os.path.join(workspace, name) if workspace else name
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                missing.append(name)
+        except OSError:
+            # Unreadable is not the same as absent, and guessing either way
+            # would either cry wolf or hide a real miss. Say nothing.
+            continue
+    return missing
+
+
+#: A request that names where its output must go. The agent can compute the
+#: right answer and simply not write it — observed on a task that asked for a
+#: number "in answer.txt", where the agent replied "400" and created nothing.
+#: The phantom-write check cannot catch that: there is no false claim to
+#: contradict, only a silent omission.
+_REQUESTED_OUTPUT = (
+    r"\b(?:write|save|put|output|store|record)\b[^.\n]{0,80}?"
+    r"\b(?:to|in|into|as)\s+[`'\"]?([\w./\-]+\.[A-Za-z0-9]{1,8})[`'\"]?",
+    r"\b(?:create|produce|generate)\b[^.\n]{0,40}?"
+    r"[`'\"]([\w./\-]+\.[A-Za-z0-9]{1,8})[`'\"]",
+)
+
+
+def requested_output_files(request: str) -> List[str]:
+    """Files the *user's request* says the answer must be written to."""
+    import re
+
+    if not request:
+        return []
+    seen, found = set(), []
+    for pattern in _REQUESTED_OUTPUT:
+        for match in re.finditer(pattern, request, re.IGNORECASE):
+            name = match.group(1)
+            if name not in seen:
+                seen.add(name)
+                found.append(name)
+    return found
+
+
+def missing_requested_outputs(
+    request: str, workspace: Optional[str] = None
+) -> List[str]:
+    """Of the files the request asked for, those that were never produced."""
+    import os
+
+    missing = []
+    for name in requested_output_files(request):
+        path = os.path.join(workspace, name) if workspace else name
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                missing.append(name)
+        except OSError:
+            continue
+    return missing

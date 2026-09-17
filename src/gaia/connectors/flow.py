@@ -569,35 +569,6 @@ def _resolve_granted_scopes(
     return [s for s in returned if s in requested_set]
 
 
-#: Bound on each provider-supplied field, matching OAuthProviderError's own.
-_MAX_PROVIDER_FIELD_LEN = 300
-
-
-def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
-    """The provider's RFC 6749 ``(error, error_description)``, bounded.
-
-    Never falls back to the raw body (#3875): every request these responses
-    answer carries a credential — an authorization code, a device code, a
-    refresh token — and providers echo request context back into error
-    bodies, so the body must not reach a log line or a user-visible error.
-    Non-string fields are dropped rather than coerced, so a provider that
-    nests an object under ``error`` yields no detail instead of a stringified
-    fragment of its body.
-    """
-    try:
-        payload = resp.json()
-    except Exception:  # noqa: BLE001 — body may be empty/non-JSON
-        return "", ""
-    if not isinstance(payload, dict):
-        return "", ""
-    error = payload.get("error")
-    description = payload.get("error_description")
-    return (
-        error[:_MAX_PROVIDER_FIELD_LEN] if isinstance(error, str) else "",
-        description[:_MAX_PROVIDER_FIELD_LEN] if isinstance(description, str) else "",
-    )
-
-
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
     """Run the token-exchange step and persist the connection."""
     provider = get_provider(flow.provider_id)
@@ -609,14 +580,19 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         response = await client.post(provider.token_url, data=body)
 
     if response.status_code != 200:
-        # Structured, bounded fields only (#2590) — the request this answers
-        # carried the authorization code and PKCE verifier, so the raw body
-        # never reaches the message (#3875).
-        error, description = _structured_oauth_error(response)
+        # Structured, bounded fields (#2590) — the previous behaviour
+        # interpolated the ENTIRE unbounded response.text into the message,
+        # so a caller that must not echo arbitrary exception text (it might
+        # ultimately carry provider-chosen content) had no way to report the
+        # failure at all short of a bare type name.
+        try:
+            err_payload = response.json()
+        except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+            err_payload = {}
         raise OAuthProviderError(
             flow.provider_id,
-            error=error,
-            error_description=description,
+            error=err_payload.get("error", ""),
+            error_description=err_payload.get("error_description", response.text[:300]),
             status_code=response.status_code,
         )
     payload = response.json()
@@ -733,8 +709,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # rejects it — under the split, that means it was registered for
         # "microsoft" (consumers) but connected via "microsoft_work"
         # (organizations, or a pinned Directory tenant id). Name the
-        # connector to use instead, never an env var. Membership test only —
-        # the body is matched against, never surfaced.
+        # connector to use instead, never an env var.
         if "AADSTS9002346" in resp.text:
             other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
@@ -752,13 +727,9 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # all (D6); the only tenant knob left is microsoft_work's optional
         # Directory (tenant) ID setup field.
         client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
-        # Structured, bounded fields only — never the raw body (#3875).
-        error, description = _structured_oauth_error(resp)
-        detail = description or error
-        reason = f" ({detail})" if detail else ""
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}{reason}. Check the client id "
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
             f"({client_id_env}), or the Directory (tenant) ID setup field if "
             f"you set one. See docs/connectors/microsoft.mdx."
         )
@@ -818,7 +789,11 @@ async def poll_device_flow(
             if resp.status_code == 200:
                 payload = resp.json()
                 break
-            err, err_description = _structured_oauth_error(resp)
+            try:
+                err_payload = resp.json()
+            except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+                err_payload = {}
+            err = err_payload.get("error", "")
             if err == "authorization_pending":
                 pass
             elif err == "slow_down":
@@ -833,15 +808,17 @@ async def poll_device_flow(
                     f"Device-code sign-in for {provider_id} was declined."
                 )
             else:
-                # Structured, bounded fields only (#2590) — see
-                # OAuthProviderError. This is where an admin-consent-required
-                # rejection (AADSTS65001) surfaces during polling; the raw
-                # body is never used as a fallback, because this request just
-                # posted the device code (#3875).
+                # Structured, bounded fields (#2590) — see OAuthProviderError.
+                # This is where an admin-consent-required rejection
+                # (AADSTS65001) actually surfaces during polling; a bare
+                # ConnectorsError with the response text glued in gave
+                # classify_oauth_exception nothing to inspect.
                 raise OAuthProviderError(
                     provider_id,
                     error=err,
-                    error_description=err_description,
+                    error_description=err_payload.get(
+                        "error_description", resp.text[:300]
+                    ),
                     status_code=resp.status_code,
                 )
             if _time.monotonic() >= deadline:

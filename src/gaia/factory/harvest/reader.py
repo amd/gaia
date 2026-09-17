@@ -102,6 +102,12 @@ class Step:
     arg_digest: str = ""
     result_chars: int = 0
     error: str = ""
+    # Which user ask this step is working on: index into ``Trace.prompts``, or
+    # -1 for steps that ran before any human turn. Stamped here rather than
+    # recovered later because the serialized step carries no timestamp, and the
+    # transcript is only read in order once. Without it a session's work cannot
+    # be split by task — 300 sessions in this corpus carry 1,208 asks.
+    prompt_index: int = -1
 
 
 @dataclass
@@ -390,6 +396,9 @@ def read_session(path: Path, kind: str = "session") -> Optional[Trace]:
                             family=tool_family(block.get("name", "unknown")),
                             arg_hash=_hash_args(args),
                             arg_digest=_digest_args(args),
+                            # The transcript is read in order, so the ask this
+                            # step serves is simply the last one seen.
+                            prompt_index=len(trace.prompts) - 1,
                         )
                     )
                     use_id = block.get("id")

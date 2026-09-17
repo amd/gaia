@@ -44,6 +44,8 @@ from gaia.agents.base.verification import (
     NOT_EXECUTED,
     build_verification_scope,
     check_was_executed,
+    missing_requested_outputs,
+    unwritten_claims,
     verification_check_label,
 )
 
@@ -51,8 +53,10 @@ from gaia.agents.base.verification import (
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
+    REMOTE_CTX_ASSUMPTION,
     budget_for_ctx,
     is_context_overflow_error,
+    is_local_host,
     profile_ctx_size,
     truncation_budget,
 )
@@ -104,12 +108,69 @@ def _skill_menu_description(description: str) -> str:
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
 
-# Global default for how many reasoning/tool steps an agent may take before it
-# stops and reports progress. This is the single knob for the whole fleet:
-# change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
-# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
-# for multi-file generation) override it explicitly in their own config.
-DEFAULT_MAX_STEPS = 50
+# How many reasoning/tool steps an agent may take. **0 means no limit, and that
+# is the default.**
+#
+# A fixed cap was measured against real work and found to stop the majority of
+# the tasks worth doing: the median bug fix runs 52 steps, the median refactor
+# 102, and a p90 feature implementation 140. A 50-step ceiling ended 39% of all
+# build-track work mid-task, having already spent the tokens — the worst of both
+# outcomes.
+#
+# Set GAIA_AGENT_MAX_STEPS=<n> to impose a ceiling for a specific run. Nothing
+# else bounds a runaway loop today, so a cap is still the right tool when the
+# agent is unattended; it is simply the wrong default for interactive work,
+# where the operator can see what is happening and interrupt.
+DEFAULT_MAX_STEPS = 0
+
+#: An answer that announces an action instead of taking one. Only consulted when
+#: the turn ran no tool at all, so a report of work already done ("I read the
+#: file and it says X") cannot trip it — the future tense and the empty tool log
+#: are both required.
+_INTENT_WITHOUT_ACTION = re.compile(
+    r"(?:i'll|i will|i am going to|i need to|i should|let me|let's|next,? i)\s+"
+    r"(?:now\s+)?(?:go ahead and\s+)?"
+    r"(?:read|open|check|look|search|find|run|execute|create|write|edit|update|"
+    r"modify|fix|add|inspect|examine|review|list|analyz|analys)"
+    r"|next steps?:"
+    r"|here(?:'s| is) (?:my|the) plan",
+    re.IGNORECASE,
+)
+
+
+#: Sentinel for "no ceiling", used wherever a step budget is compared.
+NO_STEP_LIMIT = 0
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+_ORPHAN_THINK_CLOSE = re.compile(r"^.*?</think>", re.DOTALL)
+
+
+def strip_reasoning_blocks(text: str) -> str:
+    """Remove paired ``<think>…</think>`` blocks from a raw model response.
+
+    Safe to run before JSON parsing: a paired block sits outside the tool-call
+    payload, so removing it cannot corrupt one.
+    """
+    return _THINK_BLOCK.sub("", text).strip() if text else text
+
+
+def strip_orphan_reasoning(answer: str) -> str:
+    """Drop deliberation preceding an unpaired ``</think>`` in *answer*.
+
+    When a reasoning model's opening tag is consumed by a separate channel,
+    only ``</think>`` survives inline: the text arrives as
+    ``<deliberation></think><answer>``, the paired pattern matches nothing,
+    and the deliberation ships as the answer with a stray tag inside it.
+
+    **Answer text only — never a raw response.** Applied before parsing, this
+    rule is destructive: a tool call whose arguments merely contain the
+    characters ``</think>`` loses everything before them, and
+    ``{"answer": "…</think>"}`` is reduced to ``"}``. That regression cost a
+    benchmark run eight tasks.
+    """
+    if not answer or "</think>" not in answer:
+        return answer
+    return _ORPHAN_THINK_CLOSE.sub("", answer, count=1).strip()
 
 
 def effective_skill_body(agent, skill) -> str:
@@ -210,9 +271,10 @@ def default_max_steps() -> int:
     """Resolve the global default agent step limit.
 
     Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
-    be set after this module is imported and still take effect. Returns
-    ``DEFAULT_MAX_STEPS`` when the var is unset; raises on a present-but-invalid
-    value so a typo surfaces immediately instead of silently capping agents.
+    be set after this module is imported and still take effect.
+
+    ``0`` means **no limit** and is the default. A negative value raises, so a
+    typo surfaces immediately instead of silently capping agents.
     """
     raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
     if raw is None or raw == "":
@@ -221,13 +283,13 @@ def default_max_steps() -> int:
         value = int(raw)
     except ValueError as e:
         raise ValueError(
-            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
-            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+            f"GAIA_AGENT_MAX_STEPS must be 0 (no limit) or a positive integer, "
+            f"got {raw!r}. Unset it to use the default (no limit)."
         ) from e
-    if value <= 0:
+    if value < 0:
         raise ValueError(
-            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
-            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+            f"GAIA_AGENT_MAX_STEPS must be 0 (no limit) or a positive integer, "
+            f"got {value}. Unset it to use the default (no limit)."
         )
     return value
 
@@ -4137,6 +4199,17 @@ Do NOT wrap conversational replies in JSON.
             )
 
             return budget_for_ctx(CLAUDE_CTX_SIZE)
+
+        # Same reasoning as the Claude branch, generalised: a model served from
+        # a cloud or gateway backend has its own window and its own memory, so
+        # local hardware's device profile must not cap its tool results. This
+        # reads the client's host rather than the model id, because the same
+        # model id can be served either way.
+        client = getattr(self, "llm_client", None) or getattr(self, "client", None)
+        host = getattr(client, "host", None)
+        if host is not None and not is_local_host(host):
+            return budget_for_ctx(REMOTE_CTX_ASSUMPTION)
+
         return truncation_budget(self.device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module
@@ -4959,10 +5032,55 @@ Do NOT wrap conversational replies in JSON.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
+
+        A claim to have written a file that does not exist is corrected here
+        rather than left standing (#3938). That failure is the worst one the
+        agent has, because it is indistinguishable from success in the
+        transcript: the step count looks healthy, no tool reported an error,
+        and the summary is confident and specific.
         """
         if not answer or not answer.strip():
             return answer
+        answer = self._flag_unwritten_claims(answer)
         return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+
+    def _flag_unwritten_claims(self, answer: str) -> str:
+        """Correct the answer when a file that should exist does not.
+
+        Two separate failures, and the second is invisible to the first. The
+        agent can *claim* a file it never wrote — caught by reading the answer.
+        It can also silently skip a write the request asked for: told to put a
+        number in ``answer.txt`` it replied "400" and created nothing, which is
+        a correct answer to a question nobody asked. There is no false claim to
+        contradict there, so the request has to be checked too.
+        """
+        # OSError only. A blanket ``except Exception`` here once swallowed a
+        # NameError and turned the whole check into a no-op that still passed
+        # its unit tests — a programming error must crash, not disable a guard.
+        try:
+            missing = unwritten_claims(answer, os.getcwd())
+            missing += [
+                name
+                for name in missing_requested_outputs(
+                    getattr(self, "_current_query", "") or "", os.getcwd()
+                )
+                if name not in missing
+            ]
+        except OSError as exc:
+            logger.debug("could not check written-file claims: %s", exc)
+            return answer
+        if not missing:
+            return answer
+        named = ", ".join(f"`{name}`" for name in missing)
+        logger.warning(
+            "Answer claims to have written %s, but the file is absent or empty",
+            named,
+        )
+        return (
+            f"{answer.rstrip()}\n\n**Correction:** this answer says it wrote "
+            f"{named}, but that file does not exist or is empty. The work is "
+            "not finished — the file still needs to be written."
+        )
 
     def process_query(
         self,
@@ -5119,7 +5237,11 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
-        while steps_taken < steps_limit and final_answer is None:
+        # steps_limit == NO_STEP_LIMIT means run until the agent finishes or the
+        # operator interrupts. See DEFAULT_MAX_STEPS for why that is the default.
+        while (
+            steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit
+        ) and final_answer is None:
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -5832,9 +5954,7 @@ Do NOT wrap conversational replies in JSON.
             # finds clean input, and before the response is stored in
             # conversation_history so the thinking text never bleeds into the
             # next turn and confuses the model about the current user message.
-            response = re.sub(
-                r"<think>.*?</think>", "", response, flags=re.DOTALL
-            ).strip()
+            response = strip_reasoning_blocks(response)
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
@@ -6036,9 +6156,7 @@ Do NOT wrap conversational replies in JSON.
                     self.console.stop_progress()
 
                 # Strip <think> blocks before parsing (same reason as main path)
-                plan_response = re.sub(
-                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
-                ).strip()
+                plan_response = strip_reasoning_blocks(plan_response)
 
                 # Parse the plan response
                 try:
@@ -6475,6 +6593,39 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
+                    # Repeating a call is a stall, not a conclusion. Say so and
+                    # let the model change approach once before the turn ends —
+                    # tasks were being abandoned here with the work half done
+                    # and the answer reading "Task completed".
+                    if not getattr(self, "_nudged_repeat_loop", False) and (
+                        steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1
+                    ):
+                        self._nudged_repeat_loop = True
+                        logger.debug(
+                            "[WORKFLOW] %s called identically %d times — "
+                            "asking for a different approach",
+                            tool_name,
+                            consecutive_count,
+                        )
+                        tool_call_history.clear()
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"You have called `{tool_name}` "
+                                    f"{consecutive_count} times with identical "
+                                    "arguments and learned nothing new. Do not "
+                                    "repeat it. Either use a different tool or "
+                                    "different arguments to make progress, or — "
+                                    "if you already have what you need — finish "
+                                    "the task now, including writing any file "
+                                    "the request asked for."
+                                ),
+                            }
+                        )
+                        self.console.print_repeated_tool_warning()
+                        continue
+
                     # Force a final answer if the same tool is called repeatedly.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
@@ -6642,7 +6793,9 @@ Do NOT wrap conversational replies in JSON.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                answer_candidate = parsed["answer"]
+                # Answer text, after the JSON is safely parsed — see
+                # strip_orphan_reasoning for why it cannot run before this.
+                answer_candidate = strip_orphan_reasoning(parsed["answer"])
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -6703,7 +6856,7 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
-                    and steps_taken < steps_limit - 1
+                    and (steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1)
                 ):
                     logger.debug(
                         "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
@@ -6793,7 +6946,9 @@ Do NOT wrap conversational replies in JSON.
                 is_planning_text = len(answer_candidate) < 500 and any(
                     phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
                 )
-                if is_planning_text and steps_taken < steps_limit - 1:
+                if is_planning_text and (
+                    steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1
+                ):
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
@@ -6826,9 +6981,8 @@ Do NOT wrap conversational replies in JSON.
                 _TOOL_ARTIFACT_PATTERN = re.compile(
                     r"^\s*\[tool:[a-zA-Z_]+\]\s*$", re.MULTILINE
                 )
-                if (
-                    _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
-                    and steps_taken < steps_limit - 1
+                if _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip()) and (
+                    steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1
                 ):
                     logger.debug(
                         "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
@@ -6861,7 +7015,9 @@ Do NOT wrap conversational replies in JSON.
                     re.search(p, answer_candidate, re.DOTALL)
                     for p in _RAW_JSON_PATTERNS
                 )
-                if is_raw_json and steps_taken < steps_limit - 1:
+                if is_raw_json and (
+                    steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1
+                ):
                     logger.debug(
                         "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
                         answer_candidate[:120],
@@ -6931,7 +7087,7 @@ Do NOT wrap conversational replies in JSON.
                 _should_block_sd = (
                     is_capability_claim
                     and not outcome_acknowledged
-                    and steps_taken < steps_limit - 1
+                    and (steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1)
                 )
                 if _should_block_sd:
                     logger.debug(
@@ -7015,6 +7171,78 @@ Do NOT wrap conversational replies in JSON.
                             "Image generation is not available in this session — "
                             "start GAIA with the `--sd` flag to enable it."
                         )
+
+                # Stopped-before-starting guard: the turn is ending with NO tool
+                # having run, and the answer says what the agent is about to do
+                # rather than what it did. On a task-execution benchmark this
+                # shape showed up as "1 step, 0 calls" — a whole task failed
+                # because the model narrated a plan and the loop accepted it.
+                #
+                # Deliberately narrow. A conversational turn needs no tools, so
+                # the intent language is what separates "I'll now read the file"
+                # from "the answer is 42". One nudge only; if the model repeats
+                # itself the answer stands rather than looping.
+                if (
+                    not tool_call_log
+                    and not getattr(self, "_nudged_idle_turn", False)
+                    and _INTENT_WITHOUT_ACTION.search(answer_candidate or "")
+                    and (steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1)
+                ):
+                    self._nudged_idle_turn = True
+                    logger.debug(
+                        "[WORKFLOW] Answer states intent with no tool call — "
+                        "re-prompting once: %s",
+                        (answer_candidate or "")[:80],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You described what you were going to do but did "
+                                "not do it — no tool has run this turn. Carry out "
+                                "the action now with the appropriate tool. If the "
+                                "request genuinely needs no tool, answer it "
+                                "directly instead of describing a plan."
+                            ),
+                        }
+                    )
+                    continue
+
+                # Missing-output guard: the request named a file to write and
+                # that file is absent. Saying so in the answer is honest but
+                # leaves the work undone, so ask for it once instead — the
+                # agent usually has the content already and only skipped the
+                # write. A task that asked for a diagnosis file failed twice
+                # this way with the correct diagnosis sitting in the chat.
+                if not getattr(self, "_nudged_missing_output", False) and (
+                    steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1
+                ):
+                    # OSError only — see _flag_unwritten_claims for why.
+                    try:
+                        _absent = missing_requested_outputs(
+                            getattr(self, "_current_query", "") or "", os.getcwd()
+                        )
+                    except OSError:
+                        _absent = []
+                    if _absent:
+                        self._nudged_missing_output = True
+                        _names = ", ".join(_absent)
+                        logger.debug(
+                            "[WORKFLOW] Requested output missing — re-prompting "
+                            "once: %s",
+                            _names,
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"{_names} was asked for but does not exist "
+                                    "or is empty. Write it now with the content "
+                                    "from your answer, then confirm."
+                                ),
+                            }
+                        )
+                        continue
 
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
@@ -7209,7 +7437,15 @@ Do NOT wrap conversational replies in JSON.
         consecutive_count: int,
         step_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; honest on errors."""
+        """Final-answer text when the loop breaks on repeats; never claims success.
+
+        This path is reached only after the model was already told it was
+        repeating itself and did it again, so the turn is ending on a stall.
+        It used to end on "Task completed with {tool}. No further action
+        needed." — a claim of success for work that was never finished, which
+        is worse than no answer at all because nothing downstream can tell the
+        difference.
+        """
         last = step_results[-1] if step_results else None
         if Agent._is_error_result(last):
             err = (last or {}).get("error") or "the tool returned an error"
@@ -7219,7 +7455,11 @@ Do NOT wrap conversational replies in JSON.
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        return f"Task completed with {tool_name}. No further action needed."
+        return (
+            f"I stopped: I called `{tool_name}` {consecutive_count} times with "
+            "the same arguments and stopped making progress, so the task is "
+            "not finished. Tell me what to try instead, or narrow the request."
+        )
 
     def _dedup_mutation_call(
         self,

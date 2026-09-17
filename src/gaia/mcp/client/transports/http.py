@@ -125,13 +125,6 @@ class HTTPTransport(MCPTransport):
             raise ValueError(f"Invalid JSON response: {e}")
         except TimeoutError:
             raise TimeoutError(f"Request to {self.url} timed out after {self.timeout}s")
-        except ConnectionError as e:
-            # http.client.RemoteDisconnected escapes URLError - see do_open().
-            raise RuntimeError(
-                f"HTTP request to {self.url} dropped mid-flight: {e}. The MCP "
-                f"server closed the connection - retry, or check it is still "
-                f"running with: gaia mcp status"
-            ) from e
 
     def is_connected(self) -> bool:
         """Check if HTTP connection is active.

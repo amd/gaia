@@ -303,3 +303,31 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 .venv-freeze/
 hub/agents/*/python/packaging/dist/
 hub/agents/*/python/packaging/build/
+# Step-level eval dataset output (gaia.factory.dataset). Built from private
+# transcripts: absolute paths, branch names, repository content, and anything ever
+# pasted into a prompt. It belongs in ~/.gaia/cache/factory/dataset/ and must never
+# reach this public repository.
+#
+# The builder already refuses to write into a git working tree and every record is
+# scrubbed, but a regex cannot remove arbitrary proper nouns — the data is
+# private-tier regardless. This is the last line of defence.
+#
+# The patterns are anchored (leading /) or match distinctive data filenames, so
+# they do NOT hide src/gaia/factory/dataset/, which is builder *code* and stays
+# tracked. tests/unit/factory/test_dataset_gitignore.py asserts exactly that.
+/dataset/
+/oracle/
+/pool/
+/blobs/
+/factory-cache/
+/DATASHEET.md
+/MANIFEST.json
+/partition_audit.json
+/contamination.json
+/commit_recovery.json
+/scrub_report.json
+/tool_catalog.json
+**/records.jsonl
+**/traces.jsonl
+**/intents.jsonl
+**/blobs/*.txt

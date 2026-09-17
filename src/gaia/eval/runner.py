@@ -729,9 +729,7 @@ def preflight_check(backend_url, scenarios=None):
         with urllib.request.urlopen(f"{backend_url}/api/health", timeout=5) as r:
             if r.status != 200:
                 errors.append(f"Agent UI returned HTTP {r.status}")
-    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
-        # ConnectionError catches http.client.RemoteDisconnected, which is not a
-        # URLError - see urllib.request.AbstractHTTPHandler.do_open.
+    except urllib.error.URLError as e:
         errors.append(f"Agent UI not reachable at {backend_url}: {e}")
 
     # Check corpus manifest
@@ -818,7 +816,7 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
             f"Memory admin probe failed with HTTP {e.code} from {backend_url}: "
             f"{e.reason}"
         )
-    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+    except urllib.error.URLError as e:
         return (
             f"Memory admin probe could not reach {backend_url}: {e}. "
             "Is the Agent UI backend running?"

@@ -564,13 +564,6 @@ class EmbeddedLemonade:
                 f"Failed to download {url}: {e.reason}. Check network access to "
                 f"github.com (proxy? offline?) and retry."
             ) from e
-        except (ConnectionError, TimeoutError) as e:
-            # http.client.RemoteDisconnected escapes URLError - see do_open().
-            raise EmbeddedLemonadeError(
-                f"Download of {url} dropped mid-transfer: {e}. This is usually a "
-                f"transient network failure - retry, or download the asset by hand "
-                f"from {RELEASES_PAGE}/tag/v{self.version}."
-            ) from e
 
     def _verify(self, archive: Path, expected_sha256: str) -> None:
         """Check *archive* against its pinned digest.

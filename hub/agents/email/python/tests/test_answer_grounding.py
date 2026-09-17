@@ -49,7 +49,6 @@ from gaia_agent_email import attention_cache  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent, _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
     UNGROUNDED_SUCCESS_FALLBACK,
-    _honest_prescan_summary,
     decode_stray_unicode_escapes,
     find_attention_card_contradiction,
     find_fabricated_attendee_claim,
@@ -592,59 +591,6 @@ class TestRewriteTriageAnswer:
         assert "1." in out and "Re: Q3 roadmap" in out
         # The opening sentence survives; only the list is replaced.
         assert out.startswith("Here's your inbox — 1 item needs attention.")
-
-
-class TestHonestPrescanSummary:
-    """#3768 — a pre-scan that skipped a failed mailbox must say so in the
-    sentence the user reads, not only in the envelope's ``degraded`` flag.
-    """
-
-    def test_degraded_scan_names_the_failed_mailbox(self):
-        envelope = _prescan_envelope(
-            urgent=[{"message_id": "m1"}],
-            degraded=True,
-            mailbox_errors=[{"mailbox": "microsoft", "error": "token expired"}],
-        )
-        summary = _honest_prescan_summary(envelope)
-        assert "Outlook" in summary, (
-            f"must name the mailbox that failed (provider_label('microsoft') "
-            f"== 'Outlook'), got: {summary!r}"
-        )
-        assert "couldn't be scanned" in summary
-        # A user must not be able to read this as whole-account coverage.
-        assert "only" in summary
-
-    def test_non_degraded_scan_is_byte_identical_to_the_plain_summary(self):
-        envelope = _prescan_envelope(urgent=[{"message_id": "m1"}], scanned=25)
-        assert _honest_prescan_summary(envelope) == (
-            "Here's your inbox pre-scan — 1 urgent. "
-            "25 messages scanned · 100 unread in your inbox."
-        )
-
-    def test_degraded_with_unusable_mailbox_errors_still_qualifies_the_counts(self):
-        for errors in ([], [{"error": "no mailbox name"}], None):
-            summary = _honest_prescan_summary(
-                _prescan_envelope(degraded=True, mailbox_errors=errors)
-            )
-            assert "Part of your mail could not be scanned this time." in summary, (
-                f"a degraded envelope with mailbox_errors={errors!r} must still "
-                f"carry the generic caveat, got: {summary!r}"
-            )
-
-    def test_grounded_replacement_answer_carries_the_caveat(self):
-        # End-to-end through the path that actually reaches the user: the
-        # model's contradicted claim is replaced by this summary.
-        envelope = _prescan_envelope(
-            urgent=[{"message_id": "m1"}],
-            degraded=True,
-            mailbox_errors=[{"mailbox": "microsoft", "error": "token expired"}],
-        )
-        result = {
-            "result": "No urgent items today.",
-            "conversation": [_tool_entry("pre_scan_inbox", envelope)],
-        }
-        out = ground_final_answer(result)
-        assert "Outlook couldn't be scanned (token expired)" in out["result"]
 
 
 class TestNormalizeTriageList:

@@ -87,7 +87,87 @@ ALLOWED_COMMANDS = {
     "jobs",
     # Git commands (mostly safe, read-only operations)
     "git",  # Individual git subcommands checked separately
+    # Language runtimes, so the agent can run a project's own tests.
+    # See DEVELOPER_RUNTIMES for why this is not a widening of the sandbox.
+    "python",
+    "python3",
+    "py",
+    # The verification tooling those runtimes already expose via ``-m``.
+    # See PYTHON_CONSOLE_SCRIPTS. ``pytest`` is deliberately NOT here — it has
+    # a skill-grant policy that outranks this list (see that docstring).
+    "tox",
+    "nox",
+    "coverage",
+    "ruff",
+    "black",
+    "isort",
+    "flake8",
+    "pylint",
+    "mypy",
 }
+
+#: The runtimes above, named separately so the reasoning is auditable instead of
+#: buried in one large set.
+#:
+#: These do **not** widen the sandbox. ``execute_python_file`` already runs
+#: agent-supplied Python in the same workspace under the same ``allowed_paths``,
+#: so the interpreter was always reachable — just not by the obvious command.
+#: All the omission bought was friction: asked to fix a bug and prove it, the
+#: agent could not run ``python -m pytest`` and had to write a scratch runner
+#: and execute that instead, spending extra steps on every verification.
+#:
+#: Measured on a task-execution benchmark, ``run_shell_command`` failed 55-76% of
+#: its calls across every model tried, against 0-2% for a comparison harness with
+#: no allowlist. Those refusals were the dominant cost of the tool.
+DEVELOPER_RUNTIMES = frozenset({"python", "python3", "py"})
+
+#: Console scripts that are **the same program** as ``python -m <name>``.
+#:
+#: Allowing ``python`` and refusing ``pytest`` blocks nothing — ``python -m
+#: pytest`` runs the identical code — so the refusal only costs the agent a
+#: step and teaches it that verification is unavailable. Measured on a
+#: task-execution benchmark, the agent was told "Command 'pytest' is not
+#: available to this agent" and thereafter answered without running the
+#: tests at all; nearly every episode ended "unverified — none of them a
+#: test, lint, or build".
+#:
+#: Scoped deliberately to tooling that *reads and reports*. ``pip`` is
+#: reachable the same way and is still excluded: it mutates the environment
+#: and reaches the network, which is the read/write line this allowlist
+#: already draws for ``git``. Runners outside the Python ecosystem (``npm``,
+#: ``go``, ``cargo``, ``make``) are a genuine widening rather than a name for
+#: something already permitted, so they stay out until something measures a
+#: need for them.
+#:
+#: ``pytest`` is **excluded on purpose**, though it is the one the agent
+#: reaches for most. It carries a ``shell:execute:pytest`` grant policy in
+#: :mod:`gaia.skills.binaries` that restricts flags and outranks this list, so
+#: naming it here would change nothing. That policy is bypassable via
+#: ``python -m pytest`` — tracked separately; resolving it is the policy
+#: owner's call, not something to route around here.
+PYTHON_CONSOLE_SCRIPTS = frozenset(
+    {
+        "tox",
+        "nox",
+        "coverage",
+        "ruff",
+        "black",
+        "isort",
+        "flake8",
+        "pylint",
+        "mypy",
+    }
+)
+
+#: Runaway-loop backstop, not a pace-setter.
+#:
+#: At the previous 3-per-10-seconds an ordinary edit-then-test cycle tripped
+#: the limit, and each trip cost a step and a model round trip that the user
+#: waited through — a measured 5 refusals in a single twelve-task sweep. The
+#: ceiling now sits where no deliberate sequence reaches it but a loop still
+#: does within a few seconds.
+MAX_COMMANDS_PER_10_SECONDS = 30
+MAX_COMMANDS_PER_MINUTE = 120
 
 # Actions/predicates that turn otherwise read-only commands into a write,
 # delete, or arbitrary-command-execution primitive. The whitelist only checks
@@ -122,6 +202,29 @@ SAFE_GIT_COMMANDS = {
     "describe",
     "rev-parse",
     "help",
+}
+
+#: Git subcommands that change the local repository but cannot reach a remote.
+#:
+#: Read-only git made a whole class of request impossible rather than merely
+#: awkward: asked to stop tracking a committed secret, the agent produced a
+#: correct ``.gitignore`` and then could not run ``git rm --cached``, so the
+#: file stayed tracked and the task failed. Every arm failed it for that reason.
+#:
+#: These touch the index and working tree only. ``commit`` is deliberately NOT
+#: here — creating commits unattended is gated elsewhere in this repo and that
+#: policy stands; untracking a file needs ``git rm --cached``, not a commit.
+#: ``push`` and ``remote`` stay refused because they leave the machine, and
+#: history rewrites (``rebase``, ``filter-branch``) stay out because recovery
+#: from a wrong one is not obvious.
+LOCAL_WRITE_GIT_COMMANDS = {
+    "add",
+    "rm",
+    "mv",
+    "restore",
+    "switch",
+    "checkout",
+    "stash",
 }
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
@@ -253,6 +356,39 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     return normalize_binary(token) in granted
 
 
+_CD_PREFIX = re.compile(
+    r"^\s*cd\s+(?P<dir>\"[^\"]+\"|'[^']+'|[^\s&;|]+)\s*&&\s*(?P<rest>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def split_cd_prefix(command: str):
+    """Peel a leading ``cd <dir> &&`` off a command.
+
+    Returns ``(directory, remainder)``, or ``(None, command)`` when the command
+    does not start that way.
+
+    This shape is the agent's universal habit and was refused as command
+    chaining, which is the wrong reading of it: ``cd build && pytest`` is a
+    working directory and one command, not two commands joined to smuggle a
+    second past the allowlist. The tool already takes ``working_directory``, so
+    the intent maps exactly onto a parameter it has -- it was rejecting a
+    request it could have honoured, and it was the single most common refusal.
+
+    Only a *leading* ``cd`` is peeled, and only one. Anything after the first
+    ``&&`` is still validated as a normal command, so this widens nothing: a
+    segment that would have been refused on its own is still refused.
+    """
+    match = _CD_PREFIX.match(command or "")
+    if not match:
+        return None, command
+    directory = match.group("dir").strip().strip("\"'")
+    rest = match.group("rest").strip()
+    if not directory or not rest:
+        return None, command
+    return directory, rest
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -313,8 +449,8 @@ class ShellToolsMixin:
 
         # Rate limiting configuration
         self.shell_command_times = deque(maxlen=100)  # Track last 100 command times
-        self.max_commands_per_minute = 10
-        self.max_commands_per_10_seconds = 3
+        self.max_commands_per_minute = MAX_COMMANDS_PER_MINUTE
+        self.max_commands_per_10_seconds = MAX_COMMANDS_PER_10_SECONDS
 
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its segments.
@@ -497,8 +633,8 @@ class ShellToolsMixin:
         # Initialize if not already done (defensive programming)
         if not hasattr(self, "shell_command_times"):
             self.shell_command_times = deque(maxlen=100)
-            self.max_commands_per_minute = 10
-            self.max_commands_per_10_seconds = 3
+            self.max_commands_per_minute = MAX_COMMANDS_PER_MINUTE
+            self.max_commands_per_10_seconds = MAX_COMMANDS_PER_10_SECONDS
 
         current_time = time.time()
 
@@ -611,16 +747,22 @@ class ShellToolsMixin:
                 }
             return None
 
-        # Special handling for git - only allow read-only operations
+        # Git: read-only operations, plus local writes that cannot reach a
+        # remote. The line is local-versus-published, not read-versus-write.
         if cmd_base == "git":
             if len(cmd_parts) > 1:
                 git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+                allowed = SAFE_GIT_COMMANDS | LOCAL_WRITE_GIT_COMMANDS
+                if git_subcmd not in allowed:
                     return {
                         "status": "error",
-                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
+                        "error": (
+                            f"Git command '{git_subcmd}' is not allowed. Local "
+                            "operations are permitted; anything that publishes "
+                            "to a remote or rewrites history is not."
+                        ),
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "allowed_git_commands": sorted(allowed),
                     }
         # Special handling for wmic - only allow read-only queries
         elif cmd_base == "wmic":
@@ -800,8 +942,24 @@ class ShellToolsMixin:
                 "status": "error",
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
-                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+                # Naming the alternative is the whole point. The old hint read
+                # "Only read-only, informational commands are allowed" — untrue
+                # since python and the git write subcommands were added, and it
+                # taught the agent that checking its own work was impossible, so
+                # it stopped trying and answered unverified.
+                "hint": (
+                    "Allowed: file inspection (ls, cat, head, grep, find, wc, "
+                    "diff), read-only git plus add/rm/mv/restore/switch/stash, "
+                    "python / python3 / py, and the checkers ruff, black, "
+                    "isort, flake8, pylint, mypy, coverage, tox. Run a "
+                    "project's tests with 'python -m pytest'. Use write_file "
+                    "and edit_file instead of rm/cp/mv/mkdir/touch, and "
+                    "working_directory instead of 'cd'."
+                ),
+                "examples": (
+                    "python -m pytest -q, ruff check ., git diff, "
+                    "grep -rn TODO ., ls -la"
+                ),
             }
 
         return None  # Command is allowed
@@ -819,6 +977,25 @@ class ShellToolsMixin:
             """
             Execute a shell command and return the output.
 
+            Only allowlisted programs run. What is available:
+
+            * inspect — ls, cat, head, tail, grep, find, findstr, wc, sort,
+              uniq, diff, stat, file, pwd, du, df
+            * git — status, log, diff, show, add, rm, mv, restore, switch,
+              stash. Not commit, push or rebase.
+            * python — ``python``, ``python3``, ``py``. **Run a project's
+              tests with ``python -m pytest``**, and a module the same way
+              (``python -m json.tool``, ``python -c "..."``).
+            * check — ruff, black, isort, flake8, pylint, mypy, coverage,
+              tox, nox.
+            * system info — uname, systeminfo, hostname, ps, whoami.
+
+            Not available: package managers (pip, npm), other ecosystems'
+            runners (node, go, cargo, make), file mutation (rm, mv, cp,
+            mkdir, touch — use write_file and edit_file), and the shell
+            operators ``&&``, ``||``, ``;``, ``>`` and backticks. Pipes work.
+            Use ``working_directory`` instead of ``cd``.
+
             Args:
                 command: Shell command to execute
                 working_directory: Directory to run command in
@@ -827,6 +1004,15 @@ class ShellToolsMixin:
             Returns:
                 Dictionary with status, output, and error information
             """
+            # `cd <dir> && <cmd>` is the agent's universal habit and was refused
+            # as command chaining. That reads it wrong: it is a working
+            # directory and one command, and this tool already takes a working
+            # directory. Map it onto the parameter rather than reject it. An
+            # explicit working_directory wins, because the caller was specific.
+            _cd_dir, _rest = split_cd_prefix(command)
+            if _cd_dir and working_directory is None:
+                command, working_directory = _rest, _cd_dir
+
             try:
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time = self._check_rate_limit()

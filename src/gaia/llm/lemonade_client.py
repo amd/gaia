@@ -312,6 +312,68 @@ GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
 NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 
 
+#: A context size of 0 means **do not pin one** — let the model and the serving
+#: backend use whatever they support. This is the default.
+#:
+#: Pinning was measured against real work and found far too small: the median
+#: request in a real working session carries ~153K tokens and the p90 ~434K,
+#: against a pinned 64K on GPU. Pinning also caps a remote or gateway-served
+#: model to local hardware's window for no reason. Set ``GAIA_CTX_SIZE=<n>`` to
+#: pin deliberately — on constrained hardware that is still the right call,
+#: because an unpinned load can ask for more KV cache than the device has.
+UNPINNED_CTX = 0
+
+
+#: Hosts that mean "this model runs on the machine in front of you".
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+#: Window to assume for a remote backend when nothing more specific is known.
+#: Deliberately conservative — cloud and gateway models commonly serve 128K or
+#: more, and the measured p90 real request is ~434K — but it is an assumption,
+#: not a measurement, so it is named rather than buried in a formula. Its only
+#: job is to stop a remote model being squeezed into local hardware's budget.
+REMOTE_CTX_ASSUMPTION = 131072
+
+
+def is_local_host(host: Optional[str]) -> bool:
+    """Is the backend on this machine?
+
+    The context pin, the truncation budget and the device profile all exist to
+    protect constrained local hardware — a 16 GB iGPU that cannot hold a large
+    KV cache, or an NPU runtime with a hard ceiling. **None of that applies to a
+    cloud or gateway backend**, which has its own, far larger window and its own
+    memory. Applying local limits to a remote model throws away context the
+    caller is already paying for.
+    """
+    return (host or "").strip().lower() in LOCAL_HOSTS
+
+
+def _ctx_env_override() -> Optional[int]:
+    """``GAIA_CTX_SIZE`` if set, else ``None``.
+
+    ``0`` is a meaningful value — it means "do not pin" — so this returns it
+    rather than treating it as unset. A negative value raises, because silently
+    ignoring a typo here produces a context window nobody chose.
+    """
+    raw = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_CTX_SIZE must be 0 (let the model decide) or a positive "
+            f"integer, got {raw!r}."
+        ) from e
+    if value < 0:
+        raise ValueError(
+            f"GAIA_CTX_SIZE must be 0 (let the model decide) or a positive "
+            f"integer, got {value}."
+        )
+    return value
+
+
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
 
@@ -415,6 +477,12 @@ class ModelRequirement:
     display_name: str
     required: bool = True
     min_ctx_size: int = 4096  # Minimum context size needed
+    #: Pin the load to ``min_ctx_size`` instead of letting the backend choose.
+    #: Only true where the runtime has a **hard ceiling** it cannot exceed —
+    #: the NPU's FastFlowLM build is the case this exists for. Everywhere else
+    #: an unpinned load lets a capable model use its full window, which real
+    #: work needs (median request ~153K tokens against a pinned 64K).
+    pin_ctx: bool = False
     tool_calling: bool = (
         True  # True for GGUF models via Lemonade --jinja (Tier 0 empirical)
     )
@@ -495,6 +563,7 @@ MODELS = {
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
         min_ctx_size=NPU_CTX_SIZE,
+        pin_ctx=True,  # FastFlowLM cannot load above this
         tool_calling=False,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -3502,13 +3571,23 @@ class LemonadeClient:
         # bumped MODELS[…].min_ctx_size to 65536. That's why
         # ``summarize_document`` kept hitting LemonadeContextOverflowError
         # at 35K-token sections.
+        # Default is UNPINNED: let the model and backend negotiate the window.
+        # A registry entry is treated as a *floor* the caller asked for, not a
+        # ceiling to clamp to, and an unknown model gets no pin at all rather
+        # than being forced to DEFAULT_CONTEXT_SIZE.
+        # An explicit GAIA_CTX_SIZE always wins. Otherwise pin only when the
+        # backend is local *and* its runtime has a hard ceiling it cannot
+        # exceed. A remote or gateway model is never pinned: its window is its
+        # own business and is typically far larger than local hardware's.
         expected_ctx: Optional[int] = None
-        for _key, _req in MODELS.items():
-            if _req.model_id == model:
-                expected_ctx = _req.min_ctx_size
-                break
-        if expected_ctx is None:
-            expected_ctx = DEFAULT_CONTEXT_SIZE
+        override = _ctx_env_override()
+        if override is not None:
+            expected_ctx = override or None
+        elif is_local_host(self.host):
+            for _key, _req in MODELS.items():
+                if _req.model_id == model and _req.pin_ctx:
+                    expected_ctx = _req.min_ctx_size
+                    break
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is

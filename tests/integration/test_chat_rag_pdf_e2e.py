@@ -15,11 +15,7 @@ def _can_run_e2e(backend_url="http://localhost:4200"):
         with urlopen(f"{backend_url}/api/health", timeout=2) as r:
             if r.status != 200:
                 return False, f"backend health returned {r.status}"
-    except (URLError, OSError) as e:
-        # OSError covers http.client.RemoteDisconnected, which is a
-        # ConnectionError and is NOT wrapped in URLError - see
-        # urllib.request.AbstractHTTPHandler.do_open. Without it a dropped
-        # connection ERRORs the test instead of skipping it.
+    except URLError as e:
         return False, f"backend not reachable: {e}"
     return True, "ok"
 

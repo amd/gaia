@@ -477,12 +477,6 @@ class LemonadeInstaller:
             raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Download failed: {e.reason}")
-        except (ConnectionError, TimeoutError) as e:
-            # http.client.RemoteDisconnected escapes URLError - see do_open().
-            raise RuntimeError(
-                f"Download of {url} dropped mid-transfer: {e}. This is usually a "
-                f"transient network failure - retry the install."
-            ) from e
         except Exception as e:
             raise RuntimeError(f"Download failed: {e}")
 

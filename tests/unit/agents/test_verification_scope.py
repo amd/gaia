@@ -428,17 +428,20 @@ def test_parse_give_up_path_carries_the_statement(agent):
 def test_loop_break_summary_path_carries_the_statement(agent):
     """A repeated failing check breaks the loop — and still states its scope.
 
-    This exit is the clearest case for the feature: the loop-break summary
-    reads "Task completed with <tool>" even though every call errored, and
-    the scope line is what tells the user the check did not pass. Correcting
-    that summary itself belongs to the answer-guard work in #3381.
+    This exit used to read "Task completed with <tool>" even though every
+    call errored, leaving the scope line as the only hint that the check
+    failed. Both halves must now agree: the answer says the work is
+    unfinished and the scope line says the check did not pass.
+
+    The extra stubbed replies cover the one re-prompt the loop now spends
+    asking for a different approach before it gives up.
     """
     agent.max_consecutive_repeats = 2
     agent.shell_result = {"status": "error", "error": "boom", "return_code": 1}
     call = _tool_call("pytest -q")
-    _stub_chat(agent, call, call, call, call)
+    _stub_chat(agent, call, call, call, call, call, call, call)
     result = agent.process_query("run the tests", max_steps=6)
-    assert "Task completed with" in result["result"]
+    assert "Task completed" not in result["result"]
     # Checks ran and did not pass — not "unverified", not "verified".
     assert "partially verified" in _scope_line(result["result"])
 

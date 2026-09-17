@@ -102,25 +102,32 @@ def test_loop_break_on_other_error_shapes(agent):
 # ---------------------------------------------------------------------------
 
 
-def test_loop_break_on_success_returns_task_completed_message(agent):
-    """Loop-on-success (e.g. model keeps re-calling a working tool) should
-    still produce the existing "Task completed" wording — no behaviour
-    change on the happy path."""
+def test_loop_break_on_repeated_success_is_not_a_completion(agent):
+    """Calls that *succeed* and repeat are a stall, not a finished task.
+
+    The earlier fix kept "Task completed" on this branch on the theory that
+    a loop of working calls means the work is done. Task runs say otherwise:
+    an agent searched for the same string twelve times, never found it, and
+    ended the turn reporting completion with nothing written. Every call
+    returned ``status: success`` — the tool worked, the task did not.
+    """
     summary = agent._build_loop_break_summary(
         tool_name="query_documents",
         consecutive_count=4,
         step_results=[{"status": "success", "result": "found 3 docs"}],
     )
-    assert summary.startswith("Task completed with query_documents")
+    assert "Task completed" not in summary
+    assert "not finished" in summary
+    assert "query_documents" in summary
 
 
-def test_loop_break_with_empty_step_results_returns_task_completed(agent):
-    """Edge case: no recorded results yet. Default to the success
-    message (the loop wouldn't fire without prior calls in practice)."""
+def test_loop_break_with_empty_step_results_is_not_a_completion(agent):
+    """No recorded results is the weakest possible evidence of success."""
     summary = agent._build_loop_break_summary(
         tool_name="x", consecutive_count=4, step_results=[]
     )
-    assert "Task completed" in summary
+    assert "Task completed" not in summary
+    assert "not finished" in summary
 
 
 # Native-path call-site contract: callers must pass UNWRAPPED result dicts
@@ -164,17 +171,19 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     assert "Unknown tool name" in summary
 
 
-def test_wrapped_dicts_fall_through_to_success_illustrating_required_unwrap():
+def test_wrapped_dicts_lose_the_underlying_error_message():
     """**Trap test — documents the WRONG behaviour to pin the contract.**
 
     When wrapped ``previous_outputs`` entries (``{"tool", "args",
     "result"}``) are passed straight in, the top-level dict has no
-    ``status`` key, so the helper takes the success branch and emits a
-    "Task completed" lie. That's exactly the bug the native call site
-    used to ship. The fix lives at the CALLER (unwrap via
-    ``o["result"]`` before passing); this assertion exists to make
-    that contract observable and to fail loudly if a future refactor
-    moves the unwrap into the helper without updating callers.
+    ``status`` key, so the helper cannot see the error and falls to the
+    generic stall message. The fix lives at the CALLER (unwrap via
+    ``o["result"]`` before passing); this assertion exists to make that
+    contract observable and to fail loudly if a future refactor moves the
+    unwrap into the helper without updating callers.
+
+    Neither branch claims success any more, so the cost of the trap is a
+    lost diagnostic rather than a false report of completion.
     """
     with patch("gaia.agents.base.agent.AgentSDK"):
         a = _DummyAgent(silent_mode=True, skip_lemonade=True)
@@ -184,5 +193,6 @@ def test_wrapped_dicts_fall_through_to_success_illustrating_required_unwrap():
     summary = a._build_loop_break_summary(
         tool_name="x", consecutive_count=4, step_results=wrapped
     )
-    # Documents the trap: wrapped input → false-success message.
-    assert "Task completed" in summary
+    # Documents the trap: the real error never reaches the reader.
+    assert "boom" not in summary
+    assert "not finished" in summary

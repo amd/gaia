@@ -601,9 +601,9 @@ def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
             # ``degraded`` promised at least one entry here — a malformed
             # one is a broken envelope, not a normal case worth hiding.
             logger.warning(
-                "email agent: degraded scan envelope has a malformed "
-                "mailbox_errors entry (%r) — omitting it from the coverage "
-                "caveat",
+                "email agent: degraded check_suspicious_mail envelope has a "
+                "malformed mailbox_errors entry (%r) — omitting it from the "
+                "coverage caveat",
                 entry,
             )
             continue
@@ -673,13 +673,7 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded pre-scan sentence built straight from the
     envelope's own counts — the fallback used when the model's own framing
-    sentence contradicts that same envelope.
-
-    A degraded scan gets the same ``_mailbox_failure_caveat`` as
-    ``_honest_suspicious_summary`` (#3768): these counts cover only the
-    mailboxes that answered, so stating them unqualified reads as
-    whole-account coverage when a mailbox was skipped.
-    """
+    sentence contradicts that same envelope."""
     urgent = len(envelope.get("urgent") or [])
     actionable = len(envelope.get("actionable") or [])
     needs_review = len(envelope.get("needs_review") or [])
@@ -695,10 +689,7 @@ def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     total_unread = envelope.get("total_unread")
     if isinstance(total_unread, int):
         coverage += f" · {total_unread} unread in your inbox"
-    lead = f"Here's your inbox pre-scan — {summary}. {coverage}."
-    if envelope.get("degraded"):
-        lead += " " + _mailbox_failure_caveat(envelope.get("mailbox_errors"))
-    return lead
+    return f"Here's your inbox pre-scan — {summary}. {coverage}."
 
 
 # ---------------------------------------------------------------------------

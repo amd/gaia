@@ -32,6 +32,29 @@ from gaia.agents.tools.search_scope import (
 
 logger = logging.getLogger(__name__)
 
+#: Enough of a file to tell text from binary. Executables and archives carry a
+#: NUL well inside this; source files do not.
+_BINARY_SNIFF_BYTES = 4096
+
+
+def _looks_binary(path: Path) -> bool:
+    """True when *path* is binary, by the rule ``grep -r`` uses: a NUL byte.
+
+    Content search used to filter on an extension allowlist instead, which
+    silently skipped ``.toml``, ``.cfg``, ``.ts``, ``.go``, ``.rs`` and every
+    extensionless file — so grepping a Python project for a version string
+    never looked in ``pyproject.toml``, and reported success. Any such list is
+    wrong for the next language someone searches; sniffing is not.
+
+    Unreadable reads as binary: skipping a file we cannot open is honest,
+    where treating it as text would raise inside the search loop.
+    """
+    try:
+        with open(path, "rb") as handle:
+            return b"\0" in handle.read(_BINARY_SNIFF_BYTES)
+    except OSError:
+        return True
+
 
 class FileSearchToolsMixin:
     """
@@ -115,7 +138,13 @@ class FileSearchToolsMixin:
             file_types: str = None,
         ) -> Dict[str, Any]:
             """
-            Find files by name or pattern.
+            Find files by NAME. Does not look inside them.
+
+            If the question is "where is X used / defined / declared", or
+            anything that must find every occurrence of a string, use
+            search_file_content instead — it greps contents. This tool only
+            matches filenames, and returns an empty result for a string that
+            appears inside files but in no filename.
 
             Args:
                 file_pattern: name, substring, glob ("*.go") or regex to match.
@@ -156,7 +185,28 @@ class FileSearchToolsMixin:
                         ".rs",
                         ".rb",
                         ".sh",
+                        ".log",
+                        ".yaml",
+                        ".yml",
+                        ".toml",
+                        ".ini",
+                        ".cfg",
+                        ".xml",
+                        ".html",
+                        ".css",
+                        ".sql",
+                        ".tsx",
+                        ".jsx",
                     }
+
+                # A pattern that names its own extension outranks the default
+                # list. Asking for "ci.log" and being told the directory is
+                # empty is worse than a slow search: the agent believes it and
+                # stops. Observed on a CI-triage task where the log was sitting
+                # in the working directory the whole time.
+                _named = os.path.splitext(file_pattern)[1].lower()
+                if _named and not file_types and _named.isascii():
+                    doc_extensions = doc_extensions | {_named}
 
                 import re as _re
 
@@ -799,9 +849,24 @@ class FileSearchToolsMixin:
             context_lines: int = 0,
         ) -> Dict[str, Any]:
             """
-            Search for text patterns within files (grep-like functionality).
+            Search file contents for a pattern. This is grep.
 
-            Searches actual file contents on disk, not RAG indexed documents.
+            Use this to answer "where is X used / declared / defined" —
+            anything that must find EVERY occurrence. search_file finds files
+            by NAME and cannot answer that. Bumping a version "wherever it is
+            declared", renaming a symbol, or auditing a setting all start
+            here, not with a name search.
+
+            Searches files on disk, not RAG-indexed documents. Binary files
+            are skipped; every text file is searched whatever its extension.
+
+            Args:
+                pattern: regex, or plain text if it is not a valid regex.
+                directory: folder to search, recursively. Defaults to ".".
+                file_pattern: optional glob ("*.py") to narrow the search.
+                    Omit it to search every text file.
+                case_sensitive: defaults to False.
+                context_lines: lines of context around each match.
             """
             try:
                 # Enforce the --allowed-paths sandbox before the existence probe
@@ -830,31 +895,6 @@ class FileSearchToolsMixin:
                             "to search, or use read_file for a single file."
                         ),
                     }
-
-                # Text file extensions to search
-                text_extensions = {
-                    ".txt",
-                    ".md",
-                    ".py",
-                    ".js",
-                    ".java",
-                    ".c",
-                    ".cpp",
-                    ".h",
-                    ".json",
-                    ".xml",
-                    ".yaml",
-                    ".yml",
-                    ".csv",
-                    ".log",
-                    ".ini",
-                    ".conf",
-                    ".sh",
-                    ".bat",
-                    ".html",
-                    ".css",
-                    ".sql",
-                }
 
                 matches = []
                 files_searched = 0
@@ -935,10 +975,11 @@ class FileSearchToolsMixin:
                     if file_pattern:
                         if not fnmatch.fnmatch(file_path.name, file_pattern):
                             continue
-                    else:
-                        # Only search text files
-                        if file_path.suffix.lower() not in text_extensions:
-                            continue
+                    elif _looks_binary(file_path):
+                        # Skip binaries the way grep -r does. An extension
+                        # allowlist here silently hid .toml, .cfg, .ts and
+                        # every extensionless file (Dockerfile, Makefile).
+                        continue
 
                     files_searched += 1
                     if not search_file(file_path):
@@ -956,9 +997,8 @@ class FileSearchToolsMixin:
                         if file_pattern:
                             if not fnmatch.fnmatch(_fp2.name, file_pattern):
                                 continue
-                        else:
-                            if _fp2.suffix.lower() not in text_extensions:
-                                continue
+                        elif _looks_binary(_fp2):
+                            continue
                         if not search_file(_fp2):
                             break
 

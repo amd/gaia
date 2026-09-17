@@ -172,7 +172,12 @@ def initialize_lemonade_for_agent(
     if _ctx_override:
         try:
             _ctx_int = int(_ctx_override)
-            if _ctx_int > 0:
+            if _ctx_int == 0:
+                # 0 means "let the model and backend decide" — skip the
+                # startup ctx requirement entirely rather than asserting one.
+                log.info("GAIA_CTX_SIZE=0: not pinning a context window")
+                required_ctx = 0
+            elif _ctx_int > 0:
                 log.info(
                     "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
                     _ctx_int,
@@ -1241,8 +1246,8 @@ def build_parser():
         "--max-steps",
         type=int,
         default=None,
-        help="Maximum conversation steps. Defaults to the global agent step "
-        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
+        help="Maximum conversation steps. 0 means no limit, which is the "
+        "default; set $GAIA_AGENT_MAX_STEPS to impose one fleet-wide.",
     )
     parent_parser.add_argument(
         "--list-tools",
@@ -3390,9 +3395,7 @@ def main():
                     if resp.status == 200 and body == "ok":
                         print(f"Telegram adapter: healthy ({url})")
                         return
-            except (urllib.error.URLError, ConnectionError, TimeoutError):
-                # ConnectionError catches http.client.RemoteDisconnected, which
-                # is not a URLError - see AbstractHTTPHandler.do_open.
+            except urllib.error.URLError:
                 pass
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
@@ -7717,7 +7720,7 @@ def handle_mcp_status(args):
                                 print("⚠️  Server is running but may not be healthy")
                     else:
                         raise
-                except (urllib.error.URLError, ConnectionError, TimeoutError):
+                except urllib.error.URLError:
                     print("⚠️  Server is running but status endpoint not accessible")
                     print("   Server may be starting up or using an older version")
             except Exception as e:
@@ -7753,7 +7756,7 @@ def handle_mcp_test(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
+        except urllib.error.URLError:
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7816,8 +7819,6 @@ def handle_mcp_test(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
-        except (ConnectionError, TimeoutError) as e:
-            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
@@ -7851,7 +7852,7 @@ def handle_mcp_agent(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
+        except urllib.error.URLError:
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7948,8 +7949,6 @@ def handle_mcp_agent(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
-        except (ConnectionError, TimeoutError) as e:
-            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:

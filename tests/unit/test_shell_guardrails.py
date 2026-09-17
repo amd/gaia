@@ -308,3 +308,98 @@ class TestPowerShellFiltering:
             validate("powershell -Command Get-Process | Where-Object Name -eq svchost")
             is None
         )
+
+
+class TestDeveloperRuntimes:
+    """The agent must be able to run a project's tests the obvious way.
+
+    Blocking ``python`` never protected anything: ``execute_python_file`` runs
+    agent-supplied Python in the same workspace under the same allowed paths.
+    All it did was force a write-a-runner-then-execute-it detour on every
+    verification, which is why over half of all shell calls were refused.
+    """
+
+    def test_python_can_run_a_test_suite(self):
+        import shlex
+
+        cmd = "python -m pytest tests/ -q"
+        assert (
+            ShellToolsMixin._validate_command(
+                "python", shlex.split(cmd), cmd, frozenset()
+            )
+            is None
+        )
+
+    def test_arbitrary_removal_is_still_refused(self):
+        import shlex
+
+        cmd = "rm -rf /"
+        assert (
+            ShellToolsMixin._validate_command("rm", shlex.split(cmd), cmd, frozenset())
+            is not None
+        )
+
+
+class TestLocalGitWrites:
+    """Untracking a committed file is a real request and must be possible.
+
+    Read-only git made it unachievable rather than awkward: the agent would
+    write a correct ``.gitignore`` and then have no way to run
+    ``git rm --cached``, leaving the file tracked.
+    """
+
+    def test_untracking_a_file_is_allowed(self):
+        import shlex
+
+        cmd = "git rm --cached .env"
+        assert (
+            ShellToolsMixin._validate_command("git", shlex.split(cmd), cmd, frozenset())
+            is None
+        )
+
+    def test_publishing_is_still_refused(self):
+        import shlex
+
+        for cmd in ("git push origin main", "git rebase -i HEAD~3"):
+            assert (
+                ShellToolsMixin._validate_command(
+                    "git", shlex.split(cmd), cmd, frozenset()
+                )
+                is not None
+            ), f"{cmd} should stay refused"
+
+
+class TestCdPrefix:
+    """``cd <dir> && <cmd>`` is a working directory, not command chaining.
+
+    It was the single most common refusal, and the reading was wrong: the tool
+    already takes a working directory, so the agent's habit maps exactly onto a
+    parameter it has.
+    """
+
+    def test_a_leading_cd_is_peeled_into_a_directory(self):
+        from gaia.agents.tools.shell_tools import split_cd_prefix
+
+        assert split_cd_prefix("cd /tmp/ws && python -m pytest -q") == (
+            "/tmp/ws",
+            "python -m pytest -q",
+        )
+
+    def test_a_quoted_directory_survives(self):
+        from gaia.agents.tools.shell_tools import split_cd_prefix
+
+        assert split_cd_prefix('cd "my dir" && ls') == ("my dir", "ls")
+
+    def test_chaining_that_is_not_a_cd_is_left_alone(self):
+        from gaia.agents.tools.shell_tools import split_cd_prefix
+
+        # Still reaches the operator block and is still refused -- peeling a
+        # leading cd must not become a way to smuggle a second command through.
+        assert split_cd_prefix("ls && rm -rf /") == (None, "ls && rm -rf /")
+
+    def test_only_one_cd_is_peeled(self):
+        from gaia.agents.tools.shell_tools import split_cd_prefix
+
+        directory, rest = split_cd_prefix("cd /tmp && cd /etc && ls")
+        assert directory == "/tmp"
+        assert rest == "cd /etc && ls"  # refused downstream as chaining

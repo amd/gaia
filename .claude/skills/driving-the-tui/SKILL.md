@@ -88,9 +88,71 @@ argument parsing (`error 0x80070002`), so keep it one word; and put the env vars
 new tab handed to an already-running Windows Terminal inherits *that* process's
 environment, not your shell's.
 
+### Two things that silently break the `.bat` — both cost a bring-up cycle
+
+**Call the binary by absolute path.** `NoDefaultCurrentDirectoryInExePath=1` is set
+in this environment and is inherited by every process you spawn, so `cmd.exe` will
+*not* search the working directory for an executable. `cd /d <tui>` then
+`gaia-tui.exe` fails with `'gaia-tui.exe' is not recognized as an internal or
+external command` even though the file is right there and `ls` shows it. Write
+`"<abs path>\gaia-tui.exe" --control-port 8815` instead. The `cd` is still worth
+keeping so relative paths inside the TUI resolve.
+
+**Write the `.bat` from Python, not from bash.** A bash heredoc gives it LF line
+endings, and `printf` is worse — it eats `\Users` as a `\U` unicode escape and
+silently writes a corrupted path, which surfaces as `The filename, directory name,
+or volume label syntax is incorrect.` Use:
+
+```python
+pathlib.Path(bat).write_bytes(("\r\n".join(lines) + "\r\n").encode("ascii"))
+```
+
+with the path strings as raw literals. Verify by reading the file back before you
+launch — a wrong path in a `.bat` only shows up as a terminal window that flashes
+and dies, with no error you can see from the tool call.
+
+**Confirm the launch, don't assume it.** `Start-Process` returns success whether or
+not the program inside the tab ever ran. Poll for `~/.gaia/tui/control.json` *and*
+a `200` from `/control/v1/status`; the control file alone can be stale from an
+earlier attempt. Delete it before relaunching.
+
 To check colour rather than guess: `GET /control/v1/screen?format=ansi` and
 count `\x1b`. Zero on a frame that should be styled means the profile
 degraded — relaunch under `wt.exe`.
+
+## Capture a trace — `--trace`, and the `=` is not optional
+
+Reading the screen cannot tell a correct answer from a broken one. #3576 is the proof: the
+agent answered "Zero" to a question whose answer was 203, and answered "that directory
+doesn't exist" about a directory that does — both rendered exactly like a good answer.
+`--trace` records every agent event, **tool calls with their arguments**, results and
+errors, as JSONL.
+
+```bash
+gaia-tui.exe --control-port 8815 --trace                        # ~/.gaia/traces/<ts>-<agent>.jsonl
+gaia-tui.exe --control-port 8815 --trace=C:\path\to\run.jsonl   # explicit
+```
+
+**`--trace <path>` with a space does not work and never will.** The flag carries a
+`NoOptDefVal` so that bare `--trace` parses, and pflag will not then attach a spaced value —
+your path becomes a positional argument and is read as a command name. The TUI catches this
+and prints the fix, so trust the error rather than re-deriving it:
+
+> `Error: --trace takes its path attached, not spaced: write --trace=<path>`
+
+Writing the launch `.bat`, build that argument by **concatenation, not an f-string** —
+`f'... --trace={PATH}'` makes Python parse `\Users` as a `\U` escape and the run dies with
+`The filename, directory name, or volume label syntax is incorrect.` Use
+`'... --trace=' + TRACE` with `TRACE` as a raw literal.
+
+What the trace does **not** hold: prompt size and token accounting, which live only in the
+agent's own recorder behind `GAIA_TURN_LOG`. And note the turn recorder is off by default
+and its `ok` flag is derived from the tool's own status — a tool that returns
+`status: "success"` with zero results records as green. Only the trace's arguments and
+result payload show the difference.
+
+**The file holds whatever the agent read** — file contents, shell output, email. Review
+before sharing.
 
 ## Endpoints
 

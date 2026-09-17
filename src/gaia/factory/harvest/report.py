@@ -400,8 +400,20 @@ def main() -> None:
     stats = json.loads((args.cache / "stats.json").read_text(encoding="utf-8"))
     labels = load_labels(args.labels)
 
+    # Imported here rather than at module level: task_tables reads this module's
+    # shell tokenizer, so a top-level import would be circular.
+    from gaia.factory.harvest import task_tables
+
     print("## Corpus\n")
     print(corpus_table(stats))
+    print("\n## What the corpus was used for — activity by domain\n")
+    print(task_tables.task_grid_table(traces))
+    print("\n## How each kind of work flows\n")
+    print(task_tables.flow_table(traces))
+    print("\n## Tool inventory\n")
+    print(task_tables.inventory_table(traces))
+    print("\n## What each activity requires\n")
+    print(task_tables.needs_table(traces))
     print("\n## Tool families\n")
     print(family_table(stats))
     print("\n## Binary frequency\n")
