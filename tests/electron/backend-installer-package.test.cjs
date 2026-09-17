@@ -51,7 +51,16 @@ describe("backend installation package sources", () => {
     const [command, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(command).toBe("uv");
     expect(args).toContain("/work/amd_gaia-0.23.1-py3-none-any.whl[ui]");
-    expect(args.slice(-2)).toEqual(["--extra-index-url", "https://download.pytorch.org/whl/cpu"]);
+    // The strategy flag has to travel WITH the extra index: uv gives an
+    // extra index priority over PyPI and, by default, takes a package from
+    // the first index carrying it — which resolved `requests` from the
+    // PyTorch index's pin and failed the whole install.
+    expect(args.slice(-4)).toEqual([
+      "--extra-index-url",
+      "https://download.pytorch.org/whl/cpu",
+      "--index-strategy",
+      "unsafe-best-match",
+    ]);
   });
 
   test("Linux PyPI installs retain the CPU-only index", async () => {
@@ -60,6 +69,7 @@ describe("backend installation package sources", () => {
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).toContain("amd-gaia[ui]==0.23.1");
     expect(args).toContain("https://download.pytorch.org/whl/cpu");
+    expect(args).toContain("unsafe-best-match");
   });
 
   test("Windows keeps its existing dependency source", async () => {
@@ -67,5 +77,7 @@ describe("backend installation package sources", () => {
     await installer.installBackend({ skipGaiaInit: true, isPackaged: false });
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).not.toContain("--extra-index-url");
+    // Windows takes no extra index, so it must take no strategy override either.
+    expect(args).not.toContain("--index-strategy");
   });
 });
