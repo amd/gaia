@@ -26,16 +26,19 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **69** (CORE 11 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **79** (CORE 13 + 21 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
   - `desktop`: 3
+  - `email`: 5
   - `file_browse`: 3
   - `file_discovery`: 5
   - `file_edit`: 3
   - `file_search`: 3
+  - `image_gen`: 3
   - `loop_control`: 2
+  - `media_transcription`: 4
   - `memory`: 5
   - `rag_index`: 5
   - `rag_query`: 6
