@@ -141,7 +141,7 @@ def _scope_line(text: str) -> str:
     "command,expected",
     [
         ("pytest tests/unit -q", "pytest"),
-        ("python -m pytest tests/", "python -m pytest"),
+        ("python -m pytest tests/", "pytest"),
         ("python util/lint.py --all", "util/lint.py"),
         ("npm run test", "npm run test"),
         ("cargo clippy -- -D warnings", "cargo clippy"),
@@ -913,3 +913,100 @@ def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
     )
     assert "ran and did not pass" in statement
     assert "did not run" not in statement
+
+
+@pytest.mark.parametrize(
+    "stdout,stderr,code,label",
+    [
+        ("3 passed in 0.01s\n", "", 0, "pytest"),
+        ("3 passed, 1 warning in 0.02s\n", "", 0, "pytest"),
+        ("1 failed, 2 passed, 3 warnings in 0.02s\n", "", 1, "pytest"),
+        ("=== 1 failed, 2 passed in 0.03s ===\n", "", 1, "pytest"),
+        ("", "Ran 3 tests in 0.002s\n\nOK\n", 0, "unittest"),
+        ("", "Ran 1 test in 0.001s\n\nFAILED (failures=1)\n", 1, "unittest"),
+        ("printed a result", "", 0, None),
+        ("OK", "", 0, None),
+        ("0 passed in 0.01s", "", None, None),
+        ("0 passed in 0.01s", "", 0, None),
+        ("5 skipped in 0.01s", "", 0, None),
+        ("12 deselected in 0.01s", "", 0, None),
+        ("1 warning in 0.01s", "", 0, None),
+        ("example: 3 passed in 0.01s", "", 0, None),
+    ],
+)
+def test_python_runner_results_identify_checks(stdout, stderr, code, label):
+    result = {"stdout": stdout, "stderr": stderr, "return_code": code}
+    assert (
+        verification_check_label(
+            "execute_python_file", {"file_path": "runner.py"}, result
+        )
+        == label
+    )
+    assert (
+        verification_check_label("read_file", {"file_path": "output.txt"}, result)
+        is None
+    )
+
+
+def test_refused_python_runner_is_not_a_check():
+    result = {"stdout": "3 passed in 0.01s", "return_code": 0, **NOT_EXECUTED}
+    assert verification_check_label("execute_python_file", {}, result) is None
+
+
+@pytest.mark.parametrize("code", [0, 1])
+@pytest.mark.parametrize("command", ["pytest", "python -m pytest", "py.test"])
+def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code, command):
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_shell_command", {"command": command}, {"status": "error", **NOT_EXECUTED}
+    )
+    agent._note_verification_signal(
+        "execute_python_file",
+        {"file_path": "runner.py"},
+        {
+            "status": "success",
+            "stdout": (
+                "3 passed in 0.01s" if code == 0 else "1 failed, 2 passed in 0.01s"
+            ),
+            "return_code": code,
+            "has_errors": bool(code),
+        },
+    )
+    assert agent._turn_tool_executions[-1]["check_label"] == "pytest"
+    assert agent._turn_tool_executions[-1]["ran"] is True
+    statement = agent.verification_scope_statement()
+    assert "pytest ran" in statement
+    assert ("partially verified" in statement) == bool(code)
+
+
+@pytest.mark.parametrize("runner", ["pytest", "unittest"])
+def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
+    import subprocess
+    import sys
+
+    test_file = tmp_path / "test_actual.py"
+    test_file.write_text(
+        "import unittest\n"
+        "class TestActual(unittest.TestCase):\n"
+        "    def test_arithmetic(self): self.assertEqual(2 + 2, 4)\n",
+        encoding="utf-8",
+    )
+    command = [sys.executable, "-m", runner]
+    command.extend(
+        [str(test_file), "-q"]
+        if runner == "pytest"
+        else ["discover", "-s", str(tmp_path)]
+    )
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    result = {
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "return_code": completed.returncode,
+    }
+    assert (
+        verification_check_label(
+            "execute_python_file", {"file_path": "runner.py"}, result
+        )
+        == runner
+    )
