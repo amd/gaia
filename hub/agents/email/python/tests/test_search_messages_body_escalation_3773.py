@@ -57,6 +57,7 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeGmailBackend,
+    _query_tokens,
     _payload_text,
 )
 
@@ -171,11 +172,14 @@ def test_body_only_quoted_and_unquoted_phrases_match():
 def test_apostrophes_do_not_break_following_operators():
     gmail, _ = _build_inbox(1, body_text="A" * 250 + " O'Brien approved this.")
 
-    hits = gmail.list_messages(
-        query="O'Brien from:vendor@example.com", max_results=100
-    )
+    hits = gmail.list_messages(query="O'Brien from:vendor@example.com", max_results=100)
 
     assert hits["resultSizeEstimate"] == 1
+
+
+def test_unquoted_terms_remain_separate_and_quoted_phrases_stay_intact():
+    assert _query_tokens("budget report Q3") == ["budget", "report", "Q3"]
+    assert _query_tokens('"budget report" Q3') == ["budget report", "Q3"]
 
 
 # ---------------------------------------------------------------------------

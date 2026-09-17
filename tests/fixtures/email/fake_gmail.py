@@ -819,7 +819,7 @@ def _query_tokens(query: str) -> List[str]:
         if ch == '"':
             quote = not quote
             continue
-        if ch.isspace() and quote is None:
+        if ch.isspace() and not quote:
             if current:
                 tokens.append("".join(current))
                 current = []
