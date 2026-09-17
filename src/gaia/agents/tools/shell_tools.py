@@ -14,7 +14,7 @@ import subprocess
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.verification import NOT_EXECUTED
 
@@ -422,13 +422,19 @@ def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
 _CD_CHAIN = re.compile(r"^\s*cd\s+(?P<path>\"[^\"]*\"|'[^']*'|\S+)\s*&&")
 
 
-def _cd_chain_hint(command: str) -> Dict[str, str]:
-    """A hint naming ``working_directory`` when *command* is ``cd <path> && ...``."""
+def _cd_chain_hint(command: str, is_runnable: Callable[[str], bool]) -> Dict[str, str]:
+    """A hint naming ``working_directory`` when *command* is ``cd <path> && ...``.
+
+    Suppressed unless *is_runnable* clears the tail: proposing ``rm x`` or a
+    command still carrying ``&&`` just buys the model a second refusal.
+    """
     match = _CD_CHAIN.match(command)
     if not match:
         return {}
     path = match.group("path").strip("\"'")
     rest = command[match.end() :].strip()
+    if not rest or not is_runnable(rest):
+        return {}
     return {
         "hint": (
             f"Don't chain 'cd {path} && ...'. Call run_shell_command again with "
@@ -469,7 +475,10 @@ class ShellToolsMixin:
         """
         error, segments = self._shell_command_refusal(command)
         if error is not None:
-            error = {**error, **_cd_chain_hint(command), **NOT_EXECUTED}
+            hint = _cd_chain_hint(
+                command, lambda rest: self._shell_command_refusal(rest)[0] is None
+            )
+            error = {**error, **hint, **NOT_EXECUTED}
         return error, segments
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -631,16 +640,16 @@ class ShellToolsMixin:
         )
         return True
 
-    def _check_rate_limit(self, read_only: bool = False) -> tuple:
+    def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
         """
         Check if rate limit allows another command.
 
         Args:
-            read_only: The command is read-only and allowlisted (see
-                ``_is_read_only_command``). Such commands skip the 10-second
-                burst limit — orienting in a repo is a rapid run of ``ls`` and
-                ``cat`` — but still count toward, and are held to, the
-                per-minute cap.
+            allowlisted: Every segment is on ``ALLOWED_COMMANDS`` and cleared
+                the policy (see ``_is_allowlisted_command``). Such commands skip
+                the 10-second burst limit — orienting in a repo is a rapid run
+                of ``ls`` and ``cat`` — but still count toward, and are held to,
+                the per-minute cap.
 
         Returns:
             (allowed: bool, reason: str, wait_time: float)
@@ -662,7 +671,7 @@ class ShellToolsMixin:
         recent_10_sec = sum(1 for t in self.shell_command_times if t > ten_sec_ago)
 
         # Check 10-second burst limit
-        if not read_only and recent_10_sec >= self.max_commands_per_10_seconds:
+        if not allowlisted and recent_10_sec >= self.max_commands_per_10_seconds:
             recent_times = [t for t in self.shell_command_times if t > ten_sec_ago]
             if recent_times:
                 oldest_in_window = min(recent_times)
@@ -695,12 +704,13 @@ class ShellToolsMixin:
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
 
-    def _is_read_only_command(self, command: str) -> bool:
+    def _is_allowlisted_command(self, command: str) -> bool:
         """True when every segment is an allowlisted command the policy clears.
 
-        Skill-granted CLIs (``gh``) are not on ``ALLOWED_COMMANDS`` and so never
-        count, even for a read: they reach remote services, which is what the
-        burst limit is for.
+        "Allowlisted", not "read-only": ``ALLOWED_COMMANDS`` also carries a few
+        non-reads (``cd``, ``sysctl``). Skill-granted CLIs (``gh``) are not on
+        it and so never count, even for a read — they reach remote services,
+        which is what the burst limit is for.
         """
         error, segments = self._shell_command_refusal(command)
         return (
@@ -1028,6 +1038,8 @@ class ShellToolsMixin:
               read-only git (status, log, show, diff, branch, ls-files, rev-parse;
               git -C DIR is fine). rm, mv, cp, python, pip, curl and git writes
               are blocked.
+            - A loaded skill may grant extra commands (e.g. gh, pytest). If a
+              skill tells you to run one, run it — the grant covers it.
             - To run a Python script use execute_python_file; to change files use
               edit_file or write_file — when those tools are available.
 
@@ -1042,7 +1054,7 @@ class ShellToolsMixin:
             try:
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time = self._check_rate_limit(
-                    read_only=self._is_read_only_command(command)
+                    allowlisted=self._is_allowlisted_command(command)
                 )
                 if not allowed:
                     return {

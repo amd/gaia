@@ -81,6 +81,14 @@ class TestTheDescriptionStatesTheRules:
         assert "read-only" in description
         assert "execute_python_file" in description
 
+    def test_it_says_a_skill_grant_can_widen_the_list(self, description):
+        # The allowlist reads as closed, but skills grant gh/pytest and
+        # skill_grant_covers_call runs them unprompted; the description is what
+        # the model reads every turn, so it has to say so.
+        assert "skill" in description.lower()
+        assert "gh" in description
+        assert "pytest" in description
+
     def test_working_directory_argument_says_use_it_instead_of_cd(self, tmp_path):
         _run_tool(_Host(tmp_path))
         props = get_tool_metadata("run_shell_command")["parameters"]
@@ -109,6 +117,16 @@ class TestOperatorRefusalNamesWorkingDirectory:
         error, _ = _Host(tmp_path)._validate_shell_command("ls && pwd")
         assert error is not None
         assert "working_directory" not in error.get("hint", "")
+
+    def test_no_hint_when_the_tail_is_itself_refused(self, tmp_path):
+        error, _ = _Host(tmp_path)._validate_shell_command("cd /repo && rm x")
+        assert error is not None
+        assert "rm x" not in error.get("hint", "")
+
+    def test_no_hint_when_the_tail_still_chains(self, tmp_path):
+        error, _ = _Host(tmp_path)._validate_shell_command("cd /a && ls && pwd")
+        assert error is not None
+        assert "&&" not in error.get("hint", "")
 
     def test_the_tool_returns_the_hint(self, tmp_path):
         run = _run_tool(_Host(tmp_path))
@@ -189,27 +207,27 @@ class TestGitGlobalFlags:
         assert "--work-tree" in result["error"]
 
 
-class TestReadOnlyCommandsSkipTheBurstLimit:
+class TestAllowlistedCommandsSkipTheBurstLimit:
     @pytest.mark.parametrize(
         "command", ["ls -la", "cat a.txt | head -5", "git -C /repo log", "grep -rn x ."]
     )
-    def test_read_only_classification(self, tmp_path, command):
-        assert _Host(tmp_path)._is_read_only_command(command) is True
+    def test_allowlisted_classification(self, tmp_path, command):
+        assert _Host(tmp_path)._is_allowlisted_command(command) is True
 
     @pytest.mark.parametrize(
         "command",
         ["git push origin main", "rm a.txt", "gh issue list", "ls && pwd", "ls > f"],
     )
-    def test_not_read_only(self, tmp_path, command):
-        assert _Host(tmp_path)._is_read_only_command(command) is False
+    def test_not_allowlisted(self, tmp_path, command):
+        assert _Host(tmp_path)._is_allowlisted_command(command) is False
 
-    def test_a_burst_of_read_only_commands_is_not_throttled(self, tmp_path):
+    def test_a_burst_of_allowlisted_commands_is_not_throttled(self, tmp_path):
         run = _run_tool(_Host(tmp_path))
         for _ in range(6):
             result = run(command="ls", working_directory=str(tmp_path))
             assert result["status"] == "success", result
 
-    def test_non_read_only_commands_are_still_burst_limited(self, tmp_path):
+    def test_non_allowlisted_commands_are_still_burst_limited(self, tmp_path):
         host = _Host(tmp_path)
         run = _run_tool(host)
         now = time.time()
@@ -220,7 +238,7 @@ class TestReadOnlyCommandsSkipTheBurstLimit:
         assert result["executed"] is False
         assert "per 10 seconds" in result["error"]
 
-    def test_read_only_commands_still_hit_the_per_minute_cap(self, tmp_path):
+    def test_allowlisted_commands_still_hit_the_per_minute_cap(self, tmp_path):
         host = _Host(tmp_path)
         run = _run_tool(host)
         now = time.time()
@@ -235,4 +253,4 @@ class TestReadOnlyCommandsSkipTheBurstLimit:
         now = time.time()
         host.shell_command_times.extend([now, now, now])
         assert host._check_rate_limit()[0] is False
-        assert host._check_rate_limit(read_only=True)[0] is True
+        assert host._check_rate_limit(allowlisted=True)[0] is True
