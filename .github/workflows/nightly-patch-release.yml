@@ -78,8 +78,10 @@ jobs:
           # hotfix-style (vX.Y.Z.W) tags so version-sort picks the TRUE latest — silently
           # falling back to an older 3-part tag when the real latest is a 4-part hotfix
           # would compute the next version from the wrong baseline.
+          # `|| true`: pipefail would abort on a non-matching grep before the
+          # actionable message below ever prints.
           PREV=$(git tag --sort=-v:refname --list 'v[0-9]*.[0-9]*.[0-9]*' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)
           if [ -z "$PREV" ]; then
             echo "::error::Could not find a previous release tag (expected vX.Y.Z)."
             exit 1
@@ -137,8 +139,11 @@ jobs:
 
           # Guard 3: a release PR is already open — never pile up duplicate drafts, and
           # never draft a second target while a merge/tag for a prior one is in flight.
-          EXISTING_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "Release v in:title" --json number --jq '.[0].number // empty')
+          # Matched client-side: `--search "Release v in:title"` is token matching, so an
+          # unrelated PR carrying both words would silently suppress drafting.
+          EXISTING_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,title \
+            --jq '[.[] | select(.title | test("^Release v[0-9]"))] | .[0].number // empty')
           if [ -n "$EXISTING_PR" ]; then
             echo "Release PR #$EXISTING_PR is already open. Nothing to do."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
@@ -152,7 +157,7 @@ jobs:
           # is a real, observed repo state, not a hypothetical). Drafting a fresh vX.Y.Z
           # release on top of that would collide with release notes and a version bump
           # that already exist on main. Never guess past this — always defer to a human.
-          MAIN_VERSION=$(grep -oE '^__version__ = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
+          MAIN_VERSION=$(grep -oE '^__version__ = "[^"]+"' src/gaia/version.py | cut -d'"' -f2 || true)
           if [ -z "$MAIN_VERSION" ]; then
             echo "::error::Could not parse __version__ from src/gaia/version.py"
             exit 1
@@ -182,18 +187,53 @@ jobs:
           fi
 
           # Guard 5: HEAD must be fully green before drafting a release from it — a release
-          # drafted off red CI would ship whatever broke it. check-runs are scoped to HEAD's
-          # own triggered workflow runs (lint, unit tests, etc.), so scheduled-only workflows
-          # (nightly audit, weekly eval) never factor in here. Not an error when red/pending
-          # — CI catches up and a later nightly run picks it back up, same as Guard 2 above.
-          CI=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(git rev-parse HEAD)/check-runs" --paginate \
-            --jq '{total: (.check_runs | length), not_good: ([.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length)}')
+          # drafted off red CI would ship whatever broke it.
+          #
+          # Scoped to PUSH-triggered workflow runs on HEAD. The commit's check-runs list is
+          # NOT that set: issue_comment, issues and workflow_run automation attach their
+          # check runs to main's tip too, so judging main by them mixes in jobs that never
+          # looked at main's code.
+          #
+          # `--paginate --jq` applies the filter PER PAGE and emits one object per page, so
+          # the numeric tests below would see a multi-line string and fail with "integer
+          # expression expected" — inside an `if`, that reads as false and falls through to
+          # drafting from red main. Slurp first, then filter once.
+          #
+          # Only `success` and `skipped` count as green: `cancelled` means the job never
+          # reached a verdict, which is not evidence that main is releasable.
+          SHA=$(git rev-parse HEAD)
+          CI=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&event=push&per_page=100" \
+            --paginate --slurp \
+            | jq '[.[].workflow_runs[]]
+                  | {total: length,
+                     bad: [.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped"))
+                              | "\(.name) (\(.conclusion // .status))"]}')
           TOTAL_CHECKS=$(echo "$CI" | jq -r '.total')
-          NOT_GOOD=$(echo "$CI" | jq -r '.not_good')
-          echo "CI on HEAD: $TOTAL_CHECKS check runs, $NOT_GOOD not green"
+          NOT_GOOD=$(echo "$CI" | jq -r '.bad | length')
+          echo "Push CI on $SHA: $TOTAL_CHECKS runs, $NOT_GOOD not green"
           if [ "$TOTAL_CHECKS" -eq 0 ] || [ "$NOT_GOOD" -gt 0 ]; then
             echo "main is not fully green (or CI hasn't reported yet) — skipping until it is."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
+            # Say so somewhere. This guard can stay shut for weeks, and a silent skip is
+            # indistinguishable from "no release was due" — the automation would look alive
+            # while doing nothing. The issue is EDITED in place each night, so a long block
+            # is one issue that keeps its status current, not a comment thread.
+            if [ "$TOTAL_CHECKS" -eq 0 ]; then
+              DETAIL="No push-triggered workflow runs have reported on \`$SHA\` yet."
+            else
+              DETAIL="$NOT_GOOD of $TOTAL_CHECKS push-triggered runs on \`$SHA\` are not green:
+
+          $(echo "$CI" | jq -r '.bad[] | "  - " + .')"
+            fi
+            file_or_update_issue \
+              "Release check: main's CI is not green, nightly release drafting is paused" \
+              "Nightly patch-release drafting is on hold until \`main\` reports green push CI.
+
+          $DETAIL
+
+          Nothing is broken about the automation itself — it re-checks every night and resumes on its own once CI is green. If this issue stays open for several days, the run above is the place to start.
+
+          - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
 
