@@ -141,7 +141,9 @@ class TestCaptureFromText:
             capture_skill(_markdown(), manager=manager)
         capture_skill(_markdown(), manager=manager, force=True)
 
-    def test_a_failed_force_replace_leaves_no_lock_entry_behind(self, manager, monkeypatch):
+    def test_a_failed_force_replace_leaves_no_lock_entry_behind(
+        self, manager, monkeypatch
+    ):
         """The replaced bundle is gone, so its lock entry must go with it.
 
         Otherwise the next reload finds a locked-but-absent skill: `gaia skill
