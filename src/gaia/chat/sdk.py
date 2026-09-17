@@ -460,6 +460,8 @@ class AgentSDK:
         """
         Send a message and get a complete response with conversation history.
 
+        Failed turns restore the conversation history to its pre-call state.
+
         Args:
             message: The message to send
             no_history: When True, bypass stored chat history and send only this prompt
@@ -468,6 +470,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -532,17 +536,26 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
@@ -551,6 +564,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -605,11 +620,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """

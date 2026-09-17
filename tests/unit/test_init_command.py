@@ -427,7 +427,10 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
         # systemctl returns immediately — backgrounding it is nonsense.
         self.assertNotIn(f"{self.MODERN_LINUX} &", out)
         if min_ctx:
-            self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+            # A service-managed server takes no context size on the command
+            # line, so the remedy names the size and where to set it instead.
+            self.assertIn(str(min_ctx), out)
+            self.assertIn("model settings", out)
 
     def test_manual_start_prompt_backgrounds_a_blocking_legacy_command(self):
         """A real legacy install DOES block the terminal, and the prompt
@@ -540,7 +543,10 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
         out = buf.getvalue()
         self.assertFalse(result)
         self.assertIn(self.MODERN_LINUX, out)
-        self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+        # Same as above: the size is stated, not passed as an env var, because
+        # restarting a service does not re-read one.
+        self.assertIn(str(min_ctx), out)
+        self.assertIn("model settings", out)
         self.assertNotIn("lemonade-server", out)
 
 
