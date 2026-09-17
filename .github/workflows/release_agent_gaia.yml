@@ -644,7 +644,7 @@ jobs:
           set -euo pipefail
           # Same extras as the freeze env: testing without `rag` would exercise
           # a dependency set no released binary ever has.
-          uv pip install --system -e ".[api,rag]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
+          uv pip install --system -e ".[api,rag,browser]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
 
       - name: Python tests (hub/agents/gaia/python/tests)
         shell: bash
