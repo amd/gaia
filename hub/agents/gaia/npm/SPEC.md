@@ -274,6 +274,10 @@ model is loaded — `/v1/gaia/init` answers that.
 
 ### 5.2 `session_id` and agent retention
 
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
+
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
