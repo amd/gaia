@@ -53,6 +53,7 @@ class AudioRecorder:
         #: there reaches nobody — the caller reads this to say what happened
         #: instead of printing "Listening…" at a dead device (#3554).
         self.mic_error = None
+        self._stop_requested = False
 
         # Voice detection parameters
         self.SILENCE_THRESHOLD = 0.003
@@ -81,12 +82,13 @@ class AudioRecorder:
 
     @property
     def capture_failed(self) -> bool:
-        """True when capture was never asked to stop but its thread has died."""
-        return (
-            self._is_recording
-            and self.record_thread is not None
-            and not self.record_thread.is_alive()
-        )
+        """True when capture stopped on a device error, not on request.
+
+        Keyed on ``mic_error`` rather than thread liveness: ``_record_audio``
+        clears ``is_recording`` on its way out, so by the time anyone asks,
+        a failed capture and a requested stop look identical from the flag.
+        """
+        return self.mic_error is not None and not self._stop_requested
 
     def _get_default_input_device(self):
         """Get the default input device index."""
@@ -217,9 +219,9 @@ class AudioRecorder:
             self.mic_error = self.device_error_message("open", e)
             self.log.error(self.mic_error)
         finally:
-            # No flag reset here: ``is_recording`` reads thread liveness, so a
-            # dead capture thread already reads False while ``capture_failed``
-            # can still tell a device failure from a requested stop.
+            # Always clear the flag: the supervisor loop polls it to notice the
+            # capture thread is gone, and it is the only way out of "Listening…".
+            self.is_recording = False
             try:
                 if self.stream is not None:
                     self.stream.stop()
@@ -277,6 +279,7 @@ class AudioRecorder:
         self.record_thread = None
         # Set recording flag before starting threads
         self.mic_error = None
+        self._stop_requested = False
         self.is_recording = True
 
         # Start record thread
@@ -302,6 +305,7 @@ class AudioRecorder:
     def stop_recording(self):
         """Stop recording and transcription."""
         self.log.debug("Stopping recording...")
+        self._stop_requested = True
         self.is_recording = False
         if self.record_thread:
             self.log.debug("Waiting for record thread to finish...")

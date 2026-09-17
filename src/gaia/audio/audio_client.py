@@ -492,9 +492,14 @@ class AudioClient:
             tts_thread = threading.Thread(target=run_tts, daemon=True)
             self.tts_thread = tts_thread
             tts_thread.start()
-            # Send the whole text and end
-            text_queue.put(text)
-            text_queue.put("__END__")
+            # Bounded, so a TTS thread that died on a broken output device
+            # cannot block the caller (#3554). The JOIN below stays unbounded
+            # on purpose — that is the mic-mute window, not a liveness wait.
+            try:
+                text_queue.put(text, timeout=5.0)
+                text_queue.put("__END__", timeout=5.0)
+            except queue.Full:
+                self.log.error("Voice output is not consuming; speech skipped.")
             # Full join. A timeout here resumes the mic mid-sentence, which is
             # exactly the self-transcription this method exists to prevent.
             tts_thread.join()

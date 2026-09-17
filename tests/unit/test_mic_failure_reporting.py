@@ -19,6 +19,7 @@ failure being reproduced.
 from __future__ import annotations
 
 import queue
+import threading
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -395,6 +396,14 @@ class TestTheLivePlaybackPathIsBounded:
         client.log = MagicMock()
         client.enable_tts = True
         client.tts = MagicMock()
+        # State __init__ would have set. The interrupt event is per-session
+        # rather than per-utterance so Enter can reach playback already in
+        # flight; a bare __new__ has to stand it up by hand.
+        client._playback_interrupt = threading.Event()
+        client.whisper_asr = None
+        client.is_speaking = False
+        client.tts_thread = None
+        client.transcription_queue = queue.Queue()
         # The thread starts and immediately does nothing — the broken-speaker
         # case, where generate_speech_streaming used to die on stream open.
         client.tts.generate_speech_streaming = lambda *a, **k: None
