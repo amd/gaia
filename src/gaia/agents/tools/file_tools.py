@@ -51,6 +51,7 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
         return str(e)
     return None
 
+
 DATE_RANGE_FORMATS = (
     "quarter ('2025-Q1', 'Q1 2025', 'Q1-2025', '2025 Q1', \"Q1'25\", "
     "'first quarter 2025'), year ('2025'), month ('2025-03'), "

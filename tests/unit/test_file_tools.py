@@ -1142,6 +1142,8 @@ class TestAnalyzeDataFileDateRange:
 
         assert result["status"] == "error"
         assert "no date column" in result["error"]
+
+
 @pytest.mark.parametrize("limit", [1, 20, 200])
 def test_recent_files_bounds_every_output_field(tmp_path, monkeypatch, limit):
     import os
