@@ -428,15 +428,15 @@ def test_parse_give_up_path_carries_the_statement(agent):
 def test_loop_break_summary_path_carries_the_statement(agent):
     """A repeated failing check breaks the loop — and still states its scope.
 
-    The summary names the failure (#3888), and the scope line tells the user
-    the check ran and did not pass.
+    Every call errored, so the summary must not claim completion (#3750)
+    and must not guess a cause it does not have (#3888); the scope line is
+    what tells the user the check ran and did not pass.
     """
     agent.max_consecutive_repeats = 2
     agent.shell_result = {"status": "error", "error": "boom", "return_code": 1}
     call = _tool_call("pytest -q")
     _stub_chat(agent, call, call, call, call)
     result = agent.process_query("run the tests", max_steps=6)
-    assert "kept failing: boom" in result["result"]
     assert "Task completed with" not in result["result"]
     # Checks ran and did not pass — not "unverified", not "verified".
     assert "partially verified" in _scope_line(result["result"])

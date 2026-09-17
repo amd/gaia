@@ -7329,7 +7329,16 @@ Do NOT wrap conversational replies in JSON.
         last = step_results[-1] if step_results else None
         denied = isinstance(last, dict) and last.get("status") == "denied"
         if not (denied or Agent._is_error_result(last)):
-            return f"Task completed with {tool_name}. No further action needed."
+            # A loop break is evidence of neither outcome: the work may be done
+            # (the model kept re-verifying it) or never started (it had no tool
+            # for the job). Say which is unknown instead of claiming either,
+            # which is what "Task completed with ..." used to do here (#3750).
+            return (
+                f"I stopped after calling `{tool_name}` {consecutive_count} "
+                "times in a row without making progress, so I can't confirm "
+                "the task is finished. Please check the result before relying "
+                "on it, or rephrase the request."
+            )
         err = self._loop_error_brief(last)
         attempts = f"I tried calling `{tool_name}` {consecutive_count} times"
         if self._is_throttled_result(last):

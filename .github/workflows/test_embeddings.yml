@@ -13,6 +13,8 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   pull_request:
@@ -24,6 +26,8 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   merge_group:
@@ -102,6 +106,10 @@ jobs:
             # Use --tb=long for full traceback, -rA for all test output summary
             pytest tests/test_lemonade_embeddings.py -v -s --tb=long -rA --log-cli-level=DEBUG
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            Write-Host "`n=== Checking live Lemonade health schema ==="
+            pytest tests/integration/test_lemonade_health_schema.py -v --tb=long -rA
+            if ($LASTEXITCODE -ne 0) { throw "Health schema tests failed with exit code $LASTEXITCODE" }
         } finally {
             if ($env:LEMONADE_PROCESS_ID) {
                 Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="

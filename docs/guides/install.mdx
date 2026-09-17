@@ -110,12 +110,18 @@ To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` be
 
 ## Uninstalling
 
-GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
+GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
 ### Windows
+
+The Windows uninstallers keep data by default. Choosing Yes to the additional
+cleanup prompt deletes **every file in `~/.gaia`**, including custom agents,
+connector sign-ins and permissions, memory, and shared runtimes. Other GAIA
+installations using that folder will stop working. Silent uninstalls keep it.
+
 **Settings → Apps → Installed apps → GAIA → Uninstall**
 
-This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. It does **not** touch `~/.gaia/`. To also remove your data, open a terminal (PowerShell or `cmd`) and run:
+This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. If you decline the cleanup prompt, it does **not** touch `~/.gaia/`. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
 ```powershell
 ~\.gaia\venv\Scripts\gaia uninstall --purge
 ```
@@ -133,9 +139,10 @@ To also remove your data, run from a terminal:
 sudo apt remove gaia-desktop
 ```
 
-To also remove your data, use `apt purge` instead:
+Both `apt remove` and `apt purge` preserve your personal data in `~/.gaia`.
+To also remove your data, run as your own user:
 ```bash
-sudo apt purge gaia-desktop
+~/.gaia/venv/bin/gaia uninstall --purge
 ```
 
 ### Linux (AppImage)
