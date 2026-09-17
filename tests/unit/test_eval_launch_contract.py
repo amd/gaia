@@ -3,8 +3,8 @@
 """Pin credential selection and the real MCP launcher used by agent evals."""
 
 import json
+import shutil
 import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -74,8 +74,16 @@ def test_configured_mcp_launcher_imports_real_server(tmp_path, monkeypatch):
     assert launcher.is_file()
     assert "--stdio" in server["args"]
     monkeypatch.setenv("GAIA_MCP_LOG_DIR", str(tmp_path))
+    # The configured command, not sys.executable: the eval spawns whatever
+    # `command` resolves to on PATH, so running this under pytest's own
+    # interpreter would stay green while the real launch failed at spawn.
+    command = server["command"]
+    assert shutil.which(command), (
+        f"the eval's MCP config spawns {command!r}, which is not on PATH — "
+        "the eval would fail at spawn time"
+    )
     result = subprocess.run(
-        [sys.executable, str(launcher), *server["args"][1:], "--help"],
+        [command, str(launcher), *server["args"][1:], "--help"],
         cwd=runner.REPO_ROOT,
         capture_output=True,
         text=True,
