@@ -72,6 +72,9 @@ NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 #: there to declare it. The loop's own denial shape says it for them.
 _DENIED_STATUS = "denied"
 
+# The TUI's no-op-only strip (tui/internal/ui/chat/verification.go,
+# verificationScopeRE) is a hand-kept copy of this pattern, narrowed to the
+# "unverified" case only — update both if this changes.
 _SCOPE_LINE_RE = re.compile(
     r"\n{1,2}" + re.escape(VERIFICATION_SCOPE_PREFIX) + r"[^\n]*\s*\Z"
 )
