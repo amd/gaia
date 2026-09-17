@@ -60,9 +60,7 @@ def test_an_unknown_user_model_yields_a_failure_line_instead_of_raising():
     not ``RequestException``, so catching only the latter let it escape the
     generator and reach the caller as a crash.
     """
-    with patch(
-        "gaia.agents.base.readiness.probe_model_present", return_value=False
-    ):
+    with patch("gaia.agents.base.readiness.probe_model_present", return_value=False):
         lines = list(provision_progress(BASE, "user.not-a-real-model"))
 
     assert lines[-1].startswith("✗")
