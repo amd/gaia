@@ -666,6 +666,19 @@ class FileSearchToolsMixin:
                         ),
                     }
 
+                # os.path.exists() is true for a directory too, so without this
+                # check open() below raises IsADirectoryError into the generic
+                # except Exception handler as a raw errno string (amd/gaia#3890).
+                if os.path.isdir(file_path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"'{file_path}' is a directory, not a file. Use "
+                            "search_directory to list its contents, then call "
+                            "read_file on a file inside it."
+                        ),
+                    }
+
                 # Document formats must be indexed via index_document, not read directly.
                 # The tool docstring explicitly scopes read_file to text files (Python,
                 # Markdown, etc.); binary document types are not supported.  Returning

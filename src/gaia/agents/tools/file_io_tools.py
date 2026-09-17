@@ -24,6 +24,25 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _directory_path_error(file_path: str) -> Dict[str, Any]:
+    """Error payload for a tool that expects a file but was given a directory.
+
+    ``os.path.exists`` is true for a directory, so the existing-path guard lets
+    it through to ``open()``, which raises ``IsADirectoryError`` into the
+    generic exception handler as a raw errno string (#3890). The message here
+    stays tool-agnostic rather than naming a specific listing tool, since
+    ``browse_directory`` isn't registered for every agent that composes this
+    mixin.
+    """
+    return {
+        "status": "error",
+        "error": (
+            f"'{file_path}' is a directory, not a file. List its contents "
+            "first, then use this tool on a file inside it."
+        ),
+    }
+
+
 def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
     """Run a post-write display step and report, never raise (#3676).
 
@@ -218,6 +237,8 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 # Read file content
                 try:
@@ -475,6 +496,8 @@ class FileIOToolsMixin:
                 # Read current content
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
@@ -1207,6 +1230,8 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
