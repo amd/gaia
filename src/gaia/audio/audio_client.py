@@ -64,6 +64,13 @@ class AudioClient:
         self.mic_threshold = mic_threshold
         self.enable_tts = enable_tts
 
+        #: True once the session is stopping on purpose ("stop", Ctrl+C). The
+        #: supervisor cannot otherwise tell a requested quit from a dead
+        #: microphone: ``stop_recording`` clears the flag and then joins threads
+        #: that may be mid-transcribe, so the loop sees "not recording, still
+        #: alive" on the ordinary exit path too (#3554).
+        self._stop_requested = False
+
         # Audio state
         self.is_speaking = False
         self.tts_thread = None
@@ -91,10 +98,10 @@ class AudioClient:
         try:
             self.log.debug("Initializing voice chat...")
             self._voice_loop_error = None
+            self._stop_requested = False
             banner = (
                 "Starting voice chat.\n"
-                "Say 'stop' to quit application "
-                "or 'restart' to clear the chat history."
+                "Say 'stop' to quit, or 'restart' to clear the chat history."
             )
             if self.enable_tts and self._start_stdin_listener():
                 banner += "\nPress Enter to stop audio playback."
@@ -150,7 +157,16 @@ class AudioClient:
                         self.log.debug("Process thread stopped unexpectedly")
                         break
                     if not self.whisper_asr or not self.whisper_asr.is_recording:
-                        self.log.warning("Recording stopped unexpectedly")
+                        # Say why, on screen. This used to be a debug-level
+                        # warning, so a dead microphone read as an endless
+                        # "Listening…" (#3554).
+                        reason = getattr(self.whisper_asr, "mic_error", None)
+                        if reason:
+                            self.log.error(reason)
+                            print(f"\n{reason}")
+                        elif not self._stop_requested:
+                            self.log.warning("Recording stopped unexpectedly")
+                            print("\nRecording stopped. Voice input is not active.")
                         break
                     await asyncio.sleep(0.1)
 
@@ -167,6 +183,7 @@ class AudioClient:
 
             except KeyboardInterrupt:
                 self.log.info("Received keyboard interrupt")
+                self._stop_requested = True
                 print("\nStopping voice chat...")
             except Exception as e:
                 self.log.error(f"Error in main processing loop: {str(e)}")
@@ -226,6 +243,34 @@ class AudioClient:
             if self.enable_tts:
                 text_queue = queue.Queue()
 
+                # Latched once the queue wedges. Without it every remaining
+                # chunk waits the full timeout again — a 200-chunk answer
+                # becomes minutes of stalled printing and 200 identical
+                # errors, which is the hang this is meant to close.
+                speech_dropped = False
+
+                def speak(item):
+                    """Hand *item* to TTS; never block the answer on it.
+
+                    The queue is bounded, so a consumer that died takes the
+                    LLM stream down with it once 100 chunks pile up. Speech is
+                    the optional half — drop it and keep printing (#3554).
+                    """
+                    nonlocal speech_dropped
+                    if speech_dropped:
+                        return False
+                    try:
+                        text_queue.put(item, timeout=5.0)
+                        return True
+                    except queue.Full:
+                        speech_dropped = True
+                        self.log.error(
+                            "Voice output is not keeping up and has been "
+                            "dropped for the rest of this reply; the text is "
+                            "unaffected."
+                        )
+                        return False
+
                 # Define status callback to update speaking state
                 def tts_status_callback(is_speaking):
                     self.is_speaking = is_speaking
@@ -259,7 +304,7 @@ class AudioClient:
                     if interrupt_event.is_set():
                         self.log.debug("Keyboard interrupt detected, stopping...")
                         if text_queue:
-                            text_queue.put("__END__")
+                            speak("__END__")
                         break
 
                     if self.transcription_queue.qsize() > 0:
@@ -267,7 +312,7 @@ class AudioClient:
                             "New input detected during generation, stopping..."
                         )
                         if text_queue:
-                            text_queue.put("__END__")
+                            speak("__END__")
                         # Use LLMClient to halt generation
                         if self.llm_client.halt_generation():
                             self.log.debug("Generation interrupted for new input.")
@@ -282,10 +327,10 @@ class AudioClient:
                                 if len(initial_buffer) >= 20 or chunk.endswith(
                                     ("\n", ". ", "! ", "? ")
                                 ):
-                                    text_queue.put(initial_buffer)
+                                    speak(initial_buffer)
                                     initial_buffer_sent = True
                             else:
-                                text_queue.put(chunk)
+                                speak(chunk)
                         accumulated_response += chunk
 
                 # Send any remaining buffered content
@@ -294,12 +339,12 @@ class AudioClient:
                         # Small delay for very short responses
                         if len(initial_buffer) <= 20:
                             await asyncio.sleep(0.1)
-                        text_queue.put(initial_buffer)
-                    text_queue.put("__END__")
+                        speak(initial_buffer)
+                    speak("__END__")
 
             except Exception as e:
                 if text_queue:
-                    text_queue.put("__END__")
+                    speak("__END__")
                 raise e
 
             print("\n")
@@ -322,7 +367,11 @@ class AudioClient:
 
         except Exception as e:
             if text_queue:
-                text_queue.put("__END__")
+                # Bounded: a wedged queue must not turn one failure into a hang.
+                try:
+                    text_queue.put("__END__", timeout=5.0)
+                except queue.Full:
+                    self.log.debug("TTS queue full; end signal dropped")
             raise e
         finally:
             if tts_thread and tts_thread.is_alive():
@@ -500,7 +549,14 @@ class AudioClient:
             else:
                 self.log.debug(f"Mic check passed (peak level: {max_energy:.4f})")
         except Exception as e:
-            self.log.debug(f"Mic level check skipped: {e}")
+            # A device that cannot be opened is the thing the user needs to
+            # know about first, not a debug line nobody sees (#3554).
+            self.log.error(f"Microphone check failed: {e}")
+            print(
+                f"WARNING: Could not open the microphone ({e}).\n"
+                f"  - Try a different device: gaia talk --audio-device-index <N>\n"
+                f"  - List devices with: gaia test asr-list-audio-devices"
+            )
         finally:
             if stream:
                 stream.stop()
@@ -532,6 +588,10 @@ class AudioClient:
                     # Handle special commands
                     if cleaned_text in ["stop"]:
                         print("\nStopping voice chat...")
+                        # Before stop_recording: the supervisor polls every
+                        # 0.1s and would otherwise report this quit as a
+                        # failure while the threads join (#3554).
+                        self._stop_requested = True
                         self.whisper_asr.stop_recording()
                         break
 

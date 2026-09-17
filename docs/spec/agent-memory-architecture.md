@@ -86,6 +86,8 @@ The working memory tier is bounded by the LLM's context window. The stable prefi
 
 ### Single Database: `~/.gaia/memory.db`
 
+`GAIA_MEMORY_DB` overrides the database file (a test harness points it at a throwaway file so a test drive never touches the user's real memory), and `GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset. `GAIA_HOME` does not relocate config, logs, or all other `~/.gaia` state; config uses `GAIA_CONFIG_DIR`. Complete test isolation requires a separate OS user or container. An override that is blank or names a directory raises rather than falling back to the real store (`resolve_memory_db_path` in `memory_store.py`).
+
 One file, six tables. WAL mode for concurrent reads. Schema version 3.
 
 ### Timestamps
@@ -282,11 +284,19 @@ UPDATE schema_version SET version = 3, migrated_at = <now>;
 | `profile` | Who the user is (set by bootstrap onboarding) | "User is a software engineer in America/Los_Angeles" |
 | `permission` | Standing approvals for agent-inferred goals | "Always accept routine maintenance tasks" |
 
-**Privileged categories.** `system`, `profile`, and `permission` are writable only by an
-explicit memory tool or the system -- never by the LLM conversation extractor. A chat
-turn must not be able to mint a permission grant or a profile entry by emitting that
-category, so the extraction and consolidation paths validate against
-`EXTRACTABLE_CATEGORIES` (the other six), not `VALID_CATEGORIES`.
+**Privileged categories.** `system`, `profile`, and `permission` lead every system
+prompt, so they are writable only by the system or an explicit admin path -- never from a
+chat turn. `MemoryStore.store()`, `update()`, and `delete()` enforce it: they raise
+`ValueError` for an existing or requested privileged category unless the caller passes `allow_privileged=True`, which only
+onboarding, system-context collection, `gaia memory`, `seed_bulk`, and the reviewed
+dashboard writes do. The LLM extractor (including `update` ops that carry a category),
+consolidation, and the `remember`/`update_memory`/`forget` tools validate against
+`EXTRACTABLE_CATEGORIES` (the other six). The dashboard models `KnowledgeCreate` and
+`KnowledgeUpdate` -- which `commit-discovery` and `commit-inference` also go through --
+accept `USER_REVIEWED_CATEGORIES`: those six plus `profile`, never `system` or
+`permission`. Inference commits accept only `profile`. Invalid commit batches return
+HTTP 422 before mutation; storage failures return HTTP 500 with a correlation ID
+and the number already stored (the batch is not atomic).
 
 ### Recommended Domain Naming
 
@@ -398,7 +408,7 @@ Stale facts naturally lose confidence. If "Project uses React 18" hasn't been re
 
 ### Prune
 
-`prune(days=90)` hard-deletes conversations and tool_history older than 90 days. Knowledge items are self-regulating via confidence decay -- items below 0.1 can be pruned. Conversations are consolidated before the 90-day prune (see Conversation Consolidation).
+`prune(days=90)` hard-deletes conversations and tool_history older than 90 days, except turns whose session is still queued for consolidation (>= 5 turns, any `consolidated_at IS NULL`). Those are held -- the whole session, so deleting its consolidated turns cannot strand the rest below the turn threshold -- and a WARNING reports the count. Sessions too short to consolidate are pruned normally. All turns older than twice the retention window (180 days by default) are deleted even if consolidation fails repeatedly or the session remains active. On startup `prune()` runs after consolidation. Knowledge items are self-regulating via confidence decay -- items below 0.1 can be pruned.
 
 ---
 
@@ -669,7 +679,7 @@ Distill old conversation sessions into durable knowledge before they age out, pr
 
 ### Trigger
 
-- **Automatic:** `init_memory()` on startup -- max 5 sessions per run
+- **Automatic:** on the first query after startup (deferred from `init_memory()`), before `prune()` -- max 5 sessions per run, up to 10 windows of 20 turns per session
 - **Manual:** `POST /api/memory/consolidate` REST endpoint
 
 ### Criteria for Consolidation
@@ -692,12 +702,13 @@ Session ({n} turns, {first_ts} to {last_ts}):
 ### Consolidation Lifecycle
 
 1. Select unconsolidated sessions (query by `consolidated_at IS NULL`, age, turn count)
-2. Fetch up to 20 turns per session (oldest first)
+2. Take the session's oldest 20 turns with `consolidated_at IS NULL` -- one window (`get_unconsolidated_turns`)
 3. Call LLM with consolidation prompt
 4. Store summary: `knowledge(category="note", source="consolidation", domain="session:{id[:8]}", confidence=0.5)`
-5. Store each extracted item via `store()` (normal dedup applies)
-6. Mark all fetched turns: `UPDATE conversations SET consolidated_at=now WHERE id IN (...)`
-7. Turns remain until 90-day prune; `consolidated_at` prevents re-processing
+5. Store each extracted item via `store()` (normal dedup applies; privileged categories are dropped)
+6. Mark exactly that window: `UPDATE conversations SET consolidated_at=now WHERE id IN (...)` -- only after steps 3-5 succeed; a failed window stays unmarked and is retried next run
+7. Repeat from step 2 until complete or a budget is reached: ten windows per session, five model calls total, or ten seconds elapsed across the run. An in-flight call finishes; remaining windows resume next run
+8. `consolidated_at` prevents re-processing; once the whole session is consolidated its turns are subject to the 90-day prune; all turns expire at 180 days regardless
 
 ### Storage Impact
 
@@ -712,13 +723,14 @@ Session ({n} turns, {first_ts} to {last_ts}):
 ```python
 get_unconsolidated_sessions(older_than_days=14, min_turns=5,
                              limit=5) -> List[str]   # Returns session_ids
+get_unconsolidated_turns(session_id, limit=20) -> List[Dict]  # Oldest-first window
 mark_turns_consolidated(turn_ids: List[int]) -> int  # Returns count marked
 ```
 
 ### New MemoryMixin Method
 
 ```python
-consolidate_old_sessions(max_sessions=5) -> Dict  # Returns {consolidated, extracted_items}
+consolidate_old_sessions(max_sessions=5) -> Dict  # Returns {consolidated, windows, extracted_items}
 ```
 
 ---
@@ -736,7 +748,7 @@ The Mem0-style extraction only sees the current conversation + top-10 existing i
 
 ### Solution: Periodic Reconciliation
 
-On startup, after confidence decay and before consolidation, run a reconciliation pass:
+On startup, after confidence decay and before consolidation, run a reconciliation pass over `EXTRACTABLE_CATEGORIES` only. Trusted system, profile, and permission rows are excluded before model classification; recall confidence bookkeeping is unchanged:
 
 1. **Find high-similarity pairs**: For each context, compute pairwise embedding similarity among active items. Flag pairs with cosine similarity > 0.85.
 2. **Classify relationship**: For each flagged pair, a single LLM call classifies the relationship:
@@ -774,7 +786,7 @@ With reconciliation:
 
 ```python
 def reconcile_memory(self, max_pairs: int = 20) -> Dict:
-    """Background reconciliation of high-similarity knowledge pairs.
+    """Background reconciliation of high-similarity knowledge pairs. Privileged `system`, `profile`, and `permission` rows are excluded before model classification; normal confidence bookkeeping during recall is unchanged.
     Called on startup after decay, before consolidation.
     Returns: {pairs_checked, reinforced, contradicted, weakened, neutral}"""
 ```
@@ -788,10 +800,13 @@ init_memory()
   3. Backfill embeddings for items missing them
   4. Rebuild FAISS index from stored embeddings
   5. apply_confidence_decay()                          [30-day decay]
-  6. reconcile_memory()                                [Hindsight-inspired, max 20 pairs]
-  7. consolidate_old_sessions()                        [max 5 sessions]
-  8. prune()                                           [90-day hard delete]
-  9. Generate session UUID
+  6. Generate session UUID
+
+First query: _run_memory_post_init() [deferred until the LLM is available]
+  7. reconcile_memory()                                [max 20 pairs]
+  8. consolidate_old_sessions()                        [max 5 calls, 10s between calls]
+  9. _synthesize_skills()
+ 10. prune()                                           [90 days; queued turns at most 180 days]
 ```
 
 ---
@@ -854,12 +869,24 @@ def get_memory_dynamic_context(self) -> str:
     """Per-turn context injected by process_query() override.
 
     Contains:
-    1. Current date/time (ISO 8601 + day of week)
-    2. Upcoming/overdue items (due within 7 days)
+    1. Current date/time (ISO 8601 + day of week) -- every turn
+    2. Upcoming/overdue items (due within 7 days) -- only at session start
+       or after REMINDER_PAUSE_SECONDS of silence, and only items this
+       session has not already raised
 
     Returns empty string if nothing time-sensitive is active.
     """
 ```
+
+**Reminders are surfaced once, at a natural moment.** Injecting an `[OVERDUE ...]`
+block into every turn made the agent answer unrelated messages with someone else's
+deadline, so the window is open only at session start and after a long pause.
+Whatever is included is marked as raised by the agent loop the moment it is
+included -- `reminded_at` in the store (which `get_upcoming` filters on, so the
+suppression survives a restart) plus an in-session id set (so incognito, which
+writes nothing, still gets no repeats). This used to be a prompt instruction
+asking the model to call `update_memory` itself; it did not, and the same item was
+re-injected every turn for days.
 
 **Example dynamic context prepended to each user message:**
 
@@ -1166,11 +1193,13 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | Where | sensitive=0 (default) | sensitive=1 |
 |---|---|---|
 | System prompt | Included | Never included |
-| `recall()` results | Returned | Returned (explicit query) |
+| `recall()` results | Returned | Returned for any filtered call; a bare `recall()` skips them |
 | Tool history `args` | Full args logged | Args redacted to keys only |
 | Dashboard | Normal display | Badge, content blurred until clicked |
 
 The LLM can still access sensitive data via `recall()` -- it just won't be broadcast in the system prompt where it could leak into logs or debugging output.
+
+The one exception is a **filterless** `recall()`. That is the browse an unprompted greeting makes, and on a cloud-backed session everything it returns is sent to the provider, so it holds sensitive rows back. Any filter -- a `query`, a `category`, an `entity`, a time bound -- returns them as before (#3673).
 
 ---
 
@@ -1349,13 +1378,14 @@ After 3 months of daily use, conversations table has ~10,000 turns.
 Sessions older than 14 days are consolidated automatically on startup:
 
   -> consolidate_old_sessions() finds sessions > 14 days, >= 5 turns, not yet consolidated
-  -> For each session batch (up to 20 turns), calls local LLM:
+  -> For each session, window by window (oldest 20 unconsolidated turns), calls local LLM:
     "Summarize this session and extract durable knowledge."
     -> Returns: {summary: "...", knowledge: [{category, content, entity}]}
   -> Stores summary as: knowledge(category="note", source="consolidation",
                                    domain="session:{session_id[:8]}")
   -> Each extracted knowledge item goes through normal store() with dedup
-  -> Marks source turns as consolidated_at=now (not deleted -- 90-day prune still applies)
+  -> Marks that window's turns consolidated_at=now; a long session is walked front to back
+  -> prune() holds queued sessions until consolidation, with an absolute 180-day ceiling
   -> Old conversations become searchable via consolidated summary notes
   -> DB growth slows; useful signal is preserved indefinitely as knowledge
 ```
@@ -1894,7 +1924,7 @@ class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
     def __init__(self, db_path: Path = None):
-        """Open/create DB at db_path. Default: ~/.gaia/memory.db
+        """Open/create DB at db_path. Default: GAIA_MEMORY_DB, then $GAIA_HOME/memory.db, then ~/.gaia/memory.db
         Uses WAL mode. Thread-safe via threading.Lock.
         Runs schema migrations if needed."""
 
@@ -1961,13 +1991,13 @@ class MemoryStore:
                metadata: dict = None, context: str = None,
                sensitive: bool = None, entity: str = None,
                due_at: str = None, reminded_at: str = None,
-               superseded_by: str = None) -> bool
+               superseded_by: str = None, allow_privileged: bool = False) -> bool
         """Update an existing knowledge entry. Only provided fields are changed.
         Sets updated_at to now. Returns False if ID not found.
         Normalizes reminded_at and due_at to tz-aware ISO 8601.
         When superseded_by is set, marks this item as replaced by a newer item."""
     def update_confidence(self, knowledge_id: str, delta: float) -> None
-    def delete(self, knowledge_id: str) -> bool
+    def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
 
     # --- Embeddings ---
     def store_embedding(self, knowledge_id: str, embedding: bytes) -> bool
@@ -2008,8 +2038,9 @@ class MemoryStore:
     def apply_confidence_decay(self, days_threshold: int = 30,
                                decay_factor: float = 0.9) -> int
         """Decay confidence for items not used in N days. Called once per session start."""
-    def prune(self, days: int = 90) -> int
-        """Hard-delete conversations and tool_history older than N days."""
+    def prune(self, days: int = 90, keep_unconsolidated: bool = True) -> Dict
+        """Hard-delete conversations and tool_history older than N days,
+        holding queued turns only up to twice the retention window."""
     def rebuild_fts(self) -> None
         """Rebuild FTS5 indexes from source tables."""
     def close(self) -> None
@@ -2044,7 +2075,7 @@ class MemoryMixin:
 
     def init_memory(self, db_path: Path = None, context: str = "global") -> None
         """Initialize memory store with an active context scope.
-        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay, memory reconciliation, session consolidation, and pruning (in that order)."""
+        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay. Reconciliation, bounded consolidation, skill synthesis, and pruning are deferred to the first query (in that order)."""
     @property
     def memory_store(self) -> MemoryStore
     @property

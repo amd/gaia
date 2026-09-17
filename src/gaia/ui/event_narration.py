@@ -54,6 +54,11 @@ _ARG_MAX_CHARS = 80
 #: Longest ``tool_result.preview`` line. The front-end renders it on one row.
 _PREVIEW_MAX_CHARS = 120
 
+#: An ``error:`` the upstream summary already carries — ``sse_handler`` renders
+#: a failed status as ``"<status>: <message>"``, which this module would
+#: otherwise prefix a second time.
+_LEADING_ERROR = re.compile(r"^error\s*[:\-—]\s*", re.IGNORECASE)
+
 #: ``verb token -> present participle``. Tool names are overwhelmingly
 #: ``verb_object`` (``list_skills``, ``read_file``), so conjugating the first
 #: token yields a natural phrase for tools this module has never seen.
@@ -319,6 +324,12 @@ def _error_text(payload: Mapping[str, Any]) -> str:
     return "tool call failed"
 
 
+def _strip_error_prefix(text: str) -> str:
+    """Drop a leading ``error:`` so this module's own prefix isn't doubled."""
+    stripped = _LEADING_ERROR.sub("", text, count=1).strip()
+    return stripped or text
+
+
 def _command_head(command_output: Mapping[str, Any]) -> str:
     """One line describing how a shell command ended."""
     return_code = command_output.get("return_code", 0)
@@ -352,7 +363,7 @@ def _preview_head(payload: Mapping[str, Any]) -> str:
 
     failed = payload.get("success") is False or payload.get("status") == "error"
     if failed:
-        return f"error: {_error_text(payload)}"
+        return f"error: {_strip_error_prefix(_error_text(payload))}"
 
     summary = payload.get("summary")
     if _is_scalar(summary) and _collapse(summary):

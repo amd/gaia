@@ -128,18 +128,17 @@
 name: Email Agent Eval (offline, report mode)
 
 on:
-  # Weekly — Mondays 07:17 UTC. Was nightly; moved to weekly because the run now
-  # includes the judge-scored voice-drafting eval, which spends Claude tokens.
-  # (The release itself re-runs the full suite as a hard gate — see
-  # release_agent_email.yml eval-gate — so daily cadence here is unnecessary.)
-  schedule:
-    - cron: '17 7 * * 1'
+  # Weekly schedule removed: the email agent's capability is moving into the
+  # core flagship agent (#3329), so email-specific eval coverage is disabled
+  # rather than kept running against a surface being retired. The job below
+  # is gated `if: false` for the same reason, which covers every caller
+  # (publish.yml, release_agent_email.yml, weekly_eval.yml) from one place.
   # Pre-merge coverage for email-agent behavior changes — see the PULL-REQUEST
   # COVERAGE block in the header for why these paths and not more. Advisory
   # (report mode) by default; `ready_for_review` is in `types` so undrafting a PR
   # triggers the run that the draft state skipped.
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The agent itself — prompts, tools, triage/condense, bundled skills, and
@@ -297,23 +296,14 @@ jobs:
       # `queue: single` (the default) keeps only ONE pending run and cancels the
       # previously-queued one — a phantom red X on the PR. `max` queues them FIFO.
       queue: max
-    # PR guard (no-op for schedule / workflow_dispatch / workflow_call):
-    #   - fork PRs never reach the self-hosted pool, and could only produce an
-    #     un-judged result anyway (no ANTHROPIC_API_KEY) — see the header;
-    #   - drafts skip the 90-minute run until marked ready (or labeled
-    #     `ready_for_ci`), matching test_email_agent.yml;
-    #   - `skip-email-eval` is the documented opt-OUT for an email PR that
-    #     provably cannot move behavior (docs, comments, packaging metadata).
-    #     It is opt-OUT on purpose: an opt-IN label would leave the default at
-    #     "no coverage", which is the gap this trigger exists to close.
-    # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
-    # more-indented lines, and an `if:` expression must fold to a single line.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')) &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-email-eval'))
+    # Disabled: email-agent capability is moving into the core flagship agent
+    # (#3329), so this eval suite no longer gates PRs, the weekly schedule, or
+    # a release. `if: false` makes the job a no-op "skipped" — which every
+    # caller (publish.yml, release_agent_email.yml, weekly_eval.yml) reads as
+    # a non-blocking result via `workflow_call`, so nothing downstream needs
+    # its own gate changed. The prior PR/draft/label guard is preserved above
+    # in git history if this suite is ever revived for a narrower surface.
+    if: false
     timeout-minutes: 90
     steps:
       - name: Checkout

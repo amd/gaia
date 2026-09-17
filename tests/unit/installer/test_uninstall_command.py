@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
 
 import pytest
@@ -146,6 +147,7 @@ class TestBuildPlan:
             gaia / "venv",
             gaia / "chat",
             gaia / "documents",
+            gaia / "lemonade",
             gaia / "electron-config.json",
             gaia / "gaia.log",
             gaia / "electron-install-state.json",
@@ -179,6 +181,7 @@ class TestDryRun:
                     ".gaia/venv",
                     ".gaia/chat",
                     ".gaia/documents",
+                    ".gaia/lemonade",
                     "electron-config.json",
                     "gaia.log",
                     "electron-install-state.json",
@@ -250,6 +253,10 @@ class TestVenvRemoval:
 class TestPurgeRemoval:
     def test_removes_all_tier3_paths_but_keeps_gaia_root(self, fake_home):
         _seed_gaia_tree(fake_home)
+        embedded = fake_home / ".gaia" / "lemonade"
+        embedded.mkdir()
+        (embedded / "cache").mkdir()
+        (embedded / "cache" / "backend.bin").write_bytes(b"backend")
         captured = _Capture()
 
         exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
@@ -261,6 +268,7 @@ class TestPurgeRemoval:
             "venv",
             "chat",
             "documents",
+            "lemonade",
             "electron-config.json",
             "gaia.log",
             "electron-install-state.json",
@@ -273,8 +281,10 @@ class TestPurgeRemoval:
         # And our neighbour file stays put.
         assert (gaia / "mcp_servers.json").exists()
 
-    def test_does_not_touch_lemonade_without_opt_in(self, fake_home, monkeypatch):
-        """--purge alone must NOT run Lemonade removal."""
+    def test_does_not_touch_system_lemonade_without_opt_in(
+        self, fake_home, monkeypatch
+    ):
+        """--purge alone must not run system-wide Lemonade removal."""
         _seed_gaia_tree(fake_home)
         _seed_models_cache(fake_home)
 
@@ -295,6 +305,35 @@ class TestPurgeRemoval:
         ), "Lemonade removal must not run without --purge-lemonade"
         # Models cache stays (no --purge-models).
         assert (fake_home / ".cache" / "lemonade" / "models").exists()
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            SimpleNamespace(running=True, unresponsive_pid=None),
+            SimpleNamespace(running=False, unresponsive_pid=4321),
+        ],
+        ids=["healthy", "unresponsive"],
+    )
+    def test_refuses_to_purge_a_live_embedded_instance(
+        self, fake_home, monkeypatch, status
+    ):
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        _seed_gaia_tree(fake_home)
+        embedded = fake_home / ".gaia" / "lemonade"
+        embedded.mkdir()
+        (embedded / "state.json").write_text("{}")
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.status",
+            lambda self: status,
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured, home=fake_home)
+
+        assert exit_code == uc.EXIT_ABORTED
+        assert embedded.exists()
+        assert (fake_home / ".gaia" / "chat" / "history.db").exists()
+        assert "gaia lemonade embedded stop" in captured.text
 
 
 class TestPurgeModels:

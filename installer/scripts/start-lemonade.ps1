@@ -16,10 +16,10 @@
     Comma-separated list of additional models to pull (but not load)
 
 .PARAMETER Port
-    Server port (default: 8000)
+    Server port (default: 13305, Lemonade's default since v10.1)
 
 .PARAMETER CtxSize
-    Context size (default: 8192)
+    Context size (default: 32768)
 
 .PARAMETER InitWaitTime
     Seconds to wait after loading model (default: 10)
@@ -50,7 +50,7 @@ param(
     [string]$AdditionalModels = "",
 
     [Parameter(Mandatory=$false)]
-    [int]$Port = 8000,
+    [int]$Port = 13305,
 
     [Parameter(Mandatory=$false)]
     [int]$CtxSize = 32768,
