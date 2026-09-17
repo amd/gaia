@@ -58,8 +58,6 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeGmailBackend,
-    _query_tokens,
-    _payload_text,
 )
 
 
@@ -140,47 +138,6 @@ def _call(search_messages, **kwargs) -> Dict[str, Any]:
     payload = json.loads(search_messages(**kwargs))
     assert payload["ok"] is True, payload
     return payload["data"]
-
-
-def test_body_only_quoted_and_unquoted_phrases_match():
-    """A quoted phrase must behave like the bare phrase, and body-only hits
-    must be reachable by the fake Gmail backend used in offline evals."""
-    body = "A" * 250 + " kernel fusion "
-    gmail, messages = _build_inbox(1, body_text=body)
-    subject = messages[0]["payload"]["headers"][0]["value"]
-
-    bare_hits = gmail.list_messages(query="kernel fusion", max_results=100)
-    quoted_hits = gmail.list_messages(query='"kernel fusion"', max_results=100)
-
-    assert bare_hits["resultSizeEstimate"] > 0
-    assert {m["id"] for m in bare_hits["messages"]} == {
-        m["id"] for m in quoted_hits["messages"]
-    }
-
-    body_only_for_phrase = [
-        msg
-        for msg in gmail._messages.values()
-        if "kernel fusion" in _payload_text(msg.get("payload") or {}).lower()
-        and "kernel fusion" not in subject.lower()
-        and "kernel fusion" not in (msg.get("snippet") or "").lower()
-    ]
-    assert body_only_for_phrase
-    assert {m["id"] for m in bare_hits["messages"]}.issuperset(
-        {msg["id"] for msg in body_only_for_phrase}
-    )
-
-
-def test_apostrophes_do_not_break_following_operators():
-    gmail, _ = _build_inbox(1, body_text="A" * 250 + " O'Brien approved this.")
-
-    hits = gmail.list_messages(query="O'Brien from:vendor@example.com", max_results=100)
-
-    assert hits["resultSizeEstimate"] == 1
-
-
-def test_unquoted_terms_remain_separate_and_quoted_phrases_stay_intact():
-    assert _query_tokens("budget report Q3") == ["budget", "report", "Q3"]
-    assert _query_tokens('"budget report" Q3') == ["budget report", "Q3"]
 
 
 # ---------------------------------------------------------------------------

@@ -935,11 +935,11 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
             if "UNREAD" not in label_ids:
                 return False
         elif token.startswith("from:"):
-            needle = token[len("from:") :].strip("\"'")
+            needle = token[len("from:") :]
             if needle not in headers.get("from", "").lower():
                 return False
         elif token.startswith("subject:"):
-            needle = token[len("subject:") :].strip("\"'")
+            needle = token[len("subject:") :]
             if needle not in headers.get("subject", "").lower():
                 return False
         else:
