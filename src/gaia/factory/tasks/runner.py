@@ -91,9 +91,18 @@ MAX_ARTEFACT_CHARS = 20000
 #: backend-reported usage on the Claude path.
 #: Its path is set per-attempt in :func:`child_env` and deliberately lands
 #: *outside* the workspace — see :data:`INSTRUMENTATION` for why.
+#: ``GAIA_SHELL_SANDBOXED`` is what makes the comparison mean anything. Each
+#: attempt runs in a throwaway workspace with its own ``HOME`` and ``GAIA_HOME``
+#: and is deleted afterwards, so the command-name allowlist is not the boundary
+#: here — the sandbox is. Without it GAIA runs with a filter that refuses 94%
+#: of real agent shell commands while the reference arm runs with
+#: ``--dangerously-skip-permissions`` and no filter at all, and the difference
+#: gets attributed to the agent rather than to the two different sandboxes it
+#: actually measures. Path containment is unaffected either way.
 BENCH_ENV = {
     "GAIA_AUTO_APPROVE_TOOLS": "1",
     "GAIA_PROJECT_MAP_AUTO_INDEX": "0",
+    "GAIA_SHELL_SANDBOXED": "1",
 }
 
 #: Files this harness produces, which must never be mistaken for the agent's

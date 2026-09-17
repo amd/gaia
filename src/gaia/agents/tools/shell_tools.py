@@ -159,6 +159,61 @@ PYTHON_CONSOLE_SCRIPTS = frozenset(
     }
 )
 
+#: Declares that this process runs in a **disposable sandbox**, so the shell's
+#: command filter is redundant and the isolation boundary is the sandbox.
+#:
+#: Read at call time, never cached, and **off unless explicitly set** — an
+#: agent on a developer's real machine is unaffected by its existence.
+#:
+#: Why this exists. The allowlist tries to be the whole containment story and
+#: cannot be: measured against 28,064 real agent shell commands, **94% use an
+#: operator this tool refuses** (71% chain with ``&&``, 68% pipe, 57%
+#: redirect) and the corpus spans 8,230 distinct binaries with 4,688 used
+#: exactly once. No list converges on that. Command text is not a boundary
+#: either — ``python -m pytest`` already sidesteps the ``pytest`` grant policy.
+#:
+#: What it does NOT relax: ``PathValidator`` still gates every argument, so the
+#: workspace boundary holds. Confirmation gating is a separate switch
+#: (``GAIA_AUTO_APPROVE_TOOLS``) and is unaffected.
+#:
+#: Set this only where the blast radius really is disposable — a container, a
+#: CI job, a benchmark workspace. It is the counterpart to the reference
+#: agent's ``--dangerously-skip-permissions``, and a comparison against an
+#: agent run that way is not sound without it.
+SANDBOX_ENV_VAR = "GAIA_SHELL_SANDBOXED"
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def sandboxed_shell_enabled() -> bool:
+    """True when the caller has declared a disposable-sandbox boundary."""
+    return (os.environ.get(SANDBOX_ENV_VAR) or "").strip().lower() in _TRUTHY
+
+
+#: An absolute path as it appears in the RAW command line, before tokenising:
+#: a Windows drive path, a UNC share, or a POSIX absolute path.
+_RAW_ABS_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/)[^\s\"'|;&<>]*")
+
+
+def _raw_path_operands(command: str, already: list) -> list:
+    """Absolute paths in *command* that tokenising lost.
+
+    ``shlex.split`` runs in POSIX mode, where a backslash is an escape
+    character — so ``C:\\Users\\me\\secret.txt`` tokenises to
+    ``C:Usersmesecret.txt``, which contains no separator and therefore does
+    not look like a path to the argument scanner. The raw string is what
+    actually reaches the shell, so the file is read while the validator was
+    shown something else entirely.
+
+    Recovering the operands from the untokenised string closes that gap
+    without changing how commands are split, which other behaviour depends on.
+    Deliberately over-inclusive: a false positive costs one allowlist check on
+    a string that was never a path, a false negative is a sandbox escape.
+    """
+    seen = set(already)
+    return [m for m in _RAW_ABS_PATH.findall(command or "") if m not in seen]
+
+
 #: Runaway-loop backstop, not a pace-setter.
 #:
 #: At the previous 3-per-10-seconds an ordinary edit-then-test cycle tripped
@@ -477,6 +532,22 @@ class ShellToolsMixin:
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
+        # A caller that runs inside a disposable sandbox gets the command text
+        # unfiltered — see SANDBOX_ENV_VAR. Path containment below is NOT
+        # skipped: the workspace boundary still holds.
+        if sandboxed_shell_enabled():
+            try:
+                return None, _split_pipeline(shlex.split(command))
+            except ValueError as exc:
+                return (
+                    {
+                        "status": "error",
+                        "error": f"Could not parse command: {exc}",
+                        "has_errors": True,
+                    },
+                    [],
+                )
+
         if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(command)):
             return (
                 {
@@ -707,6 +778,12 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        # In a declared disposable sandbox the binary allowlist adds nothing the
+        # sandbox does not already provide — see SANDBOX_ENV_VAR. Path
+        # containment is enforced by the caller and is NOT skipped here.
+        if sandboxed_shell_enabled():
+            return None
+
         # Skill-granted CLIs are gated by their own policy table instead of
         # ALLOWED_COMMANDS; anything ungranted is still refused.
         # Imported here — gaia.skills pulls in the connector stack.
@@ -1085,7 +1162,9 @@ class ShellToolsMixin:
                     seg for seg in segments if not _is_granted_binary(seg[0], granted)
                 ]
                 if hasattr(self, "path_validator"):
-                    for arg in [a for seg in scanned for a in seg[1:]]:
+                    _args = [a for seg in scanned for a in seg[1:]]
+                    _args.extend(_raw_path_operands(command, _args))
+                    for arg in _args:
                         candidate_path = arg
                         if arg.startswith("-"):
                             if "=" in arg:
