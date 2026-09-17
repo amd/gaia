@@ -31,12 +31,51 @@ status. The TUI's preflight gate already does (``tui/internal/ui/preflight``).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Iterator, List, Optional, Tuple
 
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Test-only hold on "model loaded" reporting (#2539): Lemonade lazily
+# reloads an unloaded model on the next inference request, which makes
+# "model unavailable" un-testable through this GET probe alone — by the time
+# a second check runs, a query elsewhere may have already triggered the
+# reload. Setting this env var to a comma-separated list of model ids (or
+# "*" for all) makes the probe report those ids as absent from
+# ``all_models_loaded`` regardless of what Lemonade actually answers, so the
+# preflight gate's "model unavailable" messaging can be exercised on demand.
+# This never touches real inference: the only production caller of
+# ``probe_backend_health`` is the read-only ``GET /v1/<id>/init`` readiness
+# route (``gaia.agents.base.server``) — nothing in the actual chat/query path
+# reads this function's return value. Unset in every normal install/run.
+INHIBIT_MODEL_ENV_VAR = "GAIA_TEST_INHIBIT_MODEL"
+
+
+def _inhibited_model_ids() -> "set[str]":
+    raw = os.environ.get(INHIBIT_MODEL_ENV_VAR, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _filter_inhibited_loaded_models(loaded_models: List[dict]) -> List[dict]:
+    inhibited = _inhibited_model_ids()
+    if not inhibited:
+        return loaded_models
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    def _is_inhibited(entry: dict) -> bool:
+        if "*" in inhibited:
+            return True
+        candidates = (entry.get("model_name"), entry.get("checkpoint"))
+        return any(
+            c is not None and any(_model_ids_match(c, want) for want in inhibited)
+            for c in candidates
+        )
+
+    return [m for m in loaded_models if not _is_inhibited(m)]
+
 
 # Fast pre-flight timeouts for the "is the backend even up?" probe. The real
 # chat path uses a long scalar timeout — correct for generation, but it also
@@ -272,7 +311,7 @@ def probe_backend_health(
                 loaded_models = [m for m in raw_loaded if isinstance(m, dict)]
     except ValueError:
         version = None
-    return True, probe_base, version, loaded_models
+    return True, probe_base, version, _filter_inhibited_loaded_models(loaded_models)
 
 
 def probe_model_present(probe_base: str, model_id: str) -> bool:
@@ -584,7 +623,7 @@ def provision_progress(
 
     try:
         present = probe_model_present(probe_base, model_id)
-    except (requests.exceptions.RequestException, ValueError) as exc:
+    except requests.exceptions.RequestException as exc:
         yield line(
             f"✗ Could not read the backend's model list ({type(exc).__name__}: {exc})."
         )
@@ -602,7 +641,9 @@ def provision_progress(
     yield line(f"→ Pulling {model_id} — a first download can take several minutes…")
     try:
         pull_model(probe_base, model_id)
-    except requests.exceptions.RequestException as exc:
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        # ValueError: pull_model rejects a `user.`-prefixed id that no MODELS
+        # entry declares. This generator promises a ✗ line, never a raise.
         yield line(f"✗ Provisioning failed: {type(exc).__name__}: {exc}")
         yield line(
             "✗ The model was not downloaded. Check the Lemonade Server logs, "

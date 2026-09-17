@@ -165,6 +165,18 @@ class EmailSidecarProxy:
     def calendar_respond(self, payload: dict) -> dict:
         return self._post("/v1/email/calendar/events/respond", payload)
 
+    def respond_query(self, run_id: str, request_id: str, value: str) -> dict:
+        """Deliver an answer to a pending ``needs_input`` question (#2595).
+
+        Loud on failure: a 409 means the question is no longer the one the
+        run is waiting on (already answered, timed out, or superseded) and
+        must reach the caller as an error, never be swallowed.
+        """
+        return self._post(
+            f"/v1/email/query/{run_id}/respond",
+            {"request_id": request_id, "value": value},
+        )
+
     # -- Health / version / readiness ----------------------------------------
     def health(self) -> dict:
         return self._get("/health")

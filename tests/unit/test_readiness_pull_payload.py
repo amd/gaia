@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.readiness import pull_model
+from gaia.agents.base.readiness import provision_progress, pull_model
 
 BASE = "http://localhost:61901/api/v1"
 
@@ -51,3 +51,19 @@ def test_an_unknown_user_model_fails_loudly_rather_than_sending_a_bad_pull():
     """Silently sending name-only here is what produced the confusing 500."""
     with pytest.raises(ValueError, match="not in GAIA's model registry"):
         _sent("user.not-a-real-model")
+
+
+def test_an_unknown_user_model_yields_a_failure_line_instead_of_raising():
+    """``provision_progress`` promises a ✗ line on every failure path.
+
+    ``pull_model`` signals an unregistered ``user.`` id with ``ValueError``,
+    not ``RequestException``, so catching only the latter let it escape the
+    generator and reach the caller as a crash.
+    """
+    with patch(
+        "gaia.agents.base.readiness.probe_model_present", return_value=False
+    ):
+        lines = list(provision_progress(BASE, "user.not-a-real-model"))
+
+    assert lines[-1].startswith("✗")
+    assert any("not in GAIA's model registry" in line for line in lines)

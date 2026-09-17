@@ -920,9 +920,11 @@ class PathValidator:
                 return None
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = real_path.with_name(
-                f"{real_path.stem}.{timestamp}.bak{real_path.suffix}"
-            )
+            # ".bak" goes LAST. Keeping the original extension made a backup of
+            # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
+            # collects and cannot import, so editing a test file broke the whole
+            # suite (#3747). Nothing globs *.bak.
+            backup_path = real_path.with_name(f"{real_path.name}.{timestamp}.bak")
 
             shutil.copy2(str(real_path), str(backup_path))
             audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")

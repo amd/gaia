@@ -65,7 +65,13 @@ def sessions_dir() -> Path:
 
 
 def origin_of(url: str) -> str:
-    """Normalized ``scheme://host`` — the unit a session is scoped to."""
+    """Normalized ``scheme://host`` — the unit a session is scoped to.
+
+    The port is deliberately excluded: a site's login survives the port it was
+    reached on, and keying on it would split one account across slots. The
+    cost is that two local dev servers share a slot; every state-changing
+    action still prompts, so they cannot act for each other unasked.
+    """
     parsed = urlparse(url if "://" in url else f"https://{url}")
     host = (parsed.hostname or "").lower()
     # urlparse is permissive: it happily reports "not a url" as a hostname, so

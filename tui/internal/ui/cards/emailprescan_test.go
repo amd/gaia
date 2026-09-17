@@ -113,6 +113,59 @@ func TestPreScanCapsHitShowsNofM(t *testing.T) {
 	assertContains(t, out, "NEEDS A REPLY", "5 of 40")
 }
 
+// #2827: a hidden needs_you tail names what those messages are, sourced
+// from the totals/informational_count the server already computes -- not a
+// bare "+N more" with no indication of content.
+func TestPreScanHiddenTailNamesBuckets(t *testing.T) {
+	// Wide enough that every bucket fits on the "+N more" row without
+	// tripping the narrow-width trim -- that trim gets its own test below.
+	const wide = 120
+	out := Render("email_pre_scan", raw(t, capsHitPreScan), wide)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, wide)
+	assertContains(t, out,
+		"+35 more",
+		"30 urgent", "8 actionable", "2 needs review", "4 informational",
+	)
+	// suggested_archives is 0 in the fixture -- a zero bucket must not
+	// clutter the line with "0 suggested archive".
+	assertNotContains(t, out, "0 suggested archive")
+}
+
+// At a card width too narrow to fit every bucket, the lowest-priority ones
+// are dropped from the end -- never truncated mid-word -- and the drop is
+// marked with "…" rather than silently disappearing.
+func TestPreScanHiddenTailBreakdownTrimsAtNarrowWidth(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, capsHitPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out, "+35 more", "30 urgent", "8 actionable", "…")
+	// Never split a bucket's own text mid-word.
+	assertNotContains(t, out, "informatio…", "review…")
+}
+
+// A payload from a producer that predates #2827 (no `totals` field) must
+// still render the bare "+N more" it always has -- the breakdown is an
+// addition, never a requirement the card refuses to render without.
+func TestPreScanHiddenTailWithoutTotalsFallsBackToBareCount(t *testing.T) {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(capsHitPreScan), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	delete(envelope, "totals")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := Render("email_pre_scan", data, width80)
+	t.Logf("\n%s", plain(out))
+	assertContains(t, out, "+35 more")
+	assertNotContains(t, out, "urgent", "actionable", "needs review", "informational")
+}
+
 func TestPreScanUncappedShowsBareCount(t *testing.T) {
 	// needs_you_total (5) matches len(needs_you) (5) -- nothing hidden, so
 	// the header must NOT read "5 of 5", which reads as a truncation that
