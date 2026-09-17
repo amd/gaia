@@ -4,6 +4,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("gaia_agent_email")
+
 from gaia_agent_email.tools.read_tools import search_messages_impl
 
 from tests.fixtures.email.fake_gmail import _payload_text, _query_tokens
