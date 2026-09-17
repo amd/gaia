@@ -24,6 +24,7 @@ import pytest
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     TIER_CONFIRM,
+    TIER_REFUSE,
     ShellToolsMixin,
     skill_granted_binaries,
 )
@@ -1067,6 +1068,26 @@ def test_a_write_is_never_pre_authorized_by_the_grant_alone():
         )
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth token",
+        "gh api -X POST repos/amd/gaia/issues",
+        "gh alias set x",
+    ],
+)
+def test_a_refused_invocation_stays_refused_without_a_grant(command):
+    """REFUSE is about what the command does, not who may run it.
+
+    With no grant at all these must still be refused. Gating on the grant
+    first sent them to the confirmation prompt instead — a weaker outcome for
+    an ungranted agent than for a granted one.
+    """
+    error = _refusal(_Gated(), command)
+    assert error is not None, f"{command!r} reached the prompt with no grant"
+    assert error["tier"] == TIER_REFUSE
 
 
 def test_a_refused_call_says_it_cannot_be_approved():

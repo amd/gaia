@@ -737,7 +737,7 @@ class ShellToolsMixin:
         end this tier removes.
         """
         # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # ALLOWED_COMMANDS; anything ungranted still needs confirmation.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -749,19 +749,10 @@ class ShellToolsMixin:
         binary = normalize_binary(cmd_base)
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
-            if binary not in granted_binaries:
-                return {
-                    "status": "error",
-                    "tier": TIER_CONFIRM,
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
-                    "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
-                }
+            # Classify BEFORE the grant check. A REFUSE-tier invocation
+            # (`gh auth token`) is refused on what it does, not on who may run
+            # it — gating first would let an ungranted one out to the
+            # confirmation prompt, which is weaker than the grant path.
             decision = classify_invocation(policy, cmd_parts)
             if decision.outcome == REFUSE:
                 return {
@@ -775,6 +766,19 @@ class ShellToolsMixin:
                         "Use an allowed command, or tell the user what you would "
                         "have run and why it is blocked."
                     ),
+                }
+            if binary not in granted_binaries:
+                return {
+                    "status": "error",
+                    "tier": TIER_CONFIRM,
+                    "error": (
+                        f"Command '{binary}' is not available to this agent. It is "
+                        "granted only to a skill that declares "
+                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
+                        "first."
+                    ),
+                    "has_errors": True,
+                    "hint": f"{policy.summary} {policy.install_hint}",
                 }
             return None
 
