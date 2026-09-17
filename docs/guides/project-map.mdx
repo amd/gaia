@@ -115,7 +115,7 @@ Resolution order:
 
 1. `project_root` on `GaiaAgentConfig`
 2. the `GAIA_PROJECT_ROOT` environment variable
-3. the working directory, or the nearest repository up to four parent directories above it (including a root exactly four levels up)
+3. the working directory, or the nearest repository above it — searching upward until the home directory or the filesystem root, whichever comes first
 
 A working directory anywhere inside **GAIA's own source tree** is rejected — in
 dev mode the agent sidecar is launched from its package directory inside the
