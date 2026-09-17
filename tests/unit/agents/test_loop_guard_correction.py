@@ -133,7 +133,8 @@ def test_first_threshold_hit_injects_a_correction_and_lets_the_model_answer(agen
     corrections = _corrections(sent)
     assert len(corrections) == 1
     content = str(corrections[0]["content"])
-    assert f"called {_TOOL} 3 times with the same arguments" in content
+    # Two calls actually ran; the third was replaced by the correction.
+    assert f"called {_TOOL} 2 times with the same arguments" in content
     assert "Is a directory" in content
 
 
@@ -259,11 +260,17 @@ def test_summary_for_a_refusal_says_not_permitted(agent, result):
     assert _SERVICE_HINT not in summary
 
 
-def test_summary_for_a_connection_error_keeps_the_service_hint(agent):
-    summary = _summary(
-        agent, {"status": "error", "error": "Connection refused (localhost:8000)"}
-    )
-    assert "kept failing: Connection refused" in summary
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Connection refused (localhost:8000)",
+        "[WinError 10061] No connection could be made because the target "
+        "machine actively refused it",
+    ],
+)
+def test_summary_for_a_connection_error_keeps_the_service_hint(agent, error):
+    summary = _summary(agent, {"status": "error", "error": error})
+    assert f"kept failing: {error}" in summary
     assert _SERVICE_HINT in summary
 
 
@@ -274,6 +281,7 @@ def test_summary_for_a_connection_error_keeps_the_service_hint(agent):
         "machine actively refused it",
         "[WinError 10060] A connection attempt failed because the connected "
         "party did not properly respond after a period of time",
+        "[WinError 10061]",
     ],
 )
 def test_summary_reads_a_windows_socket_error_as_a_connection_failure(agent, error):
@@ -286,6 +294,15 @@ def test_summary_reads_a_windows_socket_error_as_a_connection_failure(agent, err
     summary = _summary(agent, {"status": "error", "error": error})
     assert _SERVICE_HINT in summary
     assert "not permitted here" not in summary
+
+
+def test_summary_for_prose_about_refusing_is_a_plain_failure(agent):
+    """A tool declining to clobber a file is a plain failure, not a policy refusal."""
+    summary = _summary(
+        agent, {"status": "error", "error": "refusing to overwrite existing out.txt"}
+    )
+    assert "not permitted here" not in summary
+    assert "kept failing: refusing to overwrite" in summary
 
 
 def test_summary_for_a_plain_failure_does_not_blame_a_service(agent):

@@ -6264,14 +6264,14 @@ Do NOT wrap conversational replies in JSON.
                                 self._create_tool_message(
                                     tool_name,
                                     self._loop_correction_result(
-                                        tool_name, consecutive_count, recent_results
+                                        tool_name, consecutive_count - 1, recent_results
                                     ),
                                     tool_call_id=tool_call_id,
                                 )
                             )
                             continue
                         final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count, recent_results
+                            tool_name, consecutive_count - 2, recent_results
                         )
                         self.console.print_repeated_tool_warning()
                         fanout_repeat_break = True
@@ -6281,7 +6281,9 @@ Do NOT wrap conversational replies in JSON.
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
                     if self._is_throttled_result(tool_result):
-                        tool_call_history.pop()  # never ran, so not a repeat
+                        # Never ran, so not a repeat. Bounded: the shell
+                        # limiter's windows drain within a few capped waits.
+                        tool_call_history.pop()
                         self._wait_out_rate_limit(tool_result)
 
                     # Result-based dedup for query family tools
@@ -6501,7 +6503,7 @@ Do NOT wrap conversational replies in JSON.
                             self._create_tool_message(
                                 tool_name,
                                 self._loop_correction_result(
-                                    tool_name, consecutive_count, recent_results
+                                    tool_name, consecutive_count - 1, recent_results
                                 ),
                             )
                         )
@@ -6511,7 +6513,7 @@ Do NOT wrap conversational replies in JSON.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
                     final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count, recent_results
+                        tool_name, consecutive_count - 2, recent_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -6523,7 +6525,9 @@ Do NOT wrap conversational replies in JSON.
                 # Stop progress indicator
                 self.console.stop_progress()
                 if self._is_throttled_result(tool_result):
-                    tool_call_history.pop()  # never ran, so not a repeat
+                    # Never ran, so not a repeat. Bounded: the shell limiter's
+                    # windows drain within a few capped waits.
+                    tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
 
                 # Issue #1023: record success/failure of capability tools so
@@ -7244,16 +7248,16 @@ Do NOT wrap conversational replies in JSON.
         r"|unreachable|could not connect|failed to establish|max retries exceeded"
         r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
         # Windows words a refused connection as "no connection could be made
-        # because the target machine actively refused it" (WinError 10061).
-        # That matches none of the patterns above but does match "refus" in
-        # _LOOP_NOT_PERMITTED_RE, so without these a dead service is reported
-        # to the user as a permissions problem.
-        r"|no connection could be made|actively refused|connection attempt failed",
+        # because the target machine actively refused it" (WinError 10061) —
+        # without these a dead service reads as a permissions problem.
+        r"|no connection could be made|actively refused|connection attempt failed"
+        r"|winerror 1006\d",
         re.IGNORECASE,
     )
     _LOOP_NOT_PERMITTED_RE = re.compile(
         r"not allowed|not permitted|not in (?:the )?allowed|access denied"
-        r"|permission denied|blocked|refus",
+        r"|permission denied|blocked|refused (?:by|to)"
+        r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
         re.IGNORECASE,
     )
 
@@ -7300,7 +7304,7 @@ Do NOT wrap conversational replies in JSON.
         return "the tool returned an error"
 
     def _loop_correction_result(
-        self, tool_name: str, consecutive_count: int, recent_results: list
+        self, tool_name: str, executed_count: int, recent_results: list
     ) -> Dict[str, Any]:
         """The tool result sent in place of a repeated call, asking for a new approach."""
         last = recent_results[-1] if recent_results else None
@@ -7312,7 +7316,7 @@ Do NOT wrap conversational replies in JSON.
         else:
             outcome = "no new progress"
         correction = (
-            f"You have called {tool_name} {consecutive_count} times with the same "
+            f"You have called {tool_name} {executed_count} times with the same "
             f"arguments and it returned {outcome}. Do not repeat it — try a "
             "different approach, or give your final answer."
         )
@@ -7322,11 +7326,11 @@ Do NOT wrap conversational replies in JSON.
     def _build_loop_break_summary(
         self,
         tool_name: str,
-        consecutive_count: int,
-        step_results: list,
+        executed_count: int,
+        recent_results: list,
     ) -> str:
         """Final-answer text when the loop breaks on repeats; names the real cause."""
-        last = step_results[-1] if step_results else None
+        last = recent_results[-1] if recent_results else None
         denied = isinstance(last, dict) and last.get("status") == "denied"
         if not (denied or Agent._is_error_result(last)):
             # A loop break is evidence of neither outcome: the work may be done
@@ -7334,13 +7338,13 @@ Do NOT wrap conversational replies in JSON.
             # for the job). Say which is unknown instead of claiming either,
             # which is what "Task completed with ..." used to do here (#3750).
             return (
-                f"I stopped after calling `{tool_name}` {consecutive_count} "
+                f"I stopped after calling `{tool_name}` {executed_count} "
                 "times in a row without making progress, so I can't confirm "
                 "the task is finished. Please check the result before relying "
                 "on it, or rephrase the request."
             )
         err = self._loop_error_brief(last)
-        attempts = f"I tried calling `{tool_name}` {consecutive_count} times"
+        attempts = f"I tried calling `{tool_name}` {executed_count} times"
         if self._is_throttled_result(last):
             return (
                 f"{attempts}, but it was rate-limited and did not run: {err}\n\n"
