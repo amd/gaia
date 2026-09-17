@@ -294,6 +294,8 @@ def _is_file_write_flag(token: str) -> bool:
     if head.startswith("-") and head != "-":
         return head[1] == "o"
     return False
+
+
 #: Binaries an agent reaches for when it means "change this file". None are on
 #: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
 #: says "only read-only commands are allowed" and lists read-only examples,
