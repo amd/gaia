@@ -299,6 +299,8 @@ def _is_file_write_flag(token: str) -> bool:
 #: says "only read-only commands are allowed" and lists read-only examples,
 #: which leaves no route to the thing the agent was trying to do. Naming these
 #: lets the refusal point at edit_file instead of dead-ending (#3600).
+
+
 FILE_REWRITE_BINARIES = frozenset(
     {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
 )
