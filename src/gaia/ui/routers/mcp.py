@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from gaia.mcp.client.config import MCPConfig
+from gaia.mcp.ports import AGENT_UI_MCP_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ router = APIRouter(tags=["mcp"])
 # Module-level state for the Agent UI MCP server subprocess.
 # The server exposes the GAIA Agent UI as MCP tools for clients like Claude Code.
 _agent_mcp_process: Optional[subprocess.Popen] = None
-_agent_mcp_port: int = 8765
+_agent_mcp_port: int = AGENT_UI_MCP_PORT
 
 # ---------------------------------------------------------------------------
 # Response models
@@ -161,7 +162,7 @@ async def get_mcp_runtime_status():
 
 
 class StartAgentServerRequest(BaseModel):
-    port: int = Field(default=8765, ge=1024, le=65535)
+    port: int = Field(default=AGENT_UI_MCP_PORT, ge=1024, le=65535)
     backend_url: str = "http://localhost:4200"
 
 
@@ -227,7 +228,8 @@ async def start_agent_mcp_server(body: Optional[StartAgentServerRequest] = None)
     The server makes Agent UI tools available to MCP clients (e.g., Claude Code).
     It is started as a background subprocess and connects to the Agent UI backend.
 
-    Request body is optional — omit or send ``{}`` to use defaults (port 8765).
+    Request body is optional — omit or send ``{}`` to use defaults
+    (port ``AGENT_UI_MCP_PORT``).
     """
     effective = body or StartAgentServerRequest()
     global _agent_mcp_process, _agent_mcp_port  # noqa: PLW0603

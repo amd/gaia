@@ -6,6 +6,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Asking a content question about your mail ("who signed this?", "what
+  date was agreed?") now actually gets an answer when the answer is in the
+  mailbox.** Search used to return only subjects and senders unless the
+  model explicitly asked for full message bodies, which it did not
+  reliably do — so content questions often came back unanswerable. Search
+  now decides on its own: a plain filter search (by sender, label, or date)
+  still returns metadata only, but a search that includes real search
+  terms automatically reads the matching messages in full, as long as the
+  match is already narrowed down to a handful of messages (so a broad
+  search still can't overload a slow or limited model). The inbox pre-scan
+  card still never reads message content on any surface — that remains
+  tracked separately (#3773).
+
 - **Listing calendar events now tells you how many came back, and whether
   there were more.** `GET /v1/email/calendar/events` returned only the
   events list, so a caller couldn't tell a short calendar from a truncated
@@ -48,6 +61,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
   nothing.** Microsoft Graph has no equivalent for these, so they used to be
   sent as plain search text and return zero results with no indication why
   (#2996).
+- **An ordinary Outlook search like `search({ query: 'subject:"check in:
+  monday"' })` no longer fails with the error above.** The colon word was
+  inside the quoted phrase, not an operator, and is now recognized as such
+  (#3592).
 
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the

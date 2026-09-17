@@ -124,6 +124,10 @@ gaia-tui status             # is the background service running, and what do I h
 gaia-tui version
 ```
 
+`--bypass-permissions` is available only for agents launched as subprocesses.
+Daemon-backed agents, including a Hub-installed flagship, reject it before
+readiness checks; omit the flag to run with confirmation prompts enabled.
+
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
 ---
@@ -149,6 +153,20 @@ already done.
 In the pre-run checks, a condition that cannot be determined renders `[?]`
 rather than a checkmark and never counts as ready — unknown is never treated as
 fine.
+
+## Choosing an AI provider
+
+Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+**Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
+the masked field; it stays in Lemonade memory until the server restarts. Provider
+settings are shared with other clients of that server. Fireworks suggests
+`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
+organization's HTTPS endpoint and authentication header.
+
+Type to search discovered models, then press Enter to select. The header shows
+the active provider; remote chat sends conversation history to that provider.
+Embeddings remain on Lemonade. Cloud setup skips downloading a local chat model.
+See [AI providers](../docs/guides/ai-providers.mdx) for key handling and recovery.
 
 ## Testing the harness against Claude
 
@@ -186,7 +204,7 @@ and `chat --subprocess` tells you to put the flag in the command line you own.
 
 **Switching models mid-session:** the gaia agent also takes `/model` in the
 chat composer — `/model` alone lists every switchable id (the curated Claude
-5 family, plus whatever Lemonade currently has downloaded), and `/model <id>`
+5 family, downloaded local models, and discovered Fireworks/AMD models), and `/model <id>`
 swaps the live client without losing conversation history or loaded skills.
 Typing the space in `/model ` turns the slash palette into a model picker, so
 the Claude ids are pickable rather than remembered; local ids stay behind bare
