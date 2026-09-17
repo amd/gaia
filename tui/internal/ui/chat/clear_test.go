@@ -82,11 +82,12 @@ func TestClearShowsFreshProgressWhileAwaitingAcknowledgment(t *testing.T) {
 	m.buffer = "old partial output"
 	m.queryStart = time.Now().Add(-time.Hour)
 	m.logPeakRows = 20
-	m.firstToken, m.totalSteps = true, 12
+	m.totalSteps = 12
+	m.preScanRenderedThisTurn = true
 	started := time.Now()
 	next, cmd := m.submit("/clear")
 	m = next.(ChatModel)
-	if m.queryStart.Before(started) || m.buffer != "" || m.firstToken || m.totalSteps != 0 {
+	if m.queryStart.Before(started) || m.buffer != "" || m.preScanRenderedThisTurn || m.totalSteps != 0 {
 		t.Fatal("clear retained timing or output from the previous turn")
 	}
 	view := m.View()
