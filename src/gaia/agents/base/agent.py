@@ -958,6 +958,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Same rationale for the per-turn record of edited files (#3733).
+        self._turn_file_edits: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3248,7 +3250,7 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Empty LLM response received")
             self.error_history.append("Empty LLM response")
 
-            edited_files = getattr(self, "_turn_file_edits", [])
+            edited_files = self._turn_file_edits
             if edited_files:
                 lines = ["Files modified before the turn failed:"]
                 seen = set()
@@ -5104,7 +5106,6 @@ Do NOT wrap conversational replies in JSON.
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
-        self._turn_file_edits = []
 
         # Reset state management
         self.execution_state = self.STATE_PLANNING
@@ -5119,6 +5120,9 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Files edited this turn, so an empty response can name what it left
+        # behind (#3733). Per-turn: an instance persists across queries.
+        self._turn_file_edits: List[Dict[str, Any]] = []
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False

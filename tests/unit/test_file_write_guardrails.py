@@ -904,9 +904,7 @@ class TestChatAgentEditFileGuardrails:
         assert result["operation"] == "edit_file"
         assert target.read_text() == "def main():\n    print('hello')\n"
 
-    def test_edit_python_file_accepts_valid_syntax(
-        self, mixin_and_registry, tmp_path
-    ):
+    def test_edit_python_file_accepts_valid_syntax(self, mixin_and_registry, tmp_path):
         """Verify edit_file accepts Python edits that remain syntactically valid."""
         _, edit_fn = mixin_and_registry
         target = tmp_path / "app.py"
