@@ -28,16 +28,24 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish.yml"
 STEP_NAME = "Run backend tests"
 
 
+JOB_NAME = "build-npm"
+
+
 @pytest.fixture(scope="module")
-def backend_test_step() -> dict:
+def backend_test_job() -> dict:
     assert WORKFLOW.is_file(), f"{WORKFLOW} is missing"
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"].get(JOB_NAME)
+    assert job, f"publish.yml no longer has a {JOB_NAME!r} job"
+    return job
+
+
+@pytest.fixture(scope="module")
+def backend_test_step(backend_test_job) -> dict:
     steps = [
-        step
-        for step in workflow["jobs"]["build-npm"]["steps"]
-        if step.get("name") == STEP_NAME
+        step for step in backend_test_job["steps"] if step.get("name") == STEP_NAME
     ]
-    assert steps, f"build-npm no longer has a {STEP_NAME!r} step"
+    assert steps, f"{JOB_NAME} no longer has a {STEP_NAME!r} step"
     return steps[0]
 
 
@@ -53,6 +61,18 @@ def test_the_backend_tests_can_fail_the_release(backend_test_step):
         f"{STEP_NAME!r} discards stderr, which hides why a step failed even when "
         "it does fail."
     )
+
+
+def test_the_job_cannot_tolerate_the_failure_on_the_steps_behalf(backend_test_job):
+    """``continue-on-error`` on the JOB waives every step inside it.
+
+    Set here it is the same bypass as setting it on the step, and the step-level
+    assertion above would not notice: the step stays clean while the job it runs
+    in absorbs its failure and the release publishes anyway.
+    """
+    assert (
+        backend_test_job.get("continue-on-error", False) is False
+    ), f"{JOB_NAME!r} must not tolerate failures; it would waive {STEP_NAME!r} too."
 
 
 def test_the_backend_tests_install_the_extras_they_import(backend_test_step):

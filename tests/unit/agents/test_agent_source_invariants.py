@@ -37,36 +37,23 @@ def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef:
     raise AssertionError(f"function {name!r} not found in agent.py")
 
 
-def test_no_loop_break_path_claims_the_task_was_completed():
-    """Neither branch of the loop-break summary may report success.
+def test_loop_break_summary_never_claims_completion():
+    """No string literal in ``_build_loop_break_summary`` may say "Task
+    completed". The helper only runs after the loop guard STOPPED a turn, so
+    any completion claim from it is false — first as duplicated literals (the
+    lie-on-loop bug), then as the non-error branch (#3750).
 
-    The original bug was two copies of ``"Task completed with"``, one per
-    legacy loop-break site, so this asserted there was exactly one. The
-    remaining copy turned out to be a lie too: a loop of *succeeding* calls
-    that never reach the goal ended the turn claiming the task was done.
-    The invariant is now zero, not one.
-
-    Scoped to the helper's body so a docstring elsewhere can still describe
-    the historical wording without tripping this.
+    The walk is scoped to the helper's body so unrelated mentions
+    (assertions in tests, future docstrings, comments) don't trip
+    this invariant.
     """
     src = AGENT_PY.read_text(encoding="utf-8")
     tree = ast.parse(src)
     helper = _find_function(tree, "_build_loop_break_summary")
-    body = [n for n in _string_literals_in(helper) if not _is_docstring(helper, n)]
-    hits = [n for n in body if "Task completed" in n.value]
+    hits = [n for n in _string_literals_in(helper) if "Task completed" in n.value]
     assert not hits, (
-        "the loop-break summary must never claim completion; found "
-        f"{len(hits)} such literal(s) at lines {[n.lineno for n in hits]}"
-    )
-
-
-def _is_docstring(fn: ast.FunctionDef, node: ast.Constant) -> bool:
-    """True when *node* is *fn*'s own docstring."""
-    first = fn.body[0] if fn.body else None
-    return (
-        isinstance(first, ast.Expr)
-        and isinstance(first.value, ast.Constant)
-        and first.value is node
+        f"_build_loop_break_summary claims completion at lines "
+        f"{[n.lineno for n in hits]} — a loop break is never a finish"
     )
 
 

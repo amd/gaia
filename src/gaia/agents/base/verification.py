@@ -72,17 +72,52 @@ NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 #: there to declare it. The loop's own denial shape says it for them.
 _DENIED_STATUS = "denied"
 
+# The TUI's no-op-only strip (tui/internal/ui/chat/verification.go,
+# verificationScopeRE) is a hand-kept copy of this pattern, narrowed to the
+# "unverified" case only — update both if this changes.
 _SCOPE_LINE_RE = re.compile(
     r"\n{1,2}" + re.escape(VERIFICATION_SCOPE_PREFIX) + r"[^\n]*\s*\Z"
 )
 
 
-def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
+def verification_check_label(
+    tool_name: str, tool_args: Any, result: Any = None
+) -> Optional[str]:
     """Short label when this call is a verification check, else ``None``.
 
     ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
     """
     name = (tool_name or "").strip()
+    if name == "execute_python_file" and isinstance(result, dict):
+        return_code = result.get("return_code")
+        if (
+            not check_was_executed(result)
+            or not isinstance(return_code, int)
+            or isinstance(return_code, bool)
+        ):
+            return None
+        output = "\n".join(
+            value
+            for key in ("stdout", "stderr")
+            if isinstance((value := result.get(key)), str)
+        )
+        summary = re.search(
+            r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
+            r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$",
+            output,
+        )
+        if summary and re.search(
+            r"\b[1-9]\d* (?:passed|failed|error|errors|xfailed|xpassed)\b",
+            summary.group(0),
+        ):
+            return "pytest"
+        if re.search(
+            r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
+            r"(?:OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$",
+            output,
+        ):
+            return "unittest"
+        return None
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):
@@ -91,7 +126,14 @@ def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
         command = tool_args.get(key)
         if isinstance(command, str) and command.strip():
             match = _CHECK_COMMAND_RE.search(command)
-            return " ".join(match.group(0).split()).lower() if match else None
+            if not match:
+                return None
+            label = " ".join(match.group(0).split()).lower()
+            return {
+                "python -m pytest": "pytest",
+                "py.test": "pytest",
+                "python -m unittest": "unittest",
+            }.get(label, label)
     return None
 
 
