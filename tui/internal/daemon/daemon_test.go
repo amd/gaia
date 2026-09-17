@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ type fakeDaemon struct {
 	statusCode   int
 	ensureStatus int
 	ensureDetail string
+	ensureBody   []byte
 	authSeen     []string
 	paths        []string
 }
@@ -100,8 +103,13 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"service": service, "pid": pid, "api_version": DAEMONAPIVersionForTest})
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			f.t.Fatalf("read ensure request body: %v", err)
+		}
 		f.mu.Lock()
 		code, detail := f.ensureStatus, f.ensureDetail
+		f.ensureBody = append([]byte(nil), body...)
 		f.mu.Unlock()
 		if code != http.StatusOK {
 			w.WriteHeader(code)
@@ -173,6 +181,12 @@ func (f *fakeDaemon) sawPath(want string) bool {
 		}
 	}
 	return false
+}
+
+func (f *fakeDaemon) lastEnsureBody() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.ensureBody...)
 }
 
 // testClient builds a Client with fast timeouts and no real launcher.
@@ -467,6 +481,7 @@ func TestDoFailsWhenTokenDidNotRotate(t *testing.T) {
 func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
 
 	inst, err := testClient(t, nil).EnsureAgent(context.Background(), "email")
 	if err != nil {
@@ -480,6 +495,45 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	}
 	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
 		t.Error("ensure was never called")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["mode"] != "user" {
+		t.Fatalf("ensure request mode = %q, want user", body["mode"])
+	}
+	if _, ok := body["dev_src_dir"]; ok {
+		t.Fatal("user-mode ensure request must not contain dev_src_dir")
+	}
+}
+
+func TestEnsureAgentSendsCallerDevCheckout(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
+	if body["mode"] != "dev" {
+		t.Fatalf("ensure request mode = %q, want dev", body["mode"])
+	}
+	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("resolve test checkout root: %v", err)
+	}
+	want := filepath.Join(
+		filepath.Clean(filepath.FromSlash(strings.TrimSpace(string(root)))),
+		"hub", "agents", "email", "python",
+	)
+	if body["dev_src_dir"] != want {
+		t.Fatalf("ensure request dev_src_dir = %q, want %q", body["dev_src_dir"], want)
 	}
 }
 
@@ -908,6 +962,12 @@ func TestDoFailsWhenTheRefreshedTokenIsAlsoRejected(t *testing.T) {
 // that leads with `pip install -e .` points at a workflow they cannot perform.
 func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	// Isolate from any real install evidence on the box running this test
+	// (a dev machine's own ~/.gaia or active venv), so the "genuinely
+	// uninstalled" branch is the one exercised here.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("VIRTUAL_ENV", "")
 
 	_, err := gaiaDaemonStart(context.Background())
 	if err == nil {
@@ -932,6 +992,76 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	if repoPath >= 0 && repoPath < installer {
 		t.Errorf("the repo-only remediation leads the message:\n%s", msg)
 	}
+}
+
+// TestGaiaDaemonStartInstalledButUnresolvable guards the other half of #2539:
+// someone who already has GAIA installed (a venv whose bin dir isn't on this
+// process's PATH, or a machine with a prior `gaia init`) must not be told to
+// (re)install it — the curl/pip remediation is actively wrong advice there.
+func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
+	t.Run("active venv missing from PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		venv := t.TempDir()
+		binDir := filepath.Join(venv, "bin")
+		if runtime.GOOS == "windows" {
+			binDir = filepath.Join(venv, "Scripts")
+		}
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("VIRTUAL_ENV", venv)
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with an installed venv should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "installed") || !strings.Contains(msg, venv) {
+			t.Errorf("message should name the venv it found as evidence:\n%s", msg)
+		}
+	})
+
+	t.Run("prior gaia init leaves ~/.gaia/config.json", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("VIRTUAL_ENV", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		gaiaDir := filepath.Join(home, ".gaia")
+		if err := os.MkdirAll(gaiaDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gaiaDir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with a prior `gaia init` should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "config.json") {
+			t.Errorf("message should name the config file it found as evidence:\n%s", msg)
+		}
+	})
 }
 
 // TestVersionErrorNamesBothVersions pins the two halves of a skew message.

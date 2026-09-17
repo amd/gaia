@@ -9,6 +9,45 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A content question ("who signed this?", "what date was agreed?") no
+  longer comes back unanswerable when the answer is sitting in the mailbox
+  (#3773).** `search_messages` used to fetch full bodies only when the model
+  explicitly passed `include_bodies=True` — a 4B-class local model didn't
+  reliably do that, so most content questions got a metadata-only answer or a
+  refusal. The default now auto-decides from the search query itself: a pure
+  filter (`from:`/`is:`/`label:`/date operators) still returns metadata only,
+  while a query carrying an actual search term escalates to full bodies
+  automatically, capped to a small already-narrowed result set so a broad
+  content-shaped query still can't overflow the context window the way #2763
+  fixed. `pre_scan_inbox` still never reads a message body on any surface —
+  its docstring now says so explicitly and points at `get_message`/
+  `search_messages` for content (wiring an actual body-reading path into
+  pre-scan is tracked separately as #2968).
+- **Asking to put a message back in your inbox now actually works (#2626).**
+  `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
+  add the inbox label and then archive the message in the same call, undoing
+  themselves while reporting success. Both now skip the archive when the
+  target resolves to `INBOX`; every other target keeps the existing
+  move-out-of-inbox behavior. Gmail only — a folder-based mailbox (Outlook)
+  has no `INBOX` label and rejects it with an actionable error.
+- **A calendar listing no longer looks complete when it isn't (#2664).**
+  `list_calendar_events` returned the provider's first page as if it were the
+  whole window, so a busy week silently lost everything past the 25th event.
+  The result now carries `count` and `truncated`, derived from the provider's
+  own continuation token (Google `nextPageToken`, Graph `@odata.nextLink`), on
+  both the agent tool and `GET /v1/email/calendar/events`. The tool description
+  tells the model to disclose a partial page rather than present it as the
+  full window.
+- **Pre-scan archive suggestions now put low-priority senders first and
+  priority senders last (#2777).** Archive suggestions are a disposal list,
+  so the cap must retain the safest candidates rather than the senders the
+  user explicitly marked as important. The priority-sender tool description
+  now also reflects that pre-scan ordering is active.
+- **Scheduled briefings now expose cache age on every surface (#2759).**
+  `GET /v1/email/briefing` and the agent `get_briefing` tool now return
+  `cache_age_seconds` and `stale`. Briefings at least 24 hours old are labeled
+  as stale for the user, but are not refused or regenerated automatically.
+
 - **An unexpected failure on `/v1/email/*` now returns parseable JSON instead of
   a bare text 500 (#3000).** Only four connector exception types were mapped to
   a status code, so anything else — a `KeyError` on an unexpected Graph payload,
@@ -86,6 +125,21 @@ contract version is tracked separately as
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
   this. `translate_query` now raises an actionable error naming the
   unsupported operator instead of degrading to a phrase match.
+- **An Outlook search on an ordinary quoted phrase containing a colon word
+  (`subject:"check in: monday"`) no longer raises the unsupported-operator
+  error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.
+  anywhere in the query with no notion of quoting, so a colon word inside a
+  quoted value was mistaken for an operator. It now only matches outside a
+  quoted span; a real unsupported operator that follows one still raises.
+- **A triage summary no longer reads as complete when one mailbox failed
+  during the scan (#3768).** When a provider outage skipped a connected
+  mailbox, the pre-scan envelope recorded it (`degraded`, `mailbox_errors`)
+  but the grounded fallback sentence quoted its counts unqualified — so an
+  urgent message in the skipped mailbox vanished behind a confident
+  all-covered answer. That sentence now carries the same "Outlook couldn't be
+  scanned (token expired); results below are from the rest of your mailboxes
+  only" caveat the suspicious-mail summary already used. A scan where every
+  mailbox answered reads exactly as before.
 
 ### Changed
 

@@ -73,6 +73,7 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._email",
         "gaia.agents.builder",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
@@ -212,6 +213,14 @@ setup(
             "torch>=2.0.0,<2.15",
             "torchvision<0.30.0",
             "torchaudio",
+        ],
+        # Speaker diarization. Its own extra, not part of "audio": this is a
+        # ~29 MB native wheel (Apache-2.0; the onnxruntime it vendors is MIT)
+        # with no torch in it, and the frozen agent needs it BUNDLED — the
+        # lazy pip-install path cannot work inside a PyInstaller app, where
+        # sys.executable is the .exe rather than an interpreter.
+        "diarize": [
+            "sherpa-onnx>=1.13,<2",
         ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced

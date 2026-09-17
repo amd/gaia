@@ -41,14 +41,24 @@ ALLOWED_SCHEMES = {"http", "https"}
 BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 
 
+#: Carrier-grade NAT (RFC 6598). ``ipaddress`` does not call it private, but
+#: Tailscale addresses every machine on the user's mesh from it.
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     """Return True if ``ip`` points at a private/internal range we must not fetch."""
+    # ::ffff:10.0.0.1 reaches 10.0.0.1 -- judge the IPv4 address it carries.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
     return (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
+        or (ip.version == 4 and ip in CGNAT_NETWORK)
     )
 
 

@@ -34,7 +34,8 @@ export function SettingsModal() {
 
     // ── Agent UI MCP server ───────────────────────────────────────────────────
     const [agentMCP, setAgentMCP] = useState<AgentMCPServerStatus | null>(null);
-    const [mcpPort, setMcpPort] = useState<number>(8765);
+    // Keep in sync with AGENT_UI_MCP_PORT in src/gaia/mcp/ports.py.
+    const [mcpPort, setMcpPort] = useState<number>(8766);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [urlCopied, setUrlCopied] = useState(false);
 
