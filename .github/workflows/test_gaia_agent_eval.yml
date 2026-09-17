@@ -83,7 +83,8 @@ on:
   # scenarios), tier-filtered via --tag (category+tags compose in
   # find_scenarios: tags OR within the list, AND with category).
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR BASE, so `[ main ]` skips
+    # stacked PRs (#2767). The `paths:` below are what scope this workflow.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The flagship agent itself (prompts, tools, gate policy, packaging
