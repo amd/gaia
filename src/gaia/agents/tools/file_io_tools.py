@@ -24,6 +24,25 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _directory_path_error(file_path: str) -> Dict[str, Any]:
+    """Error payload for a tool that expects a file but was given a directory.
+
+    ``os.path.exists`` is true for a directory, so the existing-path guard lets
+    it through to ``open()``, which raises ``IsADirectoryError`` into the
+    generic exception handler as a raw errno string (#3890). The message here
+    stays tool-agnostic rather than naming a specific listing tool, since
+    ``browse_directory`` isn't registered for every agent that composes this
+    mixin.
+    """
+    return {
+        "status": "error",
+        "error": (
+            f"'{file_path}' is a directory, not a file. List its contents "
+            "first, then use this tool on a file inside it."
+        ),
+    }
+
+
 def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
     """Run a post-write display step and report, never raise (#3676).
 
@@ -163,13 +182,6 @@ class FileIOToolsMixin:
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,
     and diffing capabilities for Python files.
-
-    Attributes (provided by CodeAgent via ValidationAndParsingMixin):
-        _validate_python_syntax: Method to validate Python syntax
-        _parse_python_code: Method to parse Python code and extract structure
-
-    NOTE: This mixin expects the agent to also have ValidationAndParsingMixin
-    for _validate_python_syntax() and _parse_python_code() methods.
     """
 
     def get_file_editing_system_prompt(self) -> str:
@@ -229,6 +241,8 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
@@ -279,63 +293,40 @@ class FileIOToolsMixin:
 
                     result["file_type"] = "python"
 
-                    # Validate syntax — use mixin method if available (CodeAgent),
-                    # otherwise fall back to stdlib ast (graceful degradation for ChatAgent)
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                        result["is_valid"] = validation["is_valid"]
-                        result["errors"] = validation.get("errors", [])
-                        is_valid = validation["is_valid"]
-                    else:
-                        try:
-                            ast.parse(content)
-                            result["is_valid"] = True
-                            result["errors"] = []
-                            is_valid = True
-                        except SyntaxError as e:
-                            result["is_valid"] = False
-                            result["errors"] = [str(e)]
-                            is_valid = False
+                    try:
+                        ast.parse(content)
+                        result["is_valid"] = True
+                        result["errors"] = []
+                        is_valid = True
+                    except SyntaxError as e:
+                        result["is_valid"] = False
+                        result["errors"] = [str(e)]
+                        is_valid = False
 
                     # Extract symbols
                     if is_valid:
-                        if hasattr(self, "_parse_python_code"):
-                            parsed = self._parse_python_code(content)
-                            # Handle both ParsedCode object and dict (for backward compat)
-                            if hasattr(parsed, "symbols"):
-                                result["symbols"] = [
-                                    {"name": s.name, "type": s.type, "line": s.line}
-                                    for s in parsed.symbols
-                                ]
-                            elif hasattr(parsed, "ast_tree"):
-                                tree = parsed.ast_tree
-                            else:
-                                tree = None
-                        else:
-                            tree = ast.parse(content)
-
-                        if "symbols" not in result:
-                            symbols = []
-                            for node in ast.walk(tree):
-                                if isinstance(
-                                    node, (ast.FunctionDef, ast.AsyncFunctionDef)
-                                ):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "function",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                                elif isinstance(node, ast.ClassDef):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "class",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                            result["symbols"] = symbols
+                        tree = ast.parse(content)
+                        symbols = []
+                        for node in ast.walk(tree):
+                            if isinstance(
+                                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "function",
+                                        "line": node.lineno,
+                                    }
+                                )
+                            elif isinstance(node, ast.ClassDef):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "class",
+                                        "line": node.lineno,
+                                    }
+                                )
+                        result["symbols"] = symbols
 
                 # Markdown file - extract structure
                 elif ext == ".md":
@@ -390,16 +381,13 @@ class FileIOToolsMixin:
                 Dictionary with write operation results
             """
             try:
-                # Validate syntax if requested (graceful degradation: stdlib ast if no mixin)
+                # Validate syntax if requested
                 if validate:
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                    else:
-                        try:
-                            ast.parse(content)
-                            validation = {"is_valid": True, "errors": []}
-                        except SyntaxError as e:
-                            validation = {"is_valid": False, "errors": [str(e)]}
+                    try:
+                        ast.parse(content)
+                        validation = {"is_valid": True, "errors": []}
+                    except SyntaxError as e:
+                        validation = {"is_valid": False, "errors": [str(e)]}
                     if not validation["is_valid"]:
                         return {
                             "status": "error",
@@ -523,6 +511,8 @@ class FileIOToolsMixin:
                 # Read current content
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
@@ -537,15 +527,12 @@ class FileIOToolsMixin:
                         )
                     return edit_error
 
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
@@ -1137,7 +1124,7 @@ class FileIOToolsMixin:
 
                 # Start building content
                 content = "# GAIA.md\n\n"
-                content += "This file provides guidance to GAIA Code Agent when working with code in this project.\n\n"
+                content += "This file provides guidance to the GAIA agent when working with code in this project.\n\n"
 
                 if project_name:
                     content += f"## Project: {project_name}\n\n"
@@ -1258,6 +1245,8 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -1294,15 +1283,12 @@ class FileIOToolsMixin:
                 )
                 modified_content = "".join(new_lines)
 
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",

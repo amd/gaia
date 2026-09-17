@@ -9,7 +9,7 @@ this module must not drag in RAG, the browser stack, or a model client.
 
 __all__ = ["build_gaia"]
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 _LAZY = {
     "GaiaAgent": "agent",
