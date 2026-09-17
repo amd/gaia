@@ -139,9 +139,10 @@ To also remove your data, run from a terminal:
 sudo apt remove gaia-desktop
 ```
 
-To also remove your data, use `apt purge` instead:
+Both `apt remove` and `apt purge` preserve your personal data in `~/.gaia`.
+To also remove your data, run as your own user:
 ```bash
-sudo apt purge gaia-desktop
+~/.gaia/venv/bin/gaia uninstall --purge
 ```
 
 ### Linux (AppImage)
