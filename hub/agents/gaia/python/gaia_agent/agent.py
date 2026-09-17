@@ -428,6 +428,36 @@ class GaiaAgent(
             )
         return active
 
+    def _recalled_skill_tools(self) -> List[str]:
+        """The inherited SKILL signal, plus ``remember_skill_lesson`` when a
+        skill is loaded.
+
+        Semantic selection cannot rank this tool. Someone correcting a skill
+        talks about their meeting brief, not about skills, so the query never
+        resembles the ``skills`` bundle the tool lives in — the same ranking
+        blind spot that moved the file-edit tools to CORE (#3752) and
+        ``load_skill`` to proactive discovery (#3235). Left to semantics it is
+        absent on exactly the turn it exists for, and the model answers from
+        the bundle menu's prose instead: asked to fix a transcript skill's
+        output format it reported the skill "has been updated on your machine"
+        having called nothing at all.
+
+        Conditional rather than CORE, because the flagship ships with no skills
+        and a tool that can only refuse is prompt tax. It rides the SKILL signal
+        rather than adding a second mechanism: cap-bound, ahead of semantic, and
+        empty on every off-state, so a build with nothing loaded — or with
+        learning switched off — stays byte-identical.
+        """
+        tools = super()._recalled_skill_tools()
+        if not getattr(self, "loaded_skills", None):
+            return tools
+        enabled = getattr(self, "learned_skills_enabled", None)
+        if callable(enabled) and not enabled():
+            return tools
+        if "remember_skill_lesson" not in tools:
+            tools.append("remember_skill_lesson")
+        return tools
+
     def _select_skills_for_turn(self, user_input: str) -> Optional[List[str]]:
         """This turn's active skill-body subset, or ``None`` for "render all".
 
