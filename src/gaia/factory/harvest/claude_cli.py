@@ -83,6 +83,7 @@ def run_claude(
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,  # the returncode is inspected below, with the output
         )
     except subprocess.TimeoutExpired as e:
         raise SystemExit(
