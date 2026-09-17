@@ -19,6 +19,30 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
+  five other confirmation-gated tools can now run through `/v1/gaia/query`:
+  the stream stays open on `needs_confirmation` and
+  `POST /v1/gaia/query/{run_id}/tool_decision` answers it. Previously the only
+  possible answer was a refusal, so those tools were unreachable over HTTP.
+  `POST /v1/gaia/sessions/{session_id}/bypass` turns the asking off for a
+  session. A run that cannot answer — no `session_id`, or
+  `can_answer_questions: false` — is still refused. See SKILL §8.
+- **Claude as an inference backend.** `provider: "claude"` sends the
+  conversation to Anthropic's API instead of the local server; `model` then
+  names a Claude model. Anything outside `lemonade` / `claude` is still a 400.
+- **`gaia-agent --serve` works from a pip install.** The console script pointed
+  past the transport dispatcher, so the documented HTTP mode exited with
+  "unrecognized arguments".
+
+### Changed
+
+- Contract `apiVersion` is now **2.13** (was 2.12) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
+
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
