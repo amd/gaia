@@ -61,17 +61,60 @@ _CHECK_COMMAND_RE = re.compile(
 # Argument keys that carry a shell command, in priority order.
 _COMMAND_KEYS: Tuple[str, ...] = ("command", "cmd", "script")
 
+#: Result key a tool sets to ``False`` to declare it refused the call before
+#: running it. Set at the refusal itself — see ``NOT_EXECUTED`` below.
+EXECUTED_KEY = "executed"
+
+#: Spread into a tool's pre-execution refusal: ``{**NOT_EXECUTED, "status": …}``.
+NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
+
+#: A declined confirmation never reaches the tool body, so there is nothing
+#: there to declare it. The loop's own denial shape says it for them.
+_DENIED_STATUS = "denied"
+
 _SCOPE_LINE_RE = re.compile(
     r"\n{1,2}" + re.escape(VERIFICATION_SCOPE_PREFIX) + r"[^\n]*\s*\Z"
 )
 
 
-def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
+def verification_check_label(
+    tool_name: str, tool_args: Any, result: Any = None
+) -> Optional[str]:
     """Short label when this call is a verification check, else ``None``.
 
     ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
     """
     name = (tool_name or "").strip()
+    if name == "execute_python_file" and isinstance(result, dict):
+        return_code = result.get("return_code")
+        if (
+            not check_was_executed(result)
+            or not isinstance(return_code, int)
+            or isinstance(return_code, bool)
+        ):
+            return None
+        output = "\n".join(
+            value
+            for key in ("stdout", "stderr")
+            if isinstance((value := result.get(key)), str)
+        )
+        summary = re.search(
+            r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
+            r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$",
+            output,
+        )
+        if summary and re.search(
+            r"\b[1-9]\d* (?:passed|failed|error|errors|xfailed|xpassed)\b",
+            summary.group(0),
+        ):
+            return "pytest"
+        if re.search(
+            r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
+            r"(?:OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$",
+            output,
+        ):
+            return "unittest"
+        return None
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):
@@ -80,8 +123,37 @@ def verification_check_label(tool_name: str, tool_args: Any) -> Optional[str]:
         command = tool_args.get(key)
         if isinstance(command, str) and command.strip():
             match = _CHECK_COMMAND_RE.search(command)
-            return " ".join(match.group(0).split()).lower() if match else None
+            if not match:
+                return None
+            label = " ".join(match.group(0).split()).lower()
+            return {
+                "python -m pytest": "pytest",
+                "py.test": "pytest",
+                "python -m unittest": "unittest",
+            }.get(label, label)
     return None
+
+
+def check_was_executed(result: Any) -> bool:
+    """False only when *result* says the call was stopped before it ran (#3677).
+
+    A command the allowlist refused and a command that ran and failed are both
+    ``{"status": "error"}``, so the footer called a rejected ``pytest`` a test
+    that "ran and did not pass" — and a *declined* one, which is
+    ``{"status": "denied"}``, a test that passed.
+
+    The refusal has to say so: a tool that stops a call before running it
+    spreads :data:`NOT_EXECUTED` into what it returns. Guessing from the shape
+    of the result instead gets it wrong in the more damaging direction — a real
+    failing test whose tool returned a bare error dict would be reported as
+    never having run, which is the same false claim with the sign flipped.
+    """
+    if not isinstance(result, dict):
+        return True
+    declared = result.get(EXECUTED_KEY)
+    if declared is not None:
+        return bool(declared)
+    return str(result.get("status", "")).lower() != _DENIED_STATUS
 
 
 def _names(executions: List[Dict[str, Any]], limit: int = 3) -> str:
@@ -105,16 +177,39 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     passed), ``partially verified`` (checks ran, not all passed), and
     ``unverified`` (no check ran at all).
 
+    A check the agent *requested* and never got to run — refused by the shell
+    allowlist, declined by the user — is none of those three. It is named as
+    not having run, and never counted as one that did (#3677).
+
     Each execution is ``{"tool": str, "check_label": str | None,
-    "failed": bool}`` — see ``Agent._note_verification_signal``.
+    "failed": bool, "ran": bool}`` — see ``Agent._note_verification_signal``.
+    ``ran`` defaults to True for a record written before the field existed.
     """
     executions = list(executions or [])
-    checks = [e for e in executions if e.get("check_label")]
+    ran = [e for e in executions if e.get("ran", True)]
+    checks = [e for e in ran if e.get("check_label")]
+    # A refusal the agent recovered from is not an unrun check. Retrying a
+    # refused command in an allowed form is the ordinary path, and listing the
+    # first attempt alongside the one that succeeded read as
+    # "pytest ran and passed. pytest did not run."
+    reached = {e.get("check_label") for e in checks}
+    blocked = [
+        e
+        for e in executions
+        if e.get("check_label")
+        and not e.get("ran", True)
+        and e["check_label"] not in reached
+    ]
     if not checks:
-        total = len(executions)
-        if total == 0:
+        if blocked:
+            body = (
+                f"unverified — {_names(blocked)} did not run (refused before "
+                "execution), so nothing was checked."
+            )
+        elif not ran:
             body = "unverified — no tools ran, so nothing was checked."
         else:
+            total = len(ran)
             plural = "" if total == 1 else "s"
             body = (
                 f"unverified — {total} tool call{plural} ran, none of them a "
@@ -123,17 +218,19 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     else:
         passed = [e for e in checks if not e.get("failed")]
         failed = [e for e in checks if e.get("failed")]
+        # A check left unrun keeps the claim below "verified", whatever the
+        # ones that did run reported.
+        unrun = f" {_names(blocked)} did not run." if blocked else ""
         if not failed:
-            body = f"verified — {_names(passed)} ran and passed."
+            state = "partially verified" if blocked else "verified"
+            body = f"{state} — {_names(passed)} ran and passed.{unrun}"
         elif not passed:
-            body = (
-                f"partially verified — {_names(failed)} ran and did not pass; "
-                "nothing else was checked."
-            )
+            tail = unrun or " Nothing else was checked."
+            body = f"partially verified — {_names(failed)} ran and did not pass.{tail}"
         else:
             body = (
                 f"partially verified — {_names(passed)} passed, "
-                f"{_names(failed)} did not."
+                f"{_names(failed)} did not.{unrun}"
             )
     statement = VERIFICATION_SCOPE_PREFIX + body
     if len(statement) > VERIFICATION_SCOPE_MAX_CHARS:

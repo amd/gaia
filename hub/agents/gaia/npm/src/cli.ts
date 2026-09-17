@@ -14,7 +14,7 @@
  * "continue anyway" path.
  */
 
-import { readdirSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -265,13 +265,40 @@ export function pathWithoutOwnShim(
       : resolved === ownBinDir;
   };
   const entries = rawPath.split(sep).filter((d) => d !== "");
-  const kept = entries.filter((d) => !same(d));
-  if (kept.length === entries.length) return kept.join(sep);
-  // A dir holding nothing but our own shim (an npx temp dir, node_modules/.bin)
-  // costs nothing to drop. A SHARED bin dir must NOT be dropped — that is where
-  // python3 / lemonade-server / the real `gaia` live — so it moves to the end
-  // instead, letting any other `gaia` on PATH win while its siblings survive.
-  return (isExclusivelyOurs(ownBinDir, ownName) ? kept : [...kept, ownBinDir]).join(sep);
+  const ours = entries.filter((d) => same(d) || shimTargetsScript(d, argv1));
+  const kept = entries.filter((d) => !ours.includes(d));
+  const shared = ours.filter((d) => !isExclusivelyOurs(d, same(d) ? ownName : "gaia"));
+  return [...kept, ...shared].join(sep);
+}
+
+/** Match npm's symlink or generated cmd/PowerShell wrapper to this script. */
+function shimTargetsScript(dir: string, script: string): boolean {
+  const canonical = (file: string): string | undefined => {
+    try {
+      const resolved = realpathSync(file);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    } catch {
+      return undefined; // no resolvable executable at this candidate
+    }
+  };
+  const expected = canonical(script);
+  if (!expected) return false;
+  for (const name of ["gaia", "gaia.cmd", "gaia.ps1"]) {
+    const shim = path.join(dir, name);
+    if (canonical(shim) === expected) return true;
+    if (!name.includes(".")) continue;
+    let contents: string;
+    try {
+      contents = readFileSync(shim, "utf8");
+    } catch {
+      continue; // this PATH directory does not contain a readable wrapper
+    }
+    for (const match of contents.matchAll(/["'](?:%dp0%|\$basedir)[\\/]([^"']+)["']/gi)) {
+      const target = path.resolve(dir, match[1]!.replace(/[\\/]/g, path.sep));
+      if (canonical(target) === expected) return true;
+    }
+  }
+  return false;
 }
 
 /** True when every file in `dir` is a shim for `name` (`gaia`, `gaia.cmd`, …). */

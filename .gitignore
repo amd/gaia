@@ -298,3 +298,8 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /context.md
 /savings.md
 /labels.txt
+
+# Local frozen-agent build (packaging/freeze.py)
+.venv-freeze/
+hub/agents/*/python/packaging/dist/
+hub/agents/*/python/packaging/build/

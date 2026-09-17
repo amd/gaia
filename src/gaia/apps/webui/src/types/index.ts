@@ -106,8 +106,15 @@ export interface AgentInfo {
      * flight. Undefined for local-only agents (treated as ``installed``).
      */
     status?: AgentCardState;
-    /** Installed version (semver), when known. */
+    /**
+     * Installed version (semver), when known. The catalog wire payload never
+     * sends this key directly — it sends ``installed_version`` (below). This
+     * field is populated client-side by ``mergeCatalogStatus`` so components
+     * have one place to read "the version to display".
+     */
     version?: string;
+    /** Installed version as reported by ``GET /api/agents/catalog`` (raw wire field). */
+    installed_version?: string;
     /** Latest version offered by the catalog — set when newer than ``version``. */
     latest_version?: string;
     /** Per-agent compatibility verdict from the backend's system check. */
@@ -142,6 +149,12 @@ export interface AgentInfo {
     eval_scorecard_url?: string;
     /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
     eval_score?: number;
+    /**
+     * Agent version the scorecard was actually measured at (#2965) — the
+     * scorecard is only regenerated on a fresh eval, not on every release, so
+     * this is often behind `version`. Absent when none published/parseable.
+     */
+    eval_score_version?: string;
 }
 
 /** Derived card state for the Agent Hub (issue #1097). */
@@ -718,6 +731,7 @@ export type StreamEventType =
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
     | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
+    | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -762,7 +776,17 @@ export interface StreamEvent {
     confirm_id?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
-    /** Timeout in seconds (for permission_request events). */
+    /** Question id to echo back on POST /chat/user-input (for needs_input events). */
+    request_id?: string;
+    /** The question text (for needs_input events). */
+    question?: string;
+    /** 2-4 mutually-exclusive answer options (for needs_input events). */
+    options?: Array<{ value: string; label: string; description: string }>;
+    /** Whether a free-text answer is also accepted (for needs_input events). */
+    allow_free_text?: boolean;
+    /** Whether the answer must never be echoed into visible history (for needs_input events). */
+    sensitive?: boolean;
+    /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;

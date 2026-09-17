@@ -1,0 +1,301 @@
+---
+title: "Transcription and meeting notes"
+description: "Point the flagship agent at a video or audio file and get back a speaker-attributed, error-corrected transcript with a summary and action items."
+icon: "microphone"
+---
+
+## Why this matters
+
+Today, turning a recording into usable notes is a multi-hour yak-shave that GAIA can't
+help with. The agent has no transcription tool at all, and the CLI back-door that does
+exist (`gaia test --test-type asr-file-transcription`) is broken: it downloads 2.9 GB of
+Whisper weights and then dies on `ModuleNotFoundError: No module named
+'torch.utils.serialization'`, exiting 0 so nothing signals the failure (#3440, #3180).
+
+After this change, a user types one thing into the TUI:
+
+```
+transcribe C:\recordings\staff-meeting.mp4 and give me the action items
+```
+
+and gets back a speaker-attributed transcript with real names, obvious mis-hearings
+corrected, and a brief with decisions and action items — all local, on the model already
+resident in Lemonade.
+
+## What's already here
+
+Most of this feature exists; almost none of it is connected.
+
+| Piece | State |
+|---|---|
+| Speech-to-text | **Lemonade ships it.** `POST /api/v1/audio/transcriptions`, verified on v11.5.0 |
+| Word timestamps + confidence | **Yes** — richer than Lemonade's docs claim (see below) |
+| Summary / action items / decisions | **Exists** — `hub/skills/summarize/` already handles transcripts |
+| Transcript Q&A | **Exists** — `index_document` + `query_documents` in `RAGToolsMixin` |
+| Agent-facing transcription tool | **Missing** — nothing in `KNOWN_TOOLS` |
+| Media decode (mp4 → wav) | **Missing** — ffmpeg is not a GAIA dependency |
+| Speaker diarization | **Missing** — no model in Lemonade's catalog |
+
+### Lemonade returns more than its docs admit
+
+The docs describe `verbose_json` as segment-level. The running server actually returns
+**word-level timestamps and per-word confidence**. Verified against v11.5.0:
+
+```json
+{"detected_language": "english", "duration": 12.01,
+ "segments": [{"start": 0.0, "end": 3.64, "avg_logprob": -0.075,
+   "text": " Alice here. I think we should ship the transcription",
+   "words": [{"word": " Alice", "start": 0.12, "end": 0.69, "probability": 0.920}, ...]}]}
+```
+
+This is the whole design unlock, and it settles two questions at once.
+
+**It makes error-correction targetable rather than a rewrite.** In a probe, Whisper
+mis-heard "diarization" as "diurization" — and the two lowest-confidence tokens in the
+entire file were exactly the two that composed the error (`" di"` at 0.603, `"ur"` at
+0.318). So the correction pass sends the model only the low-confidence spans plus
+surrounding context and asks for targeted repairs. Handing an LLM a full transcript and
+saying "fix the errors" invites silent fabrication across text that was already correct;
+this way the edit surface is bounded and every change is anchored to a measured signal.
+
+**It gives diarization something to align against.** Speaker turns are merged onto word
+timestamps, which is how the reference pipeline below already works.
+
+Performance is a non-issue: 12 s of audio transcribed in **1.3 s warm** (~9× realtime) on
+GPU, so a 46-minute meeting is roughly 5 minutes of ASR.
+
+## The reference pipeline, reverse-engineered
+
+A validated end-to-end run exists on the maintainer's machine (a 46-minute, 4-speaker
+meeting). It is **local-only test data and is deliberately not in this repo**; the shapes
+below are the contract to reproduce, not the content.
+
+```
+video.mp4 (204 MB) ──ffmpeg──> audio.m4a ──┐
+                                            │
+                    whisperx --diarize ─────┤  654 segments
+                    (whisper large + pyannote)  {start, end, text, avg_logprob,
+                                            │    speaker: SPEAKER_00..03,
+                                            │    words: [{word, start, end, score, speaker}]}
+                                            ▼
+                    LLM pass 1 ────────> transcript_named.txt
+                    (name resolution      "Speaker key (inferred):
+                     + error repair)        <Name> = SPEAKER_03 (role; host)"
+                                            ▼
+                    LLM pass 2 ────────> meeting_brief.md
+                                          Executive Brief · Key Facts · Scope ·
+                                          Action Items · Insights · Risks/Blockers
+```
+
+The tool was **WhisperX with `--diarize`**, identified from the output schema: a
+top-level `word_segments` array, word-level `score` rather than Whisper's native
+`probability`, `speaker` stamped on every word, and `tokens` / `no_speech_prob` stripped
+by the alignment pass. WhisperX is a stack of three components, and the quality of that
+reference output is attributable to all three — not to the diarizer alone:
+
+| Stage | Reference (WhisperX) | This plan |
+|---|---|---|
+| ASR | faster-whisper, **large-v3** | Lemonade `/api/v1/audio/transcriptions` |
+| Word alignment | wav2vec2 forced alignment | Lemonade native word timestamps (DTW) |
+| Diarization | pyannote | sherpa-onnx (same segmentation network) |
+
+**Lemonade can match the reference model exactly.** Confirmed against the v11.5.0
+catalog — the ASR half of WhisperX is fully replaceable:
+
+| Model | Size (GB) | Backend |
+|---|---|---|
+| Whisper-Large-v3 | 3.10 | whispercpp |
+| **Whisper-Large-v3-Turbo** | **1.62** | **whispercpp** ← default |
+| Whisper-Medium / Small / Base / Tiny | 1.53 / 0.49 / 0.14 / 0.07 | whispercpp |
+| whisper-v3-turbo-FLM | 0.62 | flm (NPU) |
+
+Default to **Whisper-Large-v3-Turbo**: near-large-v3 quality at half the download, on the
+`whispercpp` backend that returns the segment and word timestamps diarization needs.
+
+The FLM build runs on NPU but **returns no segment timestamps**, so it cannot be used
+when `diarize=True` — offer it only for quick, unattributed transcription, and say so
+rather than silently producing a speakerless result.
+
+Two further findings drive the design:
+
+**The speaker step is genuinely two stages, not one.** Acoustic diarization produces
+anonymous `SPEAKER_00..03`; a separate LLM pass reads the transcript and maps those to
+real names and roles from content cues (self-introductions, direct address, who answers
+what). The reference output records this honestly as a `Speaker key (inferred)` block.
+Stage two is cheap and pure-LLM — it needs no new dependency and should be built
+regardless of which diarization backend wins.
+
+**A second input shape already exists.** One reference file is a Teams-exported
+transcript that *arrives* with names and timestamps. That path needs no ASR and no
+diarization at all — it skips straight to the brief. Worth handling, since it's free.
+
+## The dependency problem
+
+You asked for installs to be lazy — nothing at `gaia init`, everything on first
+transcribe. That requirement is right, and it turns out to be load-bearing, because it
+is **incompatible with pyannote**.
+
+Both `pyannote/speaker-diarization-community-1` and `segmentation-3.0` are gated on
+HuggingFace — verified: anonymous download returns **401**. Clearing that gate requires a
+logged-in browser click-through and an HF token, per user. An agent cannot complete an
+interactive web license acceptance in the middle of a turn. The lazy path would be:
+
+> *"I need to transcribe this. First, open a browser, create a HuggingFace account,
+> accept a license, generate a token, and set `HF_TOKEN`. Then I'll download ~1.5–2.5 GB
+> of PyTorch. Then we can start."*
+
+That is not a feature. And it's the same wall #1529 already hit and documented.
+
+### Measured comparison
+
+I benchmarked the alternative rather than trusting model cards. `sherpa-onnx` runs the
+**same pyannote segmentation network**, exported to ONNX and redistributed under its
+original MIT licence, plus a WeSpeaker embedding model — the same two networks pyannote
+3.1 wraps — with clustering in C++ instead of PyTorch.
+
+| | pyannote.audio 4.x | sherpa-onnx 1.13.7 |
+|---|---|---|
+| Gating | 1 HF licence + token, **401 anonymous** | **None** — plain GitHub release download |
+| Install size | ~1.5–2.5 GB (torch, lightning, matplotlib) | **40 MB**, no torch |
+| Models | ~33 MB | 32 MB |
+| 46 min audio, CPU | 15–37 min (measured 3.0/3.1 on 8 vCPU) | **5.6 min measured** |
+| Windows + AMD accel | CPU only — Ryzen AI is not on the ROCm-Windows matrix, and GAIA pins the CPU torch index | CPU only, but fast enough that it doesn't matter |
+| Licence | CC-BY-4.0 weights, but pulls the commercial `pyannoteai-sdk` | Apache-2.0 code, MIT weights |
+
+pyannote does run on Windows — that was never in doubt, and the reference pipeline proves
+it. It is slower on CPU, ~50× larger, and gated.
+
+The one honest mark against sherpa-onnx: **nobody publishes its diarization accuracy.**
+Same segmentation and embedding networks as pyannote 3.1, different clustering, and no
+overlapping-speech labels. For 2–5 person meetings that gap is small; on overlap-heavy
+audio it is real. `cluster_threshold` also needs tuning — at the default, auto-clustering
+found 7–8 speakers where ground truth was 4.
+
+**Recommendation: ship sherpa-onnx as the default; keep pyannote as an opt-in upgrade**
+for users who already have a token and want the last few DER points. Phase 2 settles the
+accuracy question empirically by scoring both against the reference meeting, whose
+4-speaker ground truth is already known.
+
+## Design
+
+One new tool mixin, one skill, and a deletion.
+
+### `AudioToolsMixin` — `src/gaia/agents/tools/audio_tools.py`
+
+Registered in `KNOWN_TOOLS` as `audio`, composed into the flagship.
+
+| Tool | Purpose |
+|---|---|
+| `transcribe_media(path, diarize=True, language=None)` | Decode → Lemonade ASR → optional diarization → merged transcript |
+| `transcription_status()` | Report which optional components are present, without installing |
+
+`transcribe_media` returns segments with `start`, `end`, `text`, `speaker`, word-level
+timing, and a `low_confidence_spans` list for the correction pass. It writes the raw
+transcript to disk **before** any later stage runs, so a failure in naming or
+summarization never costs the expensive ASR work.
+
+### Lazy bootstrap — `src/gaia/audio/bootstrap.py`
+
+Runs only inside `transcribe_media`, never at import or init.
+
+- **ffmpeg** — probe `PATH`; if absent, install via winget/brew/apt and re-probe.
+- **sherpa-onnx** — `pip install` into the running environment on first `diarize=True`.
+- **Diarization models** — ~32 MB from GitHub releases, cached under `~/.gaia/models/diarization/`.
+
+Every step is announced through the existing `status` SSE event so the TUI shows real
+progress rather than a dead spinner. If a step can't complete it **fails loudly** with
+the exact command and a docs link — no silent degradation to an unattributed transcript.
+Requesting `diarize=True` without a working diarizer is an error, not a quiet downgrade.
+
+Bootstrap is also exposed as `gaia install media` for users who'd rather pre-warm than
+wait mid-conversation.
+
+### The 180-second wall
+
+The agent loop abandons any tool that hasn't returned in 180 s
+(`GAIA_AGENT_TOOL_TIMEOUT`). A 46-minute recording takes ~5 minutes to transcribe, so the
+first real end-to-end run failed twice — while the transcript had in fact completed and
+was sitting on disk. The agent reported a timeout for work that had succeeded.
+
+`transcribe_media` therefore declares `@tool(timeout=...)`, the per-tool override the
+framework already supports. Worth knowing for any future tool that legitimately runs for
+minutes: the default will silently eat it, and the failure looks like a hang rather than
+a timeout.
+
+### `hub/skills/transcribe-meeting/SKILL.md`
+
+Drives the pipeline; ships no code. It owns the judgement, not the plumbing:
+
+1. Detect input shape — media file vs. already-named transcript (the Teams case).
+2. Call `transcribe_media`.
+3. **Name resolution** — map `SPEAKER_NN` to real names from content cues; emit a
+   `Speaker key (inferred)` block and never assert a name it can't support.
+4. **Targeted correction** — repair only `low_confidence_spans`; leave the rest alone.
+5. Write the transcript, index it via `index_document` so follow-up Q&A works.
+6. Delegate the brief to the existing `summarize` skill — don't reinvent it.
+
+`tools_required: [transcribe_media, index_document, read_file, write_file]`.
+
+### Delete the legacy ASR path
+
+`WhisperAsr`'s **file** path is broken on current Python/torch, needs ffmpeg *and* 2.9 GB
+of weights, and is strictly worse than the Lemonade endpoint. Phase 1 removes
+`WhisperAsr.transcribe_file` and the `asr-file-transcription` CLI test type, closing #215,
+#3440 and #3180.
+
+**`openai-whisper` cannot be dropped yet, and the plan shouldn't pretend otherwise.**
+`WhisperAsr`'s live-microphone path still depends on it, and replacing that means moving
+to Lemonade's realtime WebSocket endpoint — which is #372, not this work. So the `talk`
+extra keeps `openai-whisper` (and its torch pull) until #372 lands; the dependency win is
+deferred, not delivered here. What Phase 1 delivers is that the *file* path stops being
+broken and stops needing torch at all.
+
+## Phases
+
+**Phase 1 — transcribe, correct, summarize.** ffmpeg bootstrap, Lemonade ASR tool,
+skill, RAG indexing, legacy removal. No speakers yet. Ships a working feature for
+single-speaker audio and the Teams-transcript case.
+
+**Phase 2 — speakers.** sherpa-onnx bootstrap, merge onto word timestamps, LLM name
+resolution. Score both backends against the reference meeting and record the DER
+delta before defaulting.
+
+**Phase 3 — polish.** `gaia install media` pre-warm, pyannote as opt-in, docs.
+
+Ambient capture, meeting detection and consent controls stay with #1529. Live streaming
+transcription stays with #372/#700.
+
+## Validation
+
+Unit tests mock the boundaries, so per repo policy they must assert the **shape** of the
+outgoing Lemonade call — multipart body, WAV content type, valid `response_format` — not
+merely that a client method was invoked. One `require_lemonade` integration test exercises
+the real endpoint.
+
+The real gate is the reference meeting, run from a **cold state** — no ffmpeg, no
+sherpa-onnx, no cached models — because that is the state a new user is in and the state
+every previous validation of this feature skipped:
+
+- [ ] 46-min mp4 → transcript with 4 speakers correctly separated
+- [ ] Speaker names resolved to the 4 known participants
+- [ ] Brief contains the action items present in the reference brief
+- [ ] Cold machine: one query, no manual pip/ffmpeg/token steps
+- [ ] Missing ffmpeg with no package manager fails loudly with an actionable message
+- [ ] Transcript survives on disk when a later stage fails
+- [ ] Follow-up "what did X say about Y" answers from the indexed transcript
+- [ ] Driven end-to-end through the TUI via the control API, not just the Python API
+
+## Issue reconciliation
+
+| Issue | Disposition |
+|---|---|
+| #215 Switch ASR to Lemonade | **Closed by Phase 1** — this is exactly it |
+| #3440 / #3180 ffmpeg silent failure | **Closed by Phase 1** — path deleted, bootstrap replaces it |
+| #700 Meeting notes + diarization | **Narrowed** — file-based diarization moves here; live streaming stays |
+| #1529 Ambient capture | **Narrowed** — transcribe/diarize/notes engine moves here; ambient capture, meeting detection and consent stay |
+| #1498 Meeting Companion agent | **Closed — the agent should not exist.** Its features consolidate into the flagship's tool surface plus this skill, per the agent-collapse decision. Anything it needs beyond that becomes a skill, not a package |
+| #374 REST transcription endpoint | Unaffected |
+| #372 Streaming ASR | Unaffected |
+
+#1529 also cites `src/gaia/agents/summarize/prompts.py`, which no longer exists — the
+summarizer is now `hub/skills/summarize/`. Worth fixing on the issue.

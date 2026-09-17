@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -167,6 +168,51 @@ describe("pathWithoutOwnShim", () => {
     const raw = [path.resolve("/usr/local/bin"), path.resolve("/usr/bin")].join(sep);
     const argv1 = path.resolve("/elsewhere/bin/gaia");
     expect(pathWithoutOwnShim(raw, argv1)!.split(sep).length).toBe(2);
+  });
+
+  it("finds npm wrappers when argv1 names the package script", () => {
+    const bin = path.join(tmp, "node_modules", ".bin");
+    const script = path.join(tmp, "node_modules", "@amd-gaia", "gaia", "dist", "cli.js");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "");
+    fs.writeFileSync(path.join(bin, "gaia.cmd"), '@node "%dp0%/../@amd-gaia/gaia/dist/cli.js" %*');
+    const pythonBin = path.join(tmp, "python", "Scripts");
+    expect(pathWithoutOwnShim([bin, pythonBin].join(sep), script)).toBe(pythonBin);
+  });
+
+  it("recognizes PowerShell wrappers and keeps their shared tools", () => {
+    const bin = path.join(tmp, "global npm");
+    const script = path.join(bin, "node_modules", "@amd-gaia", "gaia", "dist", "cli.js");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "");
+    fs.writeFileSync(path.join(bin, "gaia.ps1"), '& node "$basedir/node_modules/@amd-gaia/gaia/dist/cli.js" $args');
+    fs.writeFileSync(path.join(bin, "unrelated.cmd"), "");
+    const pythonBin = path.join(tmp, "python");
+    expect(pathWithoutOwnShim([bin, pythonBin].join(sep), script)).toBe([pythonBin, bin].join(sep));
+  });
+
+  it.runIf(process.platform === "win32")("launches a real npm cmd wrapper and selects the Python CLI", () => {
+    const bin = path.join(tmp, "node_modules", ".bin");
+    const script = path.join(tmp, "node_modules", "@amd-gaia", "gaia", "dist", "cli.js");
+    const pythonBin = path.join(tmp, "python", "Scripts");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.mkdirSync(pythonBin, { recursive: true });
+    fs.writeFileSync(script, "console.log(JSON.stringify(process.argv[1]))");
+    const wrapper = path.join(bin, "gaia.cmd");
+    fs.writeFileSync(wrapper, [
+      "@echo off", 'set "dp0=%~dp0"',
+      `"${process.execPath}" "%dp0%\\..\\@amd-gaia\\gaia\\dist\\cli.js" %*`,
+    ].join("\r\n"));
+    fs.writeFileSync(path.join(pythonBin, "gaia.cmd"), "@echo python-daemon-ok\r\n");
+    const actualArgv1 = JSON.parse(execSync(`"${wrapper}"`, { encoding: "utf8" }));
+    expect(actualArgv1).toBe(script);
+    const childPath = pathWithoutOwnShim([bin, pythonBin].join(sep), actualArgv1)!;
+    const output = execSync("gaia daemon start", {
+      encoding: "utf8", env: { ...process.env, PATH: childPath, Path: childPath },
+    });
+    expect(output.trim()).toBe("python-daemon-ok");
   });
 
   it("survives an unset PATH or an unknown argv[1]", () => {

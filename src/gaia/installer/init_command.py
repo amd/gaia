@@ -674,8 +674,8 @@ class InitCommand:
         # `"agent": "chat"` (they resolve to the same standalone wheel), so
         # keying off the declared agent -- not a hardcoded profile-name
         # literal -- naturally covers both without a special case, and never
-        # touches profiles for other hub agents (sd/code/analyst/email/...),
-        # each of which has its own, separately-owned install lifecycle.
+        # touches profiles for other hub agents (gaia/email/...), each of
+        # which has its own, separately-owned install lifecycle.
         has_hub_agent_check = profile_config.get("agent") in HUB_INSTALL_AGENTS
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
@@ -844,7 +844,14 @@ class InitCommand:
                 config.default_device = "npu" if self.profile == "npu" else "gpu"
                 config.save()
             except Exception as e:
-                log.warning(f"Failed to save config: {e}")
+                self._print_error(
+                    f"Failed to save profile '{self.profile}' to "
+                    f"~/.gaia/config.json: {e}. Setup otherwise completed, but "
+                    "GAIA will fall back to its default profile until this is "
+                    "fixed -- re-run `gaia init` or `gaia config set profile "
+                    f"{self.profile}` once the cause is resolved."
+                )
+                return 1
 
             # A hard Agent UI build failure means the profile's UI isn't
             # usable -- don't report plain success for it. verify_setup and
@@ -1951,7 +1958,7 @@ class InitCommand:
             # Ensure proper context size for this profile
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
-            if min_ctx:
+            if min_ctx and not self.skip_chat_model:
                 from gaia.llm.lemonade_manager import LemonadeManager
 
                 self.console.print()

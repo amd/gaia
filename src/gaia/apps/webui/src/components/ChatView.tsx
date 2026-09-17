@@ -333,37 +333,46 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         const t = log.chat.time();
         setLoadingMessages(true);
         let cancelled = false;
+        let loading = false;
 
-        const loadMessages = (isInitial = false) => {
-            api.getMessages(sessionId)
-                .then((data) => {
-                    if (cancelled) return;
-                    const msgs = (data.messages || []).map((m: any) => ({
-                        ...m,
-                        // Map snake_case agent_steps from API to camelCase agentSteps
-                        agentSteps: m.agentSteps || m.agent_steps || undefined,
-                        // Map inference_stats from API to stats field
-                        stats: m.stats || m.inference_stats || undefined,
-                    }));
-                    if (isInitial) {
-                        setMessages(msgs);
-                        lastMsgCountRef.current = msgs.length;
-                        log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
-                    } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
-                        // New messages from external source (MCP, API) — refresh
-                        log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
-                        setMessages(msgs);
-                        lastMsgCountRef.current = msgs.length;
-                    }
-                })
-                .catch((err) => {
-                    if (cancelled) return;
-                    if (isInitial) {
-                        log.chat.error(`Failed to load messages for session=${sessionId}`, err);
-                        setMessages([]);
-                    }
-                })
-                .finally(() => { if (!cancelled && isInitial) setLoadingMessages(false); });
+        const loadMessages = async (isInitial = false) => {
+            if (cancelled || loading) return;
+            loading = true;
+            try {
+                if (!isInitial) {
+                    if (useChatStore.getState().isStreaming) return;
+                    const total = await api.getMessageCount(sessionId);
+                    if (cancelled || total === lastMsgCountRef.current || useChatStore.getState().isStreaming) return;
+                }
+                const data = await api.getMessages(sessionId);
+                if (cancelled) return;
+                const msgs = (data.messages || []).map((m: any) => ({
+                    ...m,
+                    // Map snake_case agent_steps from API to camelCase agentSteps
+                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                    // Map inference_stats from API to stats field
+                    stats: m.stats || m.inference_stats || undefined,
+                }));
+                if (isInitial) {
+                    setMessages(msgs);
+                    lastMsgCountRef.current = msgs.length;
+                    log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
+                } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
+                    // New messages from external source (MCP, API) — refresh
+                    log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
+                    setMessages(msgs);
+                    lastMsgCountRef.current = msgs.length;
+                }
+            } catch (err) {
+                if (cancelled) return;
+                if (isInitial) {
+                    log.chat.error(`Failed to load messages for session=${sessionId}`, err);
+                    setMessages([]);
+                }
+            } finally {
+                loading = false;
+                if (!cancelled && isInitial) setLoadingMessages(false);
+            }
         };
 
         loadMessages(true);
@@ -824,6 +833,28 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         data: {
                             action: typeof event.action === 'string' ? event.action : '',
                             summary: typeof event.summary === 'string' ? event.summary : '',
+                        },
+                    });
+                    return;
+                }
+
+                // ── Mid-run question (#2595) — answerable, non-terminal: the
+                // agent blocks server-side until NeedsInputCard posts an
+                // answer via POST /chat/user-input, then the run continues.
+                if (event.type === 'needs_input') {
+                    if (!event.request_id) {
+                        console.error('[ChatView] needs_input event missing request_id, ignoring');
+                        return;
+                    }
+                    appendCard({
+                        render: 'needs_input',
+                        data: {
+                            session_id: sessionId,
+                            request_id: event.request_id,
+                            question: typeof event.question === 'string' ? event.question : '',
+                            options: Array.isArray(event.options) ? event.options : [],
+                            allow_free_text: event.allow_free_text !== false,
+                            sensitive: Boolean(event.sensitive),
                         },
                     });
                     return;

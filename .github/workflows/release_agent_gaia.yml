@@ -399,7 +399,7 @@ jobs:
           # interpreter to install into. Without it faiss/pypdf are absent, the
           # RAG tools still register, and document Q&A fails on every call.
           uv pip install --python .venv-freeze \
-            -e ".[api,rag]" \
+            -e ".[api,rag,diarize]" \
             -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
             pyinstaller
