@@ -454,7 +454,7 @@ These mechanisms run automatically -- you don't need to manage them.
 - **Confidence decay** -- entries not accessed for 30+ days are multiplied by 0.9 once per session start, so stale knowledge fades in favor of what you actively use.
 - **Fact lineage** -- when a fact changes, the old version is kept with a `superseded_by` link and its original timestamp, so you can answer "what framework were we using in March?" The dashboard's superseded view shows the full chain.
 - **Automatic error learning** -- a failed tool call is stored as an error pattern; the next session's system prompt includes a "Known errors to avoid" list so the agent doesn't repeat it.
-- **Session consolidation** -- conversations older than 14 days are distilled into durable notes (extracted facts live indefinitely; raw conversations are pruned at 90 days), so old context is never lost.
+- **Session consolidation** -- conversations older than 14 days are distilled into durable notes (extracted facts live indefinitely; raw conversations are pruned at 90 days, but only once their whole session has been distilled), so old context is never lost.
 - **Background reconciliation** -- on startup the agent resolves contradictory facts across sessions, superseding the older item and boosting the newer (and reinforcing) one's confidence.
 
 ### Procedural memory (skills)

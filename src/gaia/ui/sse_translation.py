@@ -641,7 +641,11 @@ def render_invocation(args: Dict[str, Any]) -> str:
         parts.append(f'{key}="{text}"')
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:
-        clause = clause[:INVOCATION_TOTAL_CHARS] + "…"
+        hidden = len(clause) - INVOCATION_TOTAL_CHARS
+        clause = (
+            clause[:INVOCATION_TOTAL_CHARS]
+            + f"… [+{hidden:,} more characters not shown]"
+        )
     return clause
 
 

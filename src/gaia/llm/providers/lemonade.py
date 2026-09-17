@@ -308,6 +308,7 @@ class LemonadeProvider(LLMClient):
 
         self._backend = LemonadeClient(**backend_kwargs)
         self._model = model
+        self._last_model = model
         self._system_prompt = system_prompt
         # Token usage from the most recent non-streaming ``chat()`` call
         # (#1891) — the OpenAI-compatible ``/chat/completions`` response's
@@ -349,6 +350,7 @@ class LemonadeProvider(LLMClient):
 
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
+        self._last_model = effective_model
         tool_capable = is_tool_calling_model(effective_model)
 
         # Prepend system prompt if set
@@ -505,6 +507,13 @@ class LemonadeProvider(LLMClient):
         return vlm.extract_from_image(images[0], prompt=prompt)
 
     def get_performance_stats(self) -> dict:
+        if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):
+            # Server-global stats can belong to a concurrent local or cloud request.
+            return {
+                key: value
+                for key, value in (self._last_usage or {}).items()
+                if key != "tokens_per_second"
+            }
         return self._backend.get_stats() or {}
 
     def get_last_usage(self) -> Optional[dict]:

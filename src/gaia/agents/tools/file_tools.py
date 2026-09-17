@@ -76,15 +76,20 @@ class FileSearchToolsMixin:
         through the read tools (CWE-862). ``FileIOToolsMixin`` already
         gates its reads this way; this mirrors it.
 
-        Returns an error dict when ``path`` is outside the sandbox, or
-        ``None`` when the read is permitted (or no validator is attached).
+        The allowlist alone is not the whole gate: ``validate_read`` also
+        refuses secrets sitting *inside* an allowed directory, so a scope that
+        legitimately covers ``$HOME`` still cannot read ``~/.ssh/id_rsa``.
+
+        Returns an error dict when ``path`` is outside the sandbox or is a
+        credential file, or ``None`` when the read is permitted (or no
+        validator is attached).
         """
         validator = self._get_path_validator()
-        if validator is not None and not validator.is_path_allowed(path):
-            return {
-                "status": "error",
-                "error": f"Access denied: '{path}' is not in allowed paths",
-            }
+        if validator is None:
+            return None
+        is_allowed, reason = validator.validate_read(path)
+        if not is_allowed:
+            return {"status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:

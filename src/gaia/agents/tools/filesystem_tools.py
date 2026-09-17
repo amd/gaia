@@ -64,10 +64,10 @@ class FileSystemToolsMixin:
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
         resolved = Path(path).expanduser().resolve()
-        if self._path_validator and not self._path_validator.is_path_allowed(
-            str(resolved)
-        ):
-            raise ValueError(f"Access denied: {resolved}")
+        if self._path_validator:
+            allowed, reason = self._path_validator.validate_read(str(resolved))
+            if not allowed:
+                raise ValueError(f"Access denied: {reason}")
         return resolved
 
     def _get_default_excludes(self) -> set:
@@ -652,6 +652,22 @@ class FileSystemToolsMixin:
                         effective_type = "content"
                     else:
                         effective_type = "name"
+
+                # Validate a caller supplied scope before any search path can
+                # answer; named scopes fan out over folders that need not exist.
+                if scope not in ("smart", "home", "cwd", "everywhere"):
+                    scope_root = Path(scope).expanduser().resolve()
+                    if not scope_root.exists():
+                        return (
+                            f"Error: '{scope_root}' does not exist. Pass an existing "
+                            "folder as scope, or use 'smart', 'home', 'cwd', "
+                            "or 'everywhere'."
+                        )
+                    if not scope_root.is_dir():
+                        return (
+                            f"Error: '{scope_root}' is not a directory. Pass the "
+                            "folder to search as scope, not a file."
+                        )
 
                 # Try index first if available
                 if mixin._fs_index and effective_type in (
@@ -1325,6 +1341,13 @@ class FileSystemToolsMixin:
                                     continue
 
                                 try:
+                                    mixin._validate_path(entry.path)
+                                except ValueError as exc:
+                                    logger.debug(
+                                        "Skipping unreadable search result: %s", exc
+                                    )
+                                    continue
+                                try:
                                     with open(
                                         entry.path,
                                         "r",
@@ -1347,8 +1370,10 @@ class FileSystemToolsMixin:
                                                     }
                                                 )
                                                 break  # One match per file
-                                except (OSError, UnicodeDecodeError):
-                                    pass  # Skip unreadable files during content search
+                                except (OSError, UnicodeDecodeError) as exc:
+                                    logger.debug(
+                                        "Cannot search %s: %s", entry.path, exc
+                                    )
                         except (PermissionError, OSError):
                             continue
                 except (PermissionError, OSError):

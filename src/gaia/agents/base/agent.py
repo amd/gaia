@@ -913,26 +913,33 @@ Do NOT wrap conversational replies in JSON.
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
 
-        # Read base_url from environment if not provided
+        # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+            base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            LemonadeManager.ensure_ready(
-                min_context_size=min_context_size,
-                quiet=silent_mode,
-                base_url=base_url,
-                required_min_device=required_min_device,
-                device=device,
-            )
+            if cloud_model_provider(model_id):
+                # The local manager preloads a chat model even on an idle server.
+                LemonadeClient(base_url=base_url, verbose=False).health_check()
+            else:
+                LemonadeManager.ensure_ready(
+                    min_context_size=min_context_size,
+                    quiet=silent_mode,
+                    base_url=base_url,
+                    required_min_device=required_min_device,
+                    device=device,
+                )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -3427,18 +3434,26 @@ Do NOT wrap conversational replies in JSON.
         timeout. On success the worker's return value is returned and any
         exception it raised is re-raised in the caller (so the existing
         ``_execute_tool`` error handling applies unchanged). On timeout a
-        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
-        cannot kill a thread) but it is a daemon, so it cannot block process
-        exit and the agent loop is freed immediately.
+        ``ToolExecutionTimeout`` is raised and the worker's cancellation flag is
+        set. Python cannot kill a thread, so a tool that runs for minutes opts
+        out by polling ``tools.tool_cancelled()``; without that the abandoned
+        worker runs to completion and a retry puts a second copy of the same
+        expensive job on the same hardware (#2600).
         """
+        from gaia.agents.base.tools import set_tool_cancel_event
+
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
+        cancel = threading.Event()
 
         def _target():
+            set_tool_cancel_event(cancel)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
+            finally:
+                set_tool_cancel_event(None)
 
         # A new thread starts with an EMPTY context, so the agent-identity
         # contextvar bound by process_query would be None inside every tool
@@ -3452,6 +3467,7 @@ Do NOT wrap conversational replies in JSON.
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
+            cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
         if "exc" in holder:
             raise holder["exc"]
@@ -4144,10 +4160,14 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
+
+            if cloud_model_provider(getattr(self, "model_id", None)):
+                return False
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
@@ -4157,7 +4177,9 @@ Do NOT wrap conversational replies in JSON.
             resp = httpx.get(
                 health_url,
                 timeout=3.0,
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 return False

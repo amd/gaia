@@ -79,7 +79,17 @@ func (m ChatModel) statusHints() []hint {
 	// earlier turns; a user who does not know that concludes history is gone.
 	hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
 
-	if m.streaming {
+	if m.confirmation != nil && m.confirmation.Pending() {
+		// The modal owns the keyboard while it is up, so every hint here would
+		// be a lie: typing goes nowhere and Esc denies rather than cancels.
+		// Saying "Esc cancel" one row under a modal that says "esc deny" is
+		// two answers to the same key on the same screen.
+		//
+		// The way out is NOT named here — rankEscape appends it below and
+		// outranks everything, so spelling it again only got the bar saying
+		// "Ctrl+C quits · Ctrl+C quit".
+		hints = append(hints, hint{text: "answer above", rank: rankInterrupt})
+	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.
 		hints = append(hints,

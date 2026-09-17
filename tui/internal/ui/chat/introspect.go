@@ -11,9 +11,13 @@ func (m ChatModel) AgentID() string { return m.agentID }
 // ControlSnapshot lets the control API describe a standalone chat session (the
 // `gaia chat --subprocess` entry point, where ChatModel is the root model).
 func (m ChatModel) ControlSnapshot() control.Snapshot {
-	return control.Snapshot{
+	snap := control.Snapshot{
 		View:      "chat",
 		Agent:     m.agentID,
 		Streaming: m.streaming,
 	}
+	if m.providerPanel != nil {
+		snap.Overlay = "provider"
+	}
+	return snap
 }

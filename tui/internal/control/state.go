@@ -304,7 +304,7 @@ func (r Recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.state.SetSize(m.Width, m.Height)
 	case tea.KeyMsg:
-		r.state.debugf("inject: key %q reached the model", m.String())
+		r.state.debugf("inject: key reached the model (content omitted)")
 	}
 
 	next, cmd := r.inner.Update(msg)

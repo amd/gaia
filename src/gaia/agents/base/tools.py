@@ -6,7 +6,8 @@ Tool registry and decorator for agent tools.
 
 import inspect
 import logging
-from typing import Callable, Dict
+import threading
+from typing import Callable, Dict, Optional
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +16,41 @@ logger = logging.getLogger(__name__)
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
 _SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
+
+
+class ToolCancelled(Exception):
+    """Raised inside a tool body once the agent has abandoned the call."""
+
+    def __init__(self, message: str = "tool call was cancelled after it timed out"):
+        super().__init__(message)
+
+
+# Per-worker cancellation flag, set by ``Agent._call_tool_bounded`` when a tool
+# overruns its window. Python cannot kill a thread, so an abandoned worker runs
+# to completion unless it opts in by checking this — and for a multi-minute tool
+# that means a second job racing the first on the same hardware (#2600).
+_cancellation = threading.local()
+
+
+def set_tool_cancel_event(event: Optional[threading.Event]) -> None:
+    """Bind *event* as the cancellation flag for the calling thread."""
+    _cancellation.event = event
+
+
+def tool_cancelled() -> bool:
+    """True once the agent has stopped waiting for this tool.
+
+    Long-running tools should poll this between stages and stop early. Anything
+    that finishes well inside its timeout can ignore it.
+    """
+    event = getattr(_cancellation, "event", None)
+    return event is not None and event.is_set()
+
+
+def raise_if_cancelled() -> None:
+    """Abort a tool body the agent has already given up on."""
+    if tool_cancelled():
+        raise ToolCancelled()
 
 
 def tool(
