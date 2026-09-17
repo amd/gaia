@@ -19,8 +19,8 @@ failure being reproduced.
 from __future__ import annotations
 
 import queue
-import threading
 import sys
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
