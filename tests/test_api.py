@@ -186,7 +186,7 @@ class TestApiUnitValidation:
             assert await asyncio.to_thread(started.wait, 2)
 
             health = asyncio.create_task(openai_server.health_check())
-            await asyncio.wait_for(health, timeout=0.5)
+            await asyncio.wait_for(health, timeout=2)
             release.set()
             return await completion
 

@@ -296,10 +296,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Keep synchronous agent work from blocking health checks and other
         # requests handled by the event loop.
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, lambda: agent.process_query(user_message)
-        )
+        result = await asyncio.to_thread(agent.process_query, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
