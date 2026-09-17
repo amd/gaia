@@ -881,7 +881,14 @@ def installed() -> bool:
     Says nothing about the browser binary — that failure surfaces at launch
     with a message telling the user to run ``playwright install``.
     """
-    return importlib.util.find_spec("playwright.sync_api") is not None
+    try:
+        return importlib.util.find_spec("playwright.sync_api") is not None
+    except ModuleNotFoundError:
+        # find_spec imports the PARENT package to search it, and raises rather
+        # than returning None when the parent itself is absent. Core installs
+        # do not ship Playwright, so that is the ordinary answer here, not an
+        # error: no Playwright, no browser tools.
+        return False
 
 
 __all__: List[str] = ["PlaywrightDriver", "installed", "DEFAULT_LOGIN_TIMEOUT_S"]

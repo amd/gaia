@@ -11,6 +11,7 @@ shown, what the session store writes, and which calls need a human.
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -351,6 +352,29 @@ def test_cleanup_is_safe_when_no_browser_was_opened():
 
 
 # ------------------------------------------------- registration without deps
+
+
+def test_installed_reports_absent_rather_than_raising():
+    """``find_spec`` RAISES on a missing parent package instead of returning None.
+
+    The registration path calls this on every agent build, so letting that
+    escape takes down agent construction on any install without Playwright —
+    which is every core install. Exercises the real function; stubbing
+    ``installed`` here would only prove the caller was called.
+    """
+    import importlib
+
+    from gaia.browser import driver as browser_driver
+
+    real_find_spec = importlib.util.find_spec
+
+    def absent(name, *args, **kwargs):
+        if name.split(".")[0] == "playwright":
+            raise ModuleNotFoundError("No module named 'playwright'")
+        return real_find_spec(name, *args, **kwargs)
+
+    with patch.object(importlib.util, "find_spec", absent):
+        assert browser_driver.installed() is False
 
 
 def test_no_tools_are_registered_when_playwright_is_absent(monkeypatch):
