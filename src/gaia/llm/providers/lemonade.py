@@ -185,6 +185,21 @@ class LemonadeModelNotFoundError(LemonadeError):
         super().__init__(user_message=message, payload=payload)
 
 
+class LemonadeCloudAccountError(LemonadeError):
+    """The cloud provider refused the account itself (HTTP 402 / 412).
+
+    Suspended, out of credit, or over a spending limit. No retry can succeed,
+    so the generic "temporary issue — try again" copy is wrong here.
+    """
+
+    retryable = False
+    user_message = (
+        "Your cloud provider refused the request: the account may be suspended, "
+        "out of credit, or over its spending limit. Retrying won't help — check "
+        "billing in the provider's console, then send the message again."
+    )
+
+
 def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
     """Inspect a Lemonade response dict for a known error shape.
 

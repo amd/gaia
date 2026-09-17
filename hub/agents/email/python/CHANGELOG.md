@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A content question ("who signed this?", "what date was agreed?") no
+  longer comes back unanswerable when the answer is sitting in the mailbox
+  (#3773).** `search_messages` used to fetch full bodies only when the model
+  explicitly passed `include_bodies=True` — a 4B-class local model didn't
+  reliably do that, so most content questions got a metadata-only answer or a
+  refusal. The default now auto-decides from the search query itself: a pure
+  filter (`from:`/`is:`/`label:`/date operators) still returns metadata only,
+  while a query carrying an actual search term escalates to full bodies
+  automatically, capped to a small already-narrowed result set so a broad
+  content-shaped query still can't overflow the context window the way #2763
+  fixed. `pre_scan_inbox` still never reads a message body on any surface —
+  its docstring now says so explicitly and points at `get_message`/
+  `search_messages` for content (wiring an actual body-reading path into
+  pre-scan is tracked separately as #2968).
 - **Asking to put a message back in your inbox now actually works (#2626).**
   `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
   add the inbox label and then archive the message in the same call, undoing
