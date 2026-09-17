@@ -33,7 +33,11 @@ import json
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
-from gaia.factory.harvest.context import collect
+from gaia.factory.harvest.context import (
+    collect,
+    require_fresh_snapshot,
+    snapshot_stamp,
+)
 from gaia.factory.harvest.scan import DEFAULT_OUT
 
 # Claude's tokenizer averages close to 4 characters per token on source code
@@ -324,13 +328,27 @@ def main() -> None:
     ap.add_argument(
         "--projects", type=Path, default=Path.home() / ".claude" / "projects"
     )
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-measure the request snapshot instead of reusing requests.json.",
+    )
+    ap.add_argument(
+        "--frozen",
+        action="store_true",
+        help="Use the existing snapshot even if scan has since seen new sessions.",
+    )
     args = ap.parse_args()
 
+    require_fresh_snapshot(args.cache, args.refresh, args.frozen)
     stats, traces = load(args.cache)
-    sessions, requests = collect(args.cache, args.projects)
+    sessions, requests = collect(args.cache, args.projects, refresh=args.refresh)
     attr = attribute(traces, {s["session_id"]: s.get("series") or [] for s in sessions})
 
     print("## Attributed savings — measured against specific content\n")
+    stamp = snapshot_stamp(args.cache)
+    if stamp:
+        print(f"{stamp}\n")
     print(mechanism_table(stats, attr))
     print(
         f"\n_Tool results carry {attr['carried_results'] / 1e9:.2f} B of the "

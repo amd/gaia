@@ -20,6 +20,7 @@ Usage::
 import argparse
 import json
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -108,19 +109,75 @@ def _requests(path: Path) -> List[int]:
     return [v for v in seen.values() if v > 0]
 
 
+SNAPSHOT = "requests.json"
+
+
+def snapshot_age(cache: Path) -> Optional[bool]:
+    """Is the frozen snapshot older than the corpus it claims to describe?
+
+    ``None`` when there is no snapshot yet.  Otherwise True once ``scan`` has
+    rewritten ``traces.jsonl`` more recently than the snapshot was taken — the
+    point past which every figure derived here describes a corpus that no
+    longer matches the one ``report`` renders.
+    """
+
+    frozen = cache / SNAPSHOT
+    traces = cache / "traces.jsonl"
+    if not frozen.exists():
+        return None
+    if not traces.exists():
+        return False
+    return traces.stat().st_mtime > frozen.stat().st_mtime
+
+
+def snapshot_stamp(cache: Path) -> str:
+    """One line naming which snapshot the figures below were measured on."""
+
+    frozen = cache / SNAPSHOT
+    if not frozen.exists():
+        return ""
+    taken = datetime.fromtimestamp(frozen.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        f"_Measured on the request snapshot frozen at {taken} "
+        f"(`{SNAPSHOT}`). Re-run with `--refresh` to re-measure._"
+    )
+
+
+def require_fresh_snapshot(cache: Path, refresh: bool, frozen_ok: bool) -> None:
+    """Refuse to narrate a snapshot that no longer matches ``traces.jsonl``.
+
+    Freezing keeps published figures reproducible, so it stays the default —
+    but serving a stale snapshot without saying so puts two different corpora
+    in one report.  Make the caller choose.
+    """
+
+    if refresh or frozen_ok or not snapshot_age(cache):
+        return
+    raise SystemExit(
+        f"{cache / SNAPSHOT} is older than {cache / 'traces.jsonl'}: scan has "
+        "seen sessions this snapshot does not cover, so these figures would "
+        "disagree with the tables report renders. Pass --refresh to re-measure "
+        "against the current corpus, or --frozen to keep the existing snapshot "
+        "on purpose."
+    )
+
+
 def collect(
-    cache: Path, projects_root: Path, freeze: bool = True
+    cache: Path,
+    projects_root: Path,
+    freeze: bool = True,
+    refresh: bool = False,
 ) -> Tuple[List[dict], List[int]]:
     """Per-session request sizes, plus the flat list across the whole corpus.
 
     The result is frozen into ``requests.json`` on first run and re-read
     thereafter.  Without that, every figure derived here drifts between runs:
     the raw transcripts are live and grow while the analysis is running, so a
-    published median would not reproduce.  Delete the file to re-measure.
+    published median would not reproduce.  ``refresh`` re-measures instead.
     """
 
-    frozen = cache / "requests.json"
-    if freeze and frozen.exists():
+    frozen = cache / SNAPSHOT
+    if freeze and not refresh and frozen.exists():
         blob = json.loads(frozen.read_text(encoding="utf-8"))
         return blob["sessions"], blob["requests"]
 
@@ -273,9 +330,20 @@ def main() -> None:
         help="Root of the raw Claude Code transcripts.",
     )
     ap.add_argument("--labels", type=Path, default=None)
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-measure the request snapshot instead of reusing requests.json.",
+    )
+    ap.add_argument(
+        "--frozen",
+        action="store_true",
+        help="Use the existing snapshot even if scan has since seen new sessions.",
+    )
     args = ap.parse_args()
 
-    sessions, reqs = collect(args.cache, args.projects)
+    require_fresh_snapshot(args.cache, args.refresh, args.frozen)
+    sessions, reqs = collect(args.cache, args.projects, refresh=args.refresh)
     if not reqs:
         raise SystemExit(
             f"No requests found. Checked {args.projects} for the sessions in "
@@ -284,6 +352,9 @@ def main() -> None:
         )
 
     print("## Prompt size per request\n")
+    stamp = snapshot_stamp(args.cache)
+    if stamp:
+        print(f"{stamp}\n")
     print(distribution_table(reqs))
     print("\n## KV-cache memory these prompts require locally\n")
     print(kv_table(reqs))

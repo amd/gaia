@@ -110,8 +110,8 @@ run Claude Code.
 |---|---|
 | `scan` | `--root` (transcripts elsewhere), `--out` (default `$FACTORY`) |
 | `report` | `--cache` (default `$FACTORY`), `--labels` |
-| `context` | `--cache`, `--projects` (raw transcripts, if not under `~/.claude/projects`), `--labels` |
-| `savings` | `--cache`, `--projects` |
+| `context` | `--cache`, `--projects` (raw transcripts, if not under `~/.claude/projects`), `--labels`, `--refresh`, `--frozen` |
+| `savings` | `--cache`, `--projects`, `--refresh`, `--frozen` |
 
 ## Output files
 
@@ -123,6 +123,25 @@ run Claude Code.
 | `tables.md` | Human-readable tables rendered from `stats.json` (your redirect target) |
 | `context.md` | Per-request prompt-size and KV-cache figures |
 | `savings.md` | Token/dollar savings estimates per proposed fix |
+| `requests.json` | Frozen per-request snapshot `context` and `savings` are measured on (see below) |
+
+### The frozen request snapshot
+
+`context` and `savings` measure every individual API request, which is expensive
+and — because the corpus grows while you work — gives a different answer every
+run. So the first `context` run freezes its measurement into `requests.json` and
+both reports reuse it, which is what makes a published median reproducible.
+
+Once `scan` has seen sessions that snapshot doesn't cover, both refuse to run
+rather than narrate figures that disagree with `tables.md`:
+
+```bash
+python -m gaia.factory.harvest.context --refresh > "$FACTORY/context.md"   # re-measure
+python -m gaia.factory.harvest.context --frozen  > "$FACTORY/context.md"   # keep the old snapshot on purpose
+```
+
+Both outputs carry a line naming the snapshot they were measured on, so a report
+always says which corpus it describes.
 
 ## Classifying intent
 
