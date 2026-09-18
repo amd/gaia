@@ -14,7 +14,7 @@ thresholds inlined here. The manifest owns the enforce switch (data, not code).
 A judge credential is REQUIRED — the Claude judge cannot score drafts without
 one, and per CLAUDE.md's fail-loudly rule there is NO silent skip: its absence is
 a HARD FAILURE (exit 1), never a skip report and never an invented pass. Either
-``CLAUDE_CODE_OAUTH_TOKEN`` (preferred; driven through the ``claude`` CLI) or
+``CLAUDE_CODE_OAUTH_TOKEN`` (used when no API key is set; driven through the ``claude`` CLI) or
 ``ANTHROPIC_API_KEY`` will do — ``gaia.eval.judge_client`` owns the choice. The
 workflows that run this (release_agent_email.yml, test_email_agent_eval.yml,
 email_scorecard_refresh.yml) inject them from the matching secrets and never run
@@ -22,8 +22,8 @@ on fork PRs, so a credential is always present in a legitimate run.
 
 Config comes from the environment (shell-agnostic):
   EMAIL_EVAL_MODEL         Lemonade model id (required)
-  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, preferred
-  ANTHROPIC_API_KEY        Judge credential, fallback (neither set -> exit 1)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential when no API key is set
+  ANTHROPIC_API_KEY        Judge credential, takes precedence (neither set -> exit 1)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -80,6 +80,8 @@ def main() -> int:
         )
         return 1
 
+    judge = make_claude_judge()
+
     # Generation: drives the #1607 voice-profile drafting path per case
     # (Lemonade — this job holds the serial lemonade-eval slot).
     generations = generate_drafts(model, corpus_path=CORPUS_PATH)
@@ -89,7 +91,7 @@ def main() -> int:
     results = judge_drafts(
         load_drafting_corpus(CORPUS_PATH),
         generations,
-        make_claude_judge(),
+        judge,
         model_id=model,
     )
     summary = summarize_drafting(

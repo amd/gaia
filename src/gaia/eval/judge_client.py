@@ -60,7 +60,7 @@ _JUDGE_SYSTEM_PROMPT = (
 #: Scoring must not become an agent loop. A name that no longer exists simply
 #: matches nothing, so a stale entry is harmless.
 _DISALLOWED_TOOLS = (
-    "Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit"
+    "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit"
 )
 
 MISSING_CREDENTIAL_ERROR = (

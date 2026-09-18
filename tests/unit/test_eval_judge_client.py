@@ -177,7 +177,8 @@ def test_get_completion_isolates_the_judge_context(monkeypatch, fake_claude_bin)
     assert "--strict-mcp-config" in cmd
     assert cmd[cmd.index("--mcp-config") + 1] == '{"mcpServers": {}}'
     assert "--no-session-persistence" in cmd
-    assert "Bash" in cmd[cmd.index("--disallowed-tools") + 1]
+    assert "Bash" in cmd[cmd.index("--disallowed-tools") + 1].split(",")
+    assert "Read" in cmd[cmd.index("--disallowed-tools") + 1].split(",")
     # Claude Code's agent prompt is replaced, not appended to.
     assert "evaluation judge" in cmd[cmd.index("--system-prompt") + 1]
     # A temp cwd is what keeps the repo's own CLAUDE.md out of the judge prompt.

@@ -51,9 +51,9 @@
 #                              approved.
 #     CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY
 #                            — Claude judge credential for the eval-gate's
-#                              voice-drafting eval; the subscription token is
-#                              preferred and the key is the fallback (the choice
-#                              lives in gaia.eval.judge_client). ONE is REQUIRED:
+#                              voice-drafting eval. judge_client uses the API key
+#                              when both are set; workflow env selection can blank
+#                              the key to select the subscription. ONE is REQUIRED:
 #                              eval_drafting_report.py exits 1 when neither is set
 #                              (no silent skip — CLAUDE.md fail-loudly), so the
 #                              eval-gate step FAILS the release and never ships an

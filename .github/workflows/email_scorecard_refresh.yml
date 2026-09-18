@@ -241,7 +241,7 @@ jobs:
 
       - name: Install Claude Code CLI (judge transport)
         run: |
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.218
           if ($LASTEXITCODE -ne 0) { throw "claude CLI install failed" }
           claude --version
           if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
