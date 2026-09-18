@@ -24,6 +24,7 @@ var (
 	_ PermissionBypasser      = (*SubprocessClient)(nil)
 	_ AgentCanceler           = (*SubprocessClient)(nil)
 	_ LocalAgentStopper       = (*SubprocessClient)(nil)
+	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
 // closeGrace bounds how long Close() waits for an in-flight turn's reader to
@@ -722,6 +723,23 @@ func (s *SubprocessClient) Cancel(context.Context) error {
 // child, so abandoning a turn kills it rather than leaving it running
 // somewhere this client cannot reach.
 func (s *SubprocessClient) AbortStopsAgent() bool { return true }
+
+// Supports implements CapabilityReporter. The stdio memory-dump sentinel
+// (memory.go) is always there for a local child -- there is nothing to probe,
+// so the answer is immediate and always known.
+func (s *SubprocessClient) Supports(c Capability) (supported, known bool) {
+	switch c {
+	case CapabilityMemory:
+		return true, true
+	default:
+		return false, true
+	}
+}
+
+// ProbeCapabilities implements the async-probe seam client.CapabilityReporter
+// callers dispatch at chat start. A subprocess child has nothing to negotiate
+// -- Supports already answers immediately -- so this is a no-op.
+func (s *SubprocessClient) ProbeCapabilities(context.Context) error { return nil }
 
 // BypassAtLaunch reports whether the child was spawned with bypass already on,
 // so the UI can show the warning from the very first frame rather than only
