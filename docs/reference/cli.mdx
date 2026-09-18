@@ -1419,7 +1419,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 
@@ -1430,6 +1430,11 @@ For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wi
 1. An explicit `--model <id>` flag
 2. `default_model` from `~/.gaia/config.json`
 3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+The Agent UI resolves a new session's model the same way: an explicit pick
+in the UI wins, then `default_model`, then the built-in floor. So
+`gaia config set default_model <id>` also changes what a brand-new "New
+Chat" lands on, not just the CLI.
 
 So `gaia config set default_model <id>` lets you skip `--model` entirely, while
 `--model` still overrides it for a single run. For `gaia chat`, passing an
