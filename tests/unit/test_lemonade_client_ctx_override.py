@@ -61,6 +61,14 @@ from gaia.llm.lemonade_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_config(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+
+
 def _status(entries):
     """Build a LemonadeStatus whose ``loaded_models`` is ``entries``.
 

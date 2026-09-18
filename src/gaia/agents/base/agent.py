@@ -964,7 +964,7 @@ Do NOT wrap conversational replies in JSON.
         output_handler=None,
         max_plan_iterations: int = 3,
         max_consecutive_repeats: int = 4,
-        min_context_size: int = 32768,
+        min_context_size: Optional[int] = None,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
@@ -991,7 +991,7 @@ Do NOT wrap conversational replies in JSON.
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
-            min_context_size: Minimum context size required for this agent (default: 32768).
+            min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -1058,7 +1058,11 @@ Do NOT wrap conversational replies in JSON.
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
-            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                LemonadeClient,
+                cloud_model_provider,
+                resolve_ctx_size,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
@@ -1069,6 +1073,11 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
+                if (
+                    min_context_size is None
+                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
+                ):
+                    min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
                     quiet=silent_mode,
