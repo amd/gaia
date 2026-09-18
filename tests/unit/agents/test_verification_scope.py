@@ -948,6 +948,11 @@ def test_python_runner_results_identify_checks(stdout, stderr, code, label):
     )
 
 
+def test_a_run_python_pytest_summary_is_a_check():
+    result = {"stdout": "3 passed in 0.01s", "return_code": 0}
+    assert verification_check_label("run_python", {"code": "..."}, result) == ("pytest")
+
+
 def test_refused_python_runner_is_not_a_check():
     result = {"stdout": "3 passed in 0.01s", "return_code": 0, **NOT_EXECUTED}
     assert verification_check_label("execute_python_file", {}, result) is None
