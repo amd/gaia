@@ -45,8 +45,9 @@ is still deferred:
    alike, so an un-updated caller fails closed.
 4. **Read-only by construction — for CLIs that talk to something *external*.**
    ``pytest`` is a different class of grant and says so in its own summary: it
-   EXECUTES the project's own test code, the same trust boundary as the ungated
-   ``execute_python_file`` tool. What its table restricts is invocation shape
+   EXECUTES the project's own test code using consent from the loaded skill.
+   The separate ``execute_python_file`` tool still prompts. This table restricts
+   invocation shape
    (no plugin injection, no interactive hang, no writes/paths outside the
    checkout) — never what the tests themselves do. It has no CONFIRM tier.
 
@@ -695,18 +696,15 @@ _INTERACTIVE_HANG = (
 # ---------------------------------------------------------------------------
 #
 # `python <script.py>` is ALLOW, and that is the widest single decision in this
-# file. It is the `pytest` reasoning taken to its conclusion: running a Python
-# file that is already in the checkout is exactly what the ungated
-# `execute_python_file` tool does, so refusing the same act through `python`
-# would be a lock on a door standing next to an open one.
+# file. The loaded skill grant pre-authorizes execution of project scripts;
+# the separate `execute_python_file` tool still requires per-call confirmation.
+# A project script can perform arbitrary actions, including actions refused by
+# the CLI tables. This grant is consent to execution, not a sandbox.
 #
-# `python -c` is NOT that act, and is refused. Code passed on the command line
-# is not in the checkout, was never reviewed, and — this is the part that
-# matters — makes every other entry in this table decorative: `python -c
-# "subprocess.run(['git','push','--force'])"` is one opaque token to the gate
-# and a force-push to the operating system. The route to running new code is to
-# write the file (which the agent's write gate shows the user) and then run it.
-# `-i` and a bare `-` operand are the same hole with different spelling.
+# `python -c` is refused because the grant requires a reviewable file in the
+# checkout. It does not make file execution safer or prevent a trusted script
+# from launching other programs. Interactive mode and stdin programs are also
+# outside the grant's invocation contract.
 
 #: Every ``-m`` target must itself be policed, so ``-m`` cannot be the way
 #: around a policy: ``python -m pytest --pdb`` is refused because
@@ -1239,9 +1237,9 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         },
     ),
     # `pytest` is NOT a read-only grant in the sense `gh` is — it EXECUTES the
-    # project's own test code. That is the same trust boundary as the
-    # ungated `execute_python_file` tool (code already in the repo runs),
-    # not a new one. What this policy restricts is the invocation shape: no
+    # project's own test code with consent from the loaded skill. The separate
+    # execute_python_file tool requires per-call confirmation. This policy
+    # restricts invocation shape: no
     # plugin injection, no interactive hang, no write outside the run, no
     # pointing pytest at config/paths outside the checkout. It does not, and
     # cannot, sandbox what the tests themselves do.
@@ -1260,7 +1258,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         binary="pytest",
         summary=(
             "pytest — runs the project's own test suite. This EXECUTES "
-            "project code (the same class as execute_python_file), not a "
+            "project code under the loaded skill grant, not a "
             "read; the grant restricts flags and paths, never what a test "
             "itself does."
         ),
@@ -1552,10 +1550,9 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             binary=name,
             summary=(
                 f"{name} — runs a Python program that is already in this "
-                "checkout (the same trust boundary as execute_python_file). "
-                "Code passed on the command line with -c is refused: it is "
-                "unreviewed, and it would make every other command policy "
-                "here decorative."
+                "checkout without another prompt under the loaded skill grant. "
+                "Scripts are trusted code and can launch other programs. "
+                "The grant requires a reviewable file; -c is refused."
             ),
             install_hint=(
                 f"'{name}' is not on PATH. Activate the project's virtual "
@@ -2631,8 +2628,8 @@ def _classify_script_arguments(
     ``python util/lint.py --all --fix`` — ``--all`` is lint.py's flag, and this
     table has no opinion on another program's argument grammar. Nor does it
     need one: running an in-checkout script is the trust boundary the grant
-    already crossed (the same one ``execute_python_file`` crosses ungated), and
-    the script, not its flags, is the capability.
+    already crossed. ``execute_python_file`` separately requires confirmation;
+    this skill grant pre-authorizes scripts and does not sandbox their effects.
 
     What still holds is containment: no argument may point outside the
     checkout, so a granted script cannot be aimed at ``../../.ssh``.

@@ -76,12 +76,15 @@ python -m pytest tests/unit          # same thing, same rules
 python util/lint.py --all --fix      # or whatever the project's own runner is
 ```
 
-`python <script.py>` runs any program already in the checkout — the project's
-lint runner, a build script, a reproduction you just wrote. What it will not do
-is run code passed on the command line: `python -c "..."` is refused, because
-that code is in no file anyone reviewed and it can reach straight past every
-other rule here. If you need to run something new, write it to a file first —
-then it is reviewable, re-runnable, and the diff shows it.
+Loading this skill grants `pytest` and `python <script.py>` execution without
+another prompt. Tests and scripts are trusted project code: they can write
+files, access the network, and launch other programs, including commands the
+direct CLI policy refuses. These grants do not sandbox their effects. The
+separate `execute_python_file` tool still requires per-call approval.
+
+`python -c "..."` is refused because the grant requires a reviewable file in the
+checkout. Write new code to a file first so the diff shows it, and review what
+it does before executing it.
 
 The rest of the grant is narrow on purpose. `--pdb` would hang waiting for a
 debugger nobody can answer, `-p <plugin>` imports arbitrary code, `--junitxml`
@@ -118,7 +121,7 @@ the user the exact command before running. That is not a formality to click
 past — write the commit message as if it is the only thing the reviewer reads,
 because for a squashed PR it is.
 
-What you cannot do, at all: `push`, `reset --hard`, `clean`, `rebase`,
+The direct Git policy refuses `push`, `reset --hard`, `clean`, `rebase`,
 `commit --amend`, `git config`. Publishing and history-rewriting are the user's
 to run, and destroying uncommitted work has no undo anywhere. When the work is
 committed and wants pushing, **say so and stop** — *"committed on `fix/discount`;
