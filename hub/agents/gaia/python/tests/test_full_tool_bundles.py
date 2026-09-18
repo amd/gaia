@@ -36,7 +36,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 13 CORE leaves 13).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=27 minus 14 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -116,6 +116,12 @@ def test_file_edit_tools_are_core(flagship_registry):
     """Semantic selection cannot rank editing (#3752) — it must be always-on."""
     assert {"write_file", "edit_file"} <= set(FULL_CORE_TOOLS)
     assert {"write_file", "edit_file"} <= flagship_registry
+
+
+def test_run_python_is_core(flagship_registry):
+    """Without it the model guesses a number or leaves a script in the repo."""
+    assert "run_python" in FULL_CORE_TOOLS
+    assert "run_python" in flagship_registry
 
 
 def test_bundle_menu_renders_for_the_flagship():

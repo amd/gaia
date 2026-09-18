@@ -149,6 +149,6 @@ def build_file():
         # Introspected registry size for prompt_profile="file" (with
         # enable_filesystem=True, matching this factory's extra kwarg) —
         # drift-guarded by tests/unit/test_chat_fix_contracts.py.
-        tools_count=33,
+        tools_count=34,
         model_tiers=tiers,
     )

@@ -302,6 +302,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
+    # The same arbitrary code execution, from a snippet instead of a file.
+    "run_python",
     "write_file",
     "write_python_file",
     "edit_file",

@@ -21,6 +21,11 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **`run_python`, always on.** A quick calculation or data transform is now one
+  confirmation-gated call that runs from the project root and returns what it
+  printed, instead of a throwaway script left in your repository. It joins the
+  always-on tool set (about 250 more prompt tokens per call) and the `shell`
+  bundle.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
