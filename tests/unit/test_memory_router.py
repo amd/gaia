@@ -44,6 +44,7 @@ from fastapi.testclient import TestClient
 
 import gaia.ui.routers.memory as memory_router_mod
 from gaia.agents.base.memory_store import MemoryStore
+from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -894,7 +895,7 @@ class TestReconcileEndpoint:
         dim, not a hardcoded 768 — so a non-768 embedder (e.g. a truncated FLM
         embedder) is not silently skipped (#1744).
         """
-        pytest.importorskip("faiss")  # standalone reconcile path needs faiss
+        require_faiss()  # standalone reconcile path needs faiss
         import numpy as np
 
         # Two identical 512-dim vectors → cosine 1.0 → above the pair threshold.

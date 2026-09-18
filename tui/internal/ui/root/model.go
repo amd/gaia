@@ -10,6 +10,7 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -95,6 +96,23 @@ type FlagshipModel struct {
 	// beginPending is set when the launch was asked to start before the
 	// terminal size was known. See beginMsg.
 	beginPending bool
+
+	// catalog resolves an id picked from /agents into the full catalog.Agent
+	// record (transport, binary path, version) beginPreflight and launchAgent
+	// need — the hub-agents panel's own rows (agents.HubAgentLister) carry
+	// only what the daemon reports at runtime, not that. Nil in a test that
+	// never drives a switch.
+	catalog *catalog.Catalog
+	// hubClient feeds the /agents panel. Built lazily by hub(), the same
+	// lazy-pointer pattern as pfTransport, so a session that never opens the
+	// panel never constructs a daemon client for it. WithHubClient overrides
+	// it for tests.
+	hubClient agents.HubAgentLister
+	// pendingTranscript carries the outgoing chat's transcript, plus the
+	// divider naming an in-progress switch, across the readiness gate into
+	// the replacement ChatModel launchAgent is about to build. Cleared once
+	// consumed there, or if the switch is cancelled from the gate.
+	pendingTranscript []chat.Message
 }
 
 // clientBox owns the agent client across the copies Bubble Tea makes of the
@@ -130,6 +148,16 @@ func NewFlagshipModel(agent catalog.Agent, dev bool) FlagshipModel {
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
+}
+
+// chatCommandNames is the chat model's available-command set, or nil (show
+// everything) when help is toggled before any chat model exists yet — the
+// splash and preflight-gate views before a session's agent is even known.
+func (m FlagshipModel) chatCommandNames() []string {
+	if m.chat == nil {
+		return nil
+	}
+	return m.chat.AvailableCommandNames()
 }
 
 // Close releases everything the session opened — the agent child in
@@ -232,7 +260,11 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.model = v.ID
 			m.useClaude = false
 			m.claudeModel = ""
-			return m.beginPreflight(m.agent)
+			// m.pending, not m.agent — the gate being reopened is the one the
+			// 'p' key was pressed on, which during a switch is the incoming
+			// agent, not the still-live outgoing one m.agent names until the
+			// switch commits.
+			return m.beginPreflight(*m.pending)
 		default:
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width = size.Width
@@ -244,7 +276,10 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.agent.ID == catalog.FlagshipID {
+	// m.pending, not m.agent: while an agent-switch gate is up, m.agent is
+	// still the OUTGOING agent until launchAgent commits the switch, and this
+	// key is only ever meant for whichever agent the gate on screen is for.
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.pending != nil && m.pending.ID == catalog.FlagshipID {
 		m.preflight.Cancel()
 		panel := providers.New("", m.width, m.height)
 		m.providerPanel = &panel
@@ -303,15 +338,29 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openConnectHandoff(msg.Provider)
 
+	case agents.SelectedMsg:
+		// The chat model's own agentsPanel does NOT close itself on a pick —
+		// agents.Model emits SelectedMsg, never ClosedMsg, on Enter (see its
+		// own doc comment) — so this is the "the host is responsible for
+		// switching to it" half of agents.SelectedMsg's contract, and also
+		// for closing the panel it is switching away from. Every outcome
+		// below that does not build a fresh ChatModel keeps rendering
+		// through this same one, whose View() draws agentsPanel first; left
+		// open, it would hide the status line the outcome writes underneath.
+		if m.chat != nil {
+			m.chat.CloseAgentsPanel()
+		}
+		return m.switchAgent(msg.ID)
+
 	case status.Outcome:
 		return m.applyOutcome(msg)
 
 	case chat.ToggleHelpMsg:
-		m.help.Toggle(components.HelpContextChat)
+		m.help.Toggle(components.HelpContextChat, m.chatCommandNames())
 		return m, nil
 
 	case components.HelpContext:
-		m.help.Toggle(msg)
+		m.help.Toggle(msg, m.chatCommandNames())
 		return m, nil
 
 	case tea.MouseMsg:
@@ -425,14 +474,44 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		ClaudeModel:       m.claudeModel,
 	})
 	if err != nil {
-		// Nothing to fall back to, so this is the gate's problem: re-raise it as
-		// a blocked report rather than open a chat that cannot talk.
+		m.pendingTranscript = nil
+		// A non-nil m.chat means this launch was an /agents switch commit,
+		// not the original one — the session it is replacing is still alive
+		// and untouched (nothing has cancelled its turn or closed its client
+		// yet), so there IS something to fall back to. Report it there and
+		// stay, rather than quitting a working session over a switch that
+		// didn't even get as far as the agent that failed.
+		if m.chat != nil {
+			m.chat.AppendStatus(fmt.Sprintf("Could not switch to %s: %v. Staying on %s.", agent.ID, err, m.agent.ID))
+			m.activeView = viewChat
+			return m, nil
+		}
+		// The original launch: nothing to fall back to, so this is the
+		// gate's problem — re-raise it as a blocked report rather than open
+		// a chat that cannot talk.
 		return m.haltOnLaunchFailure(agent, err)
+	}
+
+	// The new client built cleanly, so the switch (if this is one) is
+	// actually happening now: stop the outgoing turn and close the
+	// connection reaching it. clientBox.set below would otherwise overwrite
+	// b.c without closing it (see clientBox's own doc comment).
+	if m.chat != nil {
+		m.chat.CancelActiveTurn()
+		m.chatClient.close()
 	}
 	m.chatClient.set(c)
 
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified)
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, agent.Version, m.dev, setupVerified).
+		WithHubClient(m.hub())
+	if len(m.pendingTranscript) > 0 {
+		// Set only on the switch path (switchAgent) — a fresh launch never
+		// has one, so this is a no-op there.
+		chatModel = chatModel.WithMessages(m.pendingTranscript)
+		m.pendingTranscript = nil
+	}
 	m.chat = &chatModel
+	m.agent = agent
 	m.activeView = viewChat
 
 	var cmds []tea.Cmd
