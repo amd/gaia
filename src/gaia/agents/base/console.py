@@ -213,8 +213,9 @@ class OutputHandler(ABC):
     Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
     effect. Only ``PermissionState`` sets it — an unattended harness that merely
     pre-approves prompts must not also get an unguarded shell — and in exchange
-    it lifts the shell guardrails too: the operator block, the read-only binary
-    policy (replaced by ``DEVELOPER_COMMANDS``) and the rate limit. See
+    it lifts the shell guardrails too: the operator block (heredocs included),
+    the no-prompt allowlist and the rate limit. What no approval can authorize
+    still refuses, and path checks still hold. See
     ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the

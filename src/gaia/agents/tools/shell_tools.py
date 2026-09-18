@@ -146,54 +146,6 @@ def _blocked(tier: str, error: str, **extra) -> dict:
     }
 
 
-# The binaries a developer session needs and a read-only session must not have
-# (#3374). Active ONLY under full access; ALLOWED_COMMANDS above is
-# untouched so the read-only tier keeps claiming exactly what it claims, and
-# #2768's sweep of it never has to reason about these entries.
-#
-# This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
-# each run whatever the working tree tells them to. That is why it is reachable
-# only from the mode the user turned on deliberately.
-#
-# python/python3/pytest and gh are listed for CONSOLIDATION, not new reach: all
-# four already have a path today (``execute_python_file`` for the
-# generic_file_ops profiles, a ``shell:execute:`` skill grant for pytest and
-# gh). Naming them here means full access has one answer to "may this binary run"
-# instead of three. The per-skill grant path is unchanged and still works with
-# full access off.
-DEVELOPER_COMMANDS = frozenset(
-    {
-        # Interpreters and test runners
-        "python",
-        "python3",
-        "pytest",
-        "node",
-        # Build and package tooling
-        "npm",
-        "make",
-        "cmake",
-        "go",
-        "cargo",
-        # Forge
-        "gh",
-        # Text processing that writes
-        "sed",
-        "awk",
-        # Network
-        "curl",
-        # Process control
-        "sleep",
-        "timeout",
-        "export",
-        # File shuffling. `cp` and `mv` are in; `rm` is deliberately NOT — see
-        # docs/plans/security-model.mdx. Not a boundary (anything above can
-        # delete a file), just a tripwire against an accidental recursive
-        # delete.
-        "cp",
-        "mv",
-    }
-)
-
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
     "status",
@@ -461,6 +413,65 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _FULL_ACCESS_PUNCTUATION = ";&|<>\n"
 
 
+def _heredoc_start(line: str) -> Optional[tuple]:
+    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+
+    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
+    data and ``<<<`` (a here-string, no body) never opens one.
+    """
+    try:
+        tokens = _tokenize(line, full_access=True)
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens):
+        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+            continue
+        word = tokens[index + 1]
+        strip_tabs = token == "<<-"
+        if word == "-" and index + 2 < len(tokens):
+            word, strip_tabs = tokens[index + 2], True
+        elif word.startswith("-") and len(word) > 1:
+            word, strip_tabs = word[1:], True
+        if word and all(ch not in _FULL_ACCESS_PUNCTUATION for ch in word):
+            return word, strip_tabs
+    return None
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """*command* with every heredoc body removed.
+
+    A body is input to the command that opened it, not a command, so the gates
+    must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
+    Only the text that reaches the shell as commands is returned; the shell
+    still runs the original. An unterminated body is left in place, so the
+    gates see it and refuse what they cannot parse.
+    """
+    if "<<" not in command:
+        return command
+    kept: list = []
+    lines = command.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        index += 1
+        opened = _heredoc_start(line)
+        if opened is None:
+            continue
+        word, strip_tabs = opened
+        end = index
+        while end < len(lines):
+            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
+            if body_line == word:
+                break
+            end += 1
+        if end == len(lines):
+            kept.extend(lines[index:])
+            break
+        index = end + 1
+    return "\n".join(kept)
+
+
 def _tokenize(command: str, full_access: bool = False) -> list:
     """Split *command* into argv tokens.
 
@@ -529,7 +540,7 @@ class ShellToolsMixin:
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
 
-    Rate Limiting:
+    Rate Limiting (lifted under full access):
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
     """
@@ -585,7 +596,10 @@ class ShellToolsMixin:
             )
 
         try:
-            cmd_parts = _tokenize(command, full_access=full_access)
+            cmd_parts = _tokenize(
+                _strip_heredoc_bodies(command) if full_access else command,
+                full_access=full_access,
+            )
         except ValueError as exc:
             return (
                 {
@@ -694,6 +708,8 @@ class ShellToolsMixin:
         """
         console = getattr(self, "console", None)
         if bool(getattr(console, "auto_approve_gated_tools", False)):
+            return False
+        if bool(getattr(console, "full_access", False)):
             return False
         # Deferred: the console module imports the package root.
         from gaia.agents.base import console as console_mod
@@ -865,10 +881,10 @@ class ShellToolsMixin:
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
-            full_access: This session's ``--full-access`` state. When
-                True the read-only policy is replaced wholesale by
-                ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
-                exactly as it was.
+            full_access: This session's ``--full-access`` state. When True
+                every confirmation is already answered yes, so only a
+                ``TIER_REFUSE`` result — something no approval can authorize —
+                is returned; the default path below is unchanged.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -880,7 +896,15 @@ class ShellToolsMixin:
         end this tier removes.
         """
         if full_access:
-            return ShellToolsMixin._validate_full_access_command(cmd_base)
+            error = ShellToolsMixin._validate_command(
+                cmd_base,
+                cmd_parts,
+                command,
+                granted_binaries=granted_binaries,
+            )
+            if error is not None and error.get("tier") == TIER_REFUSE:
+                return error
+            return None
 
         # Skill-granted CLIs are gated by their own policy table instead of
         # ALLOWED_COMMANDS; anything ungranted still needs confirmation.
@@ -1145,39 +1169,6 @@ class ShellToolsMixin:
             }
 
         return None  # Command is allowed
-
-    @staticmethod
-    def _validate_full_access_command(cmd_base: str) -> Optional[Dict[str, Any]]:
-        """The whole binary policy under full access.
-
-        Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
-        else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
-        ``find -exec``, ``sort -o``, ``uniq`` output) all encode "this binary
-        may not write", which is precisely the assumption full access drops.
-
-        Still a set, not an open door — ``rm`` and anything unrecognised are
-        refused, and every segment lands in the audit record either way.
-        """
-        from gaia.skills.binaries import normalize_binary
-
-        candidates = {cmd_base, normalize_binary(cmd_base)}
-        if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
-            return None
-        return {
-            "status": "error",
-            "tier": TIER_REFUSE,
-            "error": (
-                f"Command '{cmd_base}' is not in the developer command set, "
-                "even with full access on."
-            ),
-            "has_errors": True,
-            "hint": (
-                "Full access swaps the read-only allowlist for a "
-                "developer set (python, python3, pytest, node, npm, make, "
-                "cmake, go, cargo, gh, sed, awk, curl, sleep, timeout, export, "
-                "cp, mv). 'rm' is deliberately excluded."
-            ),
-        }
 
     def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
         """Record a command run under full access, arguments and all.

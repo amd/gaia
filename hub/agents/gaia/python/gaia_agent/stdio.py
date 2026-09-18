@@ -1211,12 +1211,13 @@ def build_parser() -> "argparse.ArgumentParser":
         dest="full_access",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, shell operators (&&, ||, ;, >) parse and run, the "
-        "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh) and the "
-        "shell rate limit is lifted. This is arbitrary code execution. Off "
-        "unless passed, and the host can toggle it at any time over the "
-        "control channel. Every shell command run this way is audit-logged.",
+        "without asking, shell operators (&&, ||, ;, >) and heredocs parse and "
+        "run, any command runs inside the allowed paths (rm included), and the "
+        "shell rate limit is lifted. Still refused: paths outside the allowed "
+        "directories and what no approval can authorize (gh auth token, git -c, "
+        "encoded PowerShell). This is arbitrary code execution. Off unless "
+        "passed, and the host can toggle it at any time over the control "
+        "channel. Every shell command run this way is audit-logged.",
     )
     parser.add_argument(
         "--bypass-permissions",

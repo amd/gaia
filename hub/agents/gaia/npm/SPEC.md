@@ -412,15 +412,14 @@ remotely, so a local server URL alone does not establish local inference.
 
 `--full-access` turns off more than the prompt. It also lifts the shell
 tool's own guardrails for the session: compound operators (`&&`, `||`, `;`, `>`)
-parse and run, the read-only binary allowlist is replaced by a developer set
-(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`, which
-already had their own paths), and the shell rate limit is dropped. That is
-arbitrary code execution in the working directory, which is why it exists only
-on this transport: one local parent process on a private pipe. It is **not**
-reachable over HTTP, and the request body cannot ask for it. `rm` is excluded
-from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete.
+and heredocs parse and run, any command runs inside the allowed paths without a
+prompt (`rm`, `npm`, `make`, `pytest` alike), and the shell rate limit is
+dropped. That is arbitrary code execution in the working directory, which is why
+it exists only on this transport: one local parent process on a private pipe. It
+is **not** reachable over HTTP, and the request body cannot ask for it. Two
+refusals remain: a path outside the allowed directories (an argument, a
+redirect target, `working_directory`, `git -C`), and an invocation no approval
+can authorize (`gh auth token`, `git -c`, encoded PowerShell).
 
 Every shell command run under full access is recorded with its full arguments and its
 per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
