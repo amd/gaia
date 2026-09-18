@@ -40,20 +40,10 @@ an explicit ``removed`` field rather than relying on ``ok: true`` alone,
 so the agent-loop model has an unambiguous signal to narrate from and
 cannot claim a mutation that did not happen (see each tool's docstring).
 
-#2828: a live regression showed ``set_low_priority_sender`` muting a
-different real address than the one asked for. The suspected cause —
-tool-side fuzzy resolution against mailbox contacts — does NOT exist:
-``set_priority_sender``/``set_low_priority_sender`` take a bare ``email``
-string, run it through ``_normalize_email`` (lowercase/strip only, no
-lookup), and store exactly that; the confirmation already echoes back the
-normalized value that was actually stored. The mismatch was in the
-calling model's own tool-call argument, not in this module. There is no
-mailbox contact list available to validate against here, so what these
-tools now guard against is the deterministic case within their own
-reach: the new address colliding, by near-duplicate local-part, with an
-address already sitting in this agent's own preference store from an
-earlier turn (``_find_ambiguous_senders``) — that case fails loudly and
-names the candidates instead of silently applying.
+The set-sender tools additionally refuse an address that is a
+near-duplicate, by local part, of one already in either sender list
+(``_find_ambiguous_senders``), naming the candidates rather than
+guessing which was meant.
 """
 
 from __future__ import annotations
@@ -199,17 +189,8 @@ def _normalize_email(value: str) -> str:
     return cleaned.lower()
 
 
-# #2828: the tool has no mailbox contact list to resolve a name against — it
-# only ever sees the bare address the caller (the LLM) passes in. Fuzzy
-# resolution against contacts does not exist and was never the bug (see the
-# module docstring's #2828 note). What CAN happen deterministically is a
-# collision between the address just given and one already sitting in this
-# agent's own preference store from an earlier turn — e.g. the user narrowly
-# renames/retypes a sender they configured minutes ago. That collision is
-# cheap to detect and worth failing loudly on; a genuinely new, unique address
-# is let through even though it has never been seen before, because rejecting
-# every never-before-seen address would break the common case of muting a
-# sender for the first time.
+# Only collisions with an already-stored sender are detectable here; a
+# first-time address has nothing to compare against and must go through.
 _SENDER_AMBIGUITY_RATIO = 0.82
 
 
@@ -218,8 +199,8 @@ def _local_part(email: str) -> str:
 
     Comparing local parts (not full addresses) is what catches a look-alike
     like ``tomasz.iniewicz@gmail.com`` vs. ``tomasz.testingiewicz@outlook.com``
-    (#2828's exact case) — the domains differ entirely, so comparing full
-    strings would dilute the similarity score below any sane threshold.
+    — the domains differ entirely, so comparing full strings would dilute the
+    similarity score below any sane threshold.
     """
     return email.split("@", 1)[0]
 
@@ -237,9 +218,9 @@ def _find_ambiguous_senders(normalized: str, known: Set[str]) -> List[str]:
     different addresses do not become one just because both use a common
     mailbox name. A match ratio >= ``_SENDER_AMBIGUITY_RATIO`` on the local
     part is what flags e.g. ``bob.smith`` vs. ``bob.smyth``, or the near-typo
-    ``tomasz.iniewicz`` vs. ``tomasz.testingiewicz`` (#2828's actual case,
-    also across different domains) — both share almost, but not all, of the
-    local part, which is the signal an exact-local-part match lacks.
+    ``tomasz.iniewicz`` vs. ``tomasz.testingiewicz`` (also across different
+    domains) — both share almost, but not all, of the local part, which is
+    the signal an exact-local-part match lacks.
     """
     candidate_local = _local_part(normalized)
     matches = [
@@ -461,13 +442,11 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
-            #2828: if the address closely resembles one already configured
-            (e.g. ``priya@x.com`` vs. an existing ``priyanka@x.com``), this
-            fails loudly instead of silently applying to the wrong sender —
-            the error names the address(es) it could not disambiguate from.
-            This is never permanent: ask the user to confirm the address is
-            what they meant, then retry the same call with ``confirmed=True``
-            to apply it despite the resemblance.
+            If the address closely resembles one already configured (e.g.
+            ``priya@x.com`` vs. an existing ``priyanka@x.com``), this fails
+            and names the candidates rather than applying to the wrong
+            sender. Confirm the exact address with the user, then retry with
+            ``confirmed=True``.
 
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
@@ -602,14 +581,10 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
-            #2828: if the address closely resembles one already configured
-            (e.g. muting ``a@x.com`` when ``b@x.com``, a near-duplicate, is
-            already on either sender list), this fails loudly instead of
-            silently applying to the wrong sender — the error names the
-            address(es) it could not disambiguate from. This is never
-            permanent: ask the user to confirm the address is what they
-            meant, then retry the same call with ``confirmed=True`` to apply
-            it despite the resemblance.
+            If the address closely resembles one already on either sender
+            list, this fails and names the candidates rather than applying to
+            the wrong sender. Confirm the exact address with the user, then
+            retry with ``confirmed=True``.
 
             Args:
                 email: A bare email address, e.g.
