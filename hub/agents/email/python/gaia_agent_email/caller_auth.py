@@ -23,10 +23,11 @@ Three controls, all keyed on a single :class:`CallerAuthConfig` set at app build
    in the environment) or directly in ``GAIA_EMAIL_SIDECAR_TOKEN`` (legacy).
    Every non-exempt request must present ``Authorization: Bearer <token>`` or it
    is rejected with 401. This authenticates the *caller*.
-2. **Host allowlist** — the ``Host`` header must be a loopback host
+2. **Host allowlist** — the ``Host`` header must be present AND a loopback host
    (127.0.0.1 / localhost / ::1). This closes DNS-rebinding, where a victim's
    browser is tricked into resolving ``evil.com`` → 127.0.0.1 and posting to the
-   sidecar (the browser then sends ``Host: evil.com``).
+   sidecar (the browser then sends ``Host: evil.com``). An absent or empty
+   ``Host`` is refused too, so the control cannot be skipped by omitting it.
 3. **Origin rejection** — a request carrying a browser ``Origin`` that is not a
    loopback origin is rejected with 403. This closes a drive-by web page that
    fetches ``http://127.0.0.1:<port>`` directly. Non-browser clients (the npm /
@@ -296,16 +297,29 @@ class HostOriginMiddleware:
         if config is not None:
             headers = Headers(scope=scope)
 
-            host = _host_only(headers.get("host", ""))
-            if host and host not in config.allowed_hosts:
+            # Fail closed on an absent/empty Host: HTTP/1.1 requires one and
+            # every real client sends it, so "no Host" is a caller skipping the
+            # rebinding control, not a case to wave through.
+            raw_host = headers.get("host", "")
+            host = _host_only(raw_host)
+            if host not in config.allowed_hosts:
+                # Keyed on the RAW header: _host_only returns "" for a malformed
+                # value too (`:8131`, an unbracketed `::1`), and calling that
+                # "no Host header" misdirects whoever is debugging the client.
+                named = (
+                    f"Host header '{raw_host}'"
+                    if raw_host.strip()
+                    else "A request with no Host header"
+                )
                 await self._reject(
                     scope,
                     receive,
                     send,
                     400,
-                    f"Rejected: Host header '{host}' is not an allowed loopback "
-                    "host. The email sidecar serves only 127.0.0.1/localhost; a "
-                    "non-loopback Host is a DNS-rebinding attempt.",
+                    f"Rejected: {named} is not an allowed loopback host. The "
+                    "email sidecar serves only 127.0.0.1/localhost; send "
+                    "'Host: 127.0.0.1:<port>'. A non-loopback or absent Host is "
+                    "a DNS-rebinding attempt.",
                 )
                 return
 

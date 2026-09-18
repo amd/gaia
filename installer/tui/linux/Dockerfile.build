@@ -1,0 +1,20 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+# Build environment for installer/tui/linux/build-packages.sh.
+#
+# fpm needs Ruby; the .rpm target needs rpmbuild, which Debian ships in the
+# `rpm` package. Both live here so a single image produces both artifacts —
+# a container that can only build the .deb would let a half-complete release
+# look successful.
+#
+#   docker build -f installer/tui/linux/Dockerfile.build -t gaia-linux-pkg installer/tui/linux
+#
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ruby ruby-dev build-essential rpm binutils ca-certificates \
+ && gem install --no-document fpm \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src

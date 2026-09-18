@@ -1235,28 +1235,6 @@ class TestTalkSDK:
 
 
 # ============================================================================
-# 22. ROUTING AGENT TESTS
-# ============================================================================
-
-
-class TestRoutingAgent:
-    """Smoke coverage for RoutingAgent — behavioural routing tests live in a dedicated suite."""
-
-    def test_routing_agent_exposes_process_query(self):
-        """Verify RoutingAgent imports cleanly and exposes process_query.
-
-        We don't instantiate — RoutingAgent.__init__ constructs a LemonadeClient.
-
-        RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102);
-        skip when a framework-only env lacks it.
-        """
-        pytest.importorskip("gaia_agent_routing")
-        from gaia_agent_routing.agent import RoutingAgent
-
-        assert hasattr(RoutingAgent, "process_query")
-
-
-# ============================================================================
 # 23. SPECIALIZED AGENTS TESTS
 # ============================================================================
 
@@ -1271,187 +1249,6 @@ class TestSpecializedAgents:
 
         assert ChatAgent is not None
 
-    def test_docker_agent_exists(self):
-        """Verify DockerAgent can be imported."""
-        try:
-            from gaia_agent_docker.agent import DockerAgent
-
-            assert DockerAgent is not None
-        except ImportError:
-            # Docker agent ships as the standalone gaia-agent-docker wheel (#1102)
-            pytest.skip("gaia-agent-docker not installed")
-
-    def test_jira_agent_exists(self):
-        """Verify JiraAgent can be imported."""
-        pytest.importorskip("gaia_agent_jira")
-        from gaia_agent_jira.agent import JiraAgent
-
-        assert JiraAgent is not None
-
-    def test_blender_agent_exists(self):
-        """Verify BlenderAgent can be imported."""
-        pytest.importorskip("gaia_agent_blender")
-        from gaia_agent_blender.agent import BlenderAgent
-
-        assert BlenderAgent is not None
-
-    def test_specialized_agents_inherit_from_base(self):
-        """Verify all specialized agents inherit from Agent base class."""
-        pytest.importorskip("gaia_agent_blender")
-        pytest.importorskip("gaia_agent_jira")
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_blender.agent import BlenderAgent
-        from gaia_agent_chat.agent import ChatAgent
-        from gaia_agent_jira.agent import JiraAgent
-
-        from gaia.agents.base.agent import Agent
-
-        assert issubclass(ChatAgent, Agent)
-        assert issubclass(JiraAgent, Agent)
-        assert issubclass(BlenderAgent, Agent)
-
-
-# ============================================================================
-# 24. CODE TOOL MIXINS TESTS
-# ============================================================================
-
-
-class TestCodeToolMixins:
-    """Test all code mixins."""
-
-    @pytest.fixture(autouse=True)
-    def _require_code_pkg(self):
-        # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102);
-        # skip when it isn't installed.
-        pytest.importorskip("gaia_agent_code")
-
-    def test_cli_tools_mixin_exists(self):
-        """Verify CLIToolsMixin can be imported."""
-        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
-
-        assert CLIToolsMixin is not None
-        # Check for CLI registration method
-        assert hasattr(CLIToolsMixin, "register_cli_tools") or hasattr(
-            CLIToolsMixin, "__init__"
-        )
-
-    def test_code_tools_mixin_exists(self):
-        """Verify CodeToolsMixin can be imported."""
-        from gaia_agent_code.tools.code_tools import CodeToolsMixin
-
-        assert CodeToolsMixin is not None
-        # Check for registration method
-        assert hasattr(CodeToolsMixin, "register_code_tools") or hasattr(
-            CodeToolsMixin, "__init__"
-        )
-
-    def test_file_io_tools_mixin_exists(self):
-        """Verify FileIOToolsMixin can be imported."""
-        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
-
-        assert FileIOToolsMixin is not None
-        # Check for registration method
-        assert hasattr(FileIOToolsMixin, "register_file_io_tools") or hasattr(
-            FileIOToolsMixin, "__init__"
-        )
-
-    def test_validation_tools_mixin_exists(self):
-        """Verify ValidationToolsMixin can be imported."""
-        from gaia_agent_code.tools.validation_tools import ValidationToolsMixin
-
-        assert ValidationToolsMixin is not None
-        # Check for registration method
-        assert hasattr(ValidationToolsMixin, "register_validation_tools") or hasattr(
-            ValidationToolsMixin, "__init__"
-        )
-
-    def test_error_fixing_mixin_exists(self):
-        """Verify ErrorFixingMixin can be imported."""
-        from gaia_agent_code.tools.error_fixing import ErrorFixingMixin
-
-        assert ErrorFixingMixin is not None
-        # Check for registration method
-        assert hasattr(ErrorFixingMixin, "register_error_fixing_tools") or hasattr(
-            ErrorFixingMixin, "__init__"
-        )
-
-    def test_testing_mixin_exists(self):
-        """Verify TestingMixin can be imported."""
-        from gaia_agent_code.tools.testing import TestingMixin
-
-        assert TestingMixin is not None
-        # Check for registration method
-        assert hasattr(TestingMixin, "register_testing_tools") or hasattr(
-            TestingMixin, "__init__"
-        )
-
-    def test_prisma_tools_mixin_exists(self):
-        """Verify PrismaToolsMixin can be imported."""
-        try:
-            from gaia_agent_code.tools.prisma_tools import PrismaToolsMixin
-
-            assert PrismaToolsMixin is not None
-            # Check for Prisma-related tools
-            assert hasattr(PrismaToolsMixin, "run_prisma_command") or hasattr(
-                PrismaToolsMixin, "prisma_migrate"
-            )
-        except ImportError:
-            # Prisma tools may be optional
-            pytest.skip("PrismaToolsMixin not implemented")
-
-    def test_typescript_tools_mixin_exists(self):
-        """Verify TypeScriptToolsMixin can be imported."""
-        try:
-            from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin
-
-            assert TypeScriptToolsMixin is not None
-            # Check for TypeScript-related tools
-            assert hasattr(TypeScriptToolsMixin, "compile_typescript") or hasattr(
-                TypeScriptToolsMixin, "run_tsc"
-            )
-        except ImportError:
-            # TypeScript tools may be optional
-            pytest.skip("TypeScriptToolsMixin not implemented")
-
-    def test_web_tools_mixin_exists(self):
-        """Verify WebToolsMixin can be imported."""
-        try:
-            from gaia_agent_code.tools.web_dev_tools import WebToolsMixin
-
-            assert WebToolsMixin is not None
-            # Check for web-related tools
-            assert hasattr(WebToolsMixin, "fetch_url") or hasattr(
-                WebToolsMixin, "scrape_page"
-            )
-        except ImportError:
-            # Web tools may be optional
-            pytest.skip("WebToolsMixin not implemented")
-
-    def test_code_mixins_can_be_combined(self):
-        """Verify multiple code mixins can be combined."""
-        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
-
-        from gaia.agents.base.agent import Agent
-        from gaia.agents.base.console import SilentConsole
-        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
-
-        class CombinedCodeAgent(Agent, CLIToolsMixin, FileIOToolsMixin):
-            def _get_system_prompt(self) -> str:
-                return "Combined code agent"
-
-            def _create_console(self):
-                return SilentConsole()
-
-            def _register_tools(self):
-                pass
-
-        # Should instantiate without errors
-        agent = CombinedCodeAgent(silent_mode=True)
-        assert agent is not None
-        # Should have registration methods from both mixins
-        assert isinstance(agent, CLIToolsMixin)
-        assert isinstance(agent, FileIOToolsMixin)
-
 
 # ============================================================================
 # 25. APPLICATIONS TESTS
@@ -1460,34 +1257,6 @@ class TestCodeToolMixins:
 
 class TestApplications:
     """Test app wrappers."""
-
-    def test_summarizer_app_exists(self):
-        """Verify SummarizerApp can be imported."""
-        from gaia.apps.summarize.app import SummarizerApp
-
-        assert SummarizerApp is not None
-
-    def test_summarizer_styles_defined(self):
-        """Verify summarizer styles are defined."""
-        from gaia.apps.summarize.app import SummarizerApp
-
-        # Check that common summary styles exist
-        assert hasattr(SummarizerApp, "STYLE_CONCISE") or hasattr(
-            SummarizerApp, "summarize"
-        )
-
-        # Verify summarizer can be instantiated
-        with patch("gaia.apps.summarize.app.LLMClient"):
-            summarizer = SummarizerApp()
-            assert summarizer is not None
-
-    def test_summarizer_interface_methods(self):
-        """Verify SummarizerApp has required methods."""
-        from gaia.apps.summarize.app import SummarizerApp
-
-        # Check methods exist
-        assert hasattr(SummarizerApp, "summarize")
-        assert hasattr(SummarizerApp, "summarize_file")
 
     def test_llm_app_exists(self):
         """Verify LLM app can be imported."""
@@ -1500,18 +1269,6 @@ class TestApplications:
             from gaia.llm import LLMClient
 
             assert LLMClient is not None
-
-    def test_jira_app_exists(self):
-        """Verify Jira app can be imported."""
-        try:
-            from gaia.apps.jira.app import JiraApp
-
-            assert JiraApp is not None
-        except ImportError:
-            # Jira app may be integrated with agent
-            from gaia_agent_jira.agent import JiraAgent
-
-            assert JiraAgent is not None
 
 
 # ============================================================================
@@ -1546,51 +1303,6 @@ class TestTalkIntegration:
         agent.initialize_talk()
         assert hasattr(agent, "talk_sdk")
         assert agent.talk_sdk is not None
-
-
-class TestCodeAgentIntegration:
-    """Test Code Agent integration."""
-
-    @pytest.fixture(autouse=True)
-    def _require_code_pkg(self):
-        # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102);
-        # skip when it isn't installed.
-        pytest.importorskip("gaia_agent_code")
-
-    def test_code_agent_exists(self):
-        """Verify CodeAgent can be imported."""
-        from gaia_agent_code.agent import CodeAgent
-
-        assert CodeAgent is not None
-
-    def test_code_agent_has_all_mixins(self):
-        """Verify CodeAgent includes all code mixins."""
-        from gaia_agent_code.agent import CodeAgent
-        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
-
-        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
-
-        # Should inherit from required mixins
-        assert issubclass(CodeAgent, CLIToolsMixin)
-        assert issubclass(CodeAgent, FileIOToolsMixin)
-
-    @patch("gaia_agent_code.agent.CodeAgent._create_console")
-    def test_code_agent_can_be_instantiated(self, mock_console):
-        """Verify CodeAgent can be instantiated."""
-        from gaia_agent_code.agent import CodeAgent
-        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
-
-        from gaia.agents.base.console import SilentConsole
-        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
-
-        mock_console.return_value = SilentConsole()
-
-        # Should instantiate without errors
-        agent = CodeAgent(silent_mode=True)
-        assert agent is not None
-        # Should be instance of required mixins
-        assert isinstance(agent, CLIToolsMixin)
-        assert isinstance(agent, FileIOToolsMixin)
 
 
 class TestMultiModalIntegration:

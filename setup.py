@@ -28,19 +28,6 @@ tkml_version = "5.0.4"
 # the incident. Do not move this back into extras_require until the wheels
 # are live on PyPI.
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-summarize",
-    "gaia-agent-sd",
-    "gaia-agent-fileio",
-    "gaia-agent-docker",
-    "gaia-agent-jira",
-    "gaia-agent-blender",
-    "gaia-agent-emr",
-    "gaia-agent-code",
-    "gaia-agent-connectors-demo",
-    "gaia-agent-analyst",
-    "gaia-agent-browser",
-    "gaia-agent-docqa",
-    "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
     "gaia-agent-gaia",
@@ -74,11 +61,7 @@ setup(
         "gaia.testing",
         "gaia.utils",
         "gaia.apps",
-        "gaia.apps.docker",
-        "gaia.apps.jira",
         "gaia.apps.llm",
-        "gaia.apps.summarize",
-        "gaia.apps.summarize.templates",
         "gaia.eval",
         "gaia.installer",
         "gaia.hub",
@@ -90,10 +73,13 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._email",
         "gaia.agents.builder",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.governance",
+        "gaia.factory",
+        "gaia.factory.harvest",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
@@ -134,14 +120,21 @@ setup(
         ],
     },
     install_requires=[
-        "openai",
+        # Staged by #382 for the Lemonade Realtime transcription work in #372.
+        # OpenAI 1.58.0 is the first release with Realtime API support.
+        "openai>=1.58.0",
         "pydantic>=2.9.2",
         "transformers",
         "accelerate",
         "python-dotenv",
         "aiohttp",
         "rich",
-        "requests",
+        # 2.32.3 added HTTPAdapter.build_connection_pool_key_attributes, which
+        # PinnedIPAdapter overrides to set the TLS SNI while pinning the IP.
+        # 2.32.2 is specifically unusable: it routes through
+        # get_connection_with_tls_context but has no such hook, so the SNI
+        # would silently revert to the pinned IP.
+        "requests>=2.32.3",
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
@@ -150,10 +143,6 @@ setup(
         "apscheduler>=3.10.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
-        # Required by the `gaia-mcp` bridge (base console_script), which parses
-        # multipart uploads via python_multipart at import time. Base — not an
-        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
-        "python-multipart>=0.0.9",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
@@ -183,6 +172,10 @@ setup(
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
+            # The daemon relies on psutil for every liveness check and
+            # _check_daemon_deps refuses to start without it — declare it rather
+            # than rely on accelerate pulling it in transitively.
+            "psutil>=5.9.0",
         ],
         "ui": [
             "fastapi>=0.115.0",
@@ -217,21 +210,23 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.14",
-            "torchvision<0.29.0",
+            "torch>=2.0.0,<2.15",
+            "torchvision<0.30.0",
             "torchaudio",
         ],
-        "blender": [
-            "bpy",
+        # Speaker diarization. Its own extra, not part of "audio": this is a
+        # ~29 MB native wheel (Apache-2.0; the onnxruntime it vendors is MIT)
+        # with no torch in it, and the frozen agent needs it BUNDLED — the
+        # lazy pip-install path cannot work inside a PyInstaller app, where
+        # sys.executable is the .exe rather than an interpreter.
+        "diarize": [
+            "sherpa-onnx>=1.13,<2",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
-            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
-            # mcp.server.mcpserver), breaking every FastMCP-based server
-            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
-            # servers/tui_mcp.py). Lift the cap only in a change that
-            # ports them.
-            "mcp>=1.1.0,<2.0",
+            # Supports mcp 2.x: its public MCPServer API replaced
+            # mcp.server.fastmcp (FastMCP). Keep the upper bound below the next
+            # incompatible major release.
+            "mcp>=2.0.0,<3.0",
             "starlette",
             "uvicorn",
         ],
@@ -297,6 +292,9 @@ setup(
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
+            # WebSocket transport for the Lemonade Realtime transcription work
+            # tracked in #372; #382 stages the packaging dependency first.
+            "websockets",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",

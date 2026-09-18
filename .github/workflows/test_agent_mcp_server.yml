@@ -14,18 +14,22 @@ on:
       - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
+      - 'src/gaia/ui/**'
       - 'tests/mcp/**'
+      - 'tests/unit/test_agent_ui_mcp*.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
+      - 'src/gaia/ui/**'
       - 'tests/mcp/**'
+      - 'tests/unit/test_agent_ui_mcp*.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   merge_group:
@@ -84,15 +88,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev]
-          uv pip install --system "fastmcp>=0.1.0"
+          uv pip install --system -e ".[dev,mcp,api]"
+
+      - name: Run Agent UI MCP transcript tests
+        run: python -m pytest tests/unit/test_agent_ui_mcp.py tests/unit/test_agent_ui_mcp_messages.py -v
 
       # TODO: Start Lemonade server for integration tests
-      # For now, integration tests requiring LLM will be skipped
-      # - name: Start Lemonade server
-      #   run: |
-      #     lemonade-server serve --ctx-size 32768 &
-      #     sleep 10
+      # For now, integration tests requiring LLM will be skipped.
+      # When enabling: there is no `lemonade-server serve` to call. Use
+      # installer/scripts/start-lemonade.ps1 on Windows (see test_api.yml)
+      # and build_start_command() on Linux (see test_gaia_cli_linux.yml).
 
       - name: Run MCPAgent tests (fast tests only)
         run: |
@@ -100,8 +105,22 @@ jobs:
 
       - name: Run slow tests (with Docker operations)
         if: (success() || failure()) && steps.docker-check.outcome == 'success'
+        # bash on every OS: this step branches on pytest's exit code, and the
+        # Windows leg defaults to pwsh, where that syntax is not valid.
+        shell: bash
         run: |
-          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short
+          # pytest exits 5 when the marker selects nothing, which fails the job.
+          # No slow tests remain -- the Docker-backed suite went with DockerAgent
+          # -- so treat an empty selection as nothing to do. The step stays so a
+          # future slow test runs without anyone re-adding it, and any real
+          # failure still propagates.
+          rc=0
+          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short || rc=$?
+          if [ "$rc" -eq 5 ]; then
+            echo "No slow tests are defined in this file; nothing to run."
+            exit 0
+          fi
+          exit "$rc"
 
       # Integration tests require Lemonade server - skip for now
       # - name: Run integration tests (with LLM orchestration)

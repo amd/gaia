@@ -6,6 +6,14 @@ with a runtime subdir inside — `hub/agents/<id>/python/` for the Python wheel,
 build. Each package depends on the published `amd-gaia` framework — third-party
 contributors follow the exact same pattern AMD uses for its own agents.
 
+## What ships here
+
+Three packages are products: [`gaia/`](gaia/python/) (the flagship),
+[`chat/`](chat/python/) (the base class it composes), and [`email/`](email/python/).
+Everything else in this directory is a teaching example, not a catalog agent —
+per-task agents were collapsed into skills the flagship loads on demand, so a new
+capability is a `SKILL.md` in [`hub/skills/`](../skills/), not a new package.
+
 ## New here? Start with the examples
 
 These reference agents are intentionally minimal, heavily commented, and built
@@ -16,7 +24,7 @@ order — each adds one concept:
 |---------|---------|-------|
 | [`hello-world/`](hello-world/python/) | The smallest possible agent: subclass `Agent`, set a system prompt. | 0 |
 | [`word-count/`](word-count/python/) | Registering a tool with the `@tool` decorator. | 1 |
-| [`doc-search/`](doc-search/python/) | Composing a framework mixin (`RAGToolsMixin`) for document Q&A. | 10 |
+| [`connectors-demo/`](connectors-demo/python/) | Reaching an external service through a connector grant. | 4 |
 
 Each example's `README.md` explains the pattern; its `tests/` suite mocks the
 LLM so it runs with no Lemonade server.

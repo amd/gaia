@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-debug       Disable debug logging"
             echo "  -h, --help       Show this help"
             echo ""
-            echo "Prerequisite: Lemonade Server must be running (lemonade-server serve)"
+            echo "Prerequisite: Lemonade Server must be running ('gaia init' installs and starts it)"
             exit 0
             ;;
         *)

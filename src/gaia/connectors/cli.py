@@ -332,10 +332,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
     # Importing the catalog registers the built-in specs so an unknown-connector
     # error is actionable rather than a bare KeyError.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-
-    if getattr(args, "device", False):
-        return _handle_connect_device(args)
-
     from gaia.connectors.api import (
         complete_authorization,
         resolve_declared_scopes,
@@ -415,15 +411,33 @@ def _handle_connect(args: argparse.Namespace) -> int:
         grant_agents = {grant_agent: list(scopes)} if grant_agent else None
 
     if scopes:
-        # Human-readable preview before the browser opens (#2603) — the same
-        # descriptions the Agent UI's consent dialog renders for a scope.
-        from gaia.connectors.providers.google import SCOPE_DESCRIPTIONS
+        # Human-readable preview before authorization (#2603) — the same
+        # descriptions the Agent UI's consent dialog renders for a scope. Keep
+        # this before the device/browser split so both paths show the same
+        # requested access.
+        from gaia.connectors.providers.google import (
+            SCOPE_DESCRIPTIONS as GOOGLE_SCOPE_DESCRIPTIONS,
+        )
+        from gaia.connectors.providers.microsoft import (
+            SCOPE_DESCRIPTIONS as MICROSOFT_SCOPE_DESCRIPTIONS,
+        )
+
+        # Both OAuth providers use the same CLI preview. Keep the provider
+        # label tables independent while making every known scope render as a
+        # human-readable permission, including Microsoft Graph URLs.
+        scope_descriptions = {
+            **GOOGLE_SCOPE_DESCRIPTIONS,
+            **MICROSOFT_SCOPE_DESCRIPTIONS,
+        }
 
         sys.stdout.write(f"Requesting access to {args.connector_id}:\n")
         for scope in scopes:
-            sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
+            sys.stdout.write(f"  - {scope_descriptions.get(scope, scope)}\n")
 
-    async def _run() -> str:
+    if getattr(args, "device", False):
+        return _handle_connect_device(args, scopes=scopes, grant_agents=grant_agents)
+
+    async def _run() -> dict:
         info = await start_authorization(
             args.connector_id, scopes=scopes, grant_agents=grant_agents
         )
@@ -437,12 +451,15 @@ def _handle_connect(args: argparse.Namespace) -> int:
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
-        return result.get("account_email") or "<unknown>"
+        return result
 
-    email = asyncio.run(_run())
+    result = asyncio.run(_run())
+    email = result.get("account_email") or "<unknown>"
     msg = f"Connected as {email}"
     if grant_agent:
-        granted_scopes = grant_agents[grant_agent]
+        from gaia.connectors.grants import list_agent_grants
+
+        granted_scopes = list_agent_grants(args.connector_id).get(grant_agent, [])
         msg += (
             f"; granted {args.connector_id} → {grant_agent}: "
             f"{', '.join(granted_scopes)}"
@@ -451,12 +468,21 @@ def _handle_connect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_connect_device(args: argparse.Namespace) -> int:
-    """Device-code connect: print the code + URL, then poll until sign-in."""
+def _handle_connect_device(
+    args: argparse.Namespace,
+    *,
+    scopes: list[str],
+    grant_agents: dict[str, list[str]] | None,
+) -> int:
+    """Device-code connect: print the code + URL, then poll until sign-in.
+
+    ``scopes`` and ``grant_agents`` are resolved by ``_handle_connect`` before
+    this device/browser split, keeping both authorization paths on one contract.
+    """
     from gaia.connectors.api import poll_device_flow, start_device_flow
 
     async def _run() -> str:
-        info = await start_device_flow(args.connector_id, scopes=args.scopes or [])
+        info = await start_device_flow(args.connector_id, scopes=scopes)
         # Prefer the provider's own message (it already contains the URL + code);
         # fall back to a constructed instruction line.
         if info.get("message"):
@@ -474,6 +500,7 @@ def _handle_connect_device(args: argparse.Namespace) -> int:
             scopes=info["scopes"],
             interval=info["interval"],
             expires_in=info["expires_in"],
+            grant_agents=grant_agents,
         )
         return result.get("account_email") or "<unknown>"
 
@@ -482,7 +509,20 @@ def _handle_connect_device(args: argparse.Namespace) -> int:
     except ConnectorsError as e:
         sys.stderr.write(f"gaia connectors connect --device: {e}\n")
         return 1
-    sys.stdout.write(f"Connected as {email}\n")
+    msg = f"Connected as {email}"
+    if grant_agents:
+        from gaia.connectors.grants import list_agent_grants
+
+        # The ledger, not the request, is the source of truth — a provider
+        # can narrow the granted scopes below what was requested.
+        ledger = list_agent_grants(args.connector_id)
+        for agent_id in grant_agents:
+            granted_scopes = ledger.get(agent_id, [])
+            msg += (
+                f"; granted {args.connector_id} → {agent_id}: "
+                f"{', '.join(granted_scopes)}"
+            )
+    sys.stdout.write(msg + "\n")
     return 0
 
 
@@ -656,6 +696,10 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
 
 
 def _handle_grants(args: argparse.Namespace) -> int:
+    from gaia.connectors.errors import (
+        ScopeNotAllowedError,
+        UnknownConnectorError,
+    )
     from gaia.connectors.grants import (
         grant_agent,
         list_agent_grants,
@@ -672,7 +716,13 @@ def _handle_grants(args: argparse.Namespace) -> int:
             sys.stdout.write(f"{args.connector_id} {agent_id}: {', '.join(scopes)}\n")
         return 0
     if sub == "grant":
-        grant_agent(args.connector_id, args.agent_id, args.scopes)
+        # Both gates live in grant_agent so this command and the Agent UI
+        # route enforce one ceiling (#915).
+        try:
+            grant_agent(args.connector_id, args.agent_id, args.scopes)
+        except (ScopeNotAllowedError, UnknownConnectorError) as e:
+            sys.stderr.write(f"gaia connectors grants grant: {e}\n")
+            return 1
         sys.stdout.write(
             f"Granted {args.connector_id} → {args.agent_id}: "
             f"{', '.join(args.scopes)}\n"

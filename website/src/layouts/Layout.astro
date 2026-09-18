@@ -22,14 +22,14 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
-    <!-- Pre-paint theme: avoids flash of wrong theme. localStorage empty -> OS preference. -->
+    <meta name="theme-color" content="#08080a" />
+    <!-- Pre-paint theme: avoids flash of wrong theme. Dark is the designed
+         default and the ground the star chart was drawn for, so an unset
+         preference stays dark rather than following the OS. -->
     <script is:inline>
       (() => {
         const stored = localStorage.getItem('gaia-theme');
-        const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.theme = stored === 'light' ? 'light' : 'dark';
       })();
     </script>
 

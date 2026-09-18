@@ -35,8 +35,7 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 
 ### Features
 
-- **GAIA Code Agent**: Autonomous Python development with planning, code generation, linting, and testing
-- **GAIA Jira Agent**: Natural language interface for Jira operations
+- **Pluggable agent models**: Any agent registered in `AGENT_MODELS` (`src/gaia/api/agent_registry.py`) shows up as a selectable model — none are registered by default
 - **Seamless Integration**: Works with VSCode's built-in model picker and Copilot Chat
 - **Local Processing**: All inference runs locally on your AMD hardware via GAIA
 
@@ -214,31 +213,11 @@ The extension implements VSCode's `LanguageModelChatProvider` API to register GA
 
 ### Usage Examples
 
-<Tabs>
-  <Tab title="Code Development">
-    **Using GAIA Code Agent**
-
-    1. Select **GAIA code** from the model picker
-    2. In chat, type: "Create a function to calculate prime numbers"
-    3. GAIA will:
-       - Create the function
-       - Generate tests
-       - Run linting
-       - Save files to your workspace
-       - Report file paths in the response
-  </Tab>
-
-  <Tab title="Jira Operations">
-    **Using GAIA Jira Agent**
-
-    1. Select **GAIA jira** from the model picker
-    2. In chat, type: "Show my open issues"
-    3. GAIA will:
-       - Query your Jira instance
-       - Parse natural language
-       - Return formatted results
-  </Tab>
-</Tabs>
+No agent is registered in `AGENT_MODELS` by default, so the model picker shows
+nothing until you add one (see [Adding New Agents](/reference/api-spec#adding-new-agents)).
+Once an agent is registered under an id (for example `my-agent`), select it
+from the model picker and chat with it the same way you would with any other
+VSCode language model provider.
 
 ### Troubleshooting
 
@@ -256,6 +235,7 @@ The extension implements VSCode's `LanguageModelChatProvider` API to register GA
     **Symptoms**: Model picker doesn't show GAIA models
 
     **Solutions**:
+    - The picker should list `gaia`. If it is empty, check that the `gaia-agent-gaia` package is installed — the server logs the import error it hit
     - Ensure Lemonade Server is running: `lemonade-server serve --ctx-size 32768`
     - The API server needs to be running before selecting models
     - Check the GAIA output channel for error messages (View > Output > GAIA)
@@ -269,16 +249,6 @@ The extension implements VSCode's `LanguageModelChatProvider` API to register GA
     - Run `gaia api start` on the host/port the extension expects (default `http://localhost:8080`).
     - Restart the API server on the configured address.
     - Ensure firewall allows connections to the configured port.
-  </Accordion>
-
-  <Accordion title="Agent-Specific Issues">
-    **Code Agent not working**:
-    - Ensure Lemonade context size is 32768 or higher
-    - Check workspace has write permissions
-
-    **Jira Agent not working**:
-    - Ensure Jira is configured (see [Jira documentation](/guides/jira))
-    - Verify Jira credentials are set up correctly
   </Accordion>
 </AccordionGroup>
 
@@ -476,7 +446,7 @@ src/vscode/gaia/
     2. Run "GAIA: Manage API Server" to see the About dialog
     3. Open any chat feature (e.g., Copilot Chat if available)
     4. Click the model picker
-    5. Select a GAIA model (gaia-code or gaia-jira)
+    5. Select a GAIA model (models are configured in `AGENT_MODELS`, `src/gaia/api/agent_registry.py`)
     6. Send a test message
   </Step>
 </Steps>
@@ -668,12 +638,6 @@ When making changes to the extension:
   </Card>
   <Card title="GAIA MCP Server" icon="network-wired" href="/integrations/mcp">
     Model Context Protocol server
-  </Card>
-  <Card title="Code Agent" icon="code" href="/guides/code">
-    Code agent capabilities
-  </Card>
-  <Card title="Jira Agent" icon="ticket" href="/guides/jira">
-    Jira agent capabilities
   </Card>
 </CardGroup>
 

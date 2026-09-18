@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -36,22 +38,41 @@ func prepareTerminal() {
 	}
 }
 
-// RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
-// If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
-// A non-nil ctrl starts the loopback control API against this very program.
-// bypassPermissions starts launched agents with confirmation prompts off.
-// useClaude/claudeModel start them against Anthropic's Claude API instead of
-// the local Lemonade backend.
-func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) error {
+// RunFlagship launches the TUI: splash, readiness gate, then chat with the
+// flagship agent. GAIA ships one agent, so this is the whole product — there is
+// nothing to browse and nothing to pick.
+//
+// If mockAgent is non-empty, agent binary paths are overridden with it for
+// testing. A non-nil ctrl starts the loopback control API against this very
+// program. bypassPermissions starts the agent with confirmation prompts off.
+// useClaude/claudeModel run it against Anthropic's Claude API instead of the
+// local Lemonade backend. A non-nil trace records every agent event to a JSONL
+// file; the caller owns it and closes it after this returns.
+func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	m := root.NewRootModel(cat, dev).
+	agent := cat.Get(catalog.FlagshipID)
+	if agent == nil {
+		return fmt.Errorf("the catalog has no %q entry, so there is nothing to launch. "+
+			"Report this with GAIA diagnostics", catalog.FlagshipID)
+	}
+	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+		return err
+	}
+	m := root.NewFlagshipModel(*agent, dev).
+		WithCatalog(cat).
 		WithBypassPermissions(bypassPermissions).
-		WithClaude(useClaude, claudeModel)
+		WithClaude(useClaude, claudeModel).
+		WithTrace(trace).
+		WithLocalPreflight(preflight.LocalOptions{
+			// The gate has to answer about the binary this launch will actually
+			// spawn — with --mock that is the mock, not the name the seed carries.
+			Binary: agent.BinaryPath, ClaudeMode: useClaude,
+		})
 	return run(m, dev, ctrl)
 }
 
@@ -59,7 +80,7 @@ func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions
 //
 // subprocess is a command line, so it is split with quoting honoured — a binary
 // path containing a space must be quoted, not silently torn in two.
-func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) error {
+func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, trace *event.TraceWriter) error {
 	argv, err := client.SplitCommandLine(subprocess)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
@@ -71,7 +92,7 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) e
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev)
+	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
 	defer c.Close()
 
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
@@ -79,16 +100,12 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) e
 
 // teaOptions are the terminal capabilities every GAIA TUI program asks for.
 //
-// The mouse is left to the TERMINAL by default, so drag-select and the platform's
-// own copy/paste work the way they do in every other program — Ctrl/Cmd+C,
-// Ctrl+Shift+C, right-click, whatever that terminal uses.
-//
-// Capturing it (mode 1002) buys exactly one thing: the wheel scrolling the
-// transcript, which an alt-screen app cannot get from the terminal's scrollback
-// because it has none. That is not worth breaking selection for every user who
-// never asked for it — "I still can't drag my mouse over terminal text and copy
-// it" is the report this default answers. Ctrl+T turns capture on when the wheel
-// is what you want; ↑/↓ and PgUp/PgDn scroll regardless.
+// The mouse is deliberately NOT among them: who owns it is a per-screen
+// decision, not a program-wide one, and it lives in one place —
+// ui/chat/mousecapture.go. The chat model arms Cell-Motion tracking from its
+// own Init and releases it again for SELECT MODE (Ctrl+T); the splash and the
+// readiness gate never ask for the mouse at all. Setting a program-level mouse
+// option here would fight that reconciliation on every frame.
 func teaOptions() []tea.ProgramOption {
 	return []tea.ProgramOption{
 		tea.WithAltScreen(),
@@ -99,6 +116,17 @@ func teaOptions() []tea.ProgramOption {
 // recorder so the live session can be driven over HTTP.
 func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	prepareTerminal()
+
+	// The agent is a child process, and on Windows nothing reaps it when this
+	// one exits — so whatever the session opened is closed here, after the
+	// event loop has stopped, rather than left to the OS.
+	if closer, ok := model.(io.Closer); ok {
+		defer func() {
+			if err := closer.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+			}
+		}()
+	}
 
 	// Swept whether or not this run publishes one of its own: a session started
 	// WITHOUT --control used to leave a dead predecessor's file in place.
@@ -176,14 +204,27 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // session for the control API to attach to, so the caller is expected to have
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
+//
+// mockAgent stands in for the agent binary, for tests. It is honoured here and
+// not only on the bare launch, because `run` launches an agent too — a flag
+// that overrode the binary for one entry point and not the other let a test
+// spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
 	cat := catalog.NewCatalog()
-	cat.DiscoverBinaries()
+	if mockAgent != "" {
+		cat.SetMockBinary(mockAgent)
+	} else {
+		cat.DiscoverBinaries()
+	}
 
 	agent := cat.Get(agentID)
 	if agent == nil {
-		return 1, fmt.Errorf("no agent %q in the catalog. %s", agentID, runnableIDs(cat))
+		return 1, fmt.Errorf("no agent %q in the catalog. %s", agentID, knownIDs(cat))
+	}
+
+	if err := client.CheckBypassSupported(*agent, bypassPermissions); err != nil {
+		return 1, err
 	}
 
 	// A one-shot is always bounded — that is the whole point — so an unbounded
@@ -202,47 +243,53 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		}
 	}
 
-	c, err := client.ForAgent(*agent, client.ForAgentOptions{
-		Dev:   dev,
-		Model: model,
-		Logf:  logf,
-		// A one-shot has nobody at the keyboard; only the interactive chat can
-		// answer a question, so it must not claim it can.
-		Interactive:       query == "",
-		BypassPermissions: bypassPermissions,
-		UseClaude:         useClaude,
-		ClaudeModel:       claudeModel,
-	})
-	if err != nil {
-		return 1, err
-	}
-	defer c.Close()
-
 	if query != "" {
 		logf("one-shot: agent=%s transport=%s model=%q timeout=%s",
 			agent.ID, agent.Transport, orDefault(model, "the agent's default"), timeout)
 
-		// A one-shot runs unattended, so an unmet precondition has to be
-		// reported and refused rather than waited on. Interactive is left alone
-		// on purpose: a person can read a half-answer and press ctrl+c, and the
-		// launch that does have a gate is the hub's.
+		// Readiness runs BEFORE the client is built, and over EITHER transport.
+		//
+		// Both halves used to be wrong for a subprocess agent. It ran only for a
+		// relayed agent, because every row was probed through the daemon — and
+		// it ran after the client, so a machine with no gaia-agent got
+		// ForAgent's bare "no runnable binary" instead of the gate's three-part
+		// answer, which names where it looked and how to get the program.
+		cfg := preflight.ConfigFor(agent.ID, agent.Name)
+		var rep preflight.Report
 		if agent.Transport == catalog.TransportDaemon {
-			// Only a relayed agent has the /v1/<agent>/init route the check
-			// probes. For a subprocess agent the rows could only say "not
-			// installed" — four wrong answers over a launch that works.
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
-			rep := ReportReadiness(context.Background(), t,
-				preflight.ConfigFor(agent.ID, agent.Name), os.Stderr)
-			// Every row, not just the blocker: a turn that answers nothing is
-			// usually explained by a row that passed for the wrong reason.
-			for _, row := range rep.Rows {
-				logf("readiness %s: state=%v %s | remedy=%q",
-					row.Key, row.State, row.Line, row.Remedy.Command)
-			}
-			if rep.Blocked() {
-				return 1, nil
-			}
+			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
+		} else {
+			rep = ReportLocalReadiness(context.Background(),
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude},
+				cfg, os.Stderr)
 		}
+		// Every row, not just the blocker: a turn that answers nothing is
+		// usually explained by a row that passed for the wrong reason.
+		for _, row := range rep.Rows {
+			logf("readiness %s: state=%v %s | remedy=%q",
+				row.Key, row.State, row.Line, row.Remedy.Command)
+		}
+		if rep.Blocked() {
+			return 1, nil
+		}
+
+		c, err := client.ForAgent(*agent, client.ForAgentOptions{
+			Dev:   dev,
+			Model: model,
+			Logf:  logf,
+			// A one-shot has nobody at the keyboard; only the interactive chat
+			// can answer a question, so it must not claim it can.
+			Interactive:       false,
+			BypassPermissions: bypassPermissions,
+			UseClaude:         useClaude,
+			ClaudeModel:       claudeModel,
+			Trace:             trace,
+		})
+		if err != nil {
+			return 1, err
+		}
+		defer c.Close()
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
@@ -250,56 +297,35 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		return res.ExitCode, nil
 	}
 
-	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, dev)
-	if err := run(model_, dev, ctrl); err != nil {
+	// Interactive goes through the same splash -> readiness -> chat router the
+	// flagship launch uses, and that router builds its own client once the gate
+	// passes. That is what gains an interactive --agent launch a gate: it had
+	// none, and email in particular went straight to chat and reported a
+	// missing daemon as a failed first message.
+	m := root.NewFlagshipModel(*agent, dev).
+		WithCatalog(cat).
+		WithBypassPermissions(bypassPermissions).
+		WithClaude(useClaude, claudeModel).
+		WithModel(model).
+		WithTrace(trace)
+	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
 	}
 	return 0, nil
 }
 
-// runnableIDs names what would actually start, and keeps the rest separate.
-// Listing every catalog id as "known ids" read as a menu, and most of it could
-// not run.
-func runnableIDs(cat *catalog.Catalog) string {
-	var runnable, notYet []string
+// knownIDs names the agents this build can address, for a --agent that named
+// none of them. Whether each one is READY is the readiness gate's answer, not
+// this list's: it runs a moment later and says so per row, with a remedy.
+func knownIDs(cat *catalog.Catalog) string {
+	var ids []string
 	for _, a := range cat.All() {
-		if canStart(a) {
-			runnable = append(runnable, a.ID)
-			continue
-		}
-		notYet = append(notYet, a.ID)
+		ids = append(ids, a.ID)
 	}
-
-	if len(runnable) == 0 && len(notYet) == 0 {
+	if len(ids) == 0 {
 		return "The catalog is empty."
 	}
-
-	var b strings.Builder
-	if len(runnable) == 0 {
-		b.WriteString("Nothing is installed yet — see what the Agent Hub offers with `gaia tui list`, " +
-			"then install one with `gaia tui install <id>`")
-	} else {
-		b.WriteString("Installed and runnable: " + strings.Join(runnable, ", "))
-		b.WriteString(". Install more with `gaia tui install <id>` (`gaia tui list` shows what is offered)")
-	}
-	if len(notYet) > 0 {
-		b.WriteString(". Not runnable here: " + strings.Join(notYet, ", "))
-	}
-	return b.String()
-}
-
-// canStart reports whether this entry would actually start right now. `run`
-// never consulted Status, so listing by Status alone called an agent unrunnable
-// while `gaia tui run <id>` ran it.
-func canStart(a catalog.Agent) bool {
-	if a.Transport != catalog.TransportSubprocess {
-		return a.Status.IsLaunchable()
-	}
-	if a.BinaryPath == "" {
-		return false
-	}
-	_, err := catalog.ResolveExecutable(a.BinaryPath, a.ID)
-	return err == nil
+	return "Known ids: " + strings.Join(ids, ", ") + "."
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a

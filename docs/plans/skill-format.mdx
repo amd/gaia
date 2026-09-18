@@ -258,7 +258,7 @@ are no implicit grants — a skill declares every domain it touches.
 | `network` | `read`, `write`, `none` | Connector scope (see bridge below). | **Bridged** — resolves to a `ConnectorRequirement` |
 | `mcp` | `connect`, `none` | Connector scope (MCP-server connectors). | **Bridged** — resolves to a `ConnectorRequirement` |
 | `filesystem` | `read`, `write`, `none` | Local-capability domain (new; needs the skill sandbox). | **Refused at load** |
-| `shell` | `execute`, `none` | One named CLI, scoped: `shell:execute:gh`. | **Bridged** — grants that binary, read-only |
+| `shell` | `execute`, `none` | One named CLI, scoped: `shell:execute:gh`. | **Bridged** — grants that binary; reads run, writes ask |
 | `database` | `read`, `write`, `none` | Local-capability domain (new). | **Refused at load** |
 | `desktop` | `control`, `none` | Local-capability domain (new). | **Refused at load** |
 | `env` | `read`, `none` | Environment beyond declared `env_vars`. | **Refused at load** |
@@ -305,7 +305,8 @@ inventing a second grant system:
 - `shell:execute:<binary>` has its own bridge — see
   [Bring your own CLI](#bring-your-own-cli). It is not routed through a connector
   and does not need the sandbox, because the grant is one named binary held to a
-  read-only subcommand allowlist.
+  three-tier subcommand table: reads run, a short list of writes asks the user
+  per call, and every escalation class is refused outright.
 
 Per-agent scoping reuses the `namespaced_agent_id` keying
 (`builtin:` / `custom:sha256:` / `installed:`,
@@ -363,17 +364,27 @@ Four rules make the grant safe enough to bridge before the sandbox exists:
 
 1. **The binary must be policed.** `BINARY_POLICIES`
    ([`skills/binaries.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/binaries.py))
-   maps each declarable binary to its read-only subcommands. A binary with no
-   entry cannot be declared — the refusal names what *is* declarable.
-2. **Subcommands are an allowlist.** For `gh`: `issue list|view|status`,
-   `pr list|view|diff|checks|status`, `repo list|view`, `release list|view`,
-   `run list|view`, `label list`, `search …`, `auth status`, and `gh api` for GET.
-   Anything absent is refused, so `gh auth token` (prints the credential),
-   `gh alias` / `gh extension` / `gh config` / `gh codespace` (arbitrary code or a
-   remote shell), and every write verb are blocked without being enumerated.
-3. **Flags that turn a read into a write are refused.** `gh api` rejects
-   `-X`/`--method` with anything but `GET`, rejects `-f`/`-F`/`--field`/
-   `--raw-field`/`--input` (a body implies a write), and rejects `graphql`.
+   maps each declarable binary to its subcommand table. A binary with no entry
+   cannot be declared — the refusal names what *is* declarable.
+2. **Subcommands are an allowlist, in three tiers.** Reads run with no prompt:
+   for `gh`, `issue list|view|status`, `pr list|view|diff|checks|status`,
+   `repo list|view`, `release list|view`, `run list|view`, `label list`,
+   `search …`, `auth status`, and `gh api` for GET. A short list of writes is
+   **confirmable** — `issue create|comment|edit`, `pr comment`,
+   `label create|edit` — meaning the user is shown the exact command and answers
+   yes / no / always-for-that-command-class. Everything absent is refused, so
+   `gh auth token` (prints the credential), `gh alias` / `gh extension` /
+   `gh config` / `gh codespace` (arbitrary code or a remote shell), and the
+   irreversible verbs (`pr merge`, `issue close`, `label delete`, `repo delete`)
+   are blocked without being enumerated — and are never offered as a prompt.
+   Collapsing "refuse" into "ask" is what turns a gate into a habit; the tiers
+   stay separate for that reason.
+3. **Flags that escalate are refused, even on a confirmable write.** `gh api`
+   rejects `-X`/`--method` with anything but `GET`, rejects `-f`/`-F`/`--field`/
+   `--raw-field`/`--input` (a body implies a write), and rejects `graphql`. A
+   write rejects `--body-file` (uploads a local file's contents), `--editor`
+   (hangs a stdin-less agent), and `--web`. The flag is checked before the
+   action, so a write carrying one never reaches a prompt.
 4. **The binary must be installed.** `load_skill` checks `PATH` and refuses with
    the install command when it is missing. A skill that loads without the tool it
    documents produces confident answers from no data — the failure this bridge
@@ -383,16 +394,18 @@ The existing shell guardrails still apply on top: command chaining and
 redirection (`&&`, `;`, `>`, backticks, `$()`) are rejected before the policy
 runs, and each segment of a pipeline is validated separately.
 
-**The grant replaces the per-call prompt, for the granted calls only.**
+**The grant replaces the per-call prompt for READS only.**
 `run_shell_command` is in `Agent.confirmation_required_tools()`, so every call
 normally raises a confirmation modal. A triage is five to ten reads — five to ten
 modals attended, and unattended a 100% failure rate, since a console with nobody
-to ask denies. So a call *fully covered* by an active grant skips the prompt: the
-user already consented, in front matter, to one binary and a read-only table.
-Everything else is unchanged — `Agent._call_is_pre_authorized` asks the host's
-`skill_grant_covers_call` hook, which answers False unless **every** segment of
-the command is a granted binary running an allowed subcommand. `pwd` still
-prompts. So does `gh issue list | head`: consent was for `gh`, not for a
+to ask denies. So a *read* fully covered by an active grant skips the prompt: the
+user already consented, in front matter, to one binary and a read-only table. A
+confirmable write does not: the grant declares which writes may be *offered*, and
+the user still approves each one. Everything else is unchanged —
+`Agent._call_is_pre_authorized` asks the host's `skill_grant_covers_call` hook,
+which answers False unless **every** segment of the command is a granted binary
+running an allowed read. `pwd` still prompts. So does `gh issue list | head`:
+consent was for `gh`, not for a
 pipeline. An agent that has loaded no such skill has no way to answer yes, and
 its gate is byte-identical.
 
@@ -425,7 +438,7 @@ rather than a placeholder that makes the top tier look anchored. See
 
 The dangerous set the spec names — `shell:execute`, `desktop:control`,
 `database:write` — is retained as authoritative. `shell:execute:<binary>` is
-reachable today through the read-only binary bridge and prompts at `community`;
+reachable today through the policed binary bridge and prompts at `community`;
 `desktop:control` and `database:write` are unbridged local capabilities, so they
 are still **refused before any tier check**.
 
@@ -1319,7 +1332,7 @@ the declared `network` requirements.
   **load** (installing one already fails).
 - `filesystem`/`database`/`desktop`/`env` route to the sandbox and **load**
   instead of being refused (`shell:execute:<binary>` already loads through the
-  read-only binary bridge).
+  policed binary bridge).
 - A declared `network:<level>:<scope>` actually constrains egress.
 
 ### Phase 3 — Agent UI dashboard (PROPOSED; [#701](https://github.com/amd/gaia/issues/701))

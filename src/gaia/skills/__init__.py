@@ -31,10 +31,15 @@ and scoped binary grants (``shell:execute:gh``, gated by
 """
 
 from gaia.skills.binaries import (
+    ALLOW,
     BINARY_POLICIES,
+    CONFIRM,
+    REFUSE,
     BinaryGrants,
     BinaryPolicy,
+    InvocationDecision,
     Subcommand,
+    classify_invocation,
     normalize_binary,
     resolve_binary_policies,
     validate_invocation,
@@ -192,6 +197,11 @@ __all__ = [
     # Binary bridge (shell:execute:<binary>)
     "BINARY_POLICIES",
     "BinaryPolicy",
+    "InvocationDecision",
+    "ALLOW",
+    "CONFIRM",
+    "REFUSE",
+    "classify_invocation",
     "BinaryGrants",
     "Subcommand",
     "normalize_binary",

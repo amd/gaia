@@ -23,7 +23,8 @@ Two ways in:
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
 > `gaia_agent/skills/<name>/SKILL.md`. Same filename, different artifact —
-> don't ship this one as an agent skill. See [Skills](#10-skills--opt-in-and-empty-in-010).
+> don't ship this one as an agent skill. See
+> [Skills](#10-skills--one-always-on-the-rest-opt-in).
 
 ## 1. Install
 
@@ -51,7 +52,10 @@ built-in `fetch`. Use `import`, not `require`; from CommonJS use
    each against the lock**.
 4. Installs the sidecar into `~/.gaia/agents/gaia/` and the TUI into
    `~/.gaia/npm-cache/gaia-<version>/`.
-5. Execs the TUI, whose exit code becomes ours.
+5. Writes `~/.gaia/agents/gaia/.installed` — the record the daemon and the TUI
+   both read to decide the sidecar is installed. Written on a cache hit too, so
+   an install staged by an earlier release repairs itself.
+6. Execs the TUI, whose exit code becomes ours.
 
 `run` deliberately does **not** spawn a sidecar. The TUI reaches agents through
 the GAIA daemon's relay and never holds a sidecar token, and the daemon is what
@@ -187,6 +191,30 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   on `exit`, `SIGINT`/`SIGTERM`/`SIGHUP`, `uncaughtException`, and
   `unhandledRejection`. A `SIGKILL` of *your* process is the one case nothing
   in-process can catch.
+- **Mint a caller token, or you are running the sidecar unauthenticated.** The
+  sidecar requires `Authorization: Bearer <token>` on every `/v1/gaia/*`
+  request, and skips the check only when neither token env var is set — dev
+  mode, which is what `startSidecar` gives you, because this package mints
+  nothing. Loopback binding is not the boundary: this agent has shell and file
+  tools. Mint your own and pass it through the `env` option (`StartOptions`
+  extends `SpawnOptions`, so it merges over `process.env`):
+
+  ```ts
+  import { randomBytes } from "node:crypto";
+  const token = randomBytes(32).toString("hex");
+  const proc = await startSidecar({
+    binaryPath: sidecar.binaryPath,
+    env: { GAIA_GAIA_SIDECAR_TOKEN: token },   // or ..._TOKEN_FILE, a 0600 path
+  });
+  ```
+
+  Then send `authorization: "Bearer " + token` on every `/v1/gaia/*` call.
+  `/health`, `/version`, and `/v1/gaia/version` are exempt, so `startSidecar`'s
+  own health-and-version handshake works either way. **If you did not spawn the
+  sidecar** — you are talking to one the GAIA daemon started — the token is the
+  daemon's, delivered to the sidecar as `GAIA_GAIA_SIDECAR_TOKEN_FILE` (a `0600`
+  file path); read it from there, don't invent one. A 401 whose `detail` names
+  both env vars means you sent the wrong token or none.
 
 Or skip the code entirely and let the CLI own it:
 
@@ -198,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.12**; the stream is
+package — call it with plain `fetch`. Contract version **2.13**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -210,7 +238,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
-| `model` | no | Overrides the model id for this run. |
+| `model` | no | Overrides the model id — only when the run builds a fresh agent. On a retained `session_id` the agent already exists, so a model that differs from the one it was built with is a **409**, not an override. |
 | `provider` | no | Local inference only — anything but `"lemonade"` is a **400**. |
 | `max_steps` | no | ≥ 1. |
 
@@ -220,7 +248,11 @@ import { randomUUID } from "node:crypto";
 const runId = randomUUID();
 const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   method: "POST",
-  headers: { "content-type": "application/json", accept: "text/event-stream" },
+  headers: {
+    "content-type": "application/json",
+    accept: "text/event-stream",
+    authorization: `Bearer ${token}`,   // required unless the sidecar is in dev mode — §6
+  },
   body: JSON.stringify({
     query: "Summarize the PDFs in ~/Documents/reports",
     run_id: runId,
@@ -290,14 +322,20 @@ Rules a client must respect:
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
 
-## 8. Confirmation-gated tools are **refused, not prompted**
+## 8. Over `/v1/gaia/query`, confirmation-gated tools are **refused, not prompted**
 
-Read this before you design a workflow around it.
+Read this before you design a workflow around it. This section is about the HTTP
+surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Three of the agent's 55 tools write to disk or execute a command, and sit in the
-base `TOOLS_REQUIRING_CONFIRMATION` set: **`write_file`**, **`edit_file`**, and
-**`run_shell_command`**. Everything else — reading, indexing, querying, web
-fetching, memory — runs without asking.
+Seven of the agent's 71 tools mutate the machine and need explicit approval
+before they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+**`write_file`**, **`edit_file`**, **`run_shell_command`**,
+**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
+child on Windows to draw the notification — and the flagship adds two of its
+own, **`install_skill`** and **`remove_skill`**, because installing a skill
+writes third-party code under `~/.gaia/skills` and removing one deletes it.
+Everything else — reading, indexing, querying, web fetching, memory — runs
+without asking.
 
 Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
 does not prompt. When the agent reaches one of those tools it emits a
@@ -314,11 +352,13 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot write files, edit files, or run shell commands.** If your
-integration needs that, drive the agent from a surface that can prompt (the
-terminal UI or the Agent UI), or perform the mutation yourself from your own code
-and let the agent do the reading and reasoning. Treat `needs_confirmation` as an
-early warning that the run is about to end, not as a question you can answer.
+So: **`/query` cannot run any of those seven tools.** If your integration needs
+that, drive the agent from a surface that can prompt — its stdio transport is the
+one that can, because its control channel carries an approval back to a turn
+already in flight (SPEC §5.5) — or perform the mutation yourself from your own
+code and let the agent do the reading and reasoning. Treat `needs_confirmation`
+as an early warning that the run is about to end, not as a question you can
+answer.
 
 ## 9. File-access scope
 
@@ -328,7 +368,17 @@ for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
 
-**In 0.1.0 narrowing it is a construction-time setting only.** The packaged
+**Being in scope is not the same as being safe, and two denylists apply inside
+it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
+`.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` —
+even in an allowed directory. Writes additionally refuse anything that executes
+on its own: shell startup files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Both
+come back as a structured error naming the file and the reason, so do not plan an
+integration around reading a credential file or editing a shell rc — perform
+those from your own code.
+
+**In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
 `--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
 your own Python process:
@@ -339,7 +389,7 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```
 
-## 10. Skills — opt-in, and empty in 0.1.0
+## 10. Skills — one always-on, the rest opt-in
 
 The agent is built to host **Agent Skills** (short playbooks loaded into its own
 prompt, grouped into named sets, one set active per launch), and its bundled
@@ -355,19 +405,52 @@ threshold. Manifest `skills:` entries are always-on and never collapse. If the
 embedder is unavailable, selection disables itself for the session and every
 body renders — capability is never silently lost to a failed match.
 
-**Nothing ships enabled in 0.1.0.** The bundled skill library is empty, and
-`gaia-agent.yaml` ships its `skills:` / `skill_sets:` / `default_skill_set:`
-blocks **commented out** — following the email agent's precedent, because skill
-bodies cost prompt tokens and no eval has measured that trade for this agent yet.
-Re-enabling is uncommenting two blocks; no code change.
+**One skill ships enabled: `gaia-voice`.** It is a manifest `skills:` entry, so
+it is always on, always rendered in full, and paid on every LLM call of every
+turn — budget for it. It is not a task recipe but the agent's honesty floor: do
+not claim work you did not do, do not present empty output as a result, do not
+substitute a near-miss and report success. Those failures corrupt an answer
+whatever the task is, which is why it cannot live in an opt-in bundle. It
+declares no tools, and its body measures 676 tokens (tiktoken `cl100k`).
 
-So today: no skill set loads, and there is nothing for `GAIA_SKILL_SET` to
-select — leave it unset. Once a release declares sets, `GAIA_SKILL_SET` is the
-selection channel for the packaged sidecar (its CLI has no `--skill-set` flag),
-and an undeclared name raises naming the valid sets rather than falling back to a
-default. Do not document or design around skills being on by default.
+**No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
+`default_skill_set:` blocks **commented out** — following the email agent's
+precedent, because loading several skill bodies into every prompt costs tokens
+and no eval has measured that trade for this agent yet. Re-enabling is
+uncommenting two blocks; no code change.
 
-## 11. Ports
+So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset. Once
+a release declares sets, `GAIA_SKILL_SET` is the selection channel for the
+packaged sidecar (its CLI accepts only `--host` and `--port`), and an undeclared
+name raises naming the valid sets rather than falling back to a default. Beyond
+`gaia-voice`, do not design around a skill being on by default.
+
+## 11. The project map — two things it costs you
+
+When the agent's working directory is a code repository, every task starts with
+a **project map** in the system prompt: the root, the directory shape, the
+likely entry points, which commands are installed, and the three platform
+differences that change command syntax. It exists so the agent stops burning
+round trips on "no such file" and "command not found".
+
+Two consequences an integrator needs to plan for:
+
+- **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
+  (1.8% of the NPU profile's 32K window), not a typical value — budget it
+  alongside `gaia-voice`'s 676.
+- **A background embedding pass on first contact with a new repository.** If
+  the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
+  map starts one in a background thread so semantic search is ready when it is
+  needed. On a large monorepo that is minutes of local embedding.
+  `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns it off.
+
+The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
+specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
+`GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
+a VCS checkout nor holds a recognised manifest gets **no map** — that is the
+designed answer, not a failure.
+
+## 12. Ports
 
 | Service | Port |
 |---|---|
@@ -379,11 +462,14 @@ Port **4001 is reserved repo-wide**: `spawnSidecar` throws a `RangeError` and
 speaks for the user's documents and memory and has no business on a LAN
 interface.
 
-## 12. Running in a server or long-lived app
+## 13. Running in a server or long-lived app
 
 - **`fetchAll` / `fetchBinary` are a build step**, not per request — network plus
-  a full SHA-256 hash of a large artifact. Run once; `resolveSidecarPath` /
-  `resolveTuiPath` at runtime.
+  a full SHA-256 hash of a large artifact. Run once at install time.
+- **`resolveSidecarPath` / `resolveTuiPath` are startup, not per request.** They
+  re-hash the binary against `binaries.lock.json` before handing back a path that
+  gets spawned, so they cost a full read of a large file. Resolve once and keep
+  the path. `{ verify: false }` skips the check for a binary you built yourself.
 - **Spawn once at boot** and hold the `Sidecar` handle for the process lifetime.
   Never per request.
 - **Low concurrency.** One local Lemonade model slot, so parallel queries
@@ -408,22 +494,31 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  `write_file` / `edit_file` / `run_shell_command` are unreachable over `/query`.
+  The seven gated tools are unreachable **over `/query`** — the agent itself can
+  run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
   broken install, and there is no override.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
-- **There is no caller-auth token at 0.1.0.** Unlike `@amd-gaia/agent-email`, this
-  sidecar mints none and this package sends none — don't add an `Authorization`
-  header looking for one, and don't rely on its absence as a security boundary.
-  Loopback binding is what protects it.
+- **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
+  requires `Authorization: Bearer <token>`; `/health`, `/version`, and
+  `/v1/gaia/version` are exempt, which is why a green health check sits happily
+  in front of a 401 on `/query`. It skips the check only in dev mode — neither
+  token env var set — which is what `spawnSidecar` and `gaia serve` produce,
+  because this package mints nothing. Do not treat loopback binding as the
+  boundary; mint a token and pass it (§6).
 - **`run_id` must be a UUID**, and unknown fields in the request body are a
   **422** — the model forbids extras. Typos don't get ignored.
 - **`gaia run` needs the *Python* `gaia` CLI on `PATH`** — the TUI shells out to
-  it to start the daemon. The package deliberately strips its own npm bin
-  directory from the child's `PATH` so the TUI doesn't re-invoke the npm shim; if
-  the Python CLI isn't installed, the daemon never comes up.
+  it to start the daemon. So the TUI doesn't re-invoke our own npm shim, the
+  child's `PATH` is rewritten: a directory holding nothing but our shim (an npx
+  temp dir) is dropped, and a **shared** bin directory is moved to the end
+  instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
+  it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
+  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  has no sidecar entry for this agent, which reads as a UI with a dead agent
+  rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
@@ -452,7 +547,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.12","agentVersion":"0.1.0"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -463,11 +558,40 @@ A healthy run streams `status` / `token` events and ends with one `final`. If
 `/v1/gaia/init` is 503, fix what its `hint` names and retry — the rest of your
 integration is fine.
 
+That `/query` call carries no `Authorization` header because `gaia serve` starts
+the sidecar in dev mode. Against one started with a token, add
+`-H "authorization: Bearer $TOKEN"` — a **401** here and a green `/health` is
+that and nothing else (§6).
+
 **A 503 from `/query` itself is a different condition**: every retained
 session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
 loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`.
 
+**Three more refusals are yours to avoid**, each naming its fix in `detail`
+(SPEC §5.2 has the reasoning):
+
+- **409 — the `run_id` is still in flight.** You mint it, so mint a fresh UUID
+  per request; reusing one would leave the earlier run with no way to be
+  cancelled.
+- **409 — `model` differs from what this `session_id` was built with.** Only
+  construction reads a model, so it cannot be applied to the retained agent.
+  Omit `model` to stay on the session's current one, or start a new
+  `session_id` to switch.
+- **400 — the `Host` header is absent or empty.** The loopback check fails
+  closed, so omitting the header is refused rather than served. Send
+  `Host: 127.0.0.1:<port>`; every real HTTP client already does.
+
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.
+
+## TUI inference providers
+
+The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
+Keys are entered in a masked field and sent directly to local Lemonade's runtime
+auth API, never as agent queries. `/model` lists supported discovered cloud and
+downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+when available. Cloud chat sends conversation history to the selected provider;
+embeddings remain on Lemonade. The status event names the actual provider and
+marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

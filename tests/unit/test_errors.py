@@ -67,26 +67,29 @@ class TestFormatUserErrorFiltering:
     """Test framework path filtering in format_user_error."""
 
     def test_framework_paths_includes_all_agents(self):
-        """Verify FRAMEWORK_PATHS includes all agent directories."""
+        """Verify FRAMEWORK_PATHS covers every place framework code lives."""
         expected_paths = [
             "gaia/agents/base",
-            "gaia/agents/blender",
-            "gaia/agents/code",
-            "gaia/agents/docker",
-            "gaia/agents/jira",
             "gaia/agents/tools",
-            # Hub-migrated agents (#1102): chat ships as the gaia-agent-chat
-            # wheel, filtered via gaia_agent_chat / the hub editable path.
+            # Hub agents: chat/gaia/email ship as wheels, filtered via
+            # gaia_agent_chat / site-packages / the hub editable path.
             "hub/agents/",
             "gaia_agent_chat",
             "site-packages/",
         ]
         for path in expected_paths:
             assert path in FRAMEWORK_PATHS, f"Missing framework path: {path}"
-        # RoutingAgent migrated to the gaia-agent-routing wheel (#1102); its
-        # frames are now filtered via the "site-packages/" entry, so the old
-        # "gaia/agents/routing" path must no longer be listed.
-        assert "gaia/agents/routing" not in FRAMEWORK_PATHS
+        # Per-task agents were deleted and their capability became skills, so no
+        # per-agent source path should be listed any more — a leftover entry
+        # would silently filter a user's own frames out of their traceback.
+        for gone in (
+            "gaia/agents/blender",
+            "gaia/agents/code",
+            "gaia/agents/docker",
+            "gaia/agents/jira",
+            "gaia/agents/routing",
+        ):
+            assert gone not in FRAMEWORK_PATHS
 
     def test_framework_paths_no_redundant_entries(self):
         """Verify no redundant site-packages entries."""

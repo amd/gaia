@@ -78,6 +78,7 @@ class _StubAgent:
     STICKY_SKILL_TURNS = Agent.STICKY_SKILL_TURNS
     _sticky_skill_turns = None
     _note_skill_active = Agent._note_skill_active
+    _pin_skill_body = Agent._pin_skill_body
     _always_on_skill_names = Agent._always_on_skill_names
 
     def __init__(self, manager, *, manifest=None, skill_set=None):

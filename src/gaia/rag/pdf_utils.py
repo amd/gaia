@@ -161,15 +161,35 @@ def extract_images_from_page(
     return []
 
 
-def count_images_in_page(page) -> Tuple[bool, int]:
+class PdfPageInspectionError(RuntimeError):
+    """A page's image inventory could not be read (#3551).
+
+    Distinct from "this page has no images". The old code returned ``(False,
+    0)`` for both, and that boolean is the only gate on the vision path — so a
+    damaged page was silently indexed as blank, indistinguishable from a page
+    that genuinely had nothing on it.
+    """
+
+    def __init__(self, message: str, page_num: int = 0):
+        self.page_num = page_num
+        super().__init__(message)
+
+
+def count_images_in_page(page, page_num: int = 0) -> Tuple[bool, int]:
     """
     Fast check for image presence without extraction.
 
     Args:
         page: pypdf page object
+        page_num: 1-based page number, for the error message
 
     Returns:
         (has_images: bool, count: int)
+
+    Raises:
+        PdfPageInspectionError: the page's resources could not be resolved, so
+            whether it has images is unknown. Never reported as "no images" —
+            that is the gate on the vision path (#3551).
     """
     count = 0
 
@@ -180,8 +200,11 @@ def count_images_in_page(page) -> Tuple[bool, int]:
                 obj = xobject[obj_name]
                 if obj.get("/Subtype") == "/Image":
                     count += 1
-    except Exception:  # pylint: disable=broad-except
-        pass
+    except Exception as e:  # pylint: disable=broad-except
+        raise PdfPageInspectionError(
+            f"could not read the image inventory of page {page_num}: {e}",
+            page_num,
+        ) from e
 
     return (count > 0, count)
 

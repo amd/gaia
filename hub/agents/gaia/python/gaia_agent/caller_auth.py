@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """The flagship sidecar's binding of the shared caller-auth layer.
 
-The mechanism lives in :mod:`gaia.sidecar.caller_auth` and is shared with the
-email sidecar so the two cannot drift. This module supplies only what is
-specific to this agent: which env vars carry the token, and which paths skip it.
+The mechanism lives in :mod:`gaia.sidecar.caller_auth`. This module supplies only
+what is specific to this agent: which env vars carry the token, and which paths
+skip it. The email sidecar still has its own copy of the mechanism rather than
+importing that one, so the two are not yet a single implementation.
 
 This sidecar is the one that most needs the layer — it exposes shell and file
 tools and a bypass-permissions mode, so an unauthenticated loopback port lets
@@ -40,9 +41,16 @@ TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN"
 
 SURFACE = "GAIA agent sidecar"
 
-# Paths that never require a token: the liveness and version probes a host polls
-# during the attach handshake, before any query is in play. None of them expose
+# The token-free probes a host polls during the attach handshake, before any
+# query is in play: ``/health`` (liveness), ``/version`` (the daemon's contract
+# probe) and ``/v1/gaia/version`` (the TUI's negotiate.go probe). None expose
 # user data or accept work. Host/Origin controls still apply to them.
+#
+# Today all three are registered on the APP, outside the token-guarded router,
+# so they are already tokenless and this set never decides a request. It is the
+# declaration of which paths are public — the mechanism only if one is ever
+# remounted under the router. ``test_caller_auth`` pins both halves of that, so
+# the set cannot quietly drift from the routes it names.
 EXEMPT_PATHS: FrozenSet[str] = frozenset(
     {
         "/health",

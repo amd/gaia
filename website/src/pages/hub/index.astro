@@ -8,10 +8,8 @@ import Footer from '../../components/Footer.astro';
 import Eyebrow from '../../components/Eyebrow.astro';
 import FeaturedCard from '../../components/FeaturedCard.astro';
 import AgentRow from '../../components/AgentRow.astro';
-import ComingSoonRow from '../../components/ComingSoonRow.astro';
 import StatBlock from '../../components/StatBlock.astro';
 import { getCatalog, getAgentPackages, getSkills, categoryLabel, distinct } from '../../data/catalog';
-import { getInDevelopmentAgents } from '../../data/inDevelopment';
 
 // Agents/apps/components and skills are separate lanes of one catalog (#2467):
 // a skill installs with `gaia skill install`, not the agent install path, so the
@@ -19,23 +17,25 @@ import { getInDevelopmentAgents } from '../../data/inDevelopment';
 const published = await getCatalog();
 const agents = await getAgentPackages();
 const skills = await getSkills();
-const soon = getInDevelopmentAgents(published.map((a) => a.id));
 
-// Editorial pick: feature the email agent; fall back to the first non-deprecated
-// verified agent, else the first agent.
+// The flagship leads. `gaia` is the agent the whole site points at, so it is the
+// spotlight whenever it is published — not an editorial pick that has to be
+// re-chosen each release. Falls back to any non-deprecated verified agent, then
+// to the first, so the page still renders against a sparse or offline catalog.
 const spotlight =
-  agents.find((a) => a.id === 'email' && !a.deprecated) ??
+  agents.find((a) => a.id === 'gaia' && !a.deprecated) ??
   agents.find((a) => !a.deprecated && a.security_tier === 'verified') ??
   agents[0];
-// Pills cover both groups — a category that only exists on coming-soon rows
-// still needs a way to be filtered to.
-const categories = [
-  ...new Set([...distinct(agents, 'category'), ...soon.map((a) => a.category)]),
-].sort();
+
+// …and it leads the list too, rather than sorting alphabetically into the middle.
+const ordered = [
+  ...agents.filter((a) => a.id === 'gaia'),
+  ...agents.filter((a) => a.id !== 'gaia'),
+];
+const categories = distinct(agents, 'category').sort();
 
 const stats = [
   { value: String(agents.length), label: 'Published' },
-  { value: String(soon.length), label: 'In development' },
   { value: '100%', label: 'On-device' },
 ];
 ---
@@ -100,23 +100,7 @@ const stats = [
          agents there are instead of reading loose rows. -->
     <div id="hub-list" class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
       <ul aria-label="Published agents">
-        {agents.map((agent) => <li><AgentRow agent={agent} /></li>)}
-      </ul>
-
-      <div id="hub-no-published" class="hidden border-b border-g-border px-[22px] py-[30px] text-[13.5px] text-g-faint">
-        No published agent matches your search.
-      </div>
-
-      <div id="hub-soon-divider" class="flex items-center gap-[11px] border-b border-g-border px-[22px] py-4">
-        <h2 id="hub-soon-heading" class="g-label tracking-[0.14em]">In development</h2>
-        <span class="h-px flex-1 bg-g-border" aria-hidden="true"></span>
-        <span id="hub-soon-count" class="mono text-[11px] text-g-faint">
-          {soon.length === 1 ? '1 agent' : `${soon.length} agents`}
-        </span>
-      </div>
-
-      <ul aria-labelledby="hub-soon-heading">
-        {soon.map((agent) => <li><ComingSoonRow agent={agent} /></li>)}
+        {ordered.map((agent) => <li><AgentRow agent={agent} /></li>)}
       </ul>
 
       <div id="hub-empty" class="hidden px-[22px] py-11 text-center text-[14px] text-g-muted">
@@ -173,30 +157,24 @@ const stats = [
     // Scoped to #hub-list: the Skills lane below renders the same row component
     // and must not be swept into the agent list's filter counters.
     const published = Array.from(document.querySelectorAll('#hub-list .agent-row'));
-    const soon = Array.from(document.querySelectorAll('.soon-row'));
     const pills = Array.from(document.querySelectorAll('[data-filter]'));
     const search = document.getElementById('hub-search');
-    const noPublished = document.getElementById('hub-no-published');
-    const divider = document.getElementById('hub-soon-divider');
-    const soonCount = document.getElementById('hub-soon-count');
     const empty = document.getElementById('hub-empty');
     const status = document.getElementById('hub-status');
     let category = 'all';
 
-    // The rows sit inside two <ul>s, so the hairline sequence has to be spelled
-    // out rather than read off hub-list's children.
-    const hairlines = [...published, noPublished, divider, ...soon, empty];
+    const hairlines = [...published, empty];
 
     let announceTimer;
-    const announce = (publishedVisible, soonVisible) => {
+    const announce = (publishedVisible) => {
       clearTimeout(announceTimer);
       // Debounced: one message per pause in typing, not one per keystroke.
       announceTimer = setTimeout(() => {
         const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
         status.textContent =
-          publishedVisible + soonVisible === 0
+          publishedVisible === 0
             ? 'No agents match your search.'
-            : `${plural(publishedVisible, 'published agent')}, ${plural(soonVisible, 'agent')} in development.`;
+            : `${plural(publishedVisible, 'published agent')}.`;
       }, 350);
     };
 
@@ -213,7 +191,6 @@ const stats = [
     function apply(notify) {
       const q = (search.value || '').trim().toLowerCase();
       let publishedVisible = 0;
-      let soonVisible = 0;
 
       // `.hidden` (a utility) rather than the hidden attribute — the rows are
       // `display:grid`, which is also a utility and would otherwise win.
@@ -222,16 +199,7 @@ const stats = [
         row.classList.toggle('hidden', !show);
         if (show) publishedVisible++;
       });
-      soon.forEach((row) => {
-        const show = matches(row, q);
-        row.classList.toggle('hidden', !show);
-        if (show) soonVisible++;
-      });
-
-      noPublished.classList.toggle('hidden', publishedVisible > 0 || soonVisible === 0);
-      divider.classList.toggle('hidden', soonVisible === 0);
-      empty.classList.toggle('hidden', publishedVisible + soonVisible > 0);
-      soonCount.textContent = soonVisible === 1 ? '1 agent' : `${soonVisible} agents`;
+      empty.classList.toggle('hidden', publishedVisible > 0);
 
       // The container draws the outer border, so the last visible row must not
       // draw a second hairline on top of it.
@@ -239,7 +207,7 @@ const stats = [
       const lastVisible = hairlines.filter((el) => !el.classList.contains('hidden')).pop();
       if (lastVisible) lastVisible.style.borderBottomWidth = '0';
 
-      if (notify) announce(publishedVisible, soonVisible);
+      if (notify) announce(publishedVisible);
     }
 
     pills.forEach((pill) =>

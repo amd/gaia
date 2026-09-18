@@ -18,7 +18,7 @@
  *   - health/version/emailHealth/emailVersion/openapi/spec/draft → work with NO
  *     Lemonade and NO mailbox. Running this proves your integration end-to-end.
  *   - triage → routes fine without Lemonade but returns 502 for a *live* result;
- *     start `lemonade-server serve` (and `gaia init` for the model) for a real one.
+ *     run `gaia init` (installs Lemonade, starts it, downloads the model) for a real one.
  *
  * Runs against EITHER:
  *   - the frozen binary  (set AGENT_EMAIL_BINARY=/path/to/email-agent[.exe]), or
@@ -76,7 +76,7 @@ function diagnoseTriage(e) {
   if (body.includes("not reachable") || body.includes("refused") || body.includes("connection")) {
     return {
       cause: "Lemonade not found / not running",
-      hint: "Start it: `lemonade-server serve` — install it with `gaia init`.",
+      hint: "`gaia init` installs and starts it.",
     };
   }
   if (body.includes("model") || body.includes("not found") || body.includes("404") || body.includes("load") || body.includes("download")) {
@@ -88,7 +88,7 @@ function diagnoseTriage(e) {
   if (e?.status === 0 || body.includes("timed out") || body.includes("timeout")) {
     return {
       cause: "Lemonade not responding (timed out)",
-      hint: "Is `lemonade-server serve` running and reachable on the expected port? (set LEMONADE_BASE_URL if non-default)",
+      hint: "Is Lemonade Server running and reachable on the expected port? (set LEMONADE_BASE_URL if non-default)",
     };
   }
   return {

@@ -258,9 +258,9 @@ def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
     # The mapping still happened and is reported...
     assert any("shell:execute:git" in line for line in outcome.mapped)
     # ...and the refusal names the binary and why it cannot be granted: GAIA
-    # ships no read-only command policy for 'git', so nothing could gate it.
+    # ships no command policy for 'git', so nothing could gate it.
     assert "shell:execute:git" in blocker
-    assert "no read-only command policy" in blocker
+    assert "no command policy" in blocker
     assert "BINARY_POLICIES" in blocker
 
 
@@ -637,7 +637,7 @@ def test_cli_migrate_exits_4_when_a_skill_is_refused(run_cli, tmp_path):
 
     assert rc == 4
     assert "Migrated 1/2" in out
-    assert "no read-only command policy" in out
+    assert "no command policy" in out
     assert "refused rather than silently stripped" in err
     # The good one still installed; one refusal does not block the batch.
     assert (tmp_path / "gaia-home" / "skills" / "release-notes").is_dir()
@@ -813,7 +813,7 @@ def test_real_corpus_covers_both_verdicts():
 
     assert len(migrated) >= 5, "expected several real skills to migrate cleanly"
     assert any(
-        "no read-only command policy" in b for o in refused for b in o.blockers
+        "no command policy" in b for o in refused for b in o.blockers
     ), "expected at least one real skill refused for an unpoliced binary"
 
 

@@ -279,7 +279,7 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 		// This one call has a way through that needs no daemon at all.
 		var missing *daemon.RouteMissingError
 		if errors.As(err, &missing) {
-			missing.Alternative = "`gaia tui list --installed` still works meanwhile — " +
+			missing.Alternative = "`gaia tui status` still works meanwhile — " +
 				"it reads what is installed straight from disk"
 		}
 		return nil, err

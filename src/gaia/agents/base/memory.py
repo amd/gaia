@@ -34,6 +34,7 @@ Spec: docs/spec/agent-memory-architecture.md
 """
 
 import concurrent.futures
+import ctypes
 import json
 import logging
 import os
@@ -47,7 +48,9 @@ from uuid import uuid4
 
 import numpy as np
 
+from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.memory_store import (
+    CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
     VALID_CATEGORIES,
@@ -166,6 +169,11 @@ EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 #: (``self._embedding_dim``); this is only the pre-probe fallback.
 EMBEDDING_DIM = 768
 
+#: Idle gap that reopens the proactive-reminder window mid-session. Reminders
+#: ride the first turn of a session and the first turn after this much silence
+#: — a natural pause — never every turn.
+REMINDER_PAUSE_SECONDS = 30 * 60
+
 #: Cross-encoder model for reranking (~22 MB, runs on CPU).
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
@@ -191,8 +199,18 @@ EXTRACTION_TIMEOUT_S = 8
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
 
-#: Minimum turns for a session to be eligible for consolidation.
-CONSOLIDATION_MIN_TURNS = 5
+#: Turns distilled per consolidation pass. A longer session is consolidated one
+#: window at a time, oldest first, across successive passes.
+CONSOLIDATION_WINDOW_TURNS = 20
+
+#: Windows one session may consume in a single run — bounds the LLM calls a
+#: startup pays for a very long session; the rest is picked up on the next run.
+CONSOLIDATION_MAX_WINDOWS_PER_SESSION = 10
+CONSOLIDATION_MAX_CALLS_PER_RUN = 5
+CONSOLIDATION_BUDGET_SECONDS = 10.0
+
+# CONSOLIDATION_MIN_TURNS is imported from memory_store: prune() needs the same
+# threshold to know which old turns are still queued for distillation.
 
 
 # ============================================================================
@@ -280,6 +298,90 @@ def _omp_conflict_override() -> bool:
         "true",
         "yes",
     }
+
+
+#: Shared-library basenames that are an OpenMP runtime. Two distinct ones in a
+#: process means the second to initialise aborts it ("OMP: Error #15").
+_OMP_RUNTIME_PREFIXES = ("libomp", "libiomp5", "libgomp")
+
+
+def _loaded_omp_runtimes() -> tuple[str, ...]:
+    """Paths of the OpenMP runtimes currently mapped into this process.
+
+    macOS only: the abort is a dyld-level duplicate-runtime check, and on Linux
+    libgomp and libomp coexist routinely, so reporting a "conflict" there would
+    disable recall on healthy hosts. Best-effort — an empty tuple means "could
+    not tell", never "verified safe".
+    """
+    if sys.platform != "darwin":
+        return ()
+    try:
+        libc = ctypes.CDLL(None)
+        libc._dyld_image_count.restype = ctypes.c_uint32
+        libc._dyld_get_image_name.restype = ctypes.c_char_p
+        libc._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+        found = []
+        for i in range(libc._dyld_image_count()):
+            raw = libc._dyld_get_image_name(i)
+            if not raw:
+                continue
+            path = raw.decode("utf-8", "replace")
+            if path.rsplit("/", 1)[-1].startswith(_OMP_RUNTIME_PREFIXES):
+                found.append(path)
+        return tuple(sorted(set(found)))
+    except Exception as e:  # pragma: no cover - platform introspection
+        logger.debug("[MemoryMixin] could not enumerate OpenMP runtimes: %s", e)
+        return ()
+
+
+def assert_faiss_omp_safe(operation: str) -> None:
+    """Refuse a faiss call that would SIGABRT this process.
+
+    faiss-cpu and torch each bundle their own ``libomp.dylib``. Both resident
+    means the next OpenMP region — a faiss search, or torch's first parallel
+    op — initialises the second copy and macOS kills the process. That abort is
+    native: no ``except`` can catch it, so the only place to stop it is before
+    the call. ``_get_cross_encoder`` guards the import direction; this guards
+    the search direction, which is fatal whichever library loaded first.
+
+    Raises:
+        RuntimeError: when a second OpenMP runtime is already resident.
+    """
+    if _omp_conflict_override():
+        return
+    runtimes = _loaded_omp_runtimes()
+    if len(runtimes) < 2:
+        return
+    raise RuntimeError(
+        f"{operation} would abort this process: {len(runtimes)} OpenMP runtimes "
+        f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
+        "one, and the next faiss search initialises the second — macOS aborts "
+        "the process (OMP: Error #15), which no error handler can catch. "
+        "Keep the two out of one process (torch arrives with the [audio] and "
+        "[ui] extras; memory recall needs faiss-cpu), or set "
+        f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
+        "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
+    )
+
+
+def _validated_faiss_query(
+    query_vec: np.ndarray, index, index_label: str
+) -> np.ndarray:
+    """Shape a query vector for ``index.search`` and reject a mismatched one.
+
+    A vector whose width is not the index's is a stale or cross-model index,
+    not something to rank anyway — so it raises with the rebuild instruction
+    rather than returning no matches and looking like an empty memory.
+    """
+    query = np.ascontiguousarray(query_vec.reshape(1, -1), dtype=np.float32)
+    if query.shape[1] != index.d:
+        raise RuntimeError(
+            f"Query vector has {query.shape[1]} dimensions but the {index_label} "
+            f"FAISS index has {index.d} — the index was built with a different "
+            "embedding model. Rebuild it (restart the agent, or re-run "
+            "`gaia memory` onboarding) so both sides use one embedder."
+        )
+    return query
 
 
 def _get_cross_encoder():
@@ -400,7 +502,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         Call this BEFORE super().__init__() in your agent's __init__.
 
         Args:
-            db_path: Optional path for the DB file. Default: ~/.gaia/memory.db
+            db_path: Optional path for the DB file. When None the location
+                comes from ``GAIA_MEMORY_DB``, then ``GAIA_HOME``, then
+                ``~/.gaia/memory.db`` (see ``resolve_memory_db_path``).
             context: Active context scope (e.g., 'work', 'personal', 'global').
             embedding_model: Embedder model id. Defaults to ``EMBEDDING_MODEL``
                 (GGUF nomic). The NPU profile passes the FLM-native embedder so
@@ -428,6 +532,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # "unreachable" after the fact.
         self._memory_unavailable_reason: Optional[str] = None
         self._memory_unavailable_detail: Optional[str] = None
+        self._memory_unavailable_warning_reported = False
 
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
@@ -449,6 +554,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._recalled_skills = []
             self._memory_post_init_pending = False
             self._memory_session_id = str(uuid4())
+            self._reminders_surfaced = set()
+            self._reminder_last_turn_at = None
             return
 
         from gaia.agents.base.memory_store import MemoryStore
@@ -488,6 +595,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
         # no SKILL signal this turn.
         self._recalled_skills = []
+
+        # Proactive-reminder gate — see _reminder_window_open / _mark_reminded.
+        self._reminders_surfaced: set[str] = set()
+        self._reminder_last_turn_at: Optional[float] = None
 
         # Step 2: Validate Lemonade embedding service connectivity.
         #
@@ -564,6 +675,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._incognito = True
             self._memory_post_init_pending = False
             self._memory_session_id = str(uuid4())
+            self._reminders_surfaced = set()
+            self._reminder_last_turn_at = None
             return
 
         # (Embedder-change migration is handled above via the store's
@@ -585,12 +698,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
 
-        # Steps 6-7 (reconcile + consolidate) require self.chat (AgentSDK) which
-        # isn't available until Agent.__init__() completes — defer to first query.
+        # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
         self._memory_post_init_pending = True
-
-        # Step 8: prune() (90-day hard delete)
-        self._memory_store.prune()
 
         # Step 9: Generate session UUID
         self._memory_session_id = str(uuid4())
@@ -697,6 +806,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         for fact in facts:
             try:
                 self._memory_store.store(
+                    allow_privileged=True,  # system-context collection
                     category="system",
                     content=fact["content"],
                     domain=fact.get("domain"),
@@ -835,6 +945,31 @@ class MemoryMixin(ProceduralMemoryMixin):
             f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
             f"then restart the agent. {restart_note}"
         )
+
+    def report_memory_unavailable(self) -> bool:
+        """Report a real startup failure once through the current UI console.
+
+        A ``SilentConsole`` renders ``print_warning`` as a no-op, so reporting
+        through one must not spend the one-shot flag — the UI's non-streaming
+        path builds agents with a ``SilentConsole`` (``_chat_helpers.py``), and
+        the same cached agent later serves streaming turns with a real one.
+        """
+        if getattr(self, "_memory_unavailable_warning_reported", False):
+            return False
+        if getattr(self, "_memory_unavailable_reason", None) not in (
+            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+        ):
+            return False
+        target = getattr(self, "console", None)
+        if target is None or isinstance(target, SilentConsole):
+            return False
+        message = self.memory_unavailable_message()
+        if not message:
+            return False
+        target.print_warning(message)
+        self._memory_unavailable_warning_reported = True
+        return True
 
     # ------------------------------------------------------------------
     # Properties
@@ -1106,24 +1241,26 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Returns:
             List of (knowledge_id, score) tuples, sorted by score descending.
+
+        Raises:
+            RuntimeError: on a dimension mismatch with the index, or when a
+                second OpenMP runtime makes the native search fatal.
         """
         if self._faiss_index is None or self._faiss_index.ntotal == 0:
             return []
 
-        try:
-            # Clamp top_k to index size
-            k = min(top_k, self._faiss_index.ntotal)
-            query = query_vec.reshape(1, -1).astype(np.float32)
-            scores, indices = self._faiss_index.search(query, k)
+        query = _validated_faiss_query(query_vec, self._faiss_index, "knowledge")
+        k = min(top_k, self._faiss_index.ntotal)
+        if k < 1:
+            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+        assert_faiss_omp_safe("Knowledge memory search")
 
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx >= 0 and idx < len(self._faiss_id_map):
-                    results.append((self._faiss_id_map[idx], float(score)))
-            return results
-        except Exception as e:
-            logger.debug("[MemoryMixin] FAISS search failed: %s", e)
-            return []
+        scores, indices = self._faiss_index.search(query, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx >= 0 and idx < len(self._faiss_id_map):
+                results.append((self._faiss_id_map[idx], float(score)))
+        return results
 
     # ==================================================================
     # Complexity-Aware Recall Depth
@@ -1440,6 +1577,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                             op["category"],
                         )
                 elif op_type == "update" and "knowledge_id" in op and "content" in op:
+                    # Re-categorising into a privileged row is the same escalation as adding one.
+                    cat = op.get("category")
+                    if cat is not None and cat not in EXTRACTABLE_CATEGORIES:
+                        logger.warning(
+                            "[MemoryMixin] dropped extracted update op: category "
+                            "%r may not be written from a chat turn",
+                            cat,
+                        )
+                        continue
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
                     valid_ops.append(op)
@@ -1509,6 +1655,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                     existing_item = next(
                         (e for e in existing_items if e["id"] == old_id), {}
                     )
+                    target = store.get_item(old_id)
+                    if target and target["category"] not in EXTRACTABLE_CATEGORIES:
+                        raise ValueError(
+                            "Extraction cannot update privileged memory rows"
+                        )
                     # Store new version
                     new_id = store.store(
                         category=op.get(
@@ -1561,7 +1712,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
         Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
-        then _synthesize_skills (procedural memory, #887).
+        _synthesize_skills (procedural memory, #887), then prune() — pruning is
+        last so old turns are distilled before anything is deleted.
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
@@ -1591,6 +1743,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init skill synthesis failed: %s", e)
 
+        # Step 9: prune() last, so old turns are distilled before anything is deleted.
+        try:
+            self._memory_store.prune()
+        except Exception as e:
+            logger.warning("[MemoryMixin] post-init prune failed: %s", e)
+
     # ==================================================================
     # Conversation Consolidation
     # ==================================================================
@@ -1600,14 +1758,26 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Uses LLM to summarize each session and extract durable knowledge.
 
+        Consolidation is *windowed*: each pass takes the oldest
+        ``CONSOLIDATION_WINDOW_TURNS`` turns that are not yet consolidated and
+        marks exactly those, so a long session is distilled front-to-back
+        across successive windows instead of having its newest 20 turns
+        re-summarised on every startup while the older ones are never touched.
+        A session keeps its eligibility until every turn is consolidated, and
+        ``prune()`` holds those turns up to twice the retention window.
+        Each run starts at most five model calls across all sessions, and
+        stops starting windows after ten seconds; an in-flight call finishes.
+
         Args:
             max_sessions: Maximum number of sessions to consolidate per run.
 
         Returns:
-            Dict with {consolidated: int, extracted_items: int}.
+            Dict with {consolidated: int, windows: int, extracted_items: int} —
+            ``consolidated`` counts sessions that made progress, ``windows`` the
+            turn-windows distilled across them.
         """
         store = self._memory_store
-        result = {"consolidated": 0, "extracted_items": 0}
+        result = {"consolidated": 0, "windows": 0, "extracted_items": 0}
 
         try:
             session_ids = store.get_unconsolidated_sessions(
@@ -1622,133 +1792,180 @@ class MemoryMixin(ProceduralMemoryMixin):
         if not session_ids:
             return result
 
+        deadline = time.monotonic() + CONSOLIDATION_BUDGET_SECONDS
+        calls = 0
         for session_id in session_ids:
-            try:
-                # Fetch turns for this session (up to 20, oldest first)
-                turns = store.get_history(session_id, limit=20)
-                if not turns:
-                    continue
+            windows = 0
+            while windows < CONSOLIDATION_MAX_WINDOWS_PER_SESSION:
+                if (
+                    calls >= CONSOLIDATION_MAX_CALLS_PER_RUN
+                    or time.monotonic() >= deadline
+                ):
+                    if windows:
+                        result["consolidated"] += 1
+                    logger.info(
+                        "[MemoryMixin] consolidation budget reached; resuming next run"
+                    )
+                    return result
+                try:
+                    # Oldest first — get_history() returns the NEWEST turns.
+                    turns = store.get_unconsolidated_turns(
+                        session_id, limit=CONSOLIDATION_WINDOW_TURNS
+                    )
+                    if not turns:
+                        break
 
-                # Build turns text
-                turns_text_parts = []
-                turn_ids = []
-                for turn in turns:
-                    role = turn.get("role", "user")
-                    content = turn.get("content", "")[:500]
-                    turns_text_parts.append(f"{role}: {content}")
-                    if "id" in turn:
+                    turns_text_parts = []
+                    turn_ids = []
+                    for turn in turns:
+                        role = turn.get("role", "user")
+                        content = turn.get("content", "")[:500]
+                        turns_text_parts.append(f"{role}: {content}")
                         turn_ids.append(turn["id"])
 
-                turns_text = "\n".join(turns_text_parts)
+                    turns_text = "\n".join(turns_text_parts)
 
-                first_ts = turns[0].get("timestamp", "unknown")
-                last_ts = turns[-1].get("timestamp", "unknown")
+                    first_ts = turns[0].get("timestamp", "unknown")
+                    last_ts = turns[-1].get("timestamp", "unknown")
 
-                prompt = _CONSOLIDATION_PROMPT.format(
-                    n_turns=len(turns),
-                    first_ts=first_ts,
-                    last_ts=last_ts,
-                    turns_text=turns_text,
-                )
-
-                response = self.chat.send_messages(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt="You are a conversation summarizer. Return valid JSON only.",
-                    temperature=0.1,
-                    max_tokens=1024,
-                )
-
-                raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-                raw_text = raw_text.strip()
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-                    raw_text = re.sub(r"\s*```$", "", raw_text)
-
-                data = json.loads(raw_text)
-
-                # Store summary as a note
-                summary = data.get("summary", "")
-                if summary:
-                    summary_id = store.store(
-                        category="note",
-                        content=summary,
-                        source="consolidation",
-                        domain=f"session:{session_id[:8]}",
-                        confidence=0.5,
-                        context=self._memory_context,
+                    prompt = _CONSOLIDATION_PROMPT.format(
+                        n_turns=len(turns),
+                        first_ts=first_ts,
+                        last_ts=last_ts,
+                        turns_text=turns_text,
                     )
-                    # Embed the summary
-                    try:
-                        vec = self._embed_text(summary)
-                        store.store_embedding(summary_id, _embedding_to_blob(vec))
-                        self._faiss_add(summary_id, vec)
-                    except Exception as e:
-                        # Non-fatal: the row is stored; the vector is backfilled
-                        # on the next init. Logged so the gap is never silent.
-                        logger.debug(
-                            "[MemoryMixin] consolidation summary embed failed "
-                            "(id=%s, backfilled on restart): %s",
-                            summary_id,
-                            e,
-                        )
 
-                # Store extracted knowledge items
-                knowledge_items = data.get("knowledge", [])
-                for ki in knowledge_items:
-                    if isinstance(ki, dict) and "content" in ki and "category" in ki:
+                    calls += 1
+                    response = self.chat.send_messages(
+                        messages=[{"role": "user", "content": prompt}],
+                        system_prompt="You are a conversation summarizer. Return valid JSON only.",
+                        temperature=0.1,
+                        max_tokens=1024,
+                    )
+
+                    raw_text = (
+                        response.text if hasattr(response, "text") else str(response)
+                    )
+                    raw_text = re.sub(
+                        r"<think>.*?</think>", "", raw_text, flags=re.DOTALL
+                    )
+                    raw_text = raw_text.strip()
+                    if raw_text.startswith("```"):
+                        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+                        raw_text = re.sub(r"\s*```$", "", raw_text)
+
+                    data = json.loads(raw_text)
+
+                    # Store summary as a note
+                    summary = data.get("summary", "")
+                    if summary:
+                        summary_id = store.store(
+                            category="note",
+                            content=summary,
+                            source="consolidation",
+                            domain=f"session:{session_id[:8]}",
+                            confidence=0.5,
+                            context=self._memory_context,
+                        )
+                        # Embed the summary
+                        try:
+                            vec = self._embed_text(summary)
+                            store.store_embedding(summary_id, _embedding_to_blob(vec))
+                            self._faiss_add(summary_id, vec)
+                        except Exception as e:
+                            # Non-fatal: the row is stored; the vector is
+                            # backfilled on the next init. Logged so the gap is
+                            # never silent.
+                            logger.debug(
+                                "[MemoryMixin] consolidation summary embed failed "
+                                "(id=%s, backfilled on restart): %s",
+                                summary_id,
+                                e,
+                            )
+
+                    # Store extracted knowledge items
+                    knowledge_items = data.get("knowledge", [])
+                    for ki in knowledge_items:
+                        if not (
+                            isinstance(ki, dict)
+                            and "content" in ki
+                            and "category" in ki
+                        ):
+                            continue
                         # EXTRACTABLE_CATEGORIES, not VALID_CATEGORIES: a session
                         # summary must not mint a system/profile/permission row.
-                        if ki["category"] in EXTRACTABLE_CATEGORIES:
+                        if ki["category"] not in EXTRACTABLE_CATEGORIES:
+                            continue
+                        try:
+                            kid = store.store(
+                                category=ki["category"],
+                                content=ki["content"],
+                                source="consolidation",
+                                entity=ki.get("entity"),
+                                confidence=0.5,
+                                context=self._memory_context,
+                            )
+                            # Embed
                             try:
-                                kid = store.store(
-                                    category=ki["category"],
-                                    content=ki["content"],
-                                    source="consolidation",
-                                    entity=ki.get("entity"),
-                                    confidence=0.5,
-                                    context=self._memory_context,
-                                )
-                                # Embed
-                                try:
-                                    vec = self._embed_text(ki["content"])
-                                    store.store_embedding(kid, _embedding_to_blob(vec))
-                                    self._faiss_add(kid, vec)
-                                except Exception as e:
-                                    # Non-fatal: row stored; vector backfilled on
-                                    # next init. Logged so the gap is not silent.
-                                    logger.debug(
-                                        "[MemoryMixin] consolidation item embed "
-                                        "failed (id=%s, backfilled on restart): "
-                                        "%s",
-                                        kid,
-                                        e,
-                                    )
-                                result["extracted_items"] += 1
+                                vec = self._embed_text(ki["content"])
+                                store.store_embedding(kid, _embedding_to_blob(vec))
+                                self._faiss_add(kid, vec)
                             except Exception as e:
+                                # Non-fatal: row stored; vector backfilled on
+                                # next init. Logged so the gap is not silent.
                                 logger.debug(
-                                    "[MemoryMixin] consolidation knowledge store failed: %s",
+                                    "[MemoryMixin] consolidation item embed "
+                                    "failed (id=%s, backfilled on restart): %s",
+                                    kid,
                                     e,
                                 )
+                            result["extracted_items"] += 1
+                        except Exception as e:
+                            logger.debug(
+                                "[MemoryMixin] consolidation knowledge store failed: %s",
+                                e,
+                            )
 
-                # Mark turns as consolidated
-                if turn_ids:
-                    store.mark_turns_consolidated(turn_ids)
+                    # Mark ONLY this window, and only now that it is distilled.
+                    marked = store.mark_turns_consolidated(turn_ids)
+                    if marked == 0:
+                        # Nothing moved — another process got there first, or the
+                        # rows vanished. Stop rather than re-summarise forever.
+                        logger.warning(
+                            "[MemoryMixin] consolidation marked 0 of %d turns for "
+                            "session %s; stopping to avoid a re-summarise loop",
+                            len(turn_ids),
+                            session_id[:8],
+                        )
+                        break
 
+                    windows += 1
+                    result["windows"] += 1
+
+                except json.JSONDecodeError as e:
+                    logger.warning(
+                        "[MemoryMixin] consolidation JSON parse failed for %s: %s",
+                        session_id[:8],
+                        e,
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "[MemoryMixin] consolidation failed for %s: %s",
+                        session_id[:8],
+                        e,
+                    )
+                    break
+
+            if windows:
                 result["consolidated"] += 1
-
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "[MemoryMixin] consolidation JSON parse failed for %s: %s",
-                    session_id[:8],
-                    e,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[MemoryMixin] consolidation failed for %s: %s",
-                    session_id[:8],
-                    e,
-                )
+                if windows == CONSOLIDATION_MAX_WINDOWS_PER_SESSION:
+                    logger.info(
+                        "[MemoryMixin] session %s hit the %d-window per-run cap; "
+                        "the remaining turns are distilled on the next run",
+                        session_id[:8],
+                        CONSOLIDATION_MAX_WINDOWS_PER_SESSION,
+                    )
 
         return result
 
@@ -2005,7 +2222,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             return self._build_dynamic_memory_context()
         except Exception as e:
-            logger.debug("[MemoryMixin] failed to build dynamic context: %s", e)
+            logger.warning("[MemoryMixin] failed to build dynamic context: %s", e)
             return ""
 
     def _build_stable_memory_prompt(self) -> str:
@@ -2104,6 +2321,51 @@ class MemoryMixin(ProceduralMemoryMixin):
             result = result[:4000] + "\n... (memory truncated)"
         return result
 
+    def _reminder_window_open(self, now_ts: float) -> bool:
+        """Whether this turn may carry proactive reminders.
+
+        Open at session start and after ``REMINDER_PAUSE_SECONDS`` of silence —
+        a natural pause. Closed mid-conversation, so an ``[OVERDUE ...]`` block
+        can never land on an unrelated turn like "sweet!".
+
+        Called once per turn; advances the idle clock as a side effect.
+        """
+        if not hasattr(self, "_reminders_surfaced"):
+            self._reminders_surfaced = set()
+        last = getattr(self, "_reminder_last_turn_at", None)
+        self._reminder_last_turn_at = now_ts
+        return last is None or (now_ts - last) >= REMINDER_PAUSE_SECONDS
+
+    def _mark_reminded(self, items: List[Dict], now: datetime) -> None:
+        """Record that *items* were surfaced so they are not surfaced again.
+
+        Two layers, covering different failure modes: ``_reminders_surfaced``
+        suppresses the repeat for the rest of this session and works even when
+        writes are off (incognito); ``reminded_at`` suppresses it across
+        sessions, since ``get_upcoming`` skips rows reminded at or after their
+        due date.
+
+        This used to be the model's job via a prompt instruction, and it did
+        not do it — the same overdue item was re-injected every turn for days.
+        """
+        now_iso = now.isoformat()
+        for item in items:
+            # In-session first, so a failed persist below still can't repeat
+            # the item on the next turn.
+            self._reminders_surfaced.add(item["id"])
+            if getattr(self, "_incognito", False):
+                continue
+            try:
+                self._memory_store.update(item["id"], reminded_at=now_iso)
+            except Exception as e:
+                logger.warning(
+                    "[MemoryMixin] could not mark %s as reminded (%s); it is "
+                    "suppressed for this session only and may resurface in the "
+                    "next one",
+                    item["id"],
+                    e,
+                )
+
     def _build_dynamic_memory_context(self) -> str:
         """Dynamic per-turn context: current time + upcoming/overdue items."""
         store = self._memory_store
@@ -2115,11 +2377,20 @@ class MemoryMixin(ProceduralMemoryMixin):
         time_str = now.strftime("%Y-%m-%dT%H:%M:%S%z") + f" ({now.strftime('%A')})"
         lines.append(f"Current time: {time_str}")
 
-        # Upcoming/overdue items
-        upcoming = store.get_upcoming(within_days=7, context=ctx)
+        # Upcoming/overdue items — only at session start or after a long pause,
+        # and never one this session already raised.
+        if self._reminder_window_open(time.time()):
+            upcoming = [
+                item
+                for item in store.get_upcoming(within_days=7, context=ctx)
+                if item["id"] not in self._reminders_surfaced
+            ][:10]
+        else:
+            upcoming = []
+
         if upcoming:
             up_lines = []
-            for item in upcoming[:10]:
+            for item in upcoming:
                 due = item.get("due_at", "")[:10] if item.get("due_at") else "?"
                 try:
                     due_dt = datetime.fromisoformat(item["due_at"])
@@ -2131,9 +2402,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                     up_lines.append(f"  - [DUE {due}] {item['content']}")
             lines.append("Upcoming/overdue:\n" + "\n".join(up_lines))
             lines.append(
-                "After mentioning a time-sensitive item, call update_memory "
-                "to set reminded_at so you don't repeat yourself."
+                "Raise these only if they fit what the user just said, or if "
+                "the conversation is just starting. Never derail an unrelated "
+                "turn with them. They are already marked as raised — do not "
+                "call update_memory for that."
             )
+            self._mark_reminded(upcoming, now)
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
 
@@ -2188,6 +2462,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         upcoming/overdue items) is injected per-turn by prepending it to the
         user message.
         """
+        # UI callers may replace the construction-time silent console before
+        # the first turn; report failures through the current handler.
+        self.report_memory_unavailable()
+
         # Run deferred LLM startup tasks on first real query (after self.chat exists)
         if getattr(self, "_memory_post_init_pending", False):
             self._memory_post_init_pending = False
@@ -2547,10 +2825,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
-            if category not in VALID_CATEGORIES:
+            if category not in EXTRACTABLE_CATEGORIES:
                 return {
                     "status": "error",
-                    "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
+                    "message": (
+                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
+                    ),
                 }
 
             # A moment isn't a rule: an error observation about a tool's own
@@ -2672,14 +2952,11 @@ class MemoryMixin(ProceduralMemoryMixin):
               time_from : ISO 8601 date lower bound (e.g. '2026-01-01')
               time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
 
-            At least one parameter required."""
+            All optional; a bare recall() lists recent non-sensitive rows."""
             _recall_t0 = time.perf_counter()
-            if not any([query, category, domain, context, entity, time_from, time_to]):
-                return {
-                    "status": "error",
-                    "message": "Provide at least one of: query, category, domain, context, entity, time_from, time_to",
-                }
-
+            unfiltered = not any(
+                [query, category, domain, context, entity, time_from, time_to]
+            )
             # Adaptive top_k based on query complexity
             if limit <= 0:
                 if query:
@@ -2786,9 +3063,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                     filtered.append(item)
                 results = filtered[offset : offset + limit]
             else:
+                # ``context=""`` is an equality filter matching nothing.
+                # A filterless browse is the probe a greeting makes, and on a
+                # cloud session what it returns leaves the machine — so it
+                # alone holds back sensitive rows; any filter brings them back.
                 _db_t0 = time.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
-                    context=context, limit=limit, offset=offset
+                    context=context or None,
+                    sensitive=False if unfiltered else None,
+                    limit=limit,
+                    offset=offset,
                 )
                 logger.debug(
                     "recall: get_all_knowledge took %.1fms",
@@ -2833,7 +3117,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             sensitive: str = "",
             entity: str = "",
         ) -> dict:
-            """Update an existing memory entry by ID. Only non-empty fields change. Set reminded_at=now after mentioning a time-sensitive item."""
+            """Update an existing memory entry by ID. Only non-empty fields change. reminded_at is maintained for you — do not set it after mentioning an item."""
             kwargs = {}
             if content:
                 if not content.strip():
@@ -2856,10 +3140,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                     }
                 kwargs["content"] = content[:MAX_CONTENT_LENGTH]
             if category:
-                if category not in VALID_CATEGORIES:
+                if category not in EXTRACTABLE_CATEGORIES:
                     return {
                         "status": "error",
-                        "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
+                        "message": (
+                            f"Invalid category. Use: "
+                            f"{sorted(EXTRACTABLE_CATEGORIES)}"
+                        ),
                     }
                 kwargs["category"] = category
             if domain:
@@ -2896,7 +3183,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": "No fields to update."}
 
             content_truncated = content and len(content) > MAX_CONTENT_LENGTH
-            success = mixin._memory_store.update(knowledge_id, **kwargs)
+            try:
+                success = mixin._memory_store.update(knowledge_id, **kwargs)
+            except ValueError as exc:
+                return {"status": "error", "message": str(exc)}
             if success:
                 # Re-embed if content changed
                 if content:
@@ -2922,7 +3212,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         @tool
         def forget(knowledge_id: str) -> dict:
             """Remove a specific memory entry by ID."""
-            removed = mixin._memory_store.delete(knowledge_id)
+            try:
+                removed = mixin._memory_store.delete(knowledge_id)
+            except ValueError as exc:
+                return {"status": "error", "message": str(exc)}
             if removed:
                 mixin._faiss_remove(knowledge_id)
                 return {"status": "removed", "knowledge_id": knowledge_id}
@@ -3033,6 +3326,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         if hasattr(self, "_memory_store"):
             self._memory_store.apply_confidence_decay()
             self._memory_session_id = str(uuid4())
+            # A new session reopens the reminder window; anything still due
+            # (reminded_at < due_at) may be raised once on its first turn.
+            self._reminders_surfaced = set()
+            self._reminder_last_turn_at = None
             logger.info(
                 "[MemoryMixin] session reset, new session_id=%s",
                 self._memory_session_id,

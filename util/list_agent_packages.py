@@ -58,9 +58,9 @@ class AgentListError(Exception):
 class AgentPackage:
     """A production agent wheel and where its source package lives."""
 
-    dist_name: str  # e.g. "gaia-agent-summarize"
-    agent_id: str  # e.g. "summarize"
-    path: Path  # e.g. <repo>/hub/agents/summarize/python
+    dist_name: str  # e.g. "gaia-agent-email"
+    agent_id: str  # e.g. "email"
+    path: Path  # e.g. <repo>/hub/agents/email/python
 
     @property
     def rel_path(self) -> str:

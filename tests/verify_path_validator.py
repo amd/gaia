@@ -7,12 +7,10 @@ import sys
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-# DockerAgent and CodeAgent moved to the external ``gaia_agent_docker`` /
-# ``gaia_agent_code`` wheels (#1102, #1397) and are no longer importable from
-# the framework; their path-validation is covered by those packages' own tests
-# (e.g. ``hub/agents/code/python/tests/test_file_io_guardrails.py``). The
-# chat/rag cases below still exercise the shared PathValidator contract here.
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+# DockerAgent and CodeAgent were removed in the agent-collapse (#1102,
+# #1397); the chat/rag cases below still exercise the shared PathValidator
+# contract here. ChatAgent ships as the standalone gaia-agent-chat wheel
+# (#1102).
 try:
     from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 except ImportError:

@@ -266,7 +266,7 @@ func emailCatalog(installed bool) map[string]any {
 		"source":                "network",
 		"generated_at":          "2026-07-24T00:00:00Z",
 		"hub_url":               "https://hub.amd-gaia.ai",
-		"unsupervised_filtered": []string{"code", "docker"},
+		"unsupervised_filtered": []string{"chat", "doc"},
 	}
 }
 

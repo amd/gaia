@@ -1167,38 +1167,34 @@ class TestCORSIntegration:
             "http://localhost:4200"
         )
 
-    def test_cors_allows_tunnel_origin(self, client):
-        """CORS allows the ngrok / devtunnels origins used for mobile access."""
-        origin = "https://gaia-test.ngrok-free.app"
-        resp = client.get("/api/health", headers={"Origin": origin})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == origin
+    def test_cors_rejects_shared_tunnel_namespace_origin(self, client):
+        """A tenant of a shared tunnel namespace is not a trusted origin.
+
+        ``*.ngrok-free.app`` and ``*.use.devtunnels.ms`` are self-service:
+        anyone can rent a subdomain, so trusting the namespace trusted every
+        attacker who signs up. It bought users nothing either -- the mobile
+        flow serves the SPA *from* the tunnel, so those requests are
+        same-origin and CORS never applies.
+        """
+        for origin in (
+            "https://gaia-test.ngrok-free.app",
+            "https://attacker.use.devtunnels.ms",
+        ):
+            resp = client.get("/api/health", headers={"Origin": origin})
+            assert "access-control-allow-origin" not in resp.headers, origin
 
     def test_cors_rejects_unknown_origin(self, client):
         """An origin outside the allowlist gets no allow-origin header.
 
         The server sends credentials (``allow_credentials=True``), so the
-        origin list is deliberately an allowlist -- localhost dev ports plus
-        the tunnel domains -- never a wildcard. A page on any other origin
-        must not be able to read authenticated responses, which the browser
-        enforces by the *absence* of ``access-control-allow-origin``.
+        origin list is deliberately an allowlist of localhost dev ports,
+        never a wildcard. A page on any other origin must not be able to
+        read authenticated responses, which the browser enforces by the
+        *absence* of ``access-control-allow-origin``.
         """
         resp = client.get(
             "/api/health",
             headers={"Origin": "http://some-other-origin.com"},
-        )
-        assert "access-control-allow-origin" not in resp.headers
-
-    def test_cors_rejects_tunnel_lookalike_origin(self, client):
-        """An attacker domain that merely *starts* with a tunnel host is refused.
-
-        The tunnel regex is unanchored and only safe because Starlette applies
-        it with ``fullmatch``. This pins that: a prefix-match implementation
-        would hand credentialed responses to ``*.ngrok-free.app.evil.com``.
-        """
-        resp = client.get(
-            "/api/health",
-            headers={"Origin": "https://gaia-test.ngrok-free.app.evil.com"},
         )
         assert "access-control-allow-origin" not in resp.headers
 
@@ -2236,80 +2232,4 @@ class TestCustomAgentModelChoice:
         assert captured["agent_model_id"] == "Qwen3.5-4B-GGUF", (
             f"Issue #841: agent.model_id must reflect kwargs.setdefault value; "
             f"got {captured['agent_model_id']!r}"
-        )
-
-
-# ── PR #1201 regression: get_mcp_status_report must not AttributeError ────────
-
-
-class TestSplitAgentsMcpStatusReport:
-    """Regression for the PR #1201 release blocker.
-
-    BrowserAgent and AnalystAgent (PR #1070) inherit MCPClientMixin after
-    Agent in MRO and do not pre-set ``_mcp_manager``. ``Agent.__init__`` does
-    not chain ``super().__init__()``, so ``MCPClientMixin.__init__`` never
-    runs and ``_mcp_manager`` is undefined. The UI auto-calls
-    ``agent.get_mcp_status_report()`` on every chat send
-    (``src/gaia/ui/_chat_helpers.py:1644``) → ``AttributeError``.
-
-    These tests prove the fix: ``/api/chat/send`` for the ``web`` and ``data``
-    agent_types completes without surfacing the ``_mcp_manager`` AttributeError.
-    """
-
-    def _run_send(self, tmp_path, monkeypatch, agent_type: str):
-        # web/data ship as the gaia-agent-browser / gaia-agent-analyst wheels
-        # (#1102); skip when a framework-only env lacks the agent.
-        import pytest
-
-        pytest.importorskip(
-            "gaia_agent_browser" if agent_type == "web" else "gaia_agent_analyst"
-        )
-        # Redirect HOME so AnalystAgent's default ~/.gaia/scratchpad.db lands
-        # under tmp_path instead of polluting the developer's real home.
-        # Both patches are needed: Path.home() in registry.discover() reads
-        # the cached value while ScratchpadService's os.path.expanduser
-        # reads $HOME from the environment.
-        monkeypatch.setenv("HOME", str(tmp_path))
-        with patch("gaia.agents.registry.Path.home", return_value=tmp_path):
-            app = create_app(db_path=":memory:")
-
-            with TestClient(app) as client:
-                # Create a session typed to the split agent.
-                sess_resp = client.post(
-                    "/api/sessions",
-                    json={"title": "1201-test", "agent_type": agent_type},
-                )
-                assert sess_resp.status_code == 200, sess_resp.text
-                sid = sess_resp.json()["id"]
-
-                with (
-                    patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-                    patch(
-                        "gaia.ui._chat_helpers._agent_registry",
-                        app.state.agent_registry,
-                    ),
-                ):
-                    return client.post(
-                        "/api/chat/send",
-                        json={
-                            "session_id": sid,
-                            "message": "hi",
-                            "stream": False,
-                        },
-                    )
-
-    def test_web_agent_does_not_raise_mcp_attribute_error(self, tmp_path, monkeypatch):
-        chat_resp = self._run_send(tmp_path, monkeypatch, "web")
-        assert chat_resp.status_code == 200, chat_resp.text
-        assert "_mcp_manager" not in chat_resp.text, (
-            f"PR #1201: BrowserAgent surfaced _mcp_manager AttributeError "
-            f"through /api/chat/send:\n{chat_resp.text}"
-        )
-
-    def test_data_agent_does_not_raise_mcp_attribute_error(self, tmp_path, monkeypatch):
-        chat_resp = self._run_send(tmp_path, monkeypatch, "data")
-        assert chat_resp.status_code == 200, chat_resp.text
-        assert "_mcp_manager" not in chat_resp.text, (
-            f"PR #1201: AnalystAgent surfaced _mcp_manager AttributeError "
-            f"through /api/chat/send:\n{chat_resp.text}"
         )

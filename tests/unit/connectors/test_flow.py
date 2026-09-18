@@ -40,6 +40,7 @@ from gaia.connectors.flow import (
     cancel_flow,
     complete_authorization,
     start_authorization,
+    start_device_flow,
 )
 from gaia.connectors.providers import _registry
 
@@ -59,7 +60,7 @@ def _no_browser(monkeypatch):
     monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
 
 
-def _mock_token_endpoint():
+def _mock_token_endpoint(scope="openid"):
     """Mock the Google token endpoint and pass-through 127.0.0.1.
 
     Without the pass_through() call respx would intercept the loopback
@@ -73,7 +74,7 @@ def _mock_token_endpoint():
                 "access_token": "fresh-access",
                 "refresh_token": "fresh-refresh",
                 "expires_in": 3600,
-                "scope": "openid",
+                "scope": scope,
                 "id_token": (
                     # JWT payload {"email": "alice@example.com"}; signature
                     # is a placeholder — flow.py decodes only the email
@@ -111,6 +112,33 @@ class TestSuccessPath:
         )
         assert result["account_email"] == "alice@example.com"
         assert result["scopes"] == ["openid"]
+
+
+class TestScopeCatalogBoundary:
+    async def test_start_authorization_rejects_scope_outside_catalog(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ScopeNotAllowedError
+
+        bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
+        with pytest.raises(ScopeNotAllowedError) as exc_info:
+            await start_authorization("google", scopes=[bogus_scope])
+
+        assert exc_info.value.agent_id is None
+        assert exc_info.value.connector_id == "google"
+        assert exc_info.value.scopes == [bogus_scope]
+
+    async def test_start_device_flow_rejects_scope_outside_catalog(self, monkeypatch):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        _registry.clear()
+
+        bogus_scope = "https://graph.microsoft.com/not-in-catalog"
+        from gaia.connectors.errors import ScopeNotAllowedError
+
+        with pytest.raises(ScopeNotAllowedError) as exc_info:
+            await start_device_flow("microsoft", scopes=[bogus_scope])
+
+        assert exc_info.value.scopes == [bogus_scope]
 
 
 class TestGrantedScopesTruthfulness:
@@ -157,7 +185,7 @@ class TestGrantedScopesTruthfulness:
         params = parse_qs(urlparse(info["authorization_url"]).query)
         redirect_uri = params["redirect_uri"][0]
         state = params["state"][0]
-        async with httpx.AsyncClient() as c:
+        async with httpx.AsyncClient(trust_env=False) as c:
             await c.get(f"{redirect_uri}?code=ok&state={state}")
         result = await asyncio.wait_for(
             complete_authorization(info["flow_id"]), timeout=2.0
@@ -434,11 +462,43 @@ class TestGrantOnConnect:
         "https://www.googleapis.com/auth/gmail.send",
     ]
 
+    async def test_commit_grants_intersects_token_scopes(self, monkeypatch, caplog):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+
+        from gaia.connectors.flow import _commit_grants
+
+        grant_agent = Mock()
+        emit = AsyncMock()
+        monkeypatch.setattr("gaia.connectors.grants.grant_agent", grant_agent)
+        monkeypatch.setattr("gaia.connectors.flow.emit", emit)
+
+        flow = SimpleNamespace(
+            provider_id="google",
+            grant_agents={"installed:email": self._EMAIL_SCOPES},
+        )
+        granted_scope = self._EMAIL_SCOPES[0]
+
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            await _commit_grants(flow, [granted_scope])
+
+        grant_agent.assert_called_once_with(
+            "google", "installed:email", [granted_scope]
+        )
+        assert emit.await_args.args[1]["scopes"] == [granted_scope]
+        assert "narrowed grant" in caplog.text
+
+    def test_explicit_empty_scope_field_means_no_scopes(self):
+        from gaia.connectors.flow import _resolve_granted_scopes
+
+        assert _resolve_granted_scopes({"scope": ""}, ["openid"]) == []
+
     @respx.mock
     async def test_grant_committed_on_success(self, google_provider):
         from gaia.connectors.grants import list_agent_grants
 
-        _mock_token_endpoint()
+        granted_scope = self._EMAIL_SCOPES[0]
+        _mock_token_endpoint(scope=granted_scope)
         info = await start_authorization(
             "google",
             scopes=self._EMAIL_SCOPES,
@@ -448,13 +508,13 @@ class TestGrantOnConnect:
         redirect_uri = params["redirect_uri"][0]
         state = params["state"][0]
 
-        async with httpx.AsyncClient() as c:
+        async with httpx.AsyncClient(trust_env=False) as c:
             resp = await c.get(f"{redirect_uri}?code=ok&state={state}")
         assert resp.status_code == 200
         await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
 
         grants = list_agent_grants("google")
-        assert grants.get("installed:email") == self._EMAIL_SCOPES
+        assert grants.get("installed:email") == [granted_scope]
 
     @respx.mock
     async def test_no_grant_agents_leaves_ledger_empty(self, google_provider):

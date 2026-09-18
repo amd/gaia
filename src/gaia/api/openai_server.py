@@ -21,7 +21,8 @@ import time
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -29,6 +30,7 @@ from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
+from .local_http import build_caller_guard, cors_config
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -41,6 +43,8 @@ from .schemas import (
 # Configure logging
 logger = logging.getLogger(__name__)
 _REDACTED_LOG_VALUE = "[redacted]"
+_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305/api/v1"
+_LEMONADE_HEALTH_TIMEOUT_SECONDS = 0.35
 
 # Set logger level based on debug flag
 if os.environ.get("GAIA_API_DEBUG") == "1":
@@ -109,38 +113,6 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            # Look for workspace_info section
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-
-
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -148,45 +120,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Browser origins allowed by default: localhost/127.0.0.1 on any port.
-_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Cross-origin and caller-auth policy live in one place for every GAIA local
+# HTTP server -- see gaia/api/local_http.py.
+app.add_middleware(CORSMiddleware, **cors_config())
 
-
-def _cors_config() -> dict:
-    """Build the CORS policy: localhost-only by default.
-
-    ``GAIA_API_CORS_ORIGINS`` (comma-separated) adds extra allowed origins,
-    e.g. ``https://myapp.example.com``. A literal ``*`` opts into open CORS
-    for all origins, which the Fetch spec forbids combining with credentials
-    — so the wildcard also disables credentialed requests. Wildcard origins
-    WITH credentials are never configured: Starlette would reflect any
-    request Origin, letting any website the user visits call this local,
-    unauthenticated API with credentials.
-    """
-    raw = os.environ.get("GAIA_API_CORS_ORIGINS", "")
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    if "*" in origins:
-        logger.warning(
-            "GAIA_API_CORS_ORIGINS='*': allowing all origins WITHOUT "
-            "credentials. To allow credentialed cross-origin calls, list "
-            "explicit origins instead of '*'."
-        )
-        return {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
-        }
-    return {
-        "allow_origins": origins,
-        "allow_origin_regex": _LOCAL_ORIGIN_REGEX,
-        "allow_credentials": True,
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-    }
-
-
-app.add_middleware(CORSMiddleware, **_cors_config())
 
 # The email agent's REST surface (POST /v1/email/*) is no longer mounted
 # in-process (#2176). It was the last in-process agent mount after the v2
@@ -242,7 +179,14 @@ async def log_raw_requests(request: Request, call_next):
     return response
 
 
-@app.post("/v1/chat/completions")
+#: Foreign browser origins are refused; the API key is enforced when set and
+#: warned about once when not (mandatory would break every consumer at once).
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
+)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
@@ -265,7 +209,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": false
         }
@@ -275,7 +219,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": true
         }
@@ -303,11 +247,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
         raise HTTPException(
             status_code=404, detail=f"Model '{request.model}' not found"
         )
-
-    # Extract workspace root from messages (for converting relative paths to absolute)
-    workspace_root = extract_workspace_root(request.messages)
-    if _api_debug_enabled() and workspace_root:
-        logger.debug("📁 Extracted workspace root: %s", _REDACTED_LOG_VALUE)
 
     # Extract user query from messages (get last user message)
     user_message = next(
@@ -342,9 +281,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             logger.debug("🌊 Using STREAMING mode")
 
         return StreamingResponse(
-            create_sse_stream(
-                agent, user_message, request.model, workspace_root=workspace_root
-            ),
+            create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -357,8 +294,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
-        # Process query synchronously with workspace root
-        result = agent.process_query(user_message, workspace_root=workspace_root)
+        # Keep synchronous agent work from blocking health checks and other
+        # requests handled by the event loop.
+        result = await asyncio.to_thread(agent.process_query, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -427,9 +365,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
 
-async def create_sse_stream(
-    agent, query: str, model: str, workspace_root: str = None
-) -> AsyncGenerator[str, None]:
+async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
     Create Server-Sent Events stream for chat completion.
 
@@ -440,7 +376,6 @@ async def create_sse_stream(
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
         model: Model ID
-        workspace_root: Optional workspace root path for absolute file paths
 
     Yields:
         SSE-formatted chunks with "data: " prefix
@@ -489,9 +424,7 @@ async def create_sse_stream(
 
     try:
         # Start processing in background
-        task = loop.run_in_executor(
-            None, lambda: agent.process_query(query, workspace_root=workspace_root)
-        )
+        task = loop.run_in_executor(None, lambda: agent.process_query(query))
 
         # Stream events as they are generated
         while not task.done():
@@ -647,7 +580,7 @@ async def list_models() -> ModelListResponse:
             "object": "list",
             "data": [
                 {
-                    "id": "gaia-code",
+                    "id": "gaia",
                     "object": "model",
                     "created": 1234567890,
                     "owned_by": "amd-gaia"
@@ -663,21 +596,101 @@ async def list_models() -> ModelListResponse:
 @app.get("/health")
 async def health_check():
     """
-    Health check endpoint.
+    Report API and backing-service health.
 
     Returns:
-        Status and service name
+        Overall status, service name, and component-level status
 
     Example:
         ```
         GET /health
         {
             "status": "ok",
-            "service": "gaia-api"
+            "service": "gaia-api",
+            "components": {
+                "api": {"status": "ready"},
+                "llm": {
+                    "status": "ready",
+                    "backend": "lemonade",
+                    "model": "Gemma-4-E4B-it-GGUF",
+                    "url": "http://localhost:13305/api/v1"
+                },
+                "rag": {"status": "not_configured"}
+            }
         }
         ```
     """
-    return {"status": "ok", "service": "gaia-api"}
+    llm = await _lemonade_health()
+    return {
+        "status": "ok" if llm["status"] == "ready" else "degraded",
+        "service": "gaia-api",
+        "components": {
+            "api": {"status": "ready"},
+            "llm": llm,
+            "rag": {"status": "not_configured"},
+        },
+    }
+
+
+async def _lemonade_health():
+    base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL).rstrip("/")
+    if not base_url.endswith("/api/v1"):
+        base_url = f"{base_url}/api/v1"
+
+    component = {
+        "status": "unavailable",
+        "backend": "lemonade",
+        "model": None,
+        "url": base_url,
+    }
+    api_key = os.getenv("LEMONADE_API_KEY", "").strip()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_LEMONADE_HEALTH_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(f"{base_url}/health", headers=headers)
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        component["status"] = "error"
+        return component
+    except httpx.RequestError:
+        return component
+
+    try:
+        payload = response.json()
+    except ValueError:
+        component["status"] = "error"
+        return component
+
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        component["status"] = "error"
+        return component
+
+    model = _loaded_llm_model(payload)
+    if model is None:
+        return component
+
+    component["status"] = "ready"
+    component["model"] = model
+    return component
+
+
+def _loaded_llm_model(payload):
+    loaded = payload.get("all_models_loaded")
+    if isinstance(loaded, list):
+        model = next(
+            (
+                item.get("model_name") or item.get("checkpoint")
+                for item in loaded
+                if isinstance(item, dict) and item.get("type") in (None, "llm")
+            ),
+            None,
+        )
+        if model is not None:
+            return model
+    return payload.get("model_loaded")
 
 
 # Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams

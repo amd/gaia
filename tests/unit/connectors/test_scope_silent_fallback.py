@@ -18,8 +18,7 @@ first-time connect) still falls back to ``default_scopes``.
 
 Pure ``src/gaia/connectors/**`` — no ``gaia_agent_email`` import — so a
 connectors-only contributor's CI run catches a D0 regression without the
-email wheel installed (#2408's ``gaia_agent_code`` also calls
-``get_access_token``).
+email wheel installed.
 """
 
 from __future__ import annotations

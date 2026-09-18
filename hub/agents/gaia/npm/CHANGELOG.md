@@ -4,26 +4,79 @@ All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.1.1] — unreleased
 
-First release. `npx @amd-gaia/gaia` is now the single command that gets a user
-running GAIA: it fetches and verifies everything GAIA needs and drops them into
-the terminal UI. Before this there was no packaged path at all — the flagship agent
-had to be run from a repo checkout with a Python environment, and reaching the
-terminal UI meant building it from source.
+First working release. `npx @amd-gaia/gaia` is now the single command that gets a
+user running GAIA: it fetches and verifies everything GAIA needs and drops them
+into the terminal UI. Before this there was no packaged path at all — the flagship
+agent had to be run from a repo checkout with a Python environment, and reaching
+the terminal UI meant building it from source.
+
+### Fixed
+
+- Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
+
+- Windows npm launchers now find the Python daemon CLI even when npm passes the
+  package script as argv[1], preserving unrelated tools in shared PATH directories.
 
 ### Added
 
+- **Image generation, reachable out of the box.** "Draw me a red bicycle" now
+  generates a PNG with local Stable Diffusion and reports the path; previously
+  the tools existed behind a flag nothing turned on, so the agent just said it
+  couldn't. Adds `generate_image`, `list_sd_models`, and `get_generation_history`
+  (70 tools → 73) plus an `image_gen` bundle so per-turn selection can find them.
+  Generating swaps the resident model, so the next reply waits for the chat model
+  to reload. The `image-gen` starter skill covers prompt expansion and iterating
+  on the previous image.
+- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
+  runtime API keys, discovered models, and remote-inference status.
+
+- **A project map at task start.** In a code repository the agent now opens
+  every task knowing the directory shape, the likely entry points, which
+  commands are installed, and the three platform differences that change
+  command syntax — instead of discovering each one through a failed tool call.
+  Capped at 600 prompt tokens. If the repository has no code index the map
+  starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
+  and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
+  it. See SKILL §11.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
   bug-shaped `500`. See SPEC §5.2.
+- **Three further client-visible refusals from `/query`.** Reusing a `run_id`
+  that is still in flight gets `409` — it used to replace the live run, leaving
+  it with no way to be cancelled. Supplying a `model` that differs from the one
+  the `session_id` was built with gets `409` rather than silently answering on
+  the old model. A request with an absent or empty `Host` header gets `400`
+  rather than being served, closing a DNS-rebinding check that failed open.
+  See SPEC §5 and §5.2.
 - **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
   only renders in the prompt on turns whose query matches its description; the
   rest collapse to a one-line menu the model re-activates with `load_skill`.
   `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
+- **Per-turn tool selection, now on by default for the flagship `full`
+  profile.** The model is sent at most 26 of its 71 tools on any one call — a
+  fixed core plus whichever cohesion bundles the query matched — instead of the
+  whole registry every time. No capability is lost: `load_tools` is an escape
+  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
+  moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
+- **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
+  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  of every prompt, and it declares no tools. It is the agent's honesty floor
+  (don't claim work you didn't do, don't present empty output as a result,
+  don't substitute a near-miss and report success), which is why it is not in an
+  opt-in bundle the way a task skill is. No *skill set* ships enabled: the
+  manifest's `skill_sets:` / `default_skill_set:` blocks stay commented out until
+  an eval measures what loading several bodies costs. See SKILL.md §10.
+- **A materially smaller fixed prompt on every call.** That always-on
+  `gaia-voice` guidance was rewritten from 2,129 tokens to 676 with all of its
+  behavioural rules intact. It had been a rationale document — every rule
+  followed by the incident that motivated it — and the model needs the rule,
+  not the incident report.
 - **`gaia run` (the default command)** — resolves the host platform, fetches and
   SHA-256 verifies both binaries, then launches the terminal UI and propagates its
   exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.
@@ -64,6 +117,101 @@ terminal UI meant building it from source.
 - **Programmatic exports** — `fetchAll`, `startSidecar`, `shutdown`, `runTui`, the
   platform helpers, and the typed error classes, for embedding GAIA in another
   app.
+- **The `.installed` record is written after a verified sidecar install.**
+  Staging the binary was only half an install: the daemon and the terminal UI
+  both key "this agent is installed" on `~/.gaia/agents/gaia/.installed`, and
+  without it the UI ran the REST sidecar as its own stdio child and the chat
+  filled with uvicorn's startup log. It is written on a cache hit as well as a
+  fresh download, so an install left by an earlier version repairs itself, and
+  only for this host's own platform — a `--platform` fetch stages a binary for a
+  different machine and records nothing. See SPEC §4.1.
+- **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
+  trusted local mirror.
+
+### Changed
+
+- **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
+  written.** Previously any URL not ending in `/api/v1` had that suffix appended,
+  so a reverse proxy configured as `https://proxy.example/lemonade` was silently
+  rewritten to `https://proxy.example/lemonade/api/v1`. It now resolves to
+  `https://proxy.example/lemonade` unchanged, and only a bare origin with no path
+  at all gains `/api/v1`. If a proxied install starts returning `404` after
+  upgrading, append the API path to the variable yourself.
+
+### Fixed
+
+- **A second `gaia serve` no longer reports success against a server it does not
+  own.** With the port already taken, the incumbent answered `/health` while our
+  own sidecar was still unpacking, so the start "succeeded", printed a ready URL
+  for someone else's server, and the child then died of `EADDRINUSE`. The port is
+  now checked before anything is spawned, and a taken one fails naming the port
+  and how to find the process holding it.
+- **Importing the package no longer changes a host app's error handling.** The
+  crash and signal handlers reaped every sidecar *before* checking whether the
+  host had its own handler, so an exception the host handled killed the sidecar
+  and the host's next request got an unexplained `ECONNREFUSED`.
+- **`gaia run` no longer breaks the terminal UI's `PATH`.** Hiding our own `gaia`
+  shim removed the whole bin directory, which on a Homebrew or pipx layout also
+  took `python3`, `lemonade-server`, and the real `gaia` with it — so the UI
+  reported a missing CLI that we had hidden. A shared directory now moves to the
+  end of `PATH` instead of being dropped.
+- **Flags a command does not read are refused, not ignored.** `run --port 9000`
+  parsed fine and came up on the default port; likewise `serve --component` and
+  `serve --cache-dir`.
+- **A failed install says what to do.** A download that could not be moved into
+  place — usually a running sidecar holding the file on Windows — printed a raw
+  stack trace.
+- **`taskkill` failures name their reason.** Its exit code and stderr were
+  discarded, so "Access is denied" surfaced ten seconds later as a generic
+  timeout.
+- **A sidecar that survives shutdown is still reaped at exit.** `shutdown`
+  de-registered it before killing it, so one that survived both kill windows
+  became a permanent orphan holding the port.
+- **`serve` removes its signal handlers once it stops**, so Ctrl+C keeps working
+  afterwards, and a repeat Ctrl+C during a slow teardown now says what it is
+  waiting for instead of looking frozen.
+- **A non-JSON reply from a sidecar probe raises a typed error** rather than a
+  bare `SyntaxError` — the case where a proxy answers `200` with an HTML page.
+- **`--port` no longer accepts what `Number()` would coerce**, so `--port 0x2710`
+  is rejected instead of quietly binding 10000.
+
+### Security
+
+- **A desktop notification can no longer run code.** On Windows, `notify_desktop`
+  rendered its message box by pasting the title and body into a PowerShell command
+  string, so a `'` in either — text the model picks, and prompt-injected content
+  can steer it — closed the string literal and the remainder ran as PowerShell.
+  The command is now a fixed script that reads both values from the child's
+  environment, and the tool now needs your approval before it runs, like the
+  other tools that spawn a process (SKILL.md §8).
+- **`resolveSidecarPath` / `resolveTuiPath` verify the binary before returning a
+  path that gets spawned.** Both fed `spawn()` from a predictable cache path with
+  no integrity check, so anything able to write `~/.gaia/agents/gaia/` got code
+  run — despite the package documenting the SHA verify as its security boundary.
+  They now re-hash against `binaries.lock.json`; pass `{ verify: false }` for a
+  binary you built yourself. Note this makes them proportional to the binary's
+  size — resolve once at startup, not per request.
+- **`--base-url` requires `https`** unless `--allow-insecure-base-url` is passed.
+  The pinned SHA already made a plaintext mirror non-exploitable, but tampering
+  surfaced as a confusing `IntegrityError` instead of the transport failure it is.
+- **A ~200MB artifact is never held in memory whole.** Downloads stream to disk,
+  and the cache-hit check that re-hashes an already-installed binary — which runs
+  on every `gaia run` — reads it in bounded chunks. Both hashes are computed
+  incrementally, and a download is still verified *before* the file is moved into
+  place.
+
+### Fixed
+
+- **Esc stops a running turn in the terminal UI without killing the agent.**
+  The TUI used to kill the agent process, and on the released one-file binary
+  that killed only the launcher: the cancelled tool call ran to completion and
+  the surviving process consumed the next message. The first Esc now sends the
+  agent a `cancel` control message, so the turn ends and the session keeps its
+  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  the whole process tree.
+- **A restart after a hard stop no longer turns bypass permissions back on.**
+  The replacement agent is launched in the session's current permission mode
+  instead of from the original flags, and the TUI says what the restart lost.
 
 ### Notes
 
@@ -83,11 +231,19 @@ terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI on `PATH` for the daemon the TUI starts.
+  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
+  starts. 0.23.1 is the first core whose daemon knows how to supervise this
+  agent; on 0.23.0 the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent` 0.1.0 has no caller-auth token, so unlike
-  `@amd-gaia/agent-email` this package mints and sends none.
-- Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
+- `gaia_agent` enforces a per-session caller-auth bearer on every `/v1/gaia/*`
+  request, plus a loopback `Host` allowlist and non-loopback `Origin` rejection.
+  This package mints no token, so a sidecar it spawns comes up in dev mode (token
+  check skipped, loudly warned, Host/Origin still enforced) — pass your own
+  through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
+- Tracks sidecar contract `apiVersion` **2.13**; a differing major raises
   `VersionMismatchError`.
+- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
+  stdio transport's `/memory` sentinel produces, so a daemon-supervised
+  install of the flagship exposes `/memory` too, not just a subprocess one.

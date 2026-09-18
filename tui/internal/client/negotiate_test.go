@@ -272,7 +272,7 @@ func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
 
 // Every agent id the notice is built for keeps the scoped form.
 func TestRemedyIsScopedForAnyAgent(t *testing.T) {
-	for _, id := range []string{"email", "analyst", "code"} {
+	for _, id := range []string{"email", "gaia", "chat"} {
 		notice := noticeForMissingCapability(id, "2.5")
 		if !strings.Contains(notice, "gaia hub install "+id) {
 			t.Errorf("remedy for %q is not agent-scoped: %s", id, notice)

@@ -211,8 +211,11 @@ def test_custom_agent_with_mcp_reports_diagnosable_connection_failure(
         }
     ]
     assert agent.process_query("add 7 and 35") == {
+        # Refused before the tool body ran, so the result says so — that flag is
+        # what stops the verification footer claiming the call went through.
+        "executed": False,
         "status": "error",
-        "error": "Unknown tool name. Use only tools listed in your AVAILABLE TOOLS section.",
+        "error": "Unknown tool name. Use only the tools you were given.",
     }
 
 

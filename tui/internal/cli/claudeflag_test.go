@@ -118,3 +118,54 @@ func TestClaudeModelWithoutUseClaudeIsRefusedAtLaunch(t *testing.T) {
 		t.Errorf("the pair together must be accepted: %v", err)
 	}
 }
+
+// A model id nothing recognises must be refused at the command line, with the
+// ids that would work. Nothing downstream catches it: the provider forwards
+// any "claude-*" string to Anthropic verbatim (src/gaia/llm/providers/
+// claude.py), so an unrefused typo surfaces as a 404 several seconds into the
+// first turn, far from the flag that caused it.
+func TestUnknownClaudeModelIsRefusedAtLaunch(t *testing.T) {
+	flags := rootCmd.PersistentFlags()
+	f := flags.Lookup("claude-model")
+	if f == nil {
+		t.Fatal("--claude-model is not registered")
+	}
+	t.Cleanup(func() {
+		useClaude = false
+		claudeModel = defaultClaudeModel
+		f.Changed = false
+	})
+
+	useClaude = true
+	if err := flags.Set("claude-model", "claude-haiku-45"); err != nil {
+		t.Fatalf("--claude-model: %v", err)
+	}
+	err := rootCmd.PersistentPreRunE(rootCmd, nil)
+	if err == nil {
+		t.Fatal("a typo'd model id was accepted and would have reached Anthropic")
+	}
+	for _, must := range []string{"--claude-model", "claude-haiku-4-5"} {
+		if !strings.Contains(err.Error(), must) {
+			t.Errorf("the refusal must mention %q: %v", must, err)
+		}
+	}
+
+	// The id the whole fleet actually runs on must pass.
+	if err := flags.Set("claude-model", "claude-haiku-4-5"); err != nil {
+		t.Fatalf("--claude-model: %v", err)
+	}
+	if err := rootCmd.PersistentPreRunE(rootCmd, nil); err != nil {
+		t.Errorf("claude-haiku-4-5 must be accepted: %v", err)
+	}
+}
+
+// The default stays claude-sonnet-5. Which model a given deployment prefers is
+// an operational choice made per launch, not something the binary should bake
+// in — flipping this would silently change the model for everyone who passes
+// no --claude-model at all.
+func TestTheDefaultClaudeModelIsStillSonnet(t *testing.T) {
+	if defaultClaudeModel != "claude-sonnet-5" {
+		t.Errorf("defaultClaudeModel = %q; changing it changes what every "+
+			"flagless --use-claude launch runs on", defaultClaudeModel)
+	}
+}

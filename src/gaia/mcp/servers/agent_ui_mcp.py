@@ -9,7 +9,7 @@ activity are visible in the browser UI in real time.
 
 Usage:
     uv run python -m gaia.mcp.servers.agent_ui_mcp
-    uv run python -m gaia.mcp.servers.agent_ui_mcp --port 8765
+    uv run python -m gaia.mcp.servers.agent_ui_mcp --port 8766
 """
 
 import argparse
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import requests
 
 from gaia.logger import route_console_logging_to_stderr
+from gaia.mcp.ports import AGENT_UI_MCP_PORT
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -33,13 +34,19 @@ from gaia.ui.sse_handler import (
 )
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
 logger = logging.getLogger(__name__)
 
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
-MCP_DEFAULT_PORT = 8765
+
+# The backend refuses any mutating /api request that does not carry this
+# header — it is what stops a web page the user visits from driving the
+# Agent UI (see gaia/ui/security.py). Sent on reads too so no call site
+# has to decide.
+UI_HEADER = {"X-Gaia-UI": "1"}
+MCP_DEFAULT_PORT = AGENT_UI_MCP_PORT
 MCP_DEFAULT_HOST = "localhost"
 
 
@@ -78,8 +85,9 @@ def _normalize_error(
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
+    headers = {**UI_HEADER, **kwargs.pop("headers", {})}
     try:
-        r = getattr(requests, method)(url, timeout=120, **kwargs)
+        r = getattr(requests, method)(url, timeout=120, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError as e:
@@ -112,7 +120,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     }
 
     try:
-        r = requests.post(url, json=payload, stream=True, timeout=180)
+        r = requests.post(
+            url, json=payload, stream=True, timeout=180, headers=UI_HEADER
+        )
         r.raise_for_status()
     except requests.exceptions.ConnectionError as e:
         return _normalize_error(e, base_url)
@@ -238,14 +248,14 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     return result
 
 
-def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
+def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     """Create the MCP server with tools for interacting with GAIA Agent UI."""
     # Imported lazily so the pure helpers above (_normalize_error, _api,
     # _stream_chat) stay importable without the optional ``mcp`` dependency,
     # which the unit-test job does not install (issue #1750).
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
-    mcp = FastMCP(name="GAIA Agent UI")
+    mcp = MCPServer(name="GAIA Agent UI")
 
     # ── System ─────────────────────────────────────────────────────
 
@@ -288,7 +298,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     def delete_session(session_id: str) -> Dict[str, Any]:
         """Delete a chat session and all its messages."""
         try:
-            r = requests.delete(f"{backend_url}/api/sessions/{session_id}", timeout=30)
+            r = requests.delete(
+                f"{backend_url}/api/sessions/{session_id}",
+                timeout=30,
+                headers=UI_HEADER,
+            )
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
         except Exception as e:
@@ -299,12 +313,39 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     @mcp.tool()
     def get_messages(session_id: str) -> Dict[str, Any]:
         """Get all messages in a session (with agent steps and tool outputs)."""
-        data = _api(backend_url, "get", f"/sessions/{session_id}/messages")
-        if data.get("status") == "error":
-            return data
+        raw_messages = []
+        total = None
+        while total is None or len(raw_messages) < total:
+            offset = len(raw_messages)
+            limit = 100 if total is None else min(100, total - offset)
+            data = _api(
+                backend_url,
+                "get",
+                f"/sessions/{session_id}/messages",
+                params={"limit": limit, "offset": offset},
+            )
+            if data.get("status") == "error":
+                return data
+            page = data.get("messages", [])
+            if total is None:
+                # Freeze the initial count so active chats cannot extend this
+                # request forever. A later call can retrieve newly added rows.
+                total = data.get("total", len(page))
+                if not isinstance(total, int) or total < 0:
+                    return {
+                        "status": "error",
+                        "detail": "Invalid message total from backend. Retry get_messages.",
+                    }
+            if not page and offset < total:
+                return {
+                    "status": "error",
+                    "detail": "The transcript changed or ended before all messages "
+                    "were retrieved. Retry get_messages to retrieve the current session.",
+                }
+            raw_messages.extend(page[: total - offset])
         # Simplify for readability
         messages = []
-        for m in data.get("messages", []):
+        for m in raw_messages:
             msg = {
                 "role": m["role"],
                 "content": m["content"][:2000],
@@ -325,7 +366,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
             if stats:
                 msg["stats"] = stats
             messages.append(msg)
-        return {"messages": messages, "total": data.get("total", len(messages))}
+        return {"messages": messages, "total": total}
 
     @mcp.tool()
     def send_message(session_id: str, message: str) -> Dict[str, Any]:
@@ -840,14 +881,17 @@ def main():
         print("Starting GAIA Agent UI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
         print("\n🚀 GAIA Agent UI MCP Server")
         print(f"   Backend: {args.backend}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
-        tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
-        print(f"   Tools: {tool_count} registered\n")
-        mcp.run(transport="streamable-http")
+        try:
+            tool_count = len(
+                mcp._tool_manager._tools
+            )  # pylint: disable=protected-access
+            print(f"   Tools: {tool_count} registered\n")
+        except AttributeError:
+            logger.debug("MCPServer tool registry layout changed; skipping tool count")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -62,10 +63,42 @@ type Options struct {
 	Logf func(format string, args ...any)
 }
 
-// Model is the readiness gate screen.
+// cancelBox holds the cancel func for whatever background work the screen has
+// in flight.
+//
+// A POINTER field on Model, shared by every copy Bubble Tea makes, because
+// Init() has to satisfy tea.Model's value receiver: a plain context.CancelFunc
+// stored there is parked on a copy that dies with the call, so the model the
+// host keeps has none and Cancel() cannot stop the first probe. Abandoning the
+// screen then left that probe running to its own 90s timeout — and with a fix
+// that spawns `gaia init`, ctrl+c during preflight would leak a child.
+type cancelBox struct {
+	mu sync.Mutex
+	fn context.CancelFunc
+}
+
+func (c *cancelBox) set(fn context.CancelFunc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fn = fn
+}
+
+// cancel stops the work in flight and forgets it. Safe to call more than once.
+func (c *cancelBox) cancel() {
+	c.mu.Lock()
+	fn := c.fn
+	c.fn = nil
+	c.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// Model is the readiness gate screen. It renders whatever Runner it was built
+// with — see runner.go for why there is one screen and two runners.
 type Model struct {
 	cfg  Config
-	t    Transport
+	r    Runner
 	opts Options
 
 	rep     Report
@@ -80,11 +113,32 @@ type Model struct {
 
 	provisionCh   chan provisionEvent
 	provisionLine string
-	cancel        context.CancelFunc
+	cancel        *cancelBox
+
+	// fixApplied is true once a fix has changed something on this machine —
+	// setup ran, a daemon or sidecar started, a model downloaded.
+	//
+	// It stops the re-check that follows from handing off on its own. A fix can
+	// run for minutes and then print the one line that says whether it worked;
+	// auto-proceeding ~800ms later replaces that line with a chat prompt, so
+	// the user never learns what the thing they waited for actually did. After
+	// a fix the screen waits for enter. A launch that needed no fix is
+	// untouched — nothing happened there worth pausing over.
+	fixApplied bool
 }
 
-// New builds the gate for one agent.
+// New builds the gate for an agent the GAIA daemon supervises.
 func New(t Transport, cfg Config, opts Options) Model {
+	return newWith(NewDaemonRunner(t), cfg, opts)
+}
+
+// NewLocal builds the gate for an agent the TUI spawns itself. Same screen,
+// same keys, different probes — see runner.go.
+func NewLocal(local LocalOptions, cfg Config, opts Options) Model {
+	return newWith(NewLocalRunner(local), cfg, opts)
+}
+
+func newWith(r Runner, cfg Config, opts Options) Model {
 	if opts.ReadyHold == 0 {
 		opts.ReadyHold = defaultReadyHold
 	}
@@ -98,20 +152,21 @@ func New(t Transport, cfg Config, opts Options) Model {
 
 	return Model{
 		cfg:    cfg,
-		t:      t,
+		r:      r,
 		opts:   opts,
-		rep:    Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: checkingRows(cfg)},
+		rep:    Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: checkingRows(r, cfg)},
 		phase:  phaseChecking,
 		width:  80,
 		height: 24,
 		spin:   s,
+		cancel: &cancelBox{},
 	}
 }
 
 // checkingRows is the first frame: the shape of the answer before any of it is
 // known, so the screen does not jump as rows arrive.
-func checkingRows(cfg Config) []Row {
-	rows := blankRows(cfg)
+func checkingRows(r Runner, cfg Config) []Row {
+	rows := r.Rows(cfg)
 	rows[0].State = StateChecking
 	rows[0].Line = "checking…"
 	return rows
@@ -144,13 +199,24 @@ func (m Model) FocusKey() string {
 // AgentID is the agent this gate is guarding.
 func (m Model) AgentID() string { return m.cfg.AgentID }
 
-// Cancel stops any in-flight probe or fix. The host calls it when tearing the
-// screen down so a model pull does not keep writing into a dead screen.
-func (m *Model) Cancel() {
+// Cancel stops any in-flight probe or fix — the first check included. The host
+// calls it when tearing the screen down so a model pull, or a `gaia init` child,
+// does not outlive the screen that started it.
+func (m Model) Cancel() {
 	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
+		m.cancel.cancel()
 	}
+}
+
+// RunnerLabel names the machinery behind this screen, for logs and snapshots.
+func (m Model) RunnerLabel() string { return m.r.Label() }
+
+// HeldForReview reports whether the screen is deliberately waiting for enter
+// rather than handing off. The renderer asks this rather than re-deriving it,
+// so the footer and the hand-off can never disagree about whether the launch
+// is about to start.
+func (m Model) HeldForReview() bool {
+	return (m.opts.ManualProceed || m.fixApplied) && !m.Busy() && !m.rep.Blocked()
 }
 
 // --- messages --------------------------------------------------------------
@@ -178,38 +244,26 @@ type proceedTickMsg struct{}
 // on the model, so Cancel() stops EVERYTHING the screen started — not just a
 // download. An abandoned ensure would otherwise keep spawning a sidecar minutes
 // after the user left.
-func (m *Model) begin(timeout time.Duration) context.Context {
+func (m Model) begin(timeout time.Duration) context.Context {
 	m.Cancel()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	m.cancel = cancel
+	m.cancel.set(cancel)
 	return ctx
 }
 
-func (m *Model) checkCmd() tea.Cmd {
+func (m Model) checkCmd() tea.Cmd {
 	ctx := m.begin(checkTimeout)
-	t, cfg := m.t, m.cfg
-	return func() tea.Msg { return reportMsg{rep: Check(ctx, t, cfg)} }
+	r, cfg := m.r, m.cfg
+	return func() tea.Msg { return reportMsg{rep: r.Check(ctx, cfg)} }
 }
 
-func (m *Model) startDaemonCmd() tea.Cmd {
-	ctx := m.begin(startTimeout)
-	t := m.t
+// quickFixCmd runs a fix that finishes in one call and reports a note.
+func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.Cmd {
+	ctx := m.begin(timeout)
+	r, cfg := m.r, m.cfg
 	return func() tea.Msg {
-		if _, err := t.Start(ctx); err != nil {
-			return fixDoneMsg{key: KeyDaemon, err: err}
-		}
-		return fixDoneMsg{key: KeyDaemon, note: "Background service started."}
-	}
-}
-
-func (m *Model) ensureAgentCmd() tea.Cmd {
-	ctx := m.begin(ensureTimeout)
-	t, cfg := m.t, m.cfg
-	return func() tea.Msg {
-		if err := t.EnsureAgent(ctx, cfg.AgentID); err != nil {
-			return fixDoneMsg{key: KeySidecar, err: err}
-		}
-		return fixDoneMsg{key: KeySidecar, note: cfg.AgentName + " agent started."}
+		res := r.Fix(ctx, cfg, kind, nil)
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note}
 	}
 }
 
@@ -257,25 +311,46 @@ func send(ctx context.Context, ch chan provisionEvent, ev provisionEvent) {
 	}
 }
 
+// focusFix is the fix on the focused row, FixNone when there is none.
+func (m Model) focusFix() FixKind {
+	if m.focus < 0 || m.focus >= len(m.rep.Rows) {
+		return FixNone
+	}
+	return m.rep.Rows[m.focus].Fix
+}
+
+// provisionOpeningLine promises minutes rather than a progress bar.
+//
+// The daemon relay BUFFERS non-SSE responses (src/gaia/daemon/relay.py), so a
+// model pull's progress lines all arrive at the END of the pull rather than as
+// it runs. `gaia init` is a local child whose pipes are read live, so that one
+// really does narrate.
+func provisionOpeningLine(kind FixKind) string {
+	if kind == FixRunSetup {
+		return "running setup — the first run takes several minutes"
+	}
+	return "downloading the model — the first pull takes several minutes"
+}
+
 func (m Model) startProvision() (Model, tea.Cmd) {
 	ch := make(chan provisionEvent, 64)
 	ctx := m.begin(provisionTimeout)
 	m.provisionCh = ch
-	// The daemon relay BUFFERS non-SSE responses (src/gaia/daemon/relay.py), so
-	// the sidecar's progress lines all arrive at the end of the pull rather than
-	// as it runs. Promise minutes, not a progress bar, until the relay streams
-	// text/plain too.
-	m.provisionLine = "downloading the model — the first pull takes several minutes"
+	m.provisionLine = provisionOpeningLine(m.focusFix())
 	m.phase = phaseProvisioning
 	m.note = ""
 
-	t, cfg := m.t, m.cfg
+	r, cfg, kind := m.r, m.cfg, m.focusFix()
 	go func() {
 		defer close(ch)
-		res := Provision(ctx, t, cfg, func(line string) {
+		res := r.Fix(ctx, cfg, kind, func(line string) {
 			send(ctx, ch, provisionEvent{line: line})
 		})
-		send(ctx, ch, provisionEvent{done: true, result: res})
+		send(ctx, ch, provisionEvent{done: true, result: ProvisionResult{
+			OK:        res.OK(),
+			Final:     res.Final,
+			Diagnosis: res.Diagnosis,
+		}})
 	}()
 	return m, tea.Batch(waitProvision(ch, m.cfg), m.spin.Tick)
 }
@@ -309,7 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A row the user can fix with one keypress holds the screen even when it
 		// does not block: the mailbox row is exactly that, and handing off past it
 		// would take `f connect a mailbox` away with the screen it was on.
-		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.rep.HasOneKeyFix() {
+		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.fixApplied && !m.rep.HasOneKeyFix() {
 			if m.rep.HasHalt() {
 				// Three edits together: the tick, the phase, and the note each
 				// independently claim the launch is starting.
@@ -341,6 +416,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.proceed()
 
 	case fixDoneMsg:
+		if msg.err == nil {
+			m.fixApplied = true
+		}
 		if msg.err != nil {
 			d := Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
 			m.note = "Fix failed. " + d.String()
@@ -365,6 +443,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Cancel()
 		res := msg.event.result
 		if res.OK {
+			m.fixApplied = true
 			m.note = "Download complete. Re-checking…"
 			m.phase = phaseChecking
 			return m, tea.Batch(m.checkCmd(), m.spin.Tick)
@@ -421,8 +500,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.note = ""
 		m.details = false
+		m.fixApplied = false
 		m.phase = phaseChecking
-		m.rep.Rows = checkingRows(m.cfg)
+		m.rep.Rows = checkingRows(m.r, m.cfg)
 		return m, tea.Batch(m.checkCmd(), m.spin.Tick)
 
 	case "enter":
@@ -455,12 +535,12 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 	case FixStartDaemon:
 		m.phase = phaseFixing
 		m.note = "Starting the background service…"
-		return m, tea.Batch(m.startDaemonCmd(), m.spin.Tick)
+		return m, tea.Batch(m.quickFixCmd(KeyDaemon, FixStartDaemon, startTimeout), m.spin.Tick)
 	case FixStartSidecar:
 		m.phase = phaseFixing
 		m.note = "Starting the " + m.cfg.AgentName + " agent…"
-		return m, tea.Batch(m.ensureAgentCmd(), m.spin.Tick)
-	case FixPullModel:
+		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixStartSidecar, ensureTimeout), m.spin.Tick)
+	case FixPullModel, FixRunSetup:
 		return m.startProvision()
 	case FixConnectMailbox:
 		agentID, provider := m.cfg.AgentID, row.Provider

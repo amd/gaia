@@ -38,11 +38,11 @@ func TestHelpNamesTheInvokedBinary(t *testing.T) {
 			}
 
 			// Subcommand help is built from the same root name.
-			out, err = exec.Command(installed, "install", "--help").CombinedOutput()
+			out, err = exec.Command(installed, "run", "--help").CombinedOutput()
 			if err != nil {
-				t.Fatalf("%s install --help: %v\n%s", name, err, out)
+				t.Fatalf("%s run --help: %v\n%s", name, err, out)
 			}
-			if want := name + " install"; !strings.Contains(string(out), want) {
+			if want := name + " run"; !strings.Contains(string(out), want) {
 				t.Errorf("subcommand usage does not name the invoked binary (want %q):\n%s", want, out)
 			}
 		})
@@ -64,9 +64,10 @@ func TestLeadingTUIWordStillAccepted(t *testing.T) {
 			installed := filepath.Join(t.TempDir(), name+suffix)
 			copyExecutable(t, gaiaBin, installed)
 
-			// `version` needs no daemon; `list` is the documented line and must
-			// reach the same subcommand rather than dying on "unknown command".
-			for _, sub := range []string{"version", "list"} {
+			// Both need no daemon, and `gaia tui <sub>` is the documented
+			// line — it must reach the same subcommand rather than dying on
+			// "unknown command".
+			for _, sub := range []string{"version", "help"} {
 				viaTUI, _ := exec.Command(installed, "tui", sub).CombinedOutput()
 				direct, _ := exec.Command(installed, sub).CombinedOutput()
 				if string(viaTUI) != string(direct) {

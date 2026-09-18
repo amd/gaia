@@ -15,12 +15,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
-import psutil
-
+from gaia.daemon.instance import pid_alive
 from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
     ModeConflictError,
+    SidecarInhibitedError,
     SidecarNotRunningError,
     StopFailedError,
     UnknownAgentError,
@@ -38,6 +38,34 @@ logger = get_logger(__name__)
 # idle reaper is V2-15's; an in-flight long-running clock inside a sidecar
 # must never be silently killed to make room.
 MAX_LIVE_SIDECARS = 3
+
+# Test-only hold on sidecar spawn (#2539): the daemon's normal resilience is
+# to spawn-or-attach a stopped agent on the next `ensure`, which is exactly
+# what makes "agent not running" un-testable — the first probe after
+# `stop-agent` silently heals it. Setting this env var to a comma-separated
+# list of agent ids (or "*" for all) makes `ensure()` refuse to spawn those
+# ids instead, so the stopped state holds still long enough for the
+# preflight gate's messaging to be exercised. Unset in every normal
+# install/run — nothing in the non-test code paths ever sets it.
+INHIBIT_SIDECAR_ENV_VAR = "GAIA_TEST_INHIBIT_SIDECAR"
+
+
+def _inhibited_sidecar_ids() -> "set[str]":
+    raw = os.environ.get(INHIBIT_SIDECAR_ENV_VAR, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _raise_if_inhibited(agent_id: str) -> None:
+    inhibited = _inhibited_sidecar_ids()
+    if not inhibited:
+        return
+    if "*" in inhibited or agent_id in inhibited:
+        raise SidecarInhibitedError(
+            f"agent '{agent_id}' is held down by {INHIBIT_SIDECAR_ENV_VAR} "
+            f"(test-only hook, current value {os.environ.get(INHIBIT_SIDECAR_ENV_VAR)!r}). "
+            f"Unset {INHIBIT_SIDECAR_ENV_VAR} (or remove '{agent_id}' from it) and "
+            "re-ensure to let it start."
+        )
 
 
 class SidecarRegistry:
@@ -173,6 +201,7 @@ class SidecarRegistry:
                         f"{agent_id}`), then re-ensure in the new mode."
                     )
                 return self._entry(agent_id, manager, include_token=True)
+            _raise_if_inhibited(agent_id)
             with self._lock:
                 # Cap counts running AND starting: the reservation closes the
                 # window where two different agents both pass at max_live-1.
@@ -389,7 +418,10 @@ class SidecarRegistry:
             return
         pid = manager.pid
         manager.shutdown()
-        if pid is not None and psutil.pid_exists(pid):
+        # pid_alive, not pid_exists: a killed sidecar the OS has not reaped yet is
+        # a zombie, and pid_exists calls that alive — a 500 for a process that is
+        # already gone.
+        if pid is not None and pid_alive(pid):
             raise StopFailedError(
                 f"agent '{agent_id}' sidecar pid {pid} survived the "
                 "tree-kill and is still alive. Inspect the process and "

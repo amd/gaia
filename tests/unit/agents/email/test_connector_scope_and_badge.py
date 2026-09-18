@@ -22,6 +22,8 @@ pytest.importorskip("gaia_agent_email")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.allow_network
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -174,7 +176,10 @@ class TestListEmailConnectorsCanSend:
         monkeypatch.setattr(
             capi,
             "get_connection",
-            lambda p: {"scopes": [], "account_email": "me@g.com"},
+            lambda p: {
+                "scopes": ["https://www.googleapis.com/auth/gmail.send"],
+                "account_email": "me@g.com",
+            },
         )
         monkeypatch.setattr(
             capi,
@@ -193,6 +198,34 @@ class TestListEmailConnectorsCanSend:
         by = {p["provider"]: p for p in body["providers"]}
         assert by["google"]["can_send"] is True
 
+    def test_can_send_false_when_grant_overclaims_connection_scope(self, monkeypatch):
+        """A stale ledger grant cannot make the badge claim a declined scope."""
+        import gaia.connectors.api as capi
+
+        monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: ["google"])
+        monkeypatch.setattr(
+            capi,
+            "get_connection",
+            lambda p: {
+                "scopes": ["openid", "https://www.googleapis.com/auth/gmail.modify"],
+                "account_email": "me@g.com",
+            },
+        )
+        monkeypatch.setattr(
+            capi,
+            "list_agent_grants",
+            lambda p: {
+                "installed:email": [
+                    "openid",
+                    "https://www.googleapis.com/auth/gmail.send",
+                ]
+            },
+        )
+
+        from gaia_agent_email.connector_routes import _can_send
+
+        assert _can_send("google") is False
+
     def test_can_send_true_when_mail_send_in_outlook_grant(self, monkeypatch):
         """Outlook grant with Mail.Send → can_send=True."""
         import gaia.connectors.api as capi
@@ -201,7 +234,10 @@ class TestListEmailConnectorsCanSend:
         monkeypatch.setattr(
             capi,
             "get_connection",
-            lambda p: {"scopes": [], "account_email": "me@live.com"},
+            lambda p: {
+                "scopes": ["https://graph.microsoft.com/Mail.Send"],
+                "account_email": "me@live.com",
+            },
         )
         monkeypatch.setattr(
             capi,
@@ -214,10 +250,9 @@ class TestListEmailConnectorsCanSend:
             },
         )
 
-        client = self._make_client()
-        body = client.get("/v1/email/connectors").json()
-        by = {p["provider"]: p for p in body["providers"]}
-        assert by["microsoft"]["can_send"] is True
+        from gaia_agent_email.connector_routes import _can_send
+
+        assert _can_send("microsoft") is True
 
     def test_can_send_false_for_microsoft_without_mail_send(self, monkeypatch):
         """Outlook grant missing Mail.Send → can_send=False."""

@@ -49,6 +49,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
@@ -213,6 +214,21 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
     return "default"
 
 
+def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
+    """Reject OAuth scopes outside the connector catalog ceiling (#2736).
+
+    The imports stay local because the catalog loads OAuth providers which
+    eventually import this flow module.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connector_spec = REGISTRY.get(provider_id)
+    disallowed = sorted(set(scopes_list) - set(connector_spec.available_scopes))
+    if disallowed:
+        raise ScopeNotAllowedError(None, provider_id, disallowed)
+
+
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
@@ -260,6 +276,8 @@ async def start_authorization(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # Both CLI and Agent UI browser flows converge here.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -436,8 +454,8 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     return web.Response(text=_SUCCESS_HTML, content_type="text/html")
 
 
-async def _commit_grants(flow: _PendingFlow) -> None:
-    """Write the per-agent grants requested at ``start_authorization`` time.
+async def _commit_grants(flow: _PendingFlow, granted_scopes: Iterable[str]) -> None:
+    """Write per-agent grants limited to the scopes the token exchange granted.
 
     Called only after the connection is persisted. Each grant is written
     through the same ledger the CLI/SDK/Settings panel use, so it is
@@ -449,40 +467,76 @@ async def _commit_grants(flow: _PendingFlow) -> None:
     Connecting-without-granting is the bug this flow exists to prevent, so a
     grant failure must not be swallowed.
     """
-    if not flow.grant_agents:
+    await _commit_grants_for_provider(
+        flow.provider_id, flow.grant_agents, granted_scopes
+    )
+
+
+async def _commit_grants_for_provider(
+    provider_id: str,
+    grant_agents: Optional[Mapping[str, Iterable[str]]],
+    granted_scopes: Iterable[str],
+) -> None:
+    """Commit effective per-agent grants for either OAuth flow entry point."""
+    if not grant_agents:
         return
 
     # Local import mirrors the lazy-keyring contract in connectors/__init__.py
     # and keeps flow.py's module-load dependency graph unchanged.
     from gaia.connectors.grants import grant_agent
 
-    for agent_id, agent_scopes in flow.grant_agents.items():
+    granted_scope_set = set(granted_scopes)
+    for agent_id, agent_scopes in grant_agents.items():
+        requested_scopes = list(agent_scopes)
+        effective_scopes = [
+            scope for scope in requested_scopes if scope in granted_scope_set
+        ]
+        if not effective_scopes:
+            raise GrantAfterConnectError(
+                provider_id,
+                agent_id,
+                reason=(
+                    "the provider granted none of the scopes this agent asked "
+                    f"for ({' '.join(requested_scopes)}). The connection was "
+                    "saved; re-run connect and approve them on the consent "
+                    "screen."
+                ),
+            )
+        if len(effective_scopes) != len(requested_scopes):
+            logger.warning(
+                "flow: narrowed grant connector_id=%s agent_id=%s requested=%d "
+                "granted=%d — the user declined some scopes at consent",
+                provider_id,
+                agent_id,
+                len(requested_scopes),
+                len(effective_scopes),
+            )
         try:
-            grant_agent(flow.provider_id, agent_id, list(agent_scopes))
+            grant_agent(provider_id, agent_id, effective_scopes)
         except Exception as e:
             raise GrantAfterConnectError(
-                flow.provider_id,
+                provider_id,
                 agent_id,
                 reason=(
                     f"{e}. The connection was saved; grant the agent manually "
                     f"from Settings → Connectors, or via `gaia connectors "
-                    f"grants grant {flow.provider_id} {agent_id} --scopes "
-                    f"{' '.join(agent_scopes)}`"
+                    f"grants grant {provider_id} {agent_id} --scopes "
+                    f"{' '.join(effective_scopes)}`"
                 ),
             ) from e
         await emit(
             "connector.grant.changed",
             {
-                "connector_id": flow.provider_id,
+                "connector_id": provider_id,
                 "agent_id": agent_id,
-                "scopes": list(agent_scopes),
+                "scopes": effective_scopes,
             },
         )
         logger.info(
             "flow: granted connector_id=%s agent_id=%s scopes=%d on connect",
-            flow.provider_id,
+            provider_id,
             agent_id,
-            len(agent_scopes),
+            len(effective_scopes),
         )
 
 
@@ -493,19 +547,55 @@ def _resolve_granted_scopes(
 
     Per RFC 6749 §5.1 the token endpoint returns ``scope`` only when the
     granted set differs from what was requested; its absence means "as
-    requested." Google's granular-consent screen lets a user untick Calendar
-    while approving Gmail, so trusting the request unconditionally (what this
-    code did before) records a connection that lies about carrying scopes the
-    user declined — every downstream coverage check then passes against a
-    fabricated record instead of catching the shortfall here, loudly, with an
-    actionable message.
+    requested." An explicitly empty ``scope`` therefore means that none of the
+    requested scopes were granted. Google's granular-consent screen lets a user
+    untick Calendar while approving Gmail, so trusting the request
+    unconditionally (what this code did before) records a connection that lies
+    about carrying scopes the user declined — every downstream coverage check
+    then passes against a fabricated record instead of catching the shortfall
+    here, loudly, with an actionable message.
     """
-    raw = payload.get("scope") or ""
-    returned = raw.split()
-    if not returned:
+    if "scope" not in payload:
         return list(requested)
+    raw = payload.get("scope")
+    if not isinstance(raw, str):
+        logger.warning(
+            "flow: token response contained a non-string scope; treating it "
+            "as no granted scopes"
+        )
+        return []
+    returned = raw.split()
     requested_set = set(requested)
     return [s for s in returned if s in requested_set]
+
+
+#: Bound on each provider-supplied field, matching OAuthProviderError's own.
+_MAX_PROVIDER_FIELD_LEN = 300
+
+
+def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
+    """The provider's RFC 6749 ``(error, error_description)``, bounded.
+
+    Never falls back to the raw body (#3875): every request these responses
+    answer carries a credential — an authorization code, a device code, a
+    refresh token — and providers echo request context back into error
+    bodies, so the body must not reach a log line or a user-visible error.
+    Non-string fields are dropped rather than coerced, so a provider that
+    nests an object under ``error`` yields no detail instead of a stringified
+    fragment of its body.
+    """
+    try:
+        payload = resp.json()
+    except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+    error = payload.get("error")
+    description = payload.get("error_description")
+    return (
+        error[:_MAX_PROVIDER_FIELD_LEN] if isinstance(error, str) else "",
+        description[:_MAX_PROVIDER_FIELD_LEN] if isinstance(description, str) else "",
+    )
 
 
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
@@ -519,19 +609,14 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         response = await client.post(provider.token_url, data=body)
 
     if response.status_code != 200:
-        # Structured, bounded fields (#2590) — the previous behaviour
-        # interpolated the ENTIRE unbounded response.text into the message,
-        # so a caller that must not echo arbitrary exception text (it might
-        # ultimately carry provider-chosen content) had no way to report the
-        # failure at all short of a bare type name.
-        try:
-            err_payload = response.json()
-        except Exception:  # noqa: BLE001 — body may be empty/non-JSON
-            err_payload = {}
+        # Structured, bounded fields only (#2590) — the request this answers
+        # carried the authorization code and PKCE verifier, so the raw body
+        # never reaches the message (#3875).
+        error, description = _structured_oauth_error(response)
         raise OAuthProviderError(
             flow.provider_id,
-            error=err_payload.get("error", ""),
-            error_description=err_payload.get("error_description", response.text[:300]),
+            error=error,
+            error_description=description,
             status_code=response.status_code,
         )
     payload = response.json()
@@ -574,7 +659,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     # email agent access without a follow-up CLI grant. Fail loudly — a
     # connection that persisted but whose grant could not be written is the
     # exact silent half-success the connect flow must not produce.
-    await _commit_grants(flow)
+    await _commit_grants(flow, granted_scopes)
 
     # Google's token endpoint does not return a ``connected_at`` field
     # (RFC 6749 has no such concept) — record the local wall-clock at
@@ -637,6 +722,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -647,7 +733,8 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # rejects it — under the split, that means it was registered for
         # "microsoft" (consumers) but connected via "microsoft_work"
         # (organizations, or a pinned Directory tenant id). Name the
-        # connector to use instead, never an env var.
+        # connector to use instead, never an env var. Membership test only —
+        # the body is matched against, never surfaced.
         if "AADSTS9002346" in resp.text:
             other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
@@ -665,9 +752,13 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # all (D6); the only tenant knob left is microsoft_work's optional
         # Directory (tenant) ID setup field.
         client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
+        # Structured, bounded fields only — never the raw body (#3875).
+        error, description = _structured_oauth_error(resp)
+        detail = description or error
+        reason = f" ({detail})" if detail else ""
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"{resp.status_code}{reason}. Check the client id "
             f"({client_id_env}), or the Directory (tenant) ID setup field if "
             f"you set one. See docs/connectors/microsoft.mdx."
         )
@@ -714,6 +805,9 @@ async def poll_device_flow(
     scopes_list = resolve_or_reject_empty_scopes(
         provider_id, scopes, provider.default_scopes
     )
+    # An SDK caller can reach poll_ without going through start_, and these
+    # scopes are what save_connection records.
+    _reject_scopes_outside_catalog(provider_id, scopes_list)
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)
@@ -724,11 +818,7 @@ async def poll_device_flow(
             if resp.status_code == 200:
                 payload = resp.json()
                 break
-            try:
-                err_payload = resp.json()
-            except Exception:  # noqa: BLE001 — body may be empty/non-JSON
-                err_payload = {}
-            err = err_payload.get("error", "")
+            err, err_description = _structured_oauth_error(resp)
             if err == "authorization_pending":
                 pass
             elif err == "slow_down":
@@ -743,17 +833,15 @@ async def poll_device_flow(
                     f"Device-code sign-in for {provider_id} was declined."
                 )
             else:
-                # Structured, bounded fields (#2590) — see OAuthProviderError.
-                # This is where an admin-consent-required rejection
-                # (AADSTS65001) actually surfaces during polling; a bare
-                # ConnectorsError with the response text glued in gave
-                # classify_oauth_exception nothing to inspect.
+                # Structured, bounded fields only (#2590) — see
+                # OAuthProviderError. This is where an admin-consent-required
+                # rejection (AADSTS65001) surfaces during polling; the raw
+                # body is never used as a fallback, because this request just
+                # posted the device code (#3875).
                 raise OAuthProviderError(
                     provider_id,
                     error=err,
-                    error_description=err_payload.get(
-                        "error_description", resp.text[:300]
-                    ),
+                    error_description=err_description,
                     status_code=resp.status_code,
                 )
             if _time.monotonic() >= deadline:
@@ -786,22 +874,7 @@ async def poll_device_flow(
         account_type=account_type,
     )
 
-    if grant_agents:
-        from gaia.connectors.grants import grant_agent
-
-        for agent_id, agent_scopes in grant_agents.items():
-            try:
-                grant_agent(provider_id, agent_id, list(agent_scopes))
-            except Exception as e:
-                raise GrantAfterConnectError(
-                    provider_id,
-                    agent_id,
-                    reason=(
-                        f"{e}. Grant it manually with `gaia connectors grants "
-                        f"grant {provider_id} {agent_id} --scopes "
-                        f"{' '.join(agent_scopes)}`"
-                    ),
-                ) from e
+    await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 
     await emit(
         "connector.oauth.completed",

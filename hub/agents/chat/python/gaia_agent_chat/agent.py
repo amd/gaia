@@ -25,7 +25,7 @@ except ImportError as _watchdog_err:
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
-from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
@@ -41,6 +41,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioToolsMixin,
     BrowserToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
@@ -49,7 +50,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    is_tool_calling_model,
+    resolve_lemonade_base_url,
+)
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
@@ -62,6 +67,20 @@ from gaia.vlm.mixin import VLMToolsMixin
 # (which legitimately caches ``None``) is never mistaken for "not attempted
 # yet" and rebuilt on every access.
 _UNSET = object()
+
+# ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
+# through the child's environment, never as text inside ``-Command``. A "'" in
+# a model-supplied message would otherwise close the string literal and the
+# rest of the message would run as PowerShell. ``$env:`` reads are values, not
+# code, so ``NOTIFY_DESKTOP_PS_SCRIPT`` stays a constant no input can alter.
+NOTIFY_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
+NOTIFY_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+NOTIFY_DESKTOP_PS_SCRIPT = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "[System.Windows.Forms.MessageBox]::Show("
+    f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
+    f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
+)
 
 
 @dataclass
@@ -90,6 +109,11 @@ class ChatAgentConfig:
     show_stats: bool = False
     silent_mode: bool = False
     output_dir: Optional[str] = None
+
+    # Where agent output goes. The base Agent has always accepted this; without
+    # it on the config there is no way to hand a ChatAgent the SSE handler the
+    # OpenAI-compatible API server streams through.
+    output_handler: Optional[Any] = None
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
@@ -182,6 +206,7 @@ class ChatAgent(
     VLMToolsMixin,
     ScreenshotToolsMixin,
     SDToolsMixin,
+    AudioToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -264,12 +289,10 @@ class ChatAgent(
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
 
-        # Resolve effective base_url: config value > env var > default
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
+        # config value > env var > embedded server > packaged default. Resolved
+        # centrally: an inline default here cannot see GAIA's embedded Lemonade,
+        # which binds a port chosen at start time.
+        effective_base_url = resolve_lemonade_base_url(config.base_url)
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -347,6 +370,9 @@ class ChatAgent(
 
         # Initialize web client for browser tools (optional)
         self._web_client = None
+        # Guarded client for the inline open_url/fetch_webpage tools; built on
+        # first use (see _inline_web_client).
+        self._inline_web = None
         if config.enable_browser:
             try:
                 from gaia.web.client import WebClient
@@ -416,6 +442,7 @@ class ChatAgent(
             streaming=config.streaming,
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
+            output_handler=config.output_handler,
             debug=config.debug,
             device=config.device,
             min_context_size=(
@@ -443,9 +470,10 @@ class ChatAgent(
         # never register RAG tools and can't use this restore — never trigger
         # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
         # before evaluating it.
-        _uses_rag = "doc_rag" in get_profile_spec(
-            getattr(config, "prompt_profile", "full")
-        ).tool_groups
+        _uses_rag = (
+            "doc_rag"
+            in get_profile_spec(getattr(config, "prompt_profile", "full")).tool_groups
+        )
         if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
@@ -541,6 +569,24 @@ class ChatAgent(
     def session_manager(self, value: SessionManager) -> None:
         self._session_manager = value
 
+    def _inline_web_client(self):
+        """The SSRF-guarded ``WebClient`` behind ``open_url``/``fetch_webpage``.
+
+        Built on first use so profiles without web tools never pay for it.
+        Kept apart from ``self._web_client`` (the opt-in browser mixin's
+        client) so using these tools does not also switch ``fetch_page`` on.
+        """
+        # getattr: tests build agents via __new__ and skip __init__.
+        if getattr(self, "_inline_web", None) is None:
+            from gaia.web.client import WebClient
+
+            self._inline_web = WebClient(
+                timeout=self.config.browser_timeout,
+                max_download_size=self.config.browser_max_download_size,
+                rate_limit=self.config.browser_rate_limit,
+            )
+        return self._inline_web
+
     def _ensure_tool_loader_reset(self) -> None:
         """Bootstrap a session for a just-created agent, if none exists yet.
 
@@ -574,17 +620,22 @@ class ChatAgent(
     def _maybe_build_tool_loader(self) -> Optional[ToolLoader]:
         """Construct the semantic tool loader, or ``None`` when inactive.
 
-        Active only for the ``doc`` profile with the toggle resolved on (config
-        field, overridable by ``GAIA_DYNAMIC_TOOLS``). Returning ``None`` leaves
-        the agent on the full-registry / byte-identical legacy path.
+        Active for a profile with a :data:`PROFILE_TOOL_CONFIGS` entry (``doc``,
+        ``full``) and the toggle resolved on (config field, overridable by
+        ``GAIA_DYNAMIC_TOOLS``). Any other profile returns ``None``, leaving the
+        agent on the full-registry / byte-identical legacy path.
         """
         if not self._resolve_dynamic_tools_enabled():
             return None
-        if getattr(self.config, "prompt_profile", "full") != "doc":
+        profile_config = PROFILE_TOOL_CONFIGS.get(
+            getattr(self.config, "prompt_profile", "full")
+        )
+        if profile_config is None:
             return None
         return ToolLoader(
-            core_tools=DOC_CORE_TOOLS,
-            bundles=DOC_BUNDLES,
+            core_tools=profile_config.core,
+            bundles=profile_config.bundles,
+            optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
             embed_batch_fn=self._embed_texts_batch,
             threshold=self._resolve_dynamic_tools_threshold(),
@@ -739,12 +790,17 @@ class ChatAgent(
         return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
-        prompts = super()._get_mixin_prompts()
-        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
-        if not hasattr(self, "sd_default_model"):
-            prompts = [p for p in prompts if "Stable Diffusion" not in p]
-        return prompts
+        """Auto-discover mixin prompts, minus SD's.
+
+        ``SDToolsMixin.get_sd_system_prompt`` opens with "You are an expert
+        image generation assistant" and runs ~5K chars. It was written for the
+        standalone SD agent, where that persona was the whole job. Auto-
+        discovery pulls it in for any class composing the mixin, so on a
+        general-purpose agent it front-loads the prompt with an identity that
+        is wrong for every other turn. The procedure lives in the ``image-gen``
+        skill instead, which renders only when a turn calls for it.
+        """
+        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -849,7 +905,7 @@ No documents are currently indexed.
 - Common folders: Desktop, Documents, Downloads (under {home_dir})
 - Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
 - Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
-- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"` (WS is bytes; divide in your answer). Avoid `tasklist /V`.
 - CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
 - GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
 - Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.
@@ -1017,16 +1073,16 @@ No documents are currently indexed.
 
 **IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
+**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already
         # self-recover via the free full-registry path and are the
         # TTFT-sensitive case, so we don't tax them with the menu. Lives in
         # this stable prefix (before the volatile tools tail) → no KV thrash.
-        # Only ever non-empty for the "doc" profile — no other profile's
-        # ``prompt_blocks`` names "load_tools_menu", and ``tool_loader`` is
-        # only ever built for "doc" (``_maybe_build_tool_loader``).
+        # Non-empty only where both halves line up: the profile's
+        # ``prompt_blocks`` names "load_tools_menu" and ``_maybe_build_tool_loader``
+        # built a loader for it (the "doc" and "full" profiles).
         load_tools_menu = ""
         loader = getattr(self, "tool_loader", None)
         if loader is not None and is_tool_calling_model(
@@ -1297,9 +1353,9 @@ No documents are currently indexed.
         self._register_loop_control_tools()  # set_loop_state, request_user_input
 
         # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
-        # dynamic loader is active, so the default-off doc path stays
-        # byte-identical. It is in DOC_CORE_TOOLS, so once registered it renders
-        # in both prompt paths every active turn (cap- and eviction-exempt).
+        # dynamic loader is active, so the loader-off path stays byte-identical.
+        # It is in every profile's CORE set, so once registered it renders in
+        # both prompt paths every active turn (cap- and eviction-exempt).
         if self.tool_loader is not None:
 
             @tool
@@ -1433,10 +1489,12 @@ No documents are currently indexed.
                         timeout=timeout,
                         check=False,
                     )
+                    from gaia.agents.base.artifacts import retain_excerpt
+
                     return {
                         "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
+                        "stdout": retain_excerpt(self, r.stdout, 8000),
+                        "stderr": retain_excerpt(self, r.stderr, 2000),
                         "return_code": r.returncode,
                         "has_errors": r.returncode != 0,
                         "duration_seconds": round(time.monotonic() - start, 2),
@@ -1453,8 +1511,10 @@ No documents are currently indexed.
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
         try:
+            # getattr: tools can register from super().__init__(), before
+            # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=getattr(self, "_base_url", "http://localhost:13305/api/v1")
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"
@@ -1466,12 +1526,30 @@ No documents are currently indexed.
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
         if getattr(self.config, "enable_sd_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            # Absolute, under the user's home. The mixin default is relative to
+            # cwd, which for a daemon-launched sidecar is the package directory.
+            sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
             try:
-                self.init_sd()
-                logger.debug("SD tools registered (generate_image, list_sd_models)")
-            except Exception as _sd_err:
+                self.init_sd(output_dir=str(sd_output_dir))
                 logger.debug(
-                    "SD tools not available (SD model not loaded): %s", _sd_err
+                    "SD tools registered (generate_image, list_sd_models, "
+                    "get_generation_history), output=%s",
+                    sd_output_dir,
+                )
+            except OSError as _sd_err:
+                # Only the output-dir mkdir can fail here — the SD client makes
+                # no network call at construction — so a down server is not a
+                # trigger. Anything other than OSError is a bug and propagates.
+                logger.warning(
+                    "Image generation unavailable: could not create the SD "
+                    "output directory %s (%s). Fix that directory's "
+                    "permissions, or point GAIA_CONFIG_DIR somewhere writable. "
+                    "Every other tool is unaffected.",
+                    sd_output_dir,
+                    _sd_err,
+                    exc_info=True,
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
@@ -1482,21 +1560,25 @@ No documents are currently indexed.
 
             @tool
             def open_url(url: str) -> dict:
-                """Open a URL in the system's default web browser.
+                """Open a public URL in the system's default web browser.
+
+                Refuses private, loopback, and link-local addresses.
 
                 Args:
-                    url: The URL to open (must start with http:// or https://)
+                    url: Public http:// or https:// URL to open
 
                 Returns:
                     Dictionary with status and confirmation message
                 """
                 import webbrowser
 
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
+                try:
+                    # Same SSRF screen as fetch_webpage: an injected link to a
+                    # loopback admin page would open with the user's cookies.
+                    self._inline_web_client().validate_url(url)
+                except (ValueError, OSError, ImportError) as e:
+                    logger.warning("open_url refused %s: %s", url, e)
+                    return {"status": "error", "url": url, "error": str(e)}
                 try:
                     webbrowser.open(url)
                     return {
@@ -1517,15 +1599,10 @@ No documents are currently indexed.
                 Returns:
                     Dictionary with status, content (or html), and url
                 """
-                import httpx
-
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
                 try:
-                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    # WebClient refuses private/loopback/link-local targets,
+                    # re-checks after DNS and on every redirect hop.
+                    resp = self._inline_web_client().get(url)
                     resp.raise_for_status()
                     if extract_text:
                         try:
@@ -1551,7 +1628,8 @@ No documents are currently indexed.
                         "html": resp.text[:8000],
                         "truncated": len(resp.text) > 8000,
                     }
-                except Exception as e:
+                except Exception as e:  # tool boundary -> structured error
+                    logger.warning("fetch_webpage failed for %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
 
         @tool
@@ -1651,18 +1729,20 @@ No documents are currently indexed.
                     try:
                         import subprocess
 
-                        ps_cmd = (
-                            f"Add-Type -AssemblyName System.Windows.Forms; "
-                            f"[System.Windows.Forms.MessageBox]::Show('{message}', '{title}')"
-                        )
                         subprocess.Popen(
                             [
                                 "powershell",
+                                "-NoProfile",
                                 "-WindowStyle",
                                 "Hidden",
                                 "-Command",
-                                ps_cmd,
+                                NOTIFY_DESKTOP_PS_SCRIPT,
                             ],
+                            env={
+                                **os.environ,
+                                NOTIFY_MESSAGE_ENV_VAR: message,
+                                NOTIFY_TITLE_ENV_VAR: title,
+                            },
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
@@ -1947,6 +2027,7 @@ No documents are currently indexed.
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._register_output_reader()
         self._snapshot_tools()
         if spec.generic_file_ops:
             _chat_exclude = {
@@ -2351,6 +2432,11 @@ No documents are currently indexed.
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if getattr(self, "_inline_web", None):
+                self._inline_web.close()
+        except Exception as e:
+            logger.error(f"Error closing inline web client during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()

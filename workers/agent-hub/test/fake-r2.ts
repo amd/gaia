@@ -53,6 +53,13 @@ function makeBody(obj: StoredObject) {
   };
 }
 
+/** hex -> ArrayBuffer, matching how R2 returns stored checksums. */
+function hexToBuffer(hex: string): ArrayBuffer {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out.buffer;
+}
+
 export class FakeR2 {
   private store = new Map<string, StoredObject>();
 
@@ -71,6 +78,10 @@ export class FakeR2 {
       }
     }
     const obj: StoredObject = { key, bytes, contentType, uploaded: new Date() };
+    // R2 records a whole-object SHA-256 only when one was supplied (binding
+    // `sha256` option, or x-amz-checksum-sha256 on a single-part S3 PUT). A
+    // multipart upload has none — modelled by simply not setting it.
+    if (options?.sha256) (obj as StoredObject & { sha256?: string }).sha256 = options.sha256;
     this.store.set(key, obj);
     return makeBody(obj);
   }
@@ -86,7 +97,15 @@ export class FakeR2 {
     const obj = this.store.get(key);
     if (!obj) return null;
     const body = makeBody(obj);
-    return { key: body.key, size: body.size, httpEtag: body.httpEtag, uploaded: body.uploaded };
+    const sha = (obj as StoredObject & { sha256?: string }).sha256;
+    return {
+      key: body.key,
+      size: body.size,
+      httpEtag: body.httpEtag,
+      uploaded: body.uploaded,
+      // Real R2 hands back raw bytes, not hex — the Worker hex-encodes them.
+      checksums: sha ? { sha256: hexToBuffer(sha) } : {},
+    };
   }
 
   async delete(key: string): Promise<void> {
@@ -152,6 +171,41 @@ export function makeEnv(overrides?: { tokens?: unknown; maxBytes?: string }): {
 }
 
 /** Build a POST /publish multipart request. */
+/**
+ * A by-reference publish: CI has already PUT the bytes into R2 over the S3 API,
+ * and the Worker is only asked to verify and record them.
+ */
+export function publishByRefRequest(opts: {
+  token?: string;
+  manifestYaml: string;
+  filename: string;
+  sha256: string;
+  size: number;
+  contentType?: string;
+  readme?: string;
+  changelog?: string;
+}): Request {
+  const form = new FormData();
+  form.set("manifest", opts.manifestYaml);
+  if (opts.readme !== undefined) form.set("readme", opts.readme);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  form.set("artifact_ref_filename", opts.filename);
+  form.set("artifact_ref_sha256", opts.sha256);
+  form.set("artifact_ref_size", String(opts.size));
+  if (opts.contentType) form.set("artifact_ref_content_type", opts.contentType);
+  return new Request("https://hub.amd-gaia.ai/publish", {
+    method: "POST",
+    headers: { authorization: `Bearer ${opts.token ?? "tok_amd"}` },
+    body: form,
+  });
+}
+
+/** sha256 hex over bytes, for tests that stage an object then publish it. */
+export async function sha256Of(bytes: Uint8Array): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function publishRequest(opts: {
   token?: string;
   manifestYaml: string;

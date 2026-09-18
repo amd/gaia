@@ -3,7 +3,7 @@
 
 """Dummy MCP server fixture.
 
-The server speaks stdio MCP via FastMCP and records each tool call to a JSONL
+The server speaks stdio MCP via MCPServer and records each tool call to a JSONL
 file when ``GAIA_DUMMY_MCP_LOG`` is set. It is intentionally dependency-light
 and deterministic so installer tests do not need npx, network, or credentials.
 
@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 
 def _record_tool_call(tool: str, arguments: Dict[str, Any], result: Any) -> None:
@@ -38,9 +38,9 @@ def _record_tool_call(tool: str, arguments: Dict[str, Any], result: Any) -> None
         )
 
 
-def create_dummy_mcp_server() -> FastMCP:
+def create_dummy_mcp_server() -> MCPServer:
     """Create the deterministic dummy MCP server."""
-    mcp = FastMCP(name="GAIA Dummy MCP")
+    mcp = MCPServer(name="GAIA Dummy MCP")
 
     @mcp.tool()
     def echo(message: str) -> str:

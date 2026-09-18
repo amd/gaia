@@ -13,10 +13,12 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'
@@ -24,6 +26,8 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   merge_group:
@@ -40,10 +44,8 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    runs-on:
-      - self-hosted
-      - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 30
@@ -104,6 +106,10 @@ jobs:
             # Use --tb=long for full traceback, -rA for all test output summary
             pytest tests/test_lemonade_embeddings.py -v -s --tb=long -rA --log-cli-level=DEBUG
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            Write-Host "`n=== Checking live Lemonade health schema ==="
+            pytest tests/integration/test_lemonade_health_schema.py -v --tb=long -rA
+            if ($LASTEXITCODE -ne 0) { throw "Health schema tests failed with exit code $LASTEXITCODE" }
         } finally {
             if ($env:LEMONADE_PROCESS_ID) {
                 Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="

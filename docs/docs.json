@@ -86,18 +86,17 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
-                      "guides/browse",
-                      "guides/analyze"
+                      "guides/transcription"
                     ]
                   },
                   {
                     "group": "Developer Tools",
                     "pages": [
-                      "guides/code",
                       "guides/code-index",
-                      "guides/docker"
+                      "guides/project-map"
                     ]
                   },
                   {
@@ -105,17 +104,7 @@
                     "pages": [
                       "guides/email",
                       "guides/email-integration",
-                      "guides/telegram-adapter",
-                      "guides/jira"
-                    ]
-                  },
-                  {
-                    "group": "Specialized Agents",
-                    "pages": [
-                      "guides/sd",
-                      "guides/blender",
-                      "guides/emr",
-                      "guides/routing"
+                      "guides/telegram-adapter"
                     ]
                   },
                   {
@@ -169,33 +158,11 @@
                     ]
                   },
                   {
-                    "group": "Image Generation Agent",
-                    "pages": [
-                      "playbooks/sd-agent/index"
-                    ]
-                  },
-                  {
                     "group": "Document Q&A Agent",
                     "pages": [
                       "playbooks/chat-agent/part-1-getting-started",
                       "playbooks/chat-agent/part-2-advanced-features",
                       "playbooks/chat-agent/part-3-deployment"
-                    ]
-                  },
-                  {
-                    "group": "Code Generation Agent",
-                    "pages": [
-                      "playbooks/code-agent/part-1-introduction",
-                      "playbooks/code-agent/part-2-app-creation",
-                      "playbooks/code-agent/part-3-validation-building"
-                    ]
-                  },
-                  {
-                    "group": "Medical Intake Agent",
-                    "pages": [
-                      "playbooks/emr-agent/part-1-getting-started",
-                      "playbooks/emr-agent/part-2-dashboard",
-                      "playbooks/emr-agent/part-3-architecture"
                     ]
                   },
                   {
@@ -245,7 +212,6 @@
                   {
                     "group": "Agents",
                     "pages": [
-                      "sdk/agents/routing",
                       "sdk/agents/specialized",
                       "sdk/agents/talk"
                     ]
@@ -254,7 +220,6 @@
                     "group": "Mixins & Utilities",
                     "pages": [
                       "sdk/mixins/tool-mixins",
-                      "sdk/mixins/code-mixins",
                       "sdk/mixins/database-mixin",
                       "sdk/utils/file-watcher"
                     ]
@@ -263,7 +228,6 @@
                     "group": "Guides",
                     "pages": [
                       "sdk/packaging",
-                      "sdk/applications",
                       "sdk/configuration",
                       "sdk/testing",
                       "sdk/performance-analysis-plotter",
@@ -325,9 +289,6 @@
           {
             "group": "Code Infrastructure",
             "pages": [
-              "spec/code-models",
-              "spec/orchestrator",
-              "spec/validators",
               "spec/prompts"
             ]
           },
@@ -335,22 +296,11 @@
             "group": "Tool Mixins",
             "pages": [
               "spec/database-mixin",
-              "spec/cli-tools-mixin",
-              "spec/code-tools-mixin",
               "spec/file-io-tools-mixin",
-              "spec/validation-tools-mixin",
-              "spec/error-fixing-mixin",
-              "spec/testing-mixin",
               "spec/file-tools-mixin",
               "spec/rag-tools-mixin",
               "spec/shell-tools-mixin",
               "spec/file-search-mixin",
-              "spec/code-formatting-mixin",
-              "spec/project-management-mixin",
-              "spec/prisma-tools-mixin",
-              "spec/typescript-tools-mixin",
-              "spec/external-tools-mixin",
-              "spec/web-tools-mixin",
               "spec/browser-tools",
               "spec/file-system-agent"
             ]
@@ -365,12 +315,7 @@
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
-              "spec/routing-agent",
               "spec/chat-agent",
-              "spec/docker-agent",
-              "spec/jira-agent",
-              "spec/blender-agent",
-              "spec/summarizer-app",
               "spec/component-status"
             ]
           }
@@ -400,6 +345,7 @@
                   "eval"
                 ]
               },
+              "reference/session-analytics",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -430,6 +376,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"
@@ -455,6 +402,7 @@
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]
@@ -502,6 +450,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.24.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
               "releases/v0.21.2",
@@ -562,7 +511,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.23.0 \u00b7 Lemonade 11.5.0",
+        "label": "v0.24.1 \u00b7 Lemonade 11.8.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

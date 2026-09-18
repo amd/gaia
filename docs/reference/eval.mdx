@@ -1177,15 +1177,8 @@ The evaluation framework supports **combined prompt** as an optional optimizatio
 - **Quality Trade-off**: May produce less focused results for individual styles
 - **⚠️ Model Limitations**: Smaller LLMs (e.g., less than 3B parameters) may struggle with complex combined prompts, leading to incomplete outputs or format errors
 
-To enable combined prompt (for cost/speed optimization):
-
-CLI: Use `--combined-prompt` flag to enable optimization
-
-```bash
-gaia summarize -i meeting.txt --styles all --combined-prompt
-```
-
-Config: Set `"combined_prompt": true` in parameters to enable
+To enable combined prompt (for cost/speed optimization), set
+`"combined_prompt": true` in parameters:
 
 ```json
 {
@@ -1433,6 +1426,14 @@ For the new scenario-based eval framework that tests the live Agent UI end-to-en
 - [Getting Started Guide](/guides/eval) — run your first eval in 5 minutes
 - [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
 - [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
+
+### Require a complete comparison
+
+Use `gaia eval agent --compare BASELINE CURRENT --require-complete` for a local
+pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
+measurement, as well as for measured regressions. Without this opt-in, incomplete
+measurements remain visible as warnings and the comparison judges measured results.
+
 
 ---
 

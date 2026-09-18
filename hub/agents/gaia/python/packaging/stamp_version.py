@@ -128,6 +128,15 @@ def build_rules() -> list[Rule]:
             "baseUrl",
             required=True,
         ),
+        # The SIDECAR lane's componentVersion — anchored on "sidecar" so the tui
+        # lane, which tracks terminal-hub and not this package, is never touched.
+        Rule(
+            "binaries.lock.json (sidecar componentVersion)",
+            NPM_ROOT / "binaries.lock.json",
+            re.compile(r'("sidecar"\s*:\s*\{\s*"componentVersion":\s*")([^"]+)(")'),
+            "componentVersion",
+            required=True,
+        ),
         # Optional: shields.io static version badges in the shipped READMEs.
         *(
             Rule(

@@ -10,6 +10,7 @@ so the agent loop's response parser works unchanged against either backend.
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -42,6 +43,19 @@ _PASSTHROUGH_KWARGS = frozenset({"max_tokens", "stop_sequences", "metadata", "ti
 #: models, so small caps sized for Lemonade truncate mid-answer.
 _MIN_MAX_TOKENS = 8192
 
+#: Anthropic prompt caching is opt-in: without a ``cache_control`` breakpoint
+#: nothing is ever cached. Anthropic renders ``tools`` -> ``system`` ->
+#: ``messages``, so a breakpoint at the end of the system block covers the tool
+#: schemas *and* the system prompt — the whole fixed prefill an agent re-sends
+#: on every call of every turn.
+#:
+#: Two breakpoints, not one, because caching is a prefix match with no partial
+#: credit: with only the system marker, one byte of drift anywhere in the
+#: system prompt (a memory confidence score, a skill body swapping in) would
+#: throw away the tool schemas as well. The second marker after the last tool
+#: keeps that segment readable whenever the tools themselves are unchanged.
+_CACHE_CONTROL = {"type": "ephemeral"}
+
 _FINISH_REASON_MAP = {
     "tool_use": "tool_calls",
     "end_turn": "stop",
@@ -58,6 +72,71 @@ def _require_anthropic():
             '(or the eval extras: uv pip install -e ".[eval]")'
         )
     return anthropic
+
+
+#: Usage counters read off every response. ``input_tokens`` is the uncached
+#: remainder — the two cache fields carry the rest of the prompt.
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _usage_field(usage: Any, name: str) -> int:
+    """One usage counter as a non-negative int. Absent or non-numeric reads 0 —
+    older API versions omit the cache fields entirely."""
+    value = getattr(usage, name, 0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+class _UsageTotals:
+    """Usage accumulated across a stream's events.
+
+    ``message_start`` is the only event carrying the cache counters;
+    ``message_delta`` later reports the final ``output_tokens``. A counter is
+    only ever replaced by a positive value, so a later event that omits a field
+    (or reports it as 0) cannot erase what an earlier one established.
+    """
+
+    def __init__(self) -> None:
+        for field in _USAGE_FIELDS:
+            setattr(self, field, 0)
+
+    def absorb(self, usage: Any) -> None:
+        if usage is None:
+            return
+        for field in _USAGE_FIELDS:
+            value = _usage_field(usage, field)
+            if value:
+                setattr(self, field, value)
+
+
+def _cached_system(system: str) -> List[dict]:
+    """System prompt as one text block carrying the cache breakpoint.
+
+    Deliberately a block-level breakpoint rather than top-level
+    ``cache_control=`` on ``messages.create()``: top-level auto-placement marks
+    the *last* cacheable block, which in an agent loop is the newest user turn
+    or tool result — content that differs on every call, so each request would
+    write a fresh entry and read almost nothing. Marking the system block pins
+    the boundary at the tools+system prefix, which is byte-identical across
+    calls and turns.
+    """
+    return [{"type": "text", "text": system, "cache_control": dict(_CACHE_CONTROL)}]
+
+
+def _cache_last_tool(tools: List[dict]) -> List[dict]:
+    """Breakpoint on the final tool definition — the end of the tools segment.
+
+    Copies rather than mutating: the agent hands the same list to every call.
+    """
+    marked = list(tools)
+    marked[-1] = {**marked[-1], "cache_control": dict(_CACHE_CONTROL)}
+    return marked
 
 
 class ClaudeProvider(LLMClient):
@@ -113,6 +192,8 @@ class ClaudeProvider(LLMClient):
             )
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
+        self._tool_name_map: Dict[str, str] = {}
 
     @property
     def provider_name(self) -> str:
@@ -128,46 +209,206 @@ class ClaudeProvider(LLMClient):
                 return candidate
         return DEFAULT_CLAUDE_MODEL
 
-    @staticmethod
-    def _to_anthropic_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+    #: Anthropic's tool-name contract. GAIA names can be wider — skill tools are
+    #: namespaced ``<skill>/<tool>`` and the ``/`` 400s the whole request — so
+    #: names are sanitized outbound and mapped back on returned tool_use blocks.
+    _TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+    def _api_tool_name(self, name: str) -> str:
+        if self._TOOL_NAME_RE.fullmatch(name):
+            return name
+        return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
+
+    def _restore_tool_name(self, api_name: str) -> str:
+        if api_name not in self._tool_name_map:
+            # Every outbound name is registered, so a miss means request and
+            # response were shaped against different tool sets. The message
+            # reaches the user verbatim, so the diagnostic detail goes to the
+            # log rather than into the exception.
+            logger.error(
+                "Tool %r is not in the outbound name map. The map is rebuilt "
+                "per request in _to_anthropic_tools, so a miss means this "
+                "response was parsed against a different tool set than the one "
+                "sent — e.g. an overlapping chat() call on this provider "
+                "instance. Registered: %s",
+                api_name,
+                sorted(self._tool_name_map),
+            )
+            raise RuntimeError(
+                f"Claude returned tool {api_name!r}, which was not in the tool "
+                "set sent with this request."
+            )
+        return self._tool_name_map[api_name]
+
+    def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
         """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
+        self._tool_name_map = {}
         if not tools:
             return None
         converted = []
         for tool in tools:
             fn = tool.get("function") if tool.get("type") == "function" else None
-            if fn is None:
-                # Already Anthropic-shaped (has name + input_schema) — pass through.
-                converted.append(tool)
-                continue
-            converted.append(
-                {
-                    "name": fn["name"],
+            entry = (
+                dict(tool)  # already Anthropic-shaped (name + input_schema)
+                if fn is None
+                else {
+                    # .get so a nameless entry hits the guard below rather
+                    # than dying on a bare KeyError.
+                    "name": fn.get("name"),
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters")
                     or {"type": "object", "properties": {}},
                 }
             )
+            original = entry.get("name")
+            if not original:
+                raise ValueError(
+                    "Tool definition has no name: "
+                    f"{tool!r}. Anthropic requires a name on every tool entry "
+                    "(custom, server, and client-side alike), and GAIA needs "
+                    "one to route the model's call back to a registered tool."
+                )
+            api_name = self._api_tool_name(original)
+            # Register identity names too: `write/file` sanitizes onto the
+            # builtin `write_file`, and only a full map can see that clash.
+            if api_name in self._tool_name_map:
+                clash = self._tool_name_map[api_name]
+                raise ValueError(
+                    f"Tool names {clash!r} and {original!r} both map to "
+                    f"{api_name!r} for the Anthropic API — the model's call "
+                    "could not be routed back unambiguously. Rename one."
+                )
+            self._tool_name_map[api_name] = original
+            entry["name"] = api_name
+            converted.append(entry)
         return converted
 
     def _split_system(self, messages: List[dict]) -> tuple:
-        """Hoist role=system entries out of the array into the ``system`` param."""
+        """Hoist system text and translate OpenAI tool history for Anthropic."""
         system_parts: List[str] = []
         cleaned: List[dict] = []
-        for msg in messages:
+        index = 0
+        while index < len(messages):
+            msg = messages[index]
             role = msg.get("role", "user")
             content = msg.get("content")
             if role == "system":
                 if content:
                     system_parts.append(str(content))
+                index += 1
+                continue
+            if role == "assistant" and msg.get("tool_calls"):
+                blocks = self._tool_use_content(msg)
+                expected_ids = {
+                    block["id"] for block in blocks if block["type"] == "tool_use"
+                }
+                result_messages = []
+                result_index = index + 1
+                while result_index < len(messages) and expected_ids:
+                    result = messages[result_index]
+                    if result.get("role") != "tool":
+                        break
+                    tool_call_id = result.get("tool_call_id")
+                    if tool_call_id not in expected_ids:
+                        break
+                    result_messages.append(result)
+                    expected_ids.remove(tool_call_id)
+                    result_index += 1
+                if not expected_ids:
+                    cleaned.append({"role": "assistant", "content": blocks})
+                    for result in result_messages:
+                        self._append_tool_result(cleaned, result)
+                    index = result_index
+                    continue
+                raise ValueError(
+                    "Claude tool-call history requires a complete, immediately "
+                    "adjacent result group; missing tool_call_id(s): "
+                    + ", ".join(sorted(expected_ids))
+                    + ". Append every role='tool' result directly after the "
+                    "assistant turn that requested it — any user/system message "
+                    "injected between them must come after the group."
+                )
+            if role == "tool":
+                cleaned.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[Tool result: {msg.get('name', 'tool')}] "
+                            f"{msg.get('content', '')}"
+                        ),
+                    }
+                )
+                index += 1
                 continue
             if content is None or content == "":
                 # Anthropic rejects empty message content outright.
                 logger.debug("Dropping empty %s message for Claude request", role)
+                index += 1
                 continue
             cleaned.append({"role": role, "content": content})
+            index += 1
         system = "\n\n".join(system_parts) if system_parts else self._system_prompt
         return system, cleaned
+
+    @staticmethod
+    def _tool_use_content(message: dict) -> List[dict]:
+        content = message.get("content")
+        blocks = []
+        if content:
+            if isinstance(content, list):
+                blocks.extend(content)
+            else:
+                blocks.append({"type": "text", "text": str(content)})
+        for tool_call in message["tool_calls"]:
+            function = tool_call.get("function") or {}
+            tool_call_id = tool_call.get("id")
+            name = function.get("name")
+            if not tool_call_id or not name:
+                raise ValueError("Claude tool calls require both an id and a name.")
+            arguments = function.get("arguments") or "{}"
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Claude tool call {tool_call_id!r} has invalid JSON arguments."
+                    ) from exc
+            if not isinstance(arguments, dict):
+                raise ValueError(
+                    f"Claude tool call {tool_call_id!r} arguments must decode to an object."
+                )
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_call_id,
+                    "name": name,
+                    "input": arguments,
+                }
+            )
+        return blocks
+
+    @staticmethod
+    def _append_tool_result(cleaned: List[dict], message: dict) -> None:
+        tool_call_id = message.get("tool_call_id")
+        if not tool_call_id:
+            raise ValueError("Claude tool results require a tool_call_id.")
+        block = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": message.get("content") or "[tool returned no output]",
+        }
+        if (
+            cleaned
+            and cleaned[-1]["role"] == "user"
+            and isinstance(cleaned[-1]["content"], list)
+            and all(
+                isinstance(item, dict) and item.get("type") == "tool_result"
+                for item in cleaned[-1]["content"]
+            )
+        ):
+            cleaned[-1]["content"].append(block)
+            return
+        cleaned.append({"role": "user", "content": [block]})
 
     def _build_params(
         self,
@@ -194,11 +435,11 @@ class ClaudeProvider(LLMClient):
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
         params["max_tokens"] = max(int(params.get("max_tokens") or 0), _MIN_MAX_TOKENS)
-        if system:
-            params["system"] = system
         anthropic_tools = self._to_anthropic_tools(tools)
         if anthropic_tools:
-            params["tools"] = anthropic_tools
+            params["tools"] = _cache_last_tool(anthropic_tools)
+        if system:
+            params["system"] = _cached_system(system)
         return params
 
     # ── error translation ───────────────────────────────────────────────
@@ -283,18 +524,14 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": block.name,
+                            "name": self._restore_tool_name(block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
                 )
             # thinking / redacted_thinking blocks are never answer text.
 
-        self._capture_usage(
-            getattr(response.usage, "input_tokens", 0),
-            getattr(response.usage, "output_tokens", 0),
-            elapsed,
-        )
+        self._capture_usage(response.usage, elapsed)
 
         stop_reason = response.stop_reason or ""
         if stop_reason == "refusal":
@@ -324,20 +561,24 @@ class ClaudeProvider(LLMClient):
         text_parts: List[str] = []
         tool_slots: Dict[int, dict] = {}
         stop_reason = ""
-        input_tokens = 0
-        output_tokens = 0
+        usage_totals = _UsageTotals()
         try:
             for event in events:
                 etype = event.type
                 if etype == "message_start":
-                    input_tokens = getattr(event.message.usage, "input_tokens", 0)
+                    # The only event carrying the cache counters; message_delta
+                    # then supersedes output_tokens with the final figure.
+                    usage_totals.absorb(getattr(event.message, "usage", None))
                 elif etype == "content_block_start":
                     block = event.content_block
                     if block.type == "tool_use":
                         tool_slots[event.index] = {
                             "id": block.id,
                             "type": "function",
-                            "function": {"name": block.name, "arguments": ""},
+                            "function": {
+                                "name": self._restore_tool_name(block.name),
+                                "arguments": "",
+                            },
                         }
                 elif etype == "content_block_delta":
                     delta = event.delta
@@ -353,16 +594,12 @@ class ClaudeProvider(LLMClient):
                     stop_reason = (
                         getattr(event.delta, "stop_reason", None) or stop_reason
                     )
-                    usage = getattr(event, "usage", None)
-                    if usage is not None:
-                        output_tokens = (
-                            getattr(usage, "output_tokens", 0) or output_tokens
-                        )
+                    usage_totals.absorb(getattr(event, "usage", None))
         except Exception as exc:
             self._raise_actionable(exc)
             raise  # unreachable — _raise_actionable always raises
 
-        self._capture_usage(input_tokens, output_tokens, time.monotonic() - start)
+        self._capture_usage(usage_totals, time.monotonic() - start)
 
         if stop_reason == "refusal":
             raise RuntimeError(
@@ -381,13 +618,27 @@ class ClaudeProvider(LLMClient):
                 }
             )
 
-    def _capture_usage(
-        self, input_tokens: int, output_tokens: int, elapsed: float
-    ) -> None:
+    def _capture_usage(self, usage: Any, elapsed: float) -> None:
+        """Record one call's usage, cache counters included.
+
+        ``usage.input_tokens`` from Anthropic is the *uncached remainder*, not
+        the prompt size: the prompt is that plus the cached reads and writes.
+        Reporting the remainder as ``prompt_tokens`` would make a working cache
+        look like the prompt had shrunk by 90%.
+        """
+        uncached = _usage_field(usage, "input_tokens")
+        cache_read = _usage_field(usage, "cache_read_input_tokens")
+        cache_write = _usage_field(usage, "cache_creation_input_tokens")
+        output_tokens = _usage_field(usage, "output_tokens")
+        prompt_tokens = uncached + cache_read + cache_write
+
         self._last_usage = {
-            "prompt_tokens": int(input_tokens or 0),
-            "completion_tokens": int(output_tokens or 0),
-            "total_tokens": int(input_tokens or 0) + int(output_tokens or 0),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
+            "uncached_input_tokens": uncached,
             "tokens_per_second": (
                 round(output_tokens / elapsed, 2)
                 if elapsed > 0 and output_tokens

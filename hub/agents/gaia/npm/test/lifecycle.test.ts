@@ -6,6 +6,7 @@
  * tests exercise real process management rather than a mock.
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
@@ -16,21 +17,29 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   BinaryNotFoundError,
+  GaiaError,
   HealthTimeoutError,
+  IntegrityError,
+  MalformedResponseError,
+  PortInUseError,
+  SidecarExitedError,
   VersionMismatchError,
 } from "../src/errors.js";
 import {
   API_VERSION,
   RESERVED_PORT,
   checkVersion,
+  health,
   resolveSidecarPath,
   resolveTuiPath,
   runTui,
   shutdown,
   spawnSidecar,
   startSidecar,
+  tuiExecutableName,
   waitForHealth,
 } from "../src/lifecycle.js";
+import { makeLock } from "./helpers.js";
 
 let tmp: string;
 const servers: net.Server[] = [];
@@ -62,6 +71,67 @@ async function stubSidecar(
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const addr = server.address() as net.AddressInfo;
   return `http://127.0.0.1:${addr.port}`;
+}
+
+/**
+ * A stub sidecar on a known port, with per-route delays so a race can be pinned
+ * down deterministically. Returns the port so a spawn can be aimed at it.
+ */
+async function stubSidecarOnPort(
+  opts: { versionDelayMs?: number; healthDelayMs?: number; healthBody?: unknown } = {},
+): Promise<{ baseUrl: string; port: number }> {
+  const http = await import("node:http");
+  const server = http.createServer((req, res) => {
+    const send = (v: unknown, delayMs = 0): void => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(v));
+      }, delayMs);
+    };
+    if (req.url === "/health")
+      return send(
+        opts.healthBody ?? { status: "ok", service: "not-ours" },
+        opts.healthDelayMs ?? 0,
+      );
+    if (req.url === "/version")
+      return send({ apiVersion: API_VERSION, agentVersion: "9.9.9" }, opts.versionDelayMs ?? 0);
+    res.writeHead(404).end();
+  });
+  servers.push(server);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as net.AddressInfo;
+  return { baseUrl: `http://127.0.0.1:${port}`, port };
+}
+
+/** An HTTP server that answers 200 with a body that is NOT JSON. */
+async function stubHtml(): Promise<string> {
+  const http = await import("node:http");
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<html><body>502 Bad Gateway (corporate proxy)</body></html>");
+  });
+  servers.push(server);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+}
+
+/**
+ * A binary that is guaranteed to die instantly on every platform: `node` rejects
+ * the `--host`/`--port` that spawnSidecar puts first ("bad option") and exits 9
+ * in ~25ms. Unlike `fakeBinary` this needs no shell wrapper, so it runs on
+ * Windows too.
+ */
+const diesInstantly = (): string => process.execPath;
+
+const sleepFor = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** A port that is free right now — bound, read, and released. */
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as net.AddressInfo;
+  await new Promise((r) => server.close(r));
+  return port;
 }
 
 /** Write a Node script and return its path (not itself spawnable). */
@@ -192,6 +262,214 @@ posixOnly("shutdown", () => {
   }, 20_000);
 });
 
+describe("startSidecar vs a FOREIGN server already on the port", () => {
+  // The real conflict: a second `gaia serve` finds 8141 already bound. The
+  // incumbent answers /health in milliseconds while our own child — a ~200MB
+  // one-file build — is still unpacking, so it is very much ALIVE at every
+  // post-spawn check. Only a pre-flight probe catches that ordering; the
+  // post-spawn backstops below cover the narrower window after it.
+  it("refuses the start, naming the port, before anything is spawned", async () => {
+    const { port } = await stubSidecarOnPort({ versionDelayMs: 750 });
+    const p = startSidecar({
+      binaryPath: diesInstantly(),
+      port,
+      autoCleanup: false,
+      healthTimeoutMs: 20_000,
+    });
+    await expect(p).rejects.toBeInstanceOf(PortInUseError);
+    await expect(p).rejects.toThrow(new RegExp(`port ${port}`));
+    await expect(p).rejects.toThrow(/already in use/);
+  }, 30_000);
+
+  it("never spawns a child when the port is taken", async () => {
+    // A binary that does NOT exist: spawnSidecar throws BinaryNotFoundError the
+    // moment it is reached. Getting PortInUseError instead proves the port check
+    // ran first — no process was created, and none could have been.
+    const { port } = await stubSidecarOnPort();
+    const p = startSidecar({
+      binaryPath: path.join(tmp, "never-created"),
+      port,
+      autoCleanup: false,
+    });
+    await expect(p).rejects.toBeInstanceOf(PortInUseError);
+    await expect(p).rejects.not.toBeInstanceOf(BinaryNotFoundError);
+  }, 30_000);
+
+  it("keeps the health-timeout error when the port is genuinely free", async () => {
+    // The pre-flight must not swallow the ordinary "our sidecar never came up"
+    // case: nothing is listening, so this has to reach the health wait.
+    const p = startSidecar({
+      binaryPath: diesInstantly(),
+      port: 8189,
+      autoCleanup: false,
+      healthTimeoutMs: 3_000,
+    });
+    await expect(p).rejects.toBeInstanceOf(HealthTimeoutError);
+  }, 30_000);
+
+  it("reports the conflict as a GaiaError, so the CLI formats it", async () => {
+    const { port } = await stubSidecarOnPort({ versionDelayMs: 750 });
+    await expect(
+      startSidecar({
+        binaryPath: diesInstantly(),
+        port,
+        autoCleanup: false,
+        healthTimeoutMs: 20_000,
+      }),
+    ).rejects.toBeInstanceOf(GaiaError);
+  }, 30_000);
+});
+
+posixOnly("startSidecar backstops (something binds AFTER the pre-flight)", () => {
+  /**
+   * The window the pre-flight cannot cover: the port is free when we probe it,
+   * and an unrelated process takes it before our sidecar binds. Reproduced by a
+   * fake sidecar that hands the port to a DETACHED holder and exits — the same
+   * shape as the frozen build's uvicorn grandchild. The holder signals readiness
+   * through a file so it is listening before the child goes away.
+   *
+   * Which backstop fires is still a race — a probe landing before the child's
+   * exit reaches `assertOurs` directly, one landing after goes through the
+   * re-probe — and both raise the same error, which is the point. Neutering
+   * either alone still passes; neutering both fails this test.
+   */
+  it("names the port conflict when our child dies and something else answers", async () => {
+    const readyFile = path.join(tmp, "holder.ready");
+    const holder = await script(
+      "holder",
+      `import http from "node:http";
+       import fs from "node:fs";
+       const port = Number(process.argv[2]);
+       const server = http.createServer((_q, s) => {
+         s.writeHead(200, { "content-type": "application/json" });
+         s.end(JSON.stringify({ status: "ok", service: "not-ours" }));
+       });
+       server.listen(port, "127.0.0.1", () => fs.writeFileSync(${JSON.stringify(readyFile)}, String(process.pid)));
+       setTimeout(() => process.exit(0), 20000).unref();`,
+    );
+    const bin = await fakeBinary(
+      "hands-off-port",
+      `import { spawn } from "node:child_process";
+       import fs from "node:fs";
+       const port = process.argv[process.argv.indexOf("--port") + 1];
+       const child = spawn(process.execPath, [${JSON.stringify(holder)}, port], { detached: true, stdio: "ignore" });
+       child.unref();
+       // Exit only once the holder really owns the port — no timing race.
+       const wait = () => fs.existsSync(${JSON.stringify(readyFile)}) ? process.exit(0) : setTimeout(wait, 20);
+       wait();`,
+    );
+
+    const free = await freePort();
+    try {
+      const p = startSidecar({
+        binaryPath: bin,
+        port: free,
+        autoCleanup: false,
+        healthTimeoutMs: 15_000,
+      });
+      await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
+      await expect(p).rejects.toThrow(/another process is already bound/);
+    } finally {
+      if (fs.existsSync(readyFile)) {
+        const pid = Number(fs.readFileSync(readyFile, "utf8"));
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }, 40_000);
+});
+
+describe("non-JSON responses", () => {
+  it("raises a GaiaError, not a bare SyntaxError, for a 200 that is HTML", async () => {
+    // A proxy answering 200 with an error page used to escape the CLI's
+    // `instanceof GaiaError` branch and print a raw stack.
+    const baseUrl = await stubHtml();
+    const p = health(baseUrl);
+    await expect(p).rejects.toBeInstanceOf(MalformedResponseError);
+    await expect(p).rejects.toBeInstanceOf(GaiaError);
+    await expect(p).rejects.toThrow(/not JSON/);
+  });
+
+  it("keeps polling rather than crashing when health is not JSON", async () => {
+    const baseUrl = await stubHtml();
+    await expect(
+      waitForHealth(baseUrl, { timeoutMs: 300, intervalMs: 50 }),
+    ).rejects.toBeInstanceOf(HealthTimeoutError);
+  });
+});
+
+describe("auto-cleanup registration", () => {
+  it("installs the process-level reapers by default", () => {
+    // autoCleanup defaults true, but every spawning test passed false, so none
+    // of installCleanupHandlers/registerForCleanup ever ran under test.
+    const sidecar = spawnSidecar({ binaryPath: diesInstantly(), port: 8195 });
+    try {
+      expect(process.listenerCount("exit")).toBeGreaterThan(0);
+      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        expect(process.listenerCount(sig)).toBeGreaterThan(0);
+      }
+    } finally {
+      sidecar.child.kill("SIGKILL");
+    }
+  });
+});
+
+posixOnly("auto-cleanup ownership", () => {
+  /**
+   * A live sidecar registered for auto-cleanup, torn down whatever happens.
+   * Needs a surrogate that ignores --host/--port and stays up, which on Windows
+   * would require a real .exe fixture.
+   */
+  async function withLiveSidecar(
+    port: number,
+    body: (s: ReturnType<typeof spawnSidecar>) => Promise<void>,
+  ): Promise<void> {
+    const bin = await fakeBinary(`live-${port}`, "setInterval(() => {}, 1000)");
+    const sidecar = spawnSidecar({ binaryPath: bin, port });
+    try {
+      await body(sidecar);
+    } finally {
+      await shutdown(sidecar, 10_000).catch(() => undefined);
+    }
+  }
+
+  it("does NOT reap the sidecar when the HOST app owns the signal", async () => {
+    // Importing this library must not change what a host's own SIGINT handler
+    // means. It used to: the reap ran before the ownership check, so a
+    // host-handled signal killed the sidecar and its next request got an
+    // unexplained ECONNREFUSED.
+    await withLiveSidecar(8194, async (sidecar) => {
+      const hostHandler = (): void => {};
+      process.on("SIGINT", hostHandler);
+      try {
+        process.emit("SIGINT");
+        await sleepFor(400);
+      } finally {
+        process.removeListener("SIGINT", hostHandler);
+      }
+      expect(sidecar.child.exitCode).toBeNull();
+      expect(sidecar.child.signalCode).toBeNull();
+    });
+  }, 30_000);
+
+  it("de-registers only once the child has actually exited", async () => {
+    // shutdown() used to de-register up front, so a sidecar that survived both
+    // kill windows became a permanent orphan: it threw correctly but was gone
+    // from the set the process-exit backstop reaps. The survivor branch itself
+    // cannot be tested — nothing can ignore SIGKILL — so this pins the other
+    // half: a COMPLETED shutdown does de-register, and the child really is gone.
+    await withLiveSidecar(8193, async (sidecar) => {
+      await shutdown(sidecar, 10_000);
+      expect(sidecar.child.exitCode !== null || sidecar.child.signalCode !== null).toBe(
+        true,
+      );
+    });
+  }, 30_000);
+});
+
 posixOnly("startSidecar", () => {
   it("gives up as soon as the process dies instead of waiting out the health timeout", async () => {
     const bin = await fakeBinary("dies", "process.exit(3)");
@@ -246,6 +524,15 @@ describe("runTui", () => {
 });
 
 describe("resolve*Path", () => {
+  const exe = (): string => tuiExecutableName();
+  /** Write a TUI binary and a lock that agrees (or not) with its bytes. */
+  function stage(content: string, lockContent = content): { full: string; lock: ReturnType<typeof makeLock> } {
+    const full = path.join(tmp, exe());
+    fs.writeFileSync(full, content);
+    const sha = crypto.createHash("sha256").update(lockContent).digest("hex");
+    return { full, lock: makeLock(sha) };
+  }
+
   it("throws an actionable BinaryNotFoundError when nothing is fetched yet", () => {
     for (const fn of [resolveSidecarPath, resolveTuiPath]) {
       try {
@@ -258,9 +545,34 @@ describe("resolve*Path", () => {
     }
   });
 
-  it("returns the path once the binary is present", async () => {
-    const exe = process.platform === "win32" ? "gaia-tui.exe" : "gaia-tui";
-    fs.writeFileSync(path.join(tmp, exe), "x");
-    expect(resolveTuiPath({ resourcesDir: tmp })).toBe(path.join(tmp, exe));
+  it("returns the path once the binary is present and matches the lock", () => {
+    const { full, lock } = stage("a verified gaia-tui");
+    expect(resolveTuiPath({ resourcesDir: tmp, lock })).toBe(full);
+  });
+
+  it("REFUSES a binary whose bytes do not match the lock", () => {
+    // fetch.ts calls the SHA verify "the security boundary". This path is
+    // exported and its cache dir is predictable, so anything able to write
+    // ~/.gaia/agents/gaia used to get code spawned unverified.
+    const { full, lock } = stage("tampered", "what the lock pins");
+    try {
+      resolveTuiPath({ resourcesDir: tmp, lock });
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(IntegrityError);
+      expect((e as Error).message).toContain(full);
+      expect((e as Error).message).toContain("Refusing to spawn");
+    }
+  });
+
+  it("skips the check only when the caller opts out explicitly", () => {
+    const { full, lock } = stage("a self-built binary", "something else");
+    expect(resolveTuiPath({ resourcesDir: tmp, lock, verify: false })).toBe(full);
+  });
+
+  it("refuses a placeholder-hash lock rather than treating it as verified", () => {
+    const { lock } = stage("anything");
+    for (const e of Object.values(lock.components["tui"]!.platforms)) e.sha256 = "0".repeat(64);
+    expect(() => resolveTuiPath({ resourcesDir: tmp, lock })).toThrow(IntegrityError);
   });
 });

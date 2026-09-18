@@ -3,7 +3,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Test MCP Bridge Integration for Jira Agent."""
+"""Test MCP Bridge Integration (connectivity + JSON-RPC tools/list)."""
 
 import json
 import sys
@@ -18,7 +18,7 @@ if sys.platform == "win32":
 
 
 def test_mcp_bridge():
-    """Test MCP bridge connectivity and Jira integration."""
+    """Test MCP bridge connectivity and JSON-RPC tools/list."""
 
     base_url = "http://localhost:8765"
 

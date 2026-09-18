@@ -693,3 +693,77 @@ class TestMemoryDegradedStateNotice:
             assert agent.memory_status()["available"] is True
         finally:
             agent.close_db()
+
+    def test_process_query_reports_after_a_later_console_swap(
+        self, tmp_path, monkeypatch
+    ):
+        """UI/sidecar callers build the agent with a SilentConsole, then swap in
+        the real console once the first turn arrives (``agent.console = ...`` in
+        ``_chat_helpers.py``). EmailTriageAgent's MRO puts ``Agent`` ahead of
+        ``MemoryMixin``, so ``Agent.process_query`` never delegates into
+        ``MemoryMixin.process_query`` the way ``ChatAgent`` does — the notice
+        must instead be reported directly from
+        ``EmailTriageAgent.process_query`` or it never reaches this later,
+        real console.
+        """
+        from gaia.agents.base.agent import Agent
+        from gaia.agents.base.console import SilentConsole
+
+        model_not_found = RuntimeError(
+            "Embedding failed: Error generating embeddings: Request failed "
+            'with status 404: {"error":{"code":"model_not_found",'
+            '"message":"Model \'user.embeddinggemma-300m-GGUF\' was not '
+            'found."}}'
+        )
+        with patch.object(
+            EmailTriageAgent, "_create_console", return_value=SilentConsole()
+        ):
+            agent = _build_agent_with_failing_embedder(tmp_path, model_not_found)
+        try:
+            # Construction reported into the SilentConsole, which renders
+            # nothing — the one-shot flag must still be unspent (fix #2).
+            assert agent._memory_unavailable_warning_reported is False
+
+            real_console = MagicMock()
+            agent.console = real_console
+            monkeypatch.setattr(
+                Agent,
+                "process_query",
+                lambda self, *a, **k: {"status": "success", "result": "loop ran"},
+            )
+
+            agent.process_query("what's in my inbox")
+
+            real_console.print_warning.assert_called_once()
+            assert "not been pulled" in real_console.print_warning.call_args[0][0]
+            assert agent._memory_unavailable_warning_reported is True
+        finally:
+            agent.close_db()
+
+    def test_silent_console_does_not_spend_the_one_shot_report(self, tmp_path):
+        """Reporting into a ``SilentConsole`` must not mark the notice as
+        delivered — a later real console must still get it (fix #2)."""
+        from gaia.agents.base.console import SilentConsole
+
+        model_not_found = RuntimeError(
+            "Embedding failed: Error generating embeddings: Request failed "
+            'with status 404: {"error":{"code":"model_not_found",'
+            '"message":"Model \'user.embeddinggemma-300m-GGUF\' was not '
+            'found."}}'
+        )
+        with patch.object(
+            EmailTriageAgent, "_create_console", return_value=SilentConsole()
+        ):
+            agent = _build_agent_with_failing_embedder(tmp_path, model_not_found)
+        try:
+            assert isinstance(agent.console, SilentConsole)
+            # The SilentConsole report at construction must not have consumed
+            # the one-shot flag.
+            assert agent._memory_unavailable_warning_reported is False
+
+            real_console = MagicMock()
+            agent.console = real_console
+            assert agent.report_memory_unavailable() is True
+            real_console.print_warning.assert_called_once()
+        finally:
+            agent.close_db()

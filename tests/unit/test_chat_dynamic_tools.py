@@ -79,11 +79,20 @@ def _real_loader() -> ToolLoader:
     [
         ("doc", True, True),
         ("doc", False, False),
-        ("full", True, False),
+        # "full" gained a loader once FULL_CORE_TOOLS/FULL_BUNDLES covered its
+        # whole registry; without that coverage its unbundled tools would have
+        # become permanently invisible, which is why it was excluded before.
+        ("full", True, True),
+        ("full", False, False),
+        # Everything else has no PROFILE_TOOL_CONFIGS entry and stays on the
+        # full-registry legacy path even with the toggle on.
         ("chat", True, False),
+        ("file", True, False),
+        ("data", True, False),
+        ("web", True, False),
     ],
 )
-def test_loader_built_only_for_doc_profile_with_toggle_on(
+def test_loader_built_only_for_configured_profiles_with_toggle_on(
     monkeypatch, profile, dynamic, expect_loader
 ):
     monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)

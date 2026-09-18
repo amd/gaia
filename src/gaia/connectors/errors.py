@@ -374,6 +374,25 @@ class NoDeclaredScopesError(ConnectorsError):
         )
 
 
+class UnknownConnectorError(ConnectorsError):
+    """A connector id that the catalog does not publish.
+
+    ``REGISTRY.get`` raises a bare ``KeyError``, which reaches an HTTP boundary
+    as an unhandled 500 and a CLI as a traceback. Grant writes translate it to
+    this so every surface gets one actionable, typed error instead.
+    """
+
+    def __init__(self, connector_id: str, known_ids: list[str] | None = None):
+        self.connector_id = connector_id
+        self.known_ids = sorted(known_ids or [])
+        known = f" Known ids: {', '.join(self.known_ids)}." if self.known_ids else ""
+        super().__init__(
+            f"Unknown connector {connector_id!r}.{known} Run "
+            "'gaia connectors list' to see the catalog, or check the id for a "
+            "typo."
+        )
+
+
 class ScopeNotAllowedError(ConnectorsError):
     """A declared scope is outside the connector's ``available_scopes`` ceiling.
 
@@ -383,15 +402,19 @@ class ScopeNotAllowedError(ConnectorsError):
     identity but not scope values.
     """
 
-    def __init__(self, agent_id: str, connector_id: str, scopes: list[str]):
+    def __init__(self, agent_id: str | None, connector_id: str, scopes: list[str]):
         self.agent_id = agent_id
         self.connector_id = connector_id
         self.scopes = list(scopes)
+        subject = (
+            f"Agent {agent_id!r} declares"
+            if agent_id is not None
+            else "Authorization request contains"
+        )
         super().__init__(
-            f"Agent {agent_id!r} declares scope(s) {', '.join(self.scopes)} for "
+            f"{subject} scope(s) {', '.join(self.scopes)} for "
             f"connector {connector_id!r} that are outside its available_scopes "
-            "catalog entry. This is a catalog/agent mismatch — file a bug "
-            "rather than widening the request."
+            "catalog entry. File a bug rather than widening the request."
         )
 
 

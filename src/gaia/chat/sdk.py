@@ -166,28 +166,93 @@ class AgentSDK:
         """
         Ensure messages are safe to send to the LLM.
 
-        Tool messages are converted to user-role messages in send_messages /
-        send_messages_stream, so no extra "continue" sentinel is needed here —
-        the tool result itself already forms a valid user turn for the LLM to
-        respond to.
+        Tool messages become provider-appropriate history in send_messages /
+        send_messages_stream, so no extra "continue" sentinel is needed here.
         """
         if not messages:
             return []
 
         return list(messages)
 
-    def _flatten_tool_call_turn(self, msg: Dict[str, Any]) -> str:
-        """Textual stand-in for an assistant turn that only called tools.
+    def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert one history entry to the active provider's message shape."""
+        role = msg.get("role", "user")
+        content = self._normalize_message_content(msg.get("content", ""))
+        if self.config.use_claude and role == "assistant" and msg.get("tool_calls"):
+            return {
+                "role": "assistant",
+                "content": content if msg.get("content") else None,
+                "tool_calls": msg["tool_calls"],
+            }
+        if self.config.use_claude and role == "tool":
+            return {
+                "role": "tool",
+                "content": content,
+                "name": msg.get("name", "tool"),
+                "tool_call_id": msg.get("tool_call_id"),
+            }
+        if role == "tool":
+            # Local/OpenAI-compatible backends receive tool results as user text.
+            # The native Claude path above preserves the IDs Anthropic requires.
+            return {
+                "role": "user",
+                "content": f"[Tool result: {msg.get('name', 'tool')}] {content}",
+            }
+        return {"role": role, "content": content}
 
-        Without it the flattened history shows ``None`` where the model called
-        a tool, so it can't correlate the tool results that follow.
-        """
-        calls = ", ".join(
-            f"{(tc.get('function') or {}).get('name', 'tool')}"
-            f"({(tc.get('function') or {}).get('arguments') or ''})"
-            for tc in msg.get("tool_calls", [])
-        )
-        return f"[Called tools: {calls}]"
+    # ── per-turn performance recording (dev mode, opt-in) ──────────────────
+    #
+    # Hooked here, not at the agent's call sites: every backend request funnels
+    # through this class, so one pair of hooks covers all four of them.
+
+    #: Set by the agent loop per turn; ``None`` disables all recording.
+    turn_recorder: Optional[Any] = None
+
+    #: Step index stamped onto the next recorded call, set by the agent loop.
+    turn_step: int = 0
+
+    def _recorder_begin(
+        self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
+    ) -> None:
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            # Proxy for what the server renders, and the ORDER matters: chat
+            # templates inject the tool schemas alongside the system block at
+            # the front, not after the conversation. Appending them last made
+            # the shared prefix stop at the first history message, so a turn
+            # whose whole 12.2k system+tools header was reusable reported 27%
+            # cache hit instead of ~99%.
+            head = json.dumps(structured[:1], default=str) if structured else ""
+            if tools:
+                head += json.dumps(tools, default=str)
+            rendered = head + json.dumps(structured[1:], default=str)
+            recorder.start_llm_call(self.turn_step, rendered)
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (begin) failed: %s", e)
+
+    def _recorder_mark(self) -> None:
+        """Stop the clock on the open call before its stats are fetched."""
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            recorder.mark_llm_call_end()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (mark) failed: %s", e)
+
+    def _recorder_end(self, stats: Optional[Dict[str, Any]] = None) -> None:
+        """Close the open call. A no-op once closed, so a ``finally`` can back
+        up a normal close without recording the call twice."""
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            recorder.mark_llm_call_end()
+            recorder.end_llm_call(stats if stats is not None else self.get_stats())
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (end) failed: %s", e)
 
     def send_messages(
         self,
@@ -226,34 +291,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages so that the LLM
-                    # receives a proper user turn to reply to.  Converting them to
-                    # "assistant" caused the previously-injected "continue" sentinel
-                    # to become the visible user message, making the model think it
-                    # was asked to "continue" rather than respond to the real query.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -278,12 +316,16 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
-            response = self.llm_client.chat(
-                messages=structured,
-                model=self.effective_model,
-                stream=False,
-                **kwargs,
-            )
+            self._recorder_begin(structured, tools)
+            try:
+                response = self.llm_client.chat(
+                    messages=structured,
+                    model=self.effective_model,
+                    stream=False,
+                    **kwargs,
+                )
+            finally:
+                self._recorder_end()
 
             # Prepare response data
             stats = None
@@ -342,31 +384,7 @@ class AgentSDK:
                         "system prompt already prepended."
                     )
                     continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages — same reasoning
-                    # as in send_messages above.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+                structured.append(self._structure_history_message(msg))
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -392,6 +410,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._recorder_begin(structured, tools)
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.effective_model, stream=True, **kwargs
             ):
@@ -401,15 +420,20 @@ class AgentSDK:
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
                 if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                    self._recorder_mark()
+                    tool_call_stats = self.get_stats()
+                    self._recorder_end(tool_call_stats)
                     yield AgentResponse(
-                        text=chunk, stats=self.get_stats(), is_complete=True
+                        text=chunk, stats=tool_call_stats, is_complete=True
                     )
                     return
                 yield AgentResponse(text=chunk, is_complete=False)
 
             # Send final response with stats
             # Always get stats for token tracking (show_stats controls display, not collection)
+            self._recorder_mark()
             stats = self.get_stats()
+            self._recorder_end(stats)
 
             yield AgentResponse(text="", stats=stats, is_complete=True)
 
@@ -422,12 +446,19 @@ class AgentSDK:
         except Exception as e:
             self.log.error(f"Error in send_messages_stream: {e}")
             raise
+        finally:
+            # Cancelling closes this generator at the yield; without this the
+            # call stays open and its seconds read as agent overhead. Empty
+            # stats, never a fetch — a cancel must start no HTTP request.
+            self._recorder_end(stats={})
 
     def send(
         self, message: str, *, no_history: bool = False, **kwargs
     ) -> AgentResponse:
         """
         Send a message and get a complete response with conversation history.
+
+        Failed turns restore the conversation history to its pre-call state.
 
         Args:
             message: The message to send
@@ -437,6 +468,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -501,17 +534,26 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
@@ -520,6 +562,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -574,11 +618,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """
@@ -805,13 +857,17 @@ class AgentSDK:
         """Get the number of conversation pairs (user + assistant)."""
         return len(self.chat_history) // 2
 
-    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs):
+    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs) -> bool:
         """
         Enable RAG (Retrieval-Augmented Generation) for document-based chat.
 
         Args:
             documents: List of PDF file paths to index
             **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True when RAG is enabled and every requested document was indexed;
+            False when one or more documents could not be indexed.
         """
         try:
             from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -832,19 +888,27 @@ class AgentSDK:
         self.rag_enabled = True
 
         # Index documents if provided
+        document_count = len(documents) if documents else 0
+        indexed_count = 0
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
                 result = self.rag.index_document(doc_path)
 
-                if result:
+                if isinstance(result, dict) and result.get("success") is True:
+                    indexed_count += 1
                     self.log.info(f"Successfully indexed: {doc_path}")
                 else:
                     self.log.warning(f"Failed to index document: {doc_path}")
 
-        self.log.info(
-            f"RAG enabled with {len(documents) if documents else 0} documents"
-        )
+        if indexed_count == document_count:
+            self.log.info(f"RAG enabled with {document_count} documents")
+        else:
+            self.log.warning(
+                f"RAG enabled but indexed {indexed_count} of "
+                f"{document_count} documents"
+            )
+        return indexed_count == document_count
 
     def disable_rag(self):
         """Disable RAG functionality."""
@@ -865,7 +929,7 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return self.rag.index_document(document_path)
+        return bool(self.rag.index_document(document_path).get("success"))
 
     def _estimate_tokens(self, text: str) -> int:
         """

@@ -21,7 +21,7 @@ This glossary defines technical terms, acronyms, and concepts used throughout th
 A shell script that activates a Python virtual environment, making its packages available in the current terminal session.
 
 ### Agent
-An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class, register tools via `_register_tools()`, and follow an iterative loop: think about the task, act by calling tools, observe results, and reason about next steps. Built-in agents include ChatAgent, CodeAgent, JiraAgent, and BlenderAgent. See also: Agent Loop, Tool, Mixin.
+An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class, register tools via `_register_tools()`, and follow an iterative loop: think about the task, act by calling tools, observe results, and reason about next steps. Built-in agents include GaiaAgent (the flagship), ChatAgent, and EmailTriageAgent. See also: Agent Loop, Tool, Mixin.
 
 ### Agent Loop
 The cyclic process an agent follows: thinking about the task, acting by calling tools, observing the results, and reasoning about next steps.
@@ -53,12 +53,6 @@ A segment of audio data processed at one time, typically measured in millisecond
 ### Audio Device Index
 A numerical identifier for microphone or speaker hardware used by audio processing libraries.
 
-### ATLASSIAN_API_KEY
-Environment variable containing the API token for authenticating with Atlassian Jira. Required for JiraAgent operations.
-
-### Auto-Discovery
-The automatic detection and configuration of external service capabilities. Used by JiraAgent to discover available projects, issue types, statuses, and priorities from a Jira instance.
-
 ### AWQ (Activation-Aware Weight Quantization)
 An advanced quantization technique that reduces model size while preserving accuracy by considering activation patterns.
 
@@ -71,9 +65,6 @@ The root address of an API server (e.g., `http://localhost:8080`), used as the f
 
 ### Batch Experiment
 Running evaluation tests on multiple inputs simultaneously to measure AI performance across diverse scenarios.
-
-### BlenderAgent
-GAIA's specialized agent for 3D content creation and Blender automation. Communicates with Blender via MCP to create objects, apply materials, and manage scenes through natural language commands.
 
 ---
 
@@ -102,9 +93,6 @@ The number of tokens in each piece when splitting text for processing, typically
 
 ### CLI (Command Line Interface)
 A text-based interface for interacting with software through terminal commands, such as `gaia chat` or `gaia talk`.
-
-### CodeAgent
-GAIA's specialized agent for full-stack Next.js application generation. Creates complete projects with Prisma data models, REST API routes with Zod validation, React pages with Tailwind styling, and iterative TypeScript error fixing.
 
 ### Command-line Parameter
 Arguments passed to commands when executing them, such as `--model` or `--debug`.
@@ -153,7 +141,7 @@ Monitoring API usage and associated costs, especially important when using cloud
 A verbose logging setting that provides detailed information about system operations for troubleshooting.
 
 ### Disambiguation
-The process of clarifying ambiguous user requests through follow-up questions. The RoutingAgent uses disambiguation to determine programming language and project type when not specified.
+The process of clarifying ambiguous user requests through follow-up questions when the agent's confidence in a plan of action is low.
 
 ### Document Chunking
 The process of splitting large documents into smaller, manageable pieces for processing by LLMs or embedding models.
@@ -257,11 +245,8 @@ The folder where GAIA and its dependencies are installed on your system.
 
 ## J
 
-### JiraAgent
-GAIA's specialized agent for Atlassian Jira integration. Provides natural language interface for searching, creating, and updating issues via the Jira REST API with auto-discovery of project configuration.
-
 ### JQL (Jira Query Language)
-A domain-specific query language for searching Jira issues. JiraAgent translates natural language queries into JQL for execution.
+A domain-specific query language for searching Jira issues.
 
 ### JSON Schema
 A standard format for describing the structure and validation rules of JSON data, used for tool parameter definitions.
@@ -276,9 +261,6 @@ A lightweight, high-quality text-to-speech engine used by GAIA for voice output 
 ---
 
 ## L
-
-### Language Detection
-The RoutingAgent's ability to identify programming languages and frameworks from natural language prompts, used to configure specialized agents appropriately.
 
 ### Lemonade Server
 AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Start with `lemonade-server serve`. Required for most GAIA operations. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
@@ -306,7 +288,7 @@ The number of conversation pairs retained in chat history before older messages 
 The maximum length of an LLM response, measured in tokens.
 
 ### MCP (Model Context Protocol)
-A standardized protocol for integrating AI agents with external tools and services. Enables GAIA agents to be used from VSCode, Claude Desktop, and other MCP-compatible clients. GAIA's BlenderAgent uses MCP to communicate with Blender. See also: MCPAgent, MCP Server.
+A standardized protocol for integrating AI agents with external tools and services. Enables GAIA agents to be used from VSCode, Claude Desktop, and other MCP-compatible clients. See also: MCPAgent, MCP Server.
 
 ### MCPAgent
 A GAIA base class for agents compatible with the Model Context Protocol. Subclasses implement `get_mcp_tool_definitions()` for tool schemas, `execute_mcp_tool()` for tool execution, and optionally `get_mcp_resources()` to expose data URIs. Enables integration with VSCode, Claude Desktop, and other MCP clients. See also: MCP Server, MCP Tools.
@@ -332,9 +314,6 @@ A conversation with multiple exchanges where context from previous turns is pres
 ---
 
 ## N
-
-### Next.js
-A React framework for building full-stack web applications. GAIA's CodeAgent generates Next.js projects with TypeScript, Prisma, and Tailwind CSS.
 
 ### NPU (Neural Processing Unit)
 A dedicated AI accelerator in AMD Ryzen AI processors, optimized for running neural networks efficiently.
@@ -386,12 +365,6 @@ An external web search API that can be integrated with GAIA agents for real-time
 ### Performance Metrics
 Quantitative measurements of system behavior, such as tokens per second or time to first token.
 
-### Prisma
-A TypeScript/JavaScript ORM (Object-Relational Mapping) for database access. GAIA's CodeAgent generates Prisma schemas with SQLite for data persistence. Includes automatic ID generation, timestamps, and type-safe queries. See also: Next.js, Zod.
-
-### Project Type
-Classification of code projects by their architecture: frontend (UI only), backend (API only), fullstack (both), or script (utilities/CLI). The RoutingAgent uses this to configure CodeAgent appropriately.
-
 ### Prompt
 The input text provided to an LLM, including instructions, context, and the user's question or request.
 
@@ -441,9 +414,6 @@ An API following Representational State Transfer principles, using HTTP methods 
 
 ### Retry Logic
 Automatic retry mechanisms when operations fail, often with exponential backoff.
-
-### RoutingAgent
-A GAIA agent that analyzes requests and intelligently routes them to specialized agents. Uses LLM-powered language detection to identify programming languages and project types, asks disambiguating questions when confidence is low, and configures target agents appropriately.
 
 ### Ryzen AI
 AMD's brand for processors featuring integrated NPU hardware for AI acceleration.
@@ -518,9 +488,6 @@ Instructions that shape an LLM's behavior, persona, and response style. In GAIA,
 ---
 
 ## T
-
-### Tailwind CSS
-A utility-first CSS framework for rapid UI development. GAIA's CodeAgent generates Tailwind-styled Next.js applications.
 
 ### Temperature
 A parameter (typically 0.0-2.0) controlling randomness in LLM output. Lower values produce more deterministic responses.
@@ -615,9 +582,6 @@ OpenAI's open-source speech recognition model, used by GAIA for ASR in Talk mode
 
 ### Zero-shot
 An LLM performing a task without any training examples, relying solely on its pre-training knowledge.
-
-### Zod
-A TypeScript-first schema validation library. GAIA's CodeAgent generates Zod schemas for API endpoint request validation.
 
 ---
 

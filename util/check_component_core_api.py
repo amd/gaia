@@ -53,12 +53,15 @@ import argparse
 import io
 import json
 import re
+import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -72,12 +75,15 @@ PYPI_PROJECT = "amd-gaia"
 PYPI_JSON_URL = f"https://pypi.org/pypi/{PYPI_PROJECT}/json"
 WHEEL_MEMBER = "gaia/daemon/constants.py"
 
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_SECONDS = 2
+
 # What each published core release actually shipped as DAEMON_API_VERSION.
 #
 # Verified by installing each amd-gaia wheel from PyPI and reading
 # gaia/daemon/constants.py: 0.21.2 and every release before it have no
 # gaia/daemon package at all, and 0.22.0 — the first release with a daemon —
-# shipped "1". Repo main has since moved to "1.1".
+# shipped "1"; 0.23.0 shipped "1.1", which is what this tree still serves.
 #
 # Maintenance: after cutting a core release, add its row and bump
 # LATEST_CORE_RELEASE. Forgetting makes the offline mode fall back to trusting
@@ -87,8 +93,10 @@ WHEEL_MEMBER = "gaia/daemon/constants.py"
 FIRST_CORE_RELEASE_WITH_DAEMON = (0, 22, 0)
 RELEASED_DAEMON_API: dict[tuple[int, ...], str] = {
     (0, 22, 0): "1",
+    (0, 23, 0): "1.1",
+    (0, 24, 1): "1.1",
 }
-LATEST_CORE_RELEASE = (0, 22, 0)
+LATEST_CORE_RELEASE = (0, 24, 1)
 
 # Which daemon host API each hub component needs. "tui" reads the floor from the
 # Go constants the terminal hub enforces at runtime, so the guard cannot drift
@@ -207,14 +215,41 @@ def _extract_daemon_api(source: str, where: str) -> str:
 
 
 def _fetch(url: str, timeout: int) -> bytes:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.read()
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise CheckError(
-            f"could not reach PyPI at {url}: {exc}. --verify-released needs network "
-            f"access to read what each core release actually shipped."
-        ) from exc
+    """Read *url*, retrying a dropped connection before calling PyPI unreachable.
+
+    A DNS failure is a real signal and fails on the first attempt; a transport
+    drop (``http.client.RemoteDisconnected`` is a ``ConnectionError``, not a
+    ``URLError`` — see ``AbstractHTTPHandler.do_open``) is a blip worth a retry.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            # A status code is upstream's answer, not a blip - retrying is noise.
+            raise CheckError(
+                f"PyPI returned HTTP {exc.code} for {url}: {exc.reason}. "
+                f"--verify-released reads what each core release actually shipped; "
+                f"a 404 here means that artifact is not published."
+            ) from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.gaierror):
+                raise CheckError(
+                    f"could not resolve {urlparse(url).hostname} for {url}: "
+                    f"{exc.reason}. --verify-released needs DNS and network access "
+                    f"to read what each core release actually shipped."
+                ) from exc
+            last_exc = exc
+        except (ConnectionError, TimeoutError) as exc:
+            last_exc = exc
+        if attempt < _FETCH_ATTEMPTS - 1:
+            time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
+    raise CheckError(
+        f"could not reach PyPI at {url} after {_FETCH_ATTEMPTS} attempts: "
+        f"{last_exc}. --verify-released needs network access to read what each "
+        f"core release actually shipped."
+    ) from last_exc
 
 
 def _pypi_index() -> dict:

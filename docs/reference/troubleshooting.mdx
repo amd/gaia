@@ -121,6 +121,27 @@ icon: "bug"
     </Warning>
   </Accordion>
 
+  <Accordion title="Memory recall fails with an OpenMP runtime error (macOS)" icon="triangle-exclamation">
+    On macOS, `faiss-cpu` and `torch` each ship their own copy of
+    `libomp.dylib`. With both loaded in one process, the next FAISS search
+    initialises the second copy and macOS kills the process outright —
+    `OMP: Error #15`, no traceback, nothing an error handler can catch. GAIA
+    refuses the search instead:
+
+    ```
+    Procedure recall search would abort this process: 2 OpenMP runtimes are loaded…
+    ```
+
+    Keep the two apart in the environment GAIA runs in. `torch` arrives with the
+    `[audio]` and `[ui]` extras; memory recall needs `faiss-cpu`. A virtual
+    environment with only the extras you actually use is the fix.
+
+    If your host runs both runtimes together without aborting, set
+    `GAIA_ALLOW_FAISS_TORCH_OMP=1` to search anyway. Check it in a throwaway
+    process first — when the host is not in fact safe, the override restores the
+    crash rather than working around it.
+  </Accordion>
+
   <Accordion title="Agent not found after install" icon="magnifying-glass">
     ```bash
     # Verify package is installed
@@ -234,8 +255,7 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Connection refused" icon="plug-circle-xmark">
-    **Ensure server is running** (default port is 8080; also shared by
-    `gaia mcp docker` so check for a collision):
+    **Ensure server is running** (default port is 8080):
     ```bash
     gaia api start --port 8080
     ```
@@ -252,11 +272,12 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Model not found error" icon="circle-question">
-    Use the correct model ID:
+    `AGENT_MODELS` is empty by default, so `/v1/models` returns no models until
+    one is registered:
     ```bash
     curl http://localhost:8080/v1/models
     ```
-    Default model ID is `gaia-code`.
+    See [Adding New Agents](/reference/api-spec#adding-new-agents).
   </Accordion>
 
   <Accordion title="Agent processing failed" icon="triangle-exclamation">
@@ -288,7 +309,7 @@ icon: "bug"
     Or delete all models and re-download:
     ```bash
     gaia uninstall --purge --purge-models --yes
-    gaia init --profile chat
+    gaia init
     ```
   </Accordion>
 
@@ -297,7 +318,7 @@ icon: "bug"
 
     ```bash
     # Retry with verbose output
-    gaia init --profile chat --verbose
+    gaia init --verbose
     ```
   </Accordion>
 
@@ -387,35 +408,6 @@ icon: "bug"
     - Verify documents were indexed successfully at startup
     - Check console output for indexing confirmation
     - Ensure document path is correct
-  </Accordion>
-</AccordionGroup>
-
----
-
-## Routing Agent Issues
-
-<AccordionGroup>
-  <Accordion title="Routing to wrong language" icon="shuffle">
-    The routing agent may misdetect the language/framework.
-
-    **Solutions:**
-    - Be more specific in your query (mention the language)
-    - Check the routing confidence in logs
-    - Adjust routing thresholds if available
-  </Accordion>
-
-  <Accordion title="Too many clarifying questions" icon="circle-question">
-    **Solutions:**
-    - Include framework/language in initial query
-    - Set default routing preferences
-    - Adjust confidence thresholds
-  </Accordion>
-
-  <Accordion title="Routing agent errors or skips detection" icon="forward">
-    **Check:**
-    - Lemonade Server is running
-    - Routing model is loaded
-    - Query format is valid
   </Accordion>
 </AccordionGroup>
 

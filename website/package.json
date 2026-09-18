@@ -9,9 +9,7 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "vitest run",
-    "generate:agents": "node scripts/generate-in-development.mjs",
-    "check:agents": "node scripts/generate-in-development.mjs --check"
+    "test": "vitest run"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.4",

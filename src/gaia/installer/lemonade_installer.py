@@ -385,6 +385,13 @@ class LemonadeInstaller:
                 self._unreachable_asset_error(url, f"timed out after {timeout}s"),
                 definitive=False,
             ) from e
+        except ConnectionError as e:
+            # http.client.RemoteDisconnected is raised directly by
+            # HTTPConnection.getresponse() and is NOT wrapped in URLError - a
+            # transient drop, not proof the asset is gone.
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, str(e)), definitive=False
+            ) from e
 
         if status != 200:
             raise LemonadeAssetError(
@@ -470,6 +477,12 @@ class LemonadeInstaller:
             raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Download failed: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            # http.client.RemoteDisconnected escapes URLError - see do_open().
+            raise RuntimeError(
+                f"Download of {url} dropped mid-transfer: {e}. This is usually a "
+                f"transient network failure - retry the install."
+            ) from e
         except Exception as e:
             raise RuntimeError(f"Download failed: {e}")
 
@@ -811,7 +824,9 @@ class LemonadeInstaller:
     def _uninstall_macos() -> InstallResult:
         """macOS: the upstream .pkg ships no uninstaller, so say so and hand over steps.
 
-        Paths and pkgutil identifiers come from the v11.5.0 .pkg BOMs.
+        Paths and pkgutil identifiers come from the v11.8.1 .pkg BOMs. Upstream
+        renamed the launchd labels and receipts com.lemonade.* -> ai.lemonadeserver.*
+        after 11.5.0, so these track the pin.
         """
         return InstallResult(
             success=False,
@@ -819,13 +834,13 @@ class LemonadeInstaller:
                 "Automatic uninstall is not supported on macOS — the Lemonade .pkg "
                 "ships no uninstaller. Remove it manually:\n"
                 "  sudo launchctl bootout system "
-                "/Library/LaunchDaemons/com.lemonade.server.plist\n"
-                "  sudo rm -f /Library/LaunchDaemons/com.lemonade.server.plist "
-                "/Library/LaunchAgents/com.lemonade.tray.plist\n"
+                "/Library/LaunchDaemons/ai.lemonadeserver.server.plist\n"
+                "  sudo rm -f /Library/LaunchDaemons/ai.lemonadeserver.server.plist "
+                "/Library/LaunchAgents/ai.lemonadeserver.tray.plist\n"
                 "  sudo rm -rf /Applications/lemonade-app.app\n"
                 "  sudo rm -f /usr/local/bin/lemonade /usr/local/bin/lemond "
                 "/usr/local/bin/lemonade-tray\n"
-                "  pkgutil --pkgs | grep '^com.lemonade.server' | "
+                "  pkgutil --pkgs | grep '^ai.lemonadeserver.server' | "
                 "xargs -n1 sudo pkgutil --forget"
             ),
         )

@@ -28,7 +28,10 @@ from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
     FlowTimeoutError,
+    GrantAfterConnectError,
 )
+
+pytestmark = pytest.mark.allow_network
 
 MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 
@@ -258,19 +261,37 @@ class TestPollDeviceFlow:
         assert blob["scopes"] == [MAIL_READ]
 
     def test_grant_agents_committed_on_success(self, monkeypatch):
-        _install_responses(monkeypatch, [_FakeResp(200, self._success_payload())])
+        other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
+        payload = self._success_payload()
+        payload["scope"] = MAIL_READ
+        _install_responses(monkeypatch, [_FakeResp(200, payload)])
         asyncio.run(
             flow_mod.poll_device_flow(
                 "microsoft",
                 "DEV",
-                scopes=[MAIL_READ],
-                grant_agents={"installed:email": [MAIL_READ]},
+                scopes=[MAIL_READ, other_scope],
+                grant_agents={"installed:email": [MAIL_READ, other_scope]},
             )
         )
         from gaia.connectors.grants import list_agent_grants
 
         grants = list_agent_grants("microsoft")
         assert grants.get("installed:email") == [MAIL_READ]
+
+    def test_empty_effective_grant_fails_loudly(self, monkeypatch):
+        payload = self._success_payload()
+        payload["scope"] = ""
+        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+
+        with pytest.raises(GrantAfterConnectError, match="granted none"):
+            asyncio.run(
+                flow_mod.poll_device_flow(
+                    "microsoft",
+                    "DEV",
+                    scopes=[MAIL_READ],
+                    grant_agents={"installed:email": [MAIL_READ]},
+                )
+            )
 
     def test_account_email_falls_back_to_userinfo(self, monkeypatch):
         # Device-code id_token often carries no decodable email — the flow then
@@ -334,3 +355,93 @@ class TestPollDeviceFlow:
                 flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])
             )
         assert "offline_access" in str(exc.value)
+
+
+class TestProviderBodyNeverLeaks:
+    """#3875: a failed device-code request answers a POST that carried the
+    device code, and providers echo request context into error bodies. When
+    the body has no structured ``error_description`` the code used to fall
+    back to ``resp.text`` — putting the raw body into the exception message,
+    which ``authorize_device`` forwards to the Agent UI over SSE. Only the
+    status code and the provider's own bounded RFC 6749 fields may surface.
+    """
+
+    #: Shaped like a credential echoed back in an unstructured error body.
+    LEAKY_BODY = (
+        "invalid_grant: device_code "
+        "OAQABAAEAAAD--token-shaped-secret-value was rejected"
+    )
+
+    def test_poll_failure_without_structured_fields_omits_the_body(
+        self, monkeypatch, caplog
+    ):
+        _install_responses(
+            monkeypatch, [_FakeResp(400, {"error": "invalid_grant"}, self.LEAKY_BODY)]
+        )
+        with caplog.at_level("WARNING", logger="gaia.connectors.flow"):
+            with pytest.raises(ConnectorsError) as exc:
+                asyncio.run(
+                    flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])
+                )
+
+        message = str(exc.value)
+        assert self.LEAKY_BODY not in message
+        assert "token-shaped-secret-value" not in message
+        assert exc.value.error_description == ""
+        # Still reported honestly: status code + the provider's error code.
+        assert "400" in message
+        assert "invalid_grant" in message
+
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "token-shaped-secret-value" not in log_text
+
+    def test_poll_failure_with_non_string_description_omits_the_body(self, monkeypatch):
+        # A provider that nests an object under error_description must yield
+        # no detail, not a stringified fragment of its body.
+        _install_responses(
+            monkeypatch,
+            [
+                _FakeResp(
+                    400,
+                    {"error": "invalid_grant", "error_description": {"code": 70016}},
+                    self.LEAKY_BODY,
+                )
+            ],
+        )
+        with pytest.raises(ConnectorsError) as exc:
+            asyncio.run(
+                flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])
+            )
+        assert exc.value.error_description == ""
+        assert "70016" not in str(exc.value)
+
+    def test_start_failure_omits_the_body(self, monkeypatch, caplog):
+        _install_responses(
+            monkeypatch, [_FakeResp(400, {"error": "invalid_client"}, self.LEAKY_BODY)]
+        )
+        with caplog.at_level("WARNING", logger="gaia.connectors.flow"):
+            with pytest.raises(ConnectorsError) as exc:
+                asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
+
+        message = str(exc.value)
+        assert self.LEAKY_BODY not in message
+        assert "token-shaped-secret-value" not in message
+        assert "400" in message
+        assert "invalid_client" in message
+        assert "GAIA_MICROSOFT_CLIENT_ID" in message
+
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "token-shaped-secret-value" not in log_text
+
+    def test_start_failure_with_unparseable_body_still_names_the_status(
+        self, monkeypatch
+    ):
+        # No JSON at all — there is nothing bounded to report but the status,
+        # and the remediation must still be there.
+        _install_responses(monkeypatch, [_FakeResp(502, None, self.LEAKY_BODY)])
+        with pytest.raises(ConnectorsError) as exc:
+            asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
+        message = str(exc.value)
+        assert self.LEAKY_BODY not in message
+        assert "502" in message
+        assert "GAIA_MICROSOFT_CLIENT_ID" in message

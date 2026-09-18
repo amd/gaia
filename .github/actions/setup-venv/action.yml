@@ -204,7 +204,11 @@ runs:
 
         $EXTRA_INDEX = ""
         if ("${{ inputs.extra-index-url }}" -ne "") {
-          $EXTRA_INDEX = "--extra-index-url ${{ inputs.extra-index-url }}"
+          # Without this, uv's default first-index strategy resolves a package
+          # (e.g. idna) only from whichever index lists it first -- here the
+          # pytorch CPU index -- even if that version is too old for another
+          # dependency (e.g. mcp's httpx2>=2.5.0 needs idna>=3.18).
+          $EXTRA_INDEX = "--extra-index-url ${{ inputs.extra-index-url }} --index-strategy unsafe-best-match"
         }
 
         Write-Host "Installing package: ${{ inputs.install-package }} using uv..."
@@ -221,7 +225,11 @@ runs:
 
         EXTRA_INDEX=""
         if [ -n "${{ inputs.extra-index-url }}" ]; then
-          EXTRA_INDEX="--extra-index-url ${{ inputs.extra-index-url }}"
+          # Without this, uv's default first-index strategy resolves a package
+          # (e.g. idna) only from whichever index lists it first -- here the
+          # pytorch CPU index -- even if that version is too old for another
+          # dependency (e.g. mcp's httpx2>=2.5.0 needs idna>=3.18).
+          EXTRA_INDEX="--extra-index-url ${{ inputs.extra-index-url }} --index-strategy unsafe-best-match"
         fi
 
         echo "Installing package: ${{ inputs.install-package }} using uv..."

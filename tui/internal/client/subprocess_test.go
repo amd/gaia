@@ -185,10 +185,19 @@ func TestSubprocessClient_CloseBeforeSend(t *testing.T) {
 }
 
 func TestSubprocessClient_ProcessExitWithError(t *testing.T) {
-	// Build a mock that exits with code 1 immediately.
+	// The mock reads its prompt before exiting: exiting immediately races the
+	// Send, and once the child is gone the write is a broken pipe.
 	src := `package main
-import "os"
-func main() { os.Exit(1) }
+
+import (
+	"bufio"
+	"os"
+)
+
+func main() {
+	bufio.NewReader(os.Stdin).ReadString('\n')
+	os.Exit(1)
+}
 `
 	tmpDir := t.TempDir()
 	srcPath := filepath.Join(tmpDir, "exit_agent.go")

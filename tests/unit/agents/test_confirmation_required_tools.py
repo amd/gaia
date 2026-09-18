@@ -78,7 +78,12 @@ class TestBaseDefault:
         """Email/calendar-specific names no longer live in the base set (#1440)."""
         for name in ("send_draft", "send_now", "quarantine_phishing_message"):
             assert name not in TOOLS_REQUIRING_CONFIRMATION
-        for name in ("run_shell_command", "write_file", "edit_file"):
+        for name in (
+            "run_shell_command",
+            "execute_python_file",
+            "write_file",
+            "edit_file",
+        ):
             assert name in TOOLS_REQUIRING_CONFIRMATION
 
     def test_bare_agent_confirmation_set_equals_base(self):

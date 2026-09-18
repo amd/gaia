@@ -11,9 +11,169 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.file_edit import (
+    apply_unique_replacement,
+    record_read,
+    record_write,
+)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _directory_path_error(file_path: str) -> Dict[str, Any]:
+    """Error payload for a tool that expects a file but was given a directory.
+
+    ``os.path.exists`` is true for a directory, so the existing-path guard lets
+    it through to ``open()``, which raises ``IsADirectoryError`` into the
+    generic exception handler as a raw errno string (#3890). The message here
+    stays tool-agnostic rather than naming a specific listing tool, since
+    ``browse_directory`` isn't registered for every agent that composes this
+    mixin.
+    """
+    return {
+        "status": "error",
+        "error": (
+            f"'{file_path}' is a directory, not a file. List its contents "
+            "first, then use this tool on a file inside it."
+        ),
+    }
+
+
+def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
+    """Run a post-write display step and report, never raise (#3676).
+
+    The bytes are on disk before any of these run, so a failure here is a
+    display failure, not a failed edit. Letting it reach the tool's ``except``
+    turned a completed write into ``{"status": "error"}``, and the model then
+    told the user the file was untouched.
+    """
+    if console is None:
+        return None
+    try:
+        show(console)
+        return None
+    except Exception as e:
+        logger.warning("Could not display the change (the write succeeded): %s", e)
+        return f"the file was written; displaying the change failed: {e}"
+
+
+class FunctionLookupError(Exception):
+    """``replace_function`` could not resolve the name to exactly one definition."""
+
+
+def _qualified_functions(tree: ast.Module) -> Dict[str, list]:
+    """Map every ``def`` in a module to its dotted qualified name.
+
+    ``foo`` for a module-level function, ``Runner.run`` for a method,
+    ``outer.helper`` for a nested one. Statements that do not open a scope
+    (``if``/``try``/``with``/``for``) are transparent, so a function guarded by
+    ``if TYPE_CHECKING:`` is still module-level.
+    """
+    found: Dict[str, list] = {}
+
+    def walk(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualname = f"{prefix}{child.name}"
+                found.setdefault(qualname, []).append(child)
+                walk(child, f"{qualname}.")
+            elif isinstance(child, ast.ClassDef):
+                walk(child, f"{prefix}{child.name}.")
+            else:
+                walk(child, prefix)
+
+    walk(tree, "")
+    return found
+
+
+def _resolve_function_node(tree: ast.Module, function_name: str):
+    """Find the one definition ``function_name`` names, or raise.
+
+    A bare name resolves against module-level functions only; a nested or
+    method-level definition must be named ``Class.method`` / ``outer.inner``.
+    Guessing is what let ``replace_function("run")`` rewrite the first ``run``
+    anywhere in the file.
+    """
+    name = (function_name or "").strip()
+    table = _qualified_functions(tree)
+    matches = table.get(name, [])
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        where = ", ".join(str(node.lineno) for node in matches)
+        raise FunctionLookupError(
+            f"'{name}' is defined more than once (lines {where}). Refusing to "
+            "guess which definition to replace — for an @overload stack or a "
+            "conditional definition, edit the file with edit_python_file instead."
+        )
+
+    if "." not in name:
+        nested = sorted(q for q in table if q.rsplit(".", 1)[-1] == name)
+        if nested:
+            options = ", ".join(repr(q) for q in nested)
+            raise FunctionLookupError(
+                f"No module-level function named '{name}'. It is defined as "
+                f"{options}. Pass the qualified name so the right definition is "
+                "replaced."
+            )
+
+    raise FunctionLookupError(f"Function '{function_name}' not found in file")
+
+
+def _misplaced_target(new_tree: ast.Module, qualname: str) -> Optional[str]:
+    """Why the rewritten module no longer defines ``qualname``; ``None`` if fine.
+
+    An exact span is not enough on its own: a de-indented method parses cleanly
+    at module level, so the syntax gate passes while the definition quietly
+    leaves its class. The qualified name encodes the scope, so resolving it again
+    in the rewritten tree checks placement, not just presence.
+    """
+    table = _qualified_functions(new_tree)
+    found = table.get(qualname, [])
+    if len(found) == 1:
+        return None
+
+    if len(found) > 1:
+        return (
+            f"The replacement defines '{qualname}' {len(found)} times; it must "
+            "define it exactly once."
+        )
+
+    basename = qualname.rsplit(".", 1)[-1]
+    moved = sorted(q for q in table if q.rsplit(".", 1)[-1] == basename)
+    if moved:
+        return (
+            f"The replacement moves '{qualname}' to "
+            f"{', '.join(repr(q) for q in moved)}. Indent new_implementation to "
+            f"match the definition it replaces — nothing was written."
+        )
+    return (
+        f"The replacement does not define '{qualname}'. It must define the same "
+        "function in the same scope; replace_function does not rename or move "
+        "one. Nothing was written."
+    )
+
+
+def _function_span(node, lines: list) -> tuple:
+    """0-based half-open ``(start, end)`` line span covering decorators + body.
+
+    Uses the AST's own end position. Scanning forward for the next same-indent
+    ``def``/``class`` swept up everything in between — module constants and the
+    next function's decorators — and deleted it.
+    """
+    start = node.lineno - 1
+    if node.decorator_list:
+        start = min(start, node.decorator_list[0].lineno - 1)
+        # PEP 614 parenthesized decorators put the '@' on its own line, above
+        # where the decorator expression starts.
+        while start > 0 and lines[start - 1].lstrip().startswith("@"):
+            start -= 1
+    return start, node.end_lineno
 
 
 class FileIOToolsMixin:
@@ -22,20 +182,41 @@ class FileIOToolsMixin:
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,
     and diffing capabilities for Python files.
-
-    Attributes (provided by CodeAgent via ValidationAndParsingMixin):
-        _validate_python_syntax: Method to validate Python syntax
-        _parse_python_code: Method to parse Python code and extract structure
-
-    NOTE: This mixin expects the agent to also have ValidationAndParsingMixin
-    for _validate_python_syntax() and _parse_python_code() methods.
     """
+
+    def get_file_editing_system_prompt(self) -> str:
+        """Tell the agent the edit tools exist and when to reach for them.
+
+        Auto-discovered by ``Agent._get_mixin_prompts``. Static text, so it lands
+        in the cacheable head of the prompt rather than the volatile tail.
+
+        Measured on 30 corpus moments whose correct next action was an edit, with
+        the target file already held: the shipped prompt named the shell seven
+        times with worked recipes and ``edit_file`` not once, and the agent
+        shelled out or re-read instead of editing on 23 of them. Adding this took
+        working edits from 1 to 6. It does not close the gap — shell is still
+        preferred about half the time (#3600) — but the omission was not
+        deliberate and this is the largest single lever measured.
+        """
+        return (
+            "==== CHANGING A FILE ====\n"
+            "To change a file, call edit_file with the exact existing text as "
+            "old_content, or edit_python_file for .py when you want the edit "
+            "syntax-checked. Both work on any text file — source, documentation, "
+            "configuration.\n"
+            "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
+            "the edit tools validate the path, keep a backup and report what "
+            "changed, and a shell rewrite does none of that.\n"
+            "Do not re-read a file whose content you already hold — edit it directly."
+        )
 
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
 
         @tool
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -45,20 +226,34 @@ class FileIOToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
             """
             try:
-                # Security check
-                if not self.path_validator.is_path_allowed(file_path):
-                    return {
-                        "status": "error",
-                        "error": f"Access denied: {file_path} is not in allowed paths",
-                    }
+                # Scope *and* secrets: being in an allowed directory never made
+                # a private key safe to read into the conversation.
+                is_allowed, reason = self.path_validator.validate_read(file_path)
+                if not is_allowed:
+                    return {"status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
+                        ),
+                    }
 
                 # Read file content
                 try:
@@ -76,6 +271,9 @@ class FileIOToolsMixin:
                         "is_binary": True,
                         "size_bytes": len(content_bytes),
                     }
+
+                # Anchor later edits to what the agent actually saw.
+                record_read(file_path, content)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -95,63 +293,40 @@ class FileIOToolsMixin:
 
                     result["file_type"] = "python"
 
-                    # Validate syntax — use mixin method if available (CodeAgent),
-                    # otherwise fall back to stdlib ast (graceful degradation for ChatAgent)
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                        result["is_valid"] = validation["is_valid"]
-                        result["errors"] = validation.get("errors", [])
-                        is_valid = validation["is_valid"]
-                    else:
-                        try:
-                            ast.parse(content)
-                            result["is_valid"] = True
-                            result["errors"] = []
-                            is_valid = True
-                        except SyntaxError as e:
-                            result["is_valid"] = False
-                            result["errors"] = [str(e)]
-                            is_valid = False
+                    try:
+                        ast.parse(content)
+                        result["is_valid"] = True
+                        result["errors"] = []
+                        is_valid = True
+                    except SyntaxError as e:
+                        result["is_valid"] = False
+                        result["errors"] = [str(e)]
+                        is_valid = False
 
                     # Extract symbols
                     if is_valid:
-                        if hasattr(self, "_parse_python_code"):
-                            parsed = self._parse_python_code(content)
-                            # Handle both ParsedCode object and dict (for backward compat)
-                            if hasattr(parsed, "symbols"):
-                                result["symbols"] = [
-                                    {"name": s.name, "type": s.type, "line": s.line}
-                                    for s in parsed.symbols
-                                ]
-                            elif hasattr(parsed, "ast_tree"):
-                                tree = parsed.ast_tree
-                            else:
-                                tree = None
-                        else:
-                            tree = ast.parse(content)
-
-                        if "symbols" not in result:
-                            symbols = []
-                            for node in ast.walk(tree):
-                                if isinstance(
-                                    node, (ast.FunctionDef, ast.AsyncFunctionDef)
-                                ):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "function",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                                elif isinstance(node, ast.ClassDef):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "class",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                            result["symbols"] = symbols
+                        tree = ast.parse(content)
+                        symbols = []
+                        for node in ast.walk(tree):
+                            if isinstance(
+                                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "function",
+                                        "line": node.lineno,
+                                    }
+                                )
+                            elif isinstance(node, ast.ClassDef):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "class",
+                                        "line": node.lineno,
+                                    }
+                                )
+                        result["symbols"] = symbols
 
                 # Markdown file - extract structure
                 elif ext == ".md":
@@ -206,16 +381,13 @@ class FileIOToolsMixin:
                 Dictionary with write operation results
             """
             try:
-                # Validate syntax if requested (graceful degradation: stdlib ast if no mixin)
+                # Validate syntax if requested
                 if validate:
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                    else:
-                        try:
-                            ast.parse(content)
-                            validation = {"is_valid": True, "errors": []}
-                        except SyntaxError as e:
-                            validation = {"is_valid": False, "errors": [str(e)]}
+                    try:
+                        ast.parse(content)
+                        validation = {"is_valid": True, "errors": []}
+                    except SyntaxError as e:
+                        validation = {"is_valid": False, "errors": [str(e)]}
                     if not validation["is_valid"]:
                         return {
                             "status": "error",
@@ -249,6 +421,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(file_path), content)
 
                 # Audit successful write
                 if path_validator is not None:
@@ -285,9 +458,13 @@ class FileIOToolsMixin:
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
 
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
+
             Args:
                 file_path: Path to the file to edit
-                old_content: Content to find and replace
+                old_content: Content to find and replace; must be unique in the file
                 new_content: New content to insert
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
@@ -334,29 +511,28 @@ class FileIOToolsMixin:
                 # Read current content
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
 
-                # Check if old content exists
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": "Content to replace not found in file",
-                    }
+                modified_content, edit_error = apply_unique_replacement(
+                    str(file_path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(file_path), 0, "denied", edit_error["error"]
+                        )
+                    return edit_error
 
-                # Create new content
-                modified_content = current_content.replace(old_content, new_content, 1)
-
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
@@ -395,6 +571,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                record_write(str(file_path), modified_content)
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -461,6 +638,11 @@ class FileIOToolsMixin:
                             continue
 
                         file_path = os.path.join(root, file)
+                        # A directory-wide grep must not be the way a secret gets
+                        # read back that read_file would have refused outright.
+                        blocked, _ = self.path_validator.is_read_blocked(file_path)
+                        if blocked:
+                            continue
                         files_searched += 1
 
                         try:
@@ -520,12 +702,10 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             try:
-                # Security check
-                if not self.path_validator.is_path_allowed(file_path):
-                    return {
-                        "status": "error",
-                        "error": f"Access denied: {file_path} is not in allowed paths",
-                    }
+                # A diff prints the original file, so it is a read.
+                is_allowed, reason = self.path_validator.validate_read(file_path)
+                if not is_allowed:
+                    return {"status": "error", "error": reason}
 
                 # Read original content
                 if os.path.exists(file_path):
@@ -614,6 +794,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(str(file_path), content)
 
                 # Audit successful write
                 if path_validator is not None:
@@ -644,11 +825,18 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
+            """Create a text file, or replace one wholesale, without validation.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, size limits, backup creation, and audit logging.
+            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
+            .js), configuration (.yml, .json, .toml), plain text.
+
+            Prefer edit_file when changing PART of a file that already exists —
+            this replaces the whole thing. Use write_python_file instead only
+            when you want the write REFUSED if the content is not valid Python.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, size limits, backup
+            creation, and audit logging.
 
             Args:
                 file_path: Path where to write the file
@@ -693,18 +881,23 @@ class FileIOToolsMixin:
 
                 # Write content to file
                 path.write_text(content, encoding="utf-8")
+                record_write(str(path), content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if content.strip():
-                        console.print_prompt(
-                            content,
-                            title=f"✏️ write_file → {path}",
-                        )
-                    else:
-                        console.print_info(
+                if content.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_prompt(
+                            content, title=f"✏️ write_file → {path}"
+                        ),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
                             f"write_file: {path} was created but no content was written."
-                        )
+                        ),
+                    )
 
                 # Audit successful write
                 if path_validator is not None:
@@ -723,6 +916,8 @@ class FileIOToolsMixin:
                 }
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -737,15 +932,28 @@ class FileIOToolsMixin:
             new_content: str,
             project_dir: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Edit any file by replacing old content with new content (no syntax validation).
+            """Change part of a text file in place, without rewriting the rest.
 
-            Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
-            Includes security guardrails: path validation, blocked directory enforcement,
-            sensitive file protection, backup creation, and audit logging.
+            The default way to edit anything: documentation (.md, .mdx, .rst),
+            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
+            .toml), plain text. Prefer it over rewriting a file with write_file,
+            and over shelling out to sed or a here-doc.
+
+            Use edit_python_file instead only when you want the edit REFUSED if
+            it would break Python syntax.
+
+            Includes security guardrails: path validation, blocked directory
+            enforcement, sensitive file protection, backup creation, and audit
+            logging.
+
+            old_content must match exactly one location. Zero or several matches
+            are errors that carry the file's current content, so a retry does not
+            need a separate read.
 
             Args:
                 file_path: Path to the file to edit
-                old_content: Exact content to find and replace
+                old_content: Exact content to find and replace; must be unique
+                    in the file
                 new_content: New content to replace with
                 project_dir: Project root directory for resolving relative paths
 
@@ -806,20 +1014,20 @@ class FileIOToolsMixin:
                 # Read current content
                 current_content = path.read_text(encoding="utf-8")
 
-                # Check if old_content exists in file
-                if old_content not in current_content:
-                    return {
-                        "status": "error",
-                        "error": f"Content to replace not found in {file_path}",
-                    }
+                updated_content, edit_error = apply_unique_replacement(
+                    str(path), current_content, old_content, new_content
+                )
+                if edit_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", edit_error["error"]
+                        )
+                    return edit_error
 
                 # Backup before editing
                 backup_path = None
                 if path_validator is not None:
                     backup_path = path_validator.create_backup(str(path))
-
-                # Replace content
-                updated_content = current_content.replace(old_content, new_content, 1)
 
                 # Generate diff before writing
                 diff = "\n".join(
@@ -834,13 +1042,21 @@ class FileIOToolsMixin:
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
+                record_write(str(path), updated_content)
 
                 console = getattr(self, "console", None)
-                if console:
-                    if diff.strip():
-                        console.print_diff(diff, os.path.basename(str(path)))
-                    else:
-                        console.print_info(f"edit_file: No changes were made to {path}")
+                if diff.strip():
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_diff(diff, os.path.basename(str(path))),
+                    )
+                else:
+                    display_error = _show_after_write(
+                        console,
+                        lambda c: c.print_info(
+                            f"edit_file: No changes were made to {path}"
+                        ),
+                    )
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -865,6 +1081,8 @@ class FileIOToolsMixin:
                 }
                 if backup_path:
                     result["backup_path"] = backup_path
+                if display_error:
+                    result["display_error"] = display_error
                 return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -906,7 +1124,7 @@ class FileIOToolsMixin:
 
                 # Start building content
                 content = "# GAIA.md\n\n"
-                content += "This file provides guidance to GAIA Code Agent when working with code in this project.\n\n"
+                content += "This file provides guidance to the GAIA agent when working with code in this project.\n\n"
 
                 if project_name:
                     content += f"## Project: {project_name}\n\n"
@@ -971,15 +1189,19 @@ class FileIOToolsMixin:
             new_implementation: str,
             backup: bool = True,
         ) -> Dict[str, Any]:
-            """Replace a specific function in a Python file.
+            """Replace one function definition in a Python file.
+
+            Replaces the definition and its decorators, leaving the code around
+            it untouched.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
 
             Args:
                 file_path: Path to the Python file
-                function_name: Name of the function to replace
-                new_implementation: New function implementation
+                function_name: Module-level name, or 'Class.method' for a nested one
+                new_implementation: Complete new definition — include any decorator
+                    it keeps, and match the indentation of the one it replaces
                 backup: Whether to create backup
 
             Returns:
@@ -1023,6 +1245,8 @@ class FileIOToolsMixin:
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -1033,38 +1257,13 @@ class FileIOToolsMixin:
                 except SyntaxError as e:
                     return {"status": "error", "error": f"File has syntax errors: {e}"}
 
-                # Find the function node
-                function_node = None
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if node.name == function_name:
-                            function_node = node
-                            break
+                try:
+                    function_node = _resolve_function_node(tree, function_name)
+                except FunctionLookupError as e:
+                    return {"status": "error", "error": str(e)}
 
-                if not function_node:
-                    return {
-                        "status": "error",
-                        "error": f"Function '{function_name}' not found in file",
-                    }
-
-                # Get line range of the function
                 lines = content.splitlines(keepends=True)
-                start_line = function_node.lineno - 1
-
-                # Find end of function (simplified - finds next def or class at same indent)
-                end_line = len(lines)
-                indent_level = len(lines[start_line]) - len(lines[start_line].lstrip())
-
-                for i in range(start_line + 1, len(lines)):
-                    line = lines[i]
-                    if line.strip() and not line.lstrip().startswith("#"):
-                        current_indent = len(line) - len(line.lstrip())
-                        if current_indent <= indent_level and line.strip():
-                            if line.lstrip().startswith(
-                                ("def ", "class ", "async def ")
-                            ):
-                                end_line = i
-                                break
+                start_line, end_line = _function_span(function_node, lines)
 
                 # Create backup via path_validator if available, else manual
                 backup_path = None
@@ -1078,25 +1277,37 @@ class FileIOToolsMixin:
 
                 # Replace the function
                 new_lines = (
-                    lines[:start_line] + [new_implementation + "\n"] + lines[end_line:]
+                    lines[:start_line]
+                    + [new_implementation.rstrip("\n") + "\n"]
+                    + lines[end_line:]
                 )
                 modified_content = "".join(new_lines)
 
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
                         "error": "Replacement would result in invalid syntax",
                         "syntax_errors": validation.get("errors", []),
                     }
+
+                # Parsing clean is not the same as landing in the right scope.
+                try:
+                    new_tree = ast.parse(modified_content)
+                except SyntaxError as e:
+                    return {
+                        "status": "error",
+                        "error": "Replacement would result in invalid syntax",
+                        "syntax_errors": [str(e)],
+                    }
+                misplaced = _misplaced_target(new_tree, function_name.strip())
+                if misplaced:
+                    return {"status": "error", "error": misplaced}
 
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:

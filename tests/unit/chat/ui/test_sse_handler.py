@@ -495,6 +495,20 @@ class TestPrettyPrintJsonToolResults:
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)
         assert events[0]["success"] is True
+        assert "summary_truncated" not in events[0]
+
+    def test_long_string_result_marks_summary_truncated(self, handler):
+        data = '{"succeeded": ["message-1"], "failed": [{"error": "already archived"}]}'
+        handler.pretty_print_json(data + "x" * 300, title="Result")
+        event = _drain(handler)[0]
+        assert event["summary_truncated"] is True
+        assert len(event["summary"]) == 300
+
+    def test_long_non_dict_result_marks_summary_truncated(self, handler):
+        handler.pretty_print_json(["result"] * 100, title="Result")
+        event = _drain(handler)[0]
+        assert event["summary_truncated"] is True
+        assert len(event["summary"]) == 300
 
     def test_command_output_included(self, handler):
         data = {
@@ -868,6 +882,29 @@ class TestPrintFinalAnswer:
         handler.print_final_answer("answer")
         events = _drain(handler)
         assert "ttft" not in events[0]
+
+    # ── tok_per_s ───────────────────────────────────────────────────────
+    #
+    # Same omit-don't-fake contract: the rate the inference backend measured
+    # rides the wire as "tok_per_s", and a backend that measured none leaves
+    # the key off. The client must not fill the gap by dividing tokens by the
+    # turn's wall clock, which counts tool execution as model time.
+
+    def test_positive_rate_is_emitted(self, handler):
+        handler.print_final_answer("answer", tok_per_s=44.219)
+        events = _drain(handler)
+        assert events[0]["tok_per_s"] == 44.2  # rounded to 1 decimal
+
+    @pytest.mark.parametrize("rate", [None, 0.0, -1.0, float("inf")])
+    def test_rate_omitted_when_unmeasured(self, handler, rate):
+        handler.print_final_answer("answer", tok_per_s=rate)
+        events = _drain(handler)
+        assert "tok_per_s" not in events[0]
+
+    def test_rate_omitted_by_default(self, handler):
+        handler.print_final_answer("answer")
+        events = _drain(handler)
+        assert "tok_per_s" not in events[0]
 
 
 # ===========================================================================

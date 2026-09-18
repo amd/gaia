@@ -60,10 +60,14 @@
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl, default https://hub.amd-gaia.ai.
 #     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
-#                              workers.dev URL: the free-plan managed WAF on the
-#                              proxied hub.amd-gaia.ai custom domain blocks large
-#                              binary uploads, but not GET downloads. Unset →
-#                              falls back to GAIA_HUB_BASE_URL (uploads will 403).
+#                              workers.dev URL: the managed WAF fronting the
+#                              hub.amd-gaia.ai custom domain 403s large binary
+#                              uploads, so POST /publish goes through the
+#                              workers.dev origin instead — same Worker + R2
+#                              bucket, just the door that isn't WAF-blocked
+#                              (GET downloads stay on hub.amd-gaia.ai). REQUIRED —
+#                              the release fails loudly if it is unset (no silent
+#                              fallback).
 #   npm trusted publisher for @amd-gaia/agent-email registered against THIS
 #   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
 #   is tied to the exact filename — renaming this file breaks publish.
@@ -296,6 +300,15 @@ jobs:
           fi
 
   # ── Stage 1b: scorecard presence + regression gate ─────────────────
+  # REGRESSION TOLERANCE. scorecard_gate flags a release-over-release drop only
+  # beyond max(--regression-k x recorded stdev, --regression-floor-pp). Neither is
+  # passed below, so the defaults apply: k=1 and a 1.5pp floor. Cards are now cut
+  # at experiments=1, which records stdev 0.0, so the FLOOR is the live tolerance
+  # -- a drop of up to 1.5pp passes. Deliberate (one run is noisier than the old
+  # 3-run mean), but it does not catch slow decay: three successive 1.4pp drops
+  # each pass individually. The absolute bars (acceptance_target /
+  # urgent_recall_floor, resolved in the `bars` step) are the real anchor and are
+  # enforced independently of the band.
   scorecard-gate:
     name: Scorecard gate
     runs-on: ubuntu-latest
@@ -365,6 +378,17 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
             echo "Ctx-stamp requirement OFF."
           fi
+      - name: Resolve package version being released (#2965)
+        id: pkgver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # package.json is the single source the "Resolve + validate release
+          # version" step (later in this workflow) also cross-checks the tag
+          # against, so re-reading it here needs no extra trust assumption.
+          PKG_VER="$(python -c "import json; print(json.load(open('${PKG_DIR}/package.json'))['version'])")"
+          echo "version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "Package version: ${PKG_VER}"
       - name: Run scorecard gate
         shell: bash
         run: |
@@ -372,36 +396,21 @@ jobs:
           PREV="${{ steps.prev_tag.outputs.prev_tag }}"
           BARS="${{ steps.bars.outputs.args }}"
           CTX="${{ steps.ctx.outputs.args }}"
+          PKGVER="${{ steps.pkgver.outputs.version }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
               --scorecard hub/agents/email/npm/SCORECARD.md \
-              --baseline-ref "${PREV}" ${BARS} ${CTX}
+              --baseline-ref "${PREV}" --expected-version "${PKGVER}" ${BARS} ${CTX}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/email/npm/SCORECARD.md ${BARS} ${CTX}
+              --scorecard hub/agents/email/npm/SCORECARD.md \
+              --expected-version "${PKGVER}" ${BARS} ${CTX}
           fi
 
-  # ── Stage 1c: email eval suite (release gate, self-hosted) ─────────
-  # Runs the SAME triage + drafting + action-item eval suite as the nightly
-  # (test_email_agent_eval.yml) on the [self-hosted, lemonade-eval] AMD runner,
-  # so a release exercises the shipping agent on the committed corpus — not just
-  # the hosted-CI scorecard-presence check above. Report mode: the eval runs +
-  # uploads its scorecard/gate reports and only HARD-BLOCKS the release when a
-  # threshold manifest under tests/fixtures/email/ sets enforce:true (data, not
-  # code). `publish` gates on this job, so a release can't ship without a fresh
-  # eval; the shared `lemonade-eval` concurrency group keeps it serial with the
-  # nightly/refresh runs on the single Lemonade slot.
-  email-eval:
-    name: Email eval suite (release gate)
-    uses: ./.github/workflows/test_email_agent_eval.yml
-    # Triage a smaller slice for the release gate: the full 50-email corpus is one
-    # ~32-min tool call on a 4B local model (~38s/email). 20 emails keeps the perf
-    # signal (TTFT / throughput are per-token, count-independent) and the judge
-    # evals (drafting / action-item / briefing — own seed corpora) unchanged, while
-    # cutting ~19 min off the release. The weekly nightly still runs the full 50.
-    with:
-      limit: '20'
-    secrets: inherit
+  # Stage 1c (email eval suite, self-hosted) removed: the email agent's
+  # capability is moving into the core flagship agent (#3329), so its eval
+  # suite (test_email_agent_eval.yml) no longer gates this release — it's
+  # disabled at its source (if: false) for every caller.
 
   # ── Stage 1d: email test suite (release gate, hosted) ──────────────
   # The full email test suite — unit + connectors + eval-framework tests AND the
@@ -418,7 +427,10 @@ jobs:
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [build, verify-darwin-x64-compat, scorecard-gate, email-eval, email-tests]
+    # email-eval dropped from the gate: disabled at its source
+    # (test_email_agent_eval.yml, if: false) since the email agent's capability
+    # is moving into the core flagship agent (#3329).
+    needs: [build, verify-darwin-x64-compat, scorecard-gate, email-tests]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until a
     # maintainer approves — the human backstop for an accidental/tampered release
@@ -522,6 +534,19 @@ jobs:
             exit 1
           fi
 
+      - name: Assert hub publish URL present
+        shell: bash
+        # Variable goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing.
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Download all platform artifacts
         uses: actions/download-artifact@v8
         with:
@@ -593,10 +618,9 @@ jobs:
           # blocks large binary multipart uploads (the POST /publish path).
           # workers.dev is a separate zone with no such ruleset and hits the same
           # Worker + bucket. Downloads and the lock baseUrl stay on
-          # hub.amd-gaia.ai (GETs aren't blocked). Falls back to the public origin
-          # if the var is unset.
+          # hub.amd-gaia.ai (GETs aren't blocked). Required — the release fails
+          # loudly if the variable is unset.
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           args=()
@@ -632,7 +656,7 @@ jobs:
             capability_matrix_args+=(--capability-matrix "${CAPABILITY_MATRIX}")
           fi
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --readme "${README}" \
             --changelog "${CHANGELOG}" \
@@ -692,7 +716,6 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           VER="${{ steps.ver.outputs.version }}"
@@ -714,7 +737,7 @@ jobs:
           echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
           # Publish the zip as the version's package artifact + its file listing.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${MANIFEST}" \
             --artifact "agent-email-${VER}.zip=package" \
             --package-files package-files.json

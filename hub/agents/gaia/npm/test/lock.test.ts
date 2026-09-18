@@ -49,9 +49,12 @@ describe("shipped binaries.lock.json", () => {
     expect(Object.keys(lock.components).sort()).toEqual([...COMPONENTS].sort());
   });
 
+  // Pinning the literal version here would only force an edit every release;
+  // what actually protects a publish is the lock and package.json agreeing,
+  // and the version being a real semver rather than a leftover placeholder.
   it("agrees with package.json on the version", () => {
     expect(lock.agentVersion).toBe(pkg.version);
-    expect(pkg.version).toBe("0.1.0");
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("publishes the sidecar from the gaia lane at the agent's own version", () => {

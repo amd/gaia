@@ -8,10 +8,10 @@ GAIA agents as "models" in the OpenAI API, allowing users to select which
 agent type they want to use.
 
 Example:
-    User selects "gaia-code" model -> Routes to CodeAgent
-    User selects "gaia-jira" model -> Routes to JiraAgent
+    A caller selects the "gaia" model -> the flagship GaiaAgent
 
-This is a simple hardcoded mapping for users to select agent types.
+One agent is exposed. Capability that used to mean picking a different agent is
+now a skill the flagship loads on demand.
 """
 
 import logging
@@ -27,19 +27,24 @@ from gaia.api.sse_handler import SSEOutputHandler
 logger = logging.getLogger(__name__)
 
 
-# Hardcoded agent mappings: "model" name -> (Agent class, init params)
-# These are the "models" exposed in /v1/models and selectable in VSCode
+# Agent mappings: "model" name -> (Agent class, init params). These are the
+# "models" exposed in /v1/models and selectable from any OpenAI-compatible
+# client (VSCode, curl, an SDK).
+#
+# One entry, the flagship. The per-task agents this map used to expose were
+# collapsed into skills the flagship loads on demand, so "which agent" is no
+# longer a routing decision a caller has to make up front.
 AGENT_MODELS = {
-    "gaia-code": {
-        # RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102).
-        "class_name": "gaia_agent_routing.agent.RoutingAgent",
+    "gaia": {
+        "class_name": "gaia_agent.agent.GaiaAgent",
         "init_params": {
-            "api_mode": True,  # Skip interactive questions, use defaults/best-guess
             "silent_mode": True,
             "streaming": False,
-            "max_steps": 100,
         },
-        "description": "Intelligent routing agent that detects language/project type and routes to CodeAgent",
+        "description": (
+            "GAIA flagship agent — conversation, documents, data, web research, "
+            "memory, and skills"
+        ),
     }
 }
 
@@ -100,7 +105,7 @@ class AgentRegistry:
         Dynamically load agent class from module path.
 
         Args:
-            class_path: Full module path (e.g., "gaia_agent_routing.agent.RoutingAgent")
+            class_path: Full module path (e.g., "gaia_agent_email.agent.EmailTriageAgent")
 
         Returns:
             Agent class
@@ -120,7 +125,7 @@ class AgentRegistry:
         Instantiate and return agent for model ID with SSE output handler.
 
         Args:
-            model_id: Model ID (e.g., "gaia-code", "gaia-jira")
+            model_id: Model ID (e.g., "gaia")
 
         Returns:
             Agent instance configured for API streaming
@@ -130,7 +135,7 @@ class AgentRegistry:
 
         Example:
             >>> registry = AgentRegistry()
-            >>> agent = registry.get_agent("gaia-code")
+            >>> agent = registry.get_agent("gaia")
             >>> result = agent.process_query("Write hello world")
         """
         if model_id not in AGENT_MODELS:
@@ -159,17 +164,11 @@ class AgentRegistry:
         except ImportError as e:
             logger.error(f"Failed to load agent {model_id}: {e}")
             hint = ""
-            if model_id == "gaia-code":
-                # gaia-code routes through the standalone gaia-agent-routing wheel
-                # (#1102), which in turn needs gaia-agent-code. Fail loudly with
-                # an install hint rather than degrading silently.
+            if model_id == "gaia":
                 hint = (
-                    " The 'gaia-code' model routes through RoutingAgent, which "
-                    "ships as the 'gaia-agent-routing' wheel. Neither it nor "
-                    "'gaia-agent-code' is published yet (#2240); install both "
-                    f"from source: '{source_install_command('gaia-agent-routing')}' "
-                    f"and '{source_install_command('gaia-agent-code')}'. See "
-                    "docs/spec/agent-hub-restructure.mdx."
+                    " The 'gaia' model is the flagship agent, which ships as the "
+                    "'gaia-agent-gaia' wheel. It is not published yet (#2240); "
+                    f"install it from source: '{source_install_command('gaia-agent-gaia')}'."
                 )
             raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e
 
@@ -186,19 +185,20 @@ class AgentRegistry:
             >>> registry = AgentRegistry()
             >>> models = registry.list_models()
             >>> [m["id"] for m in models]
-            ['gaia-code', 'gaia-jira']
+            ['gaia']
         """
         models = []
 
         for model_id, config in AGENT_MODELS.items():
             try:
-                # Try to load agent to get metadata (if it implements ApiAgent)
                 agent_class = self._load_agent_class(config["class_name"])
-                agent = agent_class(**config["init_params"])
 
-                # Get model info (custom if ApiAgent, default otherwise)
-                if isinstance(agent, ApiAgent):
-                    model_info = agent.get_model_info()
+                # Only an ApiAgent can customise its metadata, and asking costs
+                # an instance. Check the CLASS first: clients poll /v1/models on
+                # startup, and building an agent to read two integers off it
+                # opens that agent's DB handles and HTTP session every time.
+                if issubclass(agent_class, ApiAgent):
+                    model_info = agent_class(**config["init_params"]).get_model_info()
                     logger.debug(
                         f"Agent {model_id} provides custom model info: {model_info}"
                     )
@@ -241,7 +241,7 @@ class AgentRegistry:
 
         Example:
             >>> registry = AgentRegistry()
-            >>> registry.model_exists("gaia-code")
+            >>> registry.model_exists("gaia")
             True
             >>> registry.model_exists("nonexistent")
             False

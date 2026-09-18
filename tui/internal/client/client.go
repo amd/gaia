@@ -45,15 +45,23 @@ type TranscriptResetter interface {
 // does NOT tear down the caller's own read of the run's event channel: that
 // read has to keep going until the channel closes on its own, because THAT
 // closure — not this call returning — is the one signal proven to follow the
-// server's cleanup. A transport with no such server-side lock (e.g. a local
-// subprocess) does not implement this; for it, tearing down the local
-// connection/process IS the whole cancellation, and the caller's own
-// context.CancelFunc already does that.
+// server's cleanup.
+//
+// The local subprocess implements it too: killing the child would discard the
+// session state it holds, so Cancel asks it to stop and the caller's own
+// context.CancelFunc stays the escalation that kills it.
 type AgentCanceler interface {
-	// Cancel asks the server to stop the currently active run. It returns an
+	// Cancel asks the agent to stop the currently active run. It returns an
 	// actionable error if the request could not be delivered; a run that has
 	// already ended is not an error (there is nothing left to cancel).
 	Cancel(ctx context.Context) error
+}
+
+// LocalAgentStopper is implemented by transports whose agent is a child of
+// this process, so abandoning a turn stops the agent itself instead of leaving
+// the run finishing somewhere out of reach.
+type LocalAgentStopper interface {
+	AbortStopsAgent() bool
 }
 
 // AgentConfirmer is implemented by transports that can resolve a
@@ -111,4 +119,27 @@ type PermissionBypasser interface {
 	// SetBypassPermissions turns unattended approval on or off. It takes
 	// effect on the next gated tool, including one in a turn already running.
 	SetBypassPermissions(enabled bool) error
+}
+
+// Capability names one optional thing a session can do, so the UI can offer
+// or refuse a command without hard-coding transport type switches.
+type Capability string
+
+// CapabilityMemory gates the /memory command: whether this session can fetch
+// the agent's stored memory dump.
+const CapabilityMemory Capability = "memory"
+
+// CapabilityReporter is implemented by transports that can answer, WITHOUT
+// blocking or probing, which optional commands this session supports right
+// now. Both return values matter: supported is the answer, known is whether
+// the answer is trustworthy yet.
+//
+// A daemon-relayed transport only learns the peer's contract from an async
+// probe (negotiate.go), which the UI cannot wait on from a synchronous,
+// per-keystroke call site (paletteFiltered, syncPalette). known == false
+// means "the probe hasn't resolved" -- callers must treat that as "do not
+// hide the command yet", never as "unsupported", or a command flickers away
+// on every keystroke until the probe lands.
+type CapabilityReporter interface {
+	Supports(c Capability) (supported, known bool)
 }

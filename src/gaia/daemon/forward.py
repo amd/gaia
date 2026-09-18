@@ -27,7 +27,8 @@ Fail loudly, no silent fallbacks (CLAUDE.md):
 - mint fails because the connection was revoked / not connected → the underlying
   ``AuthRequiredError`` is re-raised AND any stale forward is withdrawn from the
   sidecar, so the sidecar loses access loudly rather than running on a stale
-  token;
+  token; transport failures are logged and leave a still-valid forward alone
+  for the next refresh tick;
 - the sidecar intake POST/DELETE fails → :class:`ForwardDeliveryError` naming
   the sidecar URL and the transport error.
 
@@ -42,6 +43,11 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectionRevokedError,
+)
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.daemon.sidecars.errors import UnknownAgentError
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
@@ -193,7 +199,9 @@ class ConnectionForwarder:
         Raises :class:`NotGrantedError` when the provider is not granted to the
         agent (the daemon never forwards a credential the user did not grant). A
         mint failure from a revoked/absent connection re-raises the connectors
-        error AND withdraws any stale forward from the sidecar.
+        error AND withdraws any stale forward from the sidecar. Transport or
+        other transient mint failures are logged and re-raised without
+        withdrawing a still-valid forward.
 
         The mint (#2730 D5) is scoped to the agent's REQUIRED subset for
         *provider* — not the whole ledger claim — so an optional (e.g.
@@ -260,7 +268,7 @@ class ConnectionForwarder:
             token, expires_at = self._mint(
                 provider=provider, scopes=required, agent_id=grant_agent_id
             )
-        except Exception as e:
+        except (AuthRequiredError, ConnectionRevokedError, ConfigurationError) as e:
             # A revoked / not-connected mint is loud here; also withdraw any
             # stale token already on the sidecar so it cannot keep running on it.
             logger.warning(
@@ -279,6 +287,18 @@ class ConnectionForwarder:
                     provider,
                     withdraw_err,
                 )
+            raise
+        except Exception as e:
+            # An unclassified failure must not turn a short-lived network blip
+            # into a mailbox outage by withdrawing a still-valid forward. The
+            # refresh loop will retry on its next tick.
+            logger.warning(
+                "forward-out: unclassified mint failure for '%s' on agent '%s' "
+                "(%s); retaining any existing forward for the next refresh",
+                provider,
+                agent_id,
+                e,
+            )
             raise
 
         if requirement is not None:

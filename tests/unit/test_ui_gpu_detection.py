@@ -160,7 +160,51 @@ def test_gpu_display_info_non_numeric_vram_is_undetected_not_zero(caplog):
 # ── /api/system/status ───────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    "kind,source", [("legacy", "probe"), ("modern", "env"), ("modern", "probe")]
+)
+@pytest.mark.allow_network
+def test_system_status_renders_the_complete_context_remedy(
+    kind, source, stub_lemonade, monkeypatch
+):
+    from gaia.llm.lemonade_launcher import LemonadeTooling
+
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        lambda: LemonadeTooling(
+            found=True,
+            kind=kind,
+            source=source,
+            client_path="/usr/bin/lemonade",
+            server_launcher=(
+                "/usr/bin/lemonade-server" if kind == "legacy" else "/usr/bin/lemond"
+            ),
+        ),
+    )
+    stub_lemonade(
+        {
+            "/health": {"model_loaded": "Gemma-4-E4B-it-GGUF"},
+            "/models": {"data": []},
+            "/system-info": {"devices": {}},
+        }
+    )
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    if kind == "legacy":
+        assert (
+            body["start_command"] == "/usr/bin/lemonade-server serve --ctx-size 32768"
+        )
+    elif source == "env":
+        assert body["start_command"] == "LEMONADE_CTX_SIZE=32768 /usr/bin/lemond"
+    else:
+        assert body["start_command"] is None
+        assert "32768" in body["start_instruction"]
+        assert "reload the model" in body["start_instruction"]
+
+
 @pytest.mark.parametrize("fixture,expected_name,expected_vram", REAL_PAYLOADS)
+@pytest.mark.allow_network
 def test_system_status_reports_gpu(
     fixture, expected_name, expected_vram, stub_lemonade
 ):
@@ -178,6 +222,7 @@ def test_system_status_reports_gpu(
     assert body["gpu_vram_gb"] == expected_vram
 
 
+@pytest.mark.allow_network
 def test_system_status_no_gpu_reports_null(stub_lemonade):
     stub_lemonade(
         {
@@ -193,6 +238,7 @@ def test_system_status_no_gpu_reports_null(stub_lemonade):
     assert body["gpu_vram_gb"] is None
 
 
+@pytest.mark.allow_network
 def test_system_status_detects_npu_from_real_payload(stub_lemonade):
     """NPU detection must survive the GPU refactor (linux fixture has an NPU)."""
     stub_lemonade(
@@ -208,6 +254,7 @@ def test_system_status_detects_npu_from_real_payload(stub_lemonade):
     assert "npu" in body["detected_devices"]
 
 
+@pytest.mark.allow_network
 def test_system_status_no_npu_on_macos(stub_lemonade):
     stub_lemonade(
         {
@@ -222,11 +269,48 @@ def test_system_status_no_npu_on_macos(stub_lemonade):
     assert "npu" not in body["detected_devices"]
 
 
+@pytest.mark.allow_network
+def test_system_status_reports_health_query_failure(stub_lemonade):
+    """A failed health/catalog probe must not masquerade as a confirmed outage."""
+    stub_lemonade({})
+
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["lemonade_running"] is False
+    assert body["lemonade_error"] == "Lemonade health query failed"
+
+
+@pytest.mark.allow_network
+def test_system_status_connection_refused_keeps_not_running_state(monkeypatch):
+    import httpx
+
+    class _FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            raise httpx.ConnectError(
+                "connection refused",
+                request=httpx.Request("GET", "http://localhost:13305"),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FailingClient())
+
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["lemonade_running"] is False
+    assert body["lemonade_error"] is None
+
+
 # ── onboarding preflight probe ───────────────────────────────────────────
 
 
 @pytest.mark.parametrize("fixture,expected_name,expected_vram", REAL_PAYLOADS)
 @pytest.mark.asyncio
+@pytest.mark.allow_network
 async def test_onboarding_probe_reports_gpu(
     fixture, expected_name, expected_vram, stub_lemonade
 ):
@@ -240,6 +324,7 @@ async def test_onboarding_probe_reports_gpu(
 
 
 @pytest.mark.asyncio
+@pytest.mark.allow_network
 async def test_onboarding_probe_no_gpu_reports_none(stub_lemonade):
     stub_lemonade({"/system-info": {"devices": load_devices("cpu_only.json")}})
 
@@ -250,6 +335,7 @@ async def test_onboarding_probe_no_gpu_reports_none(stub_lemonade):
 
 
 @pytest.mark.asyncio
+@pytest.mark.allow_network
 async def test_onboarding_probe_npu_flags_from_real_payloads(stub_lemonade):
     stub_lemonade(
         {"/system-info": {"devices": load_devices("lemonade11_amd_igpu_linux.json")}}
@@ -261,6 +347,7 @@ async def test_onboarding_probe_npu_flags_from_real_payloads(stub_lemonade):
 
 
 @pytest.mark.asyncio
+@pytest.mark.allow_network
 async def test_onboarding_probe_npu_absent_is_false_not_unknown(stub_lemonade):
     """Lemonade answered, so a missing NPU is a definite False (not None)."""
     stub_lemonade(
@@ -270,3 +357,66 @@ async def test_onboarding_probe_npu_absent_is_false_not_unknown(stub_lemonade):
     result = await onboarding_mod._probe_lemonade_devices()
 
     assert result["npu_detected"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.allow_network
+async def test_onboarding_probe_reports_query_failure(monkeypatch):
+    class _FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            raise RuntimeError("connection refused")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FailingClient())
+
+    result = await onboarding_mod._probe_lemonade_devices()
+
+    assert result["lemonade_running"] is False
+    assert result["npu_detected"] is None
+    assert result["lemonade_error"] == "Lemonade system-info query failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.allow_network
+async def test_onboarding_probe_connection_refused_keeps_npu_unknown(monkeypatch):
+    import httpx
+
+    class _FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            raise httpx.ConnectError(
+                "connection refused",
+                request=httpx.Request("GET", "http://localhost:13305"),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FailingClient())
+
+    result = await onboarding_mod._probe_lemonade_devices()
+
+    assert result["lemonade_running"] is False
+    assert result["npu_detected"] is None
+    assert result["lemonade_error"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.allow_network
+async def test_onboarding_probe_reports_non_200_query(stub_lemonade):
+    stub_lemonade({})
+
+    result = await onboarding_mod._probe_lemonade_devices()
+
+    assert result["lemonade_running"] is False
+    assert result["npu_detected"] is None
+    assert result["lemonade_error"] == "Lemonade system-info query failed"

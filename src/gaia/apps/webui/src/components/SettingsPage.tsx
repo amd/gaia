@@ -13,6 +13,7 @@ import type { SystemStatus, MCPServerStatus } from '../types';
 import { CustomAgentsSection } from './CustomAgentsSection';
 import { ConnectorsSection } from './ConnectorsSection';
 import { VersionPicker } from './VersionPicker';
+import { SessionToolGrants } from './SessionToolGrants';
 import './ConnectorsSection.css';
 import './SettingsModal.css';
 import './SettingsPage.css';
@@ -226,10 +227,10 @@ export function SettingsPage() {
                             <div className="status-grid">
                                 <StatusRow
                                     label="Lemonade Server"
-                                    value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'}
+                                    value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : status.lemonade_error ? 'Status unavailable' : 'Not Running'}
                                     ok={status.lemonade_running}
                                     hint={!status.lemonade_running
-                                        ? (status.initialized ? (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? 'Start Lemonade Server')) : 'Run: gaia init --profile chat')
+                                        ? (status.lemonade_error ? 'Could not query Lemonade Server; check it and retry.' : status.initialized ? (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? 'Start Lemonade Server')) : 'Run: gaia init')
                                         : undefined}
                                 />
                                 <StatusRow
@@ -237,7 +238,7 @@ export function SettingsPage() {
                                     value={status.model_loaded || 'None loaded'}
                                     ok={!!status.model_loaded && status.expected_model_loaded !== false}
                                     hint={!status.model_loaded
-                                        ? 'Run: gaia init --profile chat'
+                                        ? 'Run: gaia init'
                                         : status.expected_model_loaded === false
                                         ? `Expected: ${modelName}`
                                         : undefined}
@@ -606,6 +607,12 @@ export function SettingsPage() {
                 {showVersionPicker && (
                     <VersionPicker onClose={() => setShowVersionPicker(false)} />
                 )}
+
+                {/* Tools & Permissions */}
+                <section className="settings-section">
+                    <h4>Tools &amp; Permissions</h4>
+                    <SessionToolGrants />
+                </section>
 
                 {/* Privacy & Data */}
                 <section className="settings-section">

@@ -468,6 +468,22 @@ agent = MyAgent(
 
 ---
 
+## Large tool results
+
+The agent applies a character budget to plain-string tool results as well as
+structured results before sending them to the model. Strings at or below the
+threshold remain unchanged. Oversized strings become a JSON envelope containing
+`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
+serialized envelope, including escaping, fits the target budget, so long logs
+retain both their initial context and final diagnostic lines.
+
+Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
+for GPU/CPU. An omitted device follows the configured profile; FLM models retain
+the NPU budget. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens. The envelope includes
+an artifact handle and continuation instructions for recovering the omitted
+middle with `read_tool_output`. Structured results retain complete records.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
@@ -840,15 +856,18 @@ def tool(func):
     # 1. Extract the function signature
     sig = inspect.signature(func)
 
-    # 2. Build a minimal per-parameter map from type hints.
-    #    Each entry is just {type, required} — the whole docstring is stored
-    #    once as `description`; per-argument descriptions are NOT parsed out.
+    # 2. Build a per-parameter map from type hints + the docstring's Args: block.
+    #    The whole docstring is stored once as `description`; each argument also
+    #    carries its own line so the model reads it at the slot it fills.
+    arg_descriptions = parse_arg_descriptions(func.__doc__)
     params = {}
     for name, param in sig.parameters.items():
         params[name] = {
-            "type": python_type_to_json_type(param.annotation),  # str→string, int→integer, …
+            "type": python_type_to_json_type(param.annotation),  # str→string, List[str]→array, …
             "required": param.default is inspect.Parameter.empty,
         }
+        if arg_descriptions.get(name):
+            params[name]["description"] = arg_descriptions[name]
 
     # 3. Register in the global _TOOL_REGISTRY under the function name.
     _TOOL_REGISTRY[func.__name__] = {
@@ -866,6 +885,54 @@ they matter so much. See the [Tools guide](./tools) for the authoritative
 walkthrough of the registry entry.
 
 </Accordion>
+
+---
+
+## Verification Scope
+
+Every answer the agent loop emits ends with one line saying whether the result
+was actually checked. Without it, "done" reads the same whether the agent ran
+the test suite or ran nothing at all, and the only rational response is to
+distrust every completion message.
+
+```text
+Fixed the off-by-one in the pagination helper.
+
+Verification: verified — pytest ran and passed.
+```
+
+Three states, derived from the tool calls that actually executed during the
+turn — no extra model call:
+
+| State | When |
+|-------|------|
+| `verified` | At least one test / lint / build ran, and every one passed. |
+| `partially verified` | Checks ran, but not all of them passed. |
+| `unverified` | No check ran. Names how many tools did run, if any. |
+
+A call counts as a check when the tool is one of `run_tests`, `run_lint`,
+`typecheck`, or `build`, or when its `command` argument names a known runner
+(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
+classifier also recognizes completed `execute_python_file` results containing a
+pytest summary or unittest run summary and an integer exit code. Reading a file
+containing test output, a refusal, or an ordinary script exit does not establish
+that tests ran. Other unrecognized runners remain `unverified`.
+
+The statement rides in the emitted answer, so it reaches every surface — the
+CLI console, the SSE `answer` event, and `process_query`'s return value — and
+it is capped at `VERIFICATION_SCOPE_MAX_CHARS` (200) so it cannot grow the
+prompt as conversation history accumulates.
+
+```python
+from gaia.agents.base.verification import strip_verification_scope
+
+answer_only = strip_verification_scope(result["result"])
+```
+
+<Note>
+A turn cancelled from the UI returns an empty result on purpose, and carries no
+statement — filling it in would make a cancelled turn look like a completed one.
+</Note>
 
 ---
 
@@ -992,3 +1059,25 @@ See pre-built agents for chat, code, Jira, Blender
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 </small>
+
+
+## Recovering large tool outputs
+
+When a result exceeds the model budget, the excerpt includes an `artifact`
+handle and `continuation: read_tool_output`. Call
+`read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
+`next_offset` is the next character offset, or `null` at the end. Pages are
+limited to 8,000 characters. Unicode offsets count characters, not bytes.
+The archived text is the original string, or JSON for a structured result.
+Small results remain unchanged. Structured excerpts retain whole records.
+
+Shell, Python execution and browser excerpts retain omitted output before
+applying their own display limits. File readers accept `offset` and `limit`
+for bounded text pages, including files too large for a full read. Their normal
+path permissions still apply; paging does not authorize a new path.
+
+Output handles belong to the producing agent process, expire after one hour,
+and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
+quota exhaustion return explicit errors. Restarting an agent invalidates its
+output handles; rerun the source tool if the session has ended. A continuation
+reads captured output rather than re-executing a potentially state-changing tool.

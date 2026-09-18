@@ -41,12 +41,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main dispatcher |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge |
 
-**Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/<id>/python/`):
-
-| Script | Entry | Hub package |
-|--------|-------|-------------|
-| `gaia-code` | `gaia_agent_code.cli:main` | `gaia-agent-code` (`hub/agents/code/python/`) |
-| `gaia-emr` | `gaia_agent_emr.cli:main` | `gaia-agent-emr` (`hub/agents/emr/python/`) |
+**Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/<id>/python/`). None ship today: per-task agents were collapsed into skills, so a new capability is a `SKILL.md`, not a new binary.
 
 ## Current top-level subcommands
 

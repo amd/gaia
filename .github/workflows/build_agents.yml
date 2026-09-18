@@ -26,7 +26,7 @@ on:
       - 'cpp/**'
       - '.github/workflows/build_agents.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'cpp/**'
@@ -93,6 +93,7 @@ jobs:
         with:
           path: cpp/build/_deps
           key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-agents-${{ matrix.platform }}-
 
       - name: Install static OpenSSL via vcpkg (${{ matrix.triplet }})
         shell: bash

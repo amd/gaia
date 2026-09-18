@@ -34,6 +34,39 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 
 ---
 
+## Host Agent Contract
+
+`RAGToolsMixin` is a mixin, not a base class — it reads state off `self` that it
+never initializes itself. A class mixing it in must set all five attributes
+below before `_register_tools()` runs, or every tool call hits an
+`AttributeError` internally the moment it touches `self.rag` — caught and
+turned into a "temporarily unavailable" fallback response rather than
+surfacing to the caller (see below):
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `self.rag` | `RAGSDK` | The document index and query engine. |
+| `self.indexed_files` | `set` or `list` | Tracks which files are indexed. |
+| `self.max_chunks` | `int` | Default chunk count for retrieval. |
+| `self.current_session` | any, or `None` | `None` is a valid, expected value. |
+| `self.session_manager` | any, or `None` | `None` is a valid, expected value. |
+
+Nothing sets these for you — not the base `Agent` class, not `RAGToolsMixin`
+itself. `ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+is the reference implementation: it sets all five before calling
+`super().__init__()`, because `_register_tools()` runs inside that call. The
+[custom agent guide](/guides/custom-agent) shows the same pattern for a
+minimal example.
+
+This is enforced by convention today, not by the mixin — a host class that
+forgets one of these fails silently in the specific sense that the tool call
+still returns a response, just a "temporarily unavailable" fallback instead
+of an error a developer would notice. [#3316](https://github.com/amd/gaia/issues/3316)
+tracks making `_register_tools()` fail loudly at registration time instead of
+relying on documentation to catch this.
+
+---
+
 ## Requirements
 
 ### Functional Requirements
