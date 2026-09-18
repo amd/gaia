@@ -271,7 +271,8 @@ class FileSearchToolsMixin:
                 "old_size": int,   # chars before edit
                 "new_size": int,   # chars after edit
                 "diff": str,       # unified diff
-                "backup_path": str # only when a backup was created
+                "backup_path": str # only when a backup was created; under
+                                   # ~/.gaia/cache/backups/, never beside the file
             }
 
             On rejection:

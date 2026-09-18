@@ -494,12 +494,12 @@ class TestCreateBackup:
     """Test PathValidator.create_backup() method."""
 
     @pytest.fixture
-    def validator(self, tmp_path):
-        """Create a PathValidator with tmp_path allowed."""
+    def validator(self, tmp_path, mock_home):
+        """Create a PathValidator with tmp_path allowed; ~/.gaia is under it."""
         return PathValidator(allowed_paths=[str(tmp_path)])
 
     def test_backup_creates_file(self, validator, tmp_path):
-        """Verify backup creates a new file alongside the original."""
+        """Verify backup creates a copy of the original."""
         original = tmp_path / "document.txt"
         original.write_text("original content here")
 
@@ -575,15 +575,34 @@ class TestCreateBackup:
         assert backup_path is not None
         assert str(backup_path) != str(original)
 
-    def test_backup_in_same_directory(self, validator, tmp_path):
-        """Verify backup is created in the same directory as the original."""
-        original = tmp_path / "notes.md"
+    def test_backup_lands_in_gaia_state_mirroring_the_original(
+        self, validator, tmp_path
+    ):
+        """Under ~/.gaia/cache/backups, at the original's own absolute path."""
+        work = tmp_path / "repo" / "docs"
+        work.mkdir(parents=True)
+        original = work / "notes.md"
         original.write_text("# Notes")
 
-        backup_path = validator.create_backup(str(original))
+        backup_path = Path(validator.create_backup(str(original)))
 
-        assert backup_path is not None
-        assert os.path.dirname(backup_path) == str(tmp_path)
+        real = original.resolve()
+        expected_dir = (
+            validator.cache_dir / "backups" / real.parent.relative_to(real.anchor)
+        )
+        assert backup_path.parent == expected_dir
+        assert backup_path.name.startswith("notes.md.")
+        assert backup_path.read_text() == "# Notes"
+
+    def test_backing_up_leaves_nothing_next_to_the_original(self, validator, tmp_path):
+        work = tmp_path / "repo"
+        work.mkdir()
+        original = work / "notes.md"
+        original.write_text("# Notes")
+
+        validator.create_backup(str(original))
+
+        assert sorted(p.name for p in work.iterdir()) == ["notes.md"]
 
     def test_multiple_backups_have_unique_names(self, validator, tmp_path):
         """Verify multiple backups of the same file produce unique names."""
@@ -1476,3 +1495,72 @@ class TestNoPathValidatorFallback:
         # Should succeed (with warning logged)
         assert result["status"] == "success"
         assert result["bytes_written"] == 5
+
+
+# ============================================================================
+# 11. Edits leave no backup next to the edited file
+# ============================================================================
+
+
+class TestEditingLeavesTheWorkspaceClean:
+    """Every write/edit used to leave ``name.<stamp>.bak`` beside the file, and
+    nothing removed them — they littered every repository the agent touched."""
+
+    @pytest.fixture
+    def repo(self, tmp_path, mock_home):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+        return repo
+
+    @staticmethod
+    def _tool(mixin_cls, register, name, repo):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        mixin = mixin_cls()
+        mixin.path_validator = PathValidator(allowed_paths=[str(repo)])
+        mixin._path_validator = None
+        mixin.console = None
+        saved = dict(_TOOL_REGISTRY)
+        _TOOL_REGISTRY.clear()
+        try:
+            getattr(mixin, register)()
+            return _TOOL_REGISTRY[name]["function"], mixin.path_validator
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+
+    @pytest.mark.parametrize(
+        "module, mixin, register",
+        [
+            (
+                "gaia.agents.tools.file_tools",
+                "FileSearchToolsMixin",
+                "register_file_search_tools",
+            ),
+            (
+                "gaia.agents.tools.file_io_tools",
+                "FileIOToolsMixin",
+                "register_file_io_tools",
+            ),
+        ],
+    )
+    def test_edit_file_leaves_no_new_file_beside_the_original(
+        self, repo, module, mixin, register
+    ):
+        import importlib
+
+        mixin_cls = getattr(importlib.import_module(module), mixin)
+        edit_file, validator = self._tool(mixin_cls, register, "edit_file", repo)
+
+        result = edit_file(
+            file_path=str(repo / "app.py"), old_content="x = 1", new_content="x = 2"
+        )
+
+        assert result["status"] == "success", result
+        assert (repo / "app.py").read_text(encoding="utf-8") == "x = 2\n"
+        assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
+        # The safety net is still there, in GAIA's own state directory.
+        backup = Path(result["backup_path"])
+        assert backup.is_relative_to(validator.cache_dir / "backups")
+        assert backup.read_text(encoding="utf-8") == "x = 1\n"

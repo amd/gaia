@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import sys
 from contextlib import contextmanager
@@ -908,31 +909,47 @@ class PathValidator:
     def create_backup(self, path: str) -> Optional[str]:
         """Create a timestamped backup of a file before modification.
 
+        Backups live under ``<cache_dir>/backups``, at the original's absolute
+        path, so editing a repository never leaves files in it.
+
         Args:
             path: Path to the file to back up.
 
         Returns:
             Backup file path if successful, None if file doesn't exist or backup failed.
         """
-        try:
-            real_path = Path(os.path.realpath(path)).resolve()
-            if not real_path.exists():
-                return None
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            # ".bak" goes LAST. Keeping the original extension made a backup of
-            # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
-            # collects and cannot import, so editing a test file broke the whole
-            # suite (#3747). Nothing globs *.bak.
-            backup_path = real_path.with_name(f"{real_path.name}.{timestamp}.bak")
-
-            shutil.copy2(str(real_path), str(backup_path))
-            audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
-            logger.debug(f"Created backup: {backup_path}")
-            return str(backup_path)
-        except Exception as e:
-            logger.warning(f"Failed to create backup of {path}: {e}")
+        real_path = Path(os.path.realpath(path)).resolve()
+        if not real_path.exists():
             return None
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # A drive or UNC share becomes one plain folder name under backups/.
+        drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")
+        mirror = self.cache_dir / "backups"
+        if drive:
+            mirror = mirror / drive
+        mirror = mirror / real_path.parent.relative_to(real_path.anchor)
+        # ".bak" goes LAST. Keeping the original extension made a backup of
+        # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
+        # collects and cannot import, so editing a test file broke the whole
+        # suite (#3747). Nothing globs *.bak.
+        backup_path = mirror / f"{real_path.name}.{timestamp}.bak"
+
+        try:
+            mirror.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(real_path), str(backup_path))
+        except OSError as e:
+            logger.warning(
+                "Failed to back up %s to %s: %s. The edit goes ahead without a "
+                "backup.",
+                real_path,
+                backup_path,
+                e,
+            )
+            return None
+        audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
+        logger.debug(f"Created backup: {backup_path}")
+        return str(backup_path)
 
     def audit_write(
         self, operation: str, path: str, size: int, status: str, detail: str = ""

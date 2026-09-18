@@ -92,7 +92,9 @@ Edit a Python file by replacing content with validation.
 - `old_content` (str, required): Content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to insert
-- `backup` (bool, optional): Create backup (default: True)
+- `backup` (bool, optional): Create backup (default: True). With a
+  `PathValidator` the copy goes to `~/.gaia/cache/backups/<original absolute
+  path>/<name>.<timestamp>.bak`, never beside the file.
 - `dry_run` (bool, optional): Only simulate (default: False)
 
 **Returns:**
