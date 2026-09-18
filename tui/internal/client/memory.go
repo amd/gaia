@@ -156,6 +156,15 @@ func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 				"again once the agent responds",
 			s.agentID)
 	}
+	if s.agentID != memoryAgentID {
+		// A different agent entirely, not an out-of-date one: telling the user
+		// to reinstall it would be wrong, and calling the route anyway would
+		// turn a 404 into the "advertised then refused" shape #3978 removes.
+		return MemoryDump{}, fmt.Errorf(
+			"the '%s' agent does not keep a memory store — only '%s' does. "+
+				"Run `gaia tui` to talk to it, or `gaia tui status` to see what is installed",
+			s.agentID, memoryAgentID)
+	}
 	if !contractAtLeast(peer.version, memoryContractMajor, memoryContractMinor) {
 		return MemoryDump{}, &ErrMemoryContractTooOld{AgentID: s.agentID, Version: peer.version}
 	}

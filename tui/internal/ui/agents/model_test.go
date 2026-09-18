@@ -182,13 +182,21 @@ func TestEscCancelsWithoutSelecting(t *testing.T) {
 	}
 }
 
-func TestOldPanelResultsCannotAffectNewPanel(t *testing.T) {
-	old := New(&stubLister{catalogOut: &catalog.HubCatalog{}}, 80, 24)
+func TestAbandonedLoadResultsCannotLandOnTheCurrentList(t *testing.T) {
 	m := New(&stubLister{catalogOut: &catalog.HubCatalog{}}, 80, 24)
-	next, _ := m.Update(loadedMsg{source: old.client, rows: []row{{id: "stale"}}})
+	stale := m.gen
+	m.abandonLoad()
+
+	next, _ := m.Update(loadedMsg{gen: stale, rows: []row{{id: "stale"}}})
 	m = next.(Model)
 	if len(m.rows) != 0 {
-		t.Fatal("a stale client's result reached a different panel")
+		t.Fatal("a result from an abandoned load overwrote the current list")
+	}
+
+	// ...while the load that IS current still lands.
+	next, _ = m.Update(loadedMsg{gen: m.gen, rows: []row{{id: "gaia"}}})
+	if len(next.(Model).rows) != 1 {
+		t.Fatal("the current load's result was dropped")
 	}
 }
 
