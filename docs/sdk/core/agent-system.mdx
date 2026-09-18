@@ -902,6 +902,10 @@ pytest summary or unittest run summary and an integer exit code. Reading a file
 containing test output, a refusal, or an ordinary script exit does not establish
 that tests ran. Other unrecognized runners remain `unverified`.
 
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`.
+
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
 it is capped at `VERIFICATION_SCOPE_MAX_CHARS` (200) so it cannot grow the

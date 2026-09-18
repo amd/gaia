@@ -180,6 +180,10 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     passed), ``partially verified`` (checks ran, not all passed), and
     ``unverified`` (no check ran at all).
 
+    A check that ran more than once counts once, by its most recent run: a
+    test that failed and then passed after a fix is verified, and one that
+    passed and then failed after an edit is not (#3989).
+
     A check the agent *requested* and never got to run — refused by the shell
     allowlist, declined by the user — is none of those three. It is named as
     not having run, and never counted as one that did (#3677).
@@ -219,8 +223,13 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
                 "test, lint, or build."
             )
     else:
-        passed = [e for e in checks if not e.get("failed")]
-        failed = [e for e in checks if e.get("failed")]
+        # A check that ran more than once is judged by its latest run, so a
+        # fix that made it pass and an edit that made it fail stay distinct.
+        latest: Dict[str, Dict[str, Any]] = {}
+        for execution in checks:
+            latest[execution["check_label"]] = execution
+        passed = [e for e in latest.values() if not e.get("failed")]
+        failed = [e for e in latest.values() if e.get("failed")]
         # A check left unrun keeps the claim below "verified", whatever the
         # ones that did run reported.
         unrun = f" {_names(blocked)} did not run." if blocked else ""

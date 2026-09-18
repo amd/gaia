@@ -262,6 +262,121 @@ def test_duplicate_labels_collapse():
     assert statement.count("pytest") == 1
 
 
+# ---------------------------------------------------------------------------
+# A check that ran more than once is judged by its latest run (#3989)
+# ---------------------------------------------------------------------------
+
+
+def test_a_check_that_failed_then_passed_after_a_fix_is_verified():
+    statement = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_check_that_passed_then_failed_after_an_edit_did_not_pass():
+    statement = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest ran and did not pass" in statement
+    assert "passed," not in statement
+
+
+def test_the_two_orders_no_longer_read_the_same():
+    fixed = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    broken = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert fixed != broken
+
+
+def test_only_the_last_of_many_runs_counts():
+    statement = build_verification_scope(
+        [
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+        ]
+    )
+    assert "pytest ran and did not pass" in statement
+
+
+def test_distinct_labels_are_each_judged_on_their_own_latest_run():
+    statement = build_verification_scope(
+        [
+            _execution("ruff", failed=True),
+            _execution("pytest"),
+            _execution("ruff"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "ruff, pytest passed" in statement
+    assert "mypy did not" in statement
+
+
+def test_distinct_labels_with_one_run_each_are_unchanged():
+    statement = build_verification_scope(
+        [_execution("ruff"), _execution("pytest", failed=True)]
+    )
+    assert "ruff passed, pytest did not." in statement
+
+
+def test_a_refused_attempt_then_a_fail_then_a_fix_is_verified():
+    statement = build_verification_scope(
+        [
+            _blocked("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_loop_reports_a_fixed_test_as_verified(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("refactor", max_steps=5)["result"])
+    assert "pytest ran and did not pass" in line
+    assert "pytest passed" not in line
+
+
+def _scripted_runs(agent_, *runs):
+    """Script the model to run each command in turn, the shell returning each result."""
+    results = [result for result, _ in runs]
+    real_tool_result = _DummyAgent.shell_result
+
+    def _next_result():
+        return results.pop(0) if results else real_tool_result
+
+    responses = [_tool_call(command) for _, command in runs] + [_answer("Done.")]
+    chat = _stub_chat(agent_, *responses)
+    send = chat.send_messages.side_effect
+
+    def _send(*args, **kwargs):
+        agent_.shell_result = _next_result()
+        return send(*args, **kwargs)
+
+    chat.send_messages.side_effect = _send
+
+
 def test_every_state_fits_the_bound():
     for executions in (
         [],
