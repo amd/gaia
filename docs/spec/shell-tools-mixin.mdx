@@ -237,6 +237,33 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+### Full Access
+
+Off by default. Turned on only by the flagship sidecar's `--full-access` launch
+flag or the TUI's `/full-access`, both of which set `full_access` (and
+`auto_approve_gated_tools`) on the session's output handler.
+`full_access_active()` reads that attribute live, so a mid-session toggle takes
+effect on the next command.
+
+When on, the operator block and the rate limit come off, the command runs through
+a real shell, and `_validate_command` returns only `TIER_REFUSE` results —
+everything the default policy would have asked about runs unasked. Still refused:
+paths outside the allowed directories (checked at execution) and the refuse tier
+(`gh auth token`, `git -c`, encoded PowerShell, an unparseable command). The per-segment `_split_pipeline` +
+`_validate_command` walk stays intact so every invocation is still audited to
+`~/.gaia/cache/file_audit.log`.
+
+Segment separators include the newline, not just `&&`, `||`, `;`, `&` and `|` —
+the shell running the string treats a line break as a command separator, so the
+walk has to as well, or a second command rides in unvalidated and unaudited. A
+newline inside quotes stays ordinary data, and a heredoc body
+(`python3 - <<'EOF'` … `EOF`) is skipped: it is input to its command, not a
+command.
+
+This permits arbitrary code execution, and is reachable on the stdio transport
+only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
+and why the HTTP transport is excluded.
+
 ### Git Command Filtering
 
 ```python
