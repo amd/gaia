@@ -703,6 +703,80 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# Fabricated-save guard (#4010): a final answer that asserts a file was
+# written when no write tool ran this turn.
+_MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+# File-writing tools the guard can name in its correction. Presence of one of
+# these in the registry is what makes the claim checkable at all.
+_FILE_WRITE_TOOLS: Tuple[str, ...] = (
+    "write_file",
+    "write_markdown_file",
+    "write_python_file",
+    "edit_file",
+)
+# Matched permissively against every tool called this turn: any of these
+# markers means something plausibly touched disk, so the claim is believed.
+# Over-matching only costs recall; under-matching would block a true save.
+_FILE_WRITE_TOOL_MARKERS: Tuple[str, ...] = (
+    "write",
+    "save",
+    "edit",
+    "create",
+    "download",
+    "export",
+    "replace",
+    "generate_image",
+)
+_FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
+_FILE_WRITE_CLAIM_PATTERNS = (
+    # "I saved …", "I've written …", "I have now created …"
+    re.compile(
+        rf"\bi(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+|successfully\s+)*"
+        rf"{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # "… has been saved", "… was written", "… is now stored"
+    re.compile(
+        rf"\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|already\s+|successfully\s+)*"
+        rf"(?:been\s+)?{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # A bare "Saved to …" / "Written to …" opening a sentence or line
+    re.compile(
+        rf"(?:^|[.!?]\s+|\n)\s*{_FILE_WRITE_VERBS}\s+"
+        rf"(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
+        re.IGNORECASE,
+    ),
+)
+_FILE_TARGET_PATTERN = re.compile(
+    r"\b(?:file|files|filename|path|directory|folder|disk)\b"
+    r"|[\w~./\\-]+\.[A-Za-z0-9]{1,6}\b"
+    r"|[A-Za-z]:[\\/]"
+    r"|(?:^|\s)[~/][\w./\\-]+"
+    # "…to `routine.md`" — a backticked destination is a path even when the
+    # model invents a bare name with no extension.
+    r"|(?:to|at|in|into)\s+`[^`]+`",
+    re.IGNORECASE,
+)
+
+
+def _claims_file_write(answer: str) -> bool:
+    """True when the prose asserts a file has already been written to disk.
+
+    A sentence must carry both a completed write verb and a file/path target,
+    so "I saved the routine to notes/routine.md" fires while "I created a
+    summary of the meeting" does not. Fenced code is ignored — a sample
+    command is not a claim.
+    """
+    prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
+        if not _FILE_TARGET_PATTERN.search(sentence):
+            continue
+        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+            return True
+    return False
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -5297,6 +5371,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        file_write_claim_reprompts = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7200,6 +7275,44 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
+
+                # Fabricated-save guard: the answer says a file was written but
+                # no tool that can touch disk ran this turn, so nothing was.
+                if (
+                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                    and steps_taken < steps_limit - 1
+                    and _claims_file_write(answer_candidate)
+                ):
+                    _registry = self._tools_registry
+                    _write_tool = next(
+                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
+                    )
+                    _wrote_this_turn = any(
+                        any(_m in _tname.lower() for _m in _FILE_WRITE_TOOL_MARKERS)
+                        for _tname, _ in tool_call_log
+                    )
+                    if _write_tool and not _wrote_this_turn:
+                        file_write_claim_reprompts += 1
+                        logger.debug(
+                            "[WORKFLOW] Blocking unbacked file-write claim as final "
+                            "answer: %s",
+                            answer_candidate[:120],
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: Your answer says a file was saved, but no "
+                                    "file-writing tool ran in this turn — nothing was "
+                                    "written to disk. If the file is still needed, call "
+                                    f"`{_write_tool}` now with the full content and the "
+                                    "exact path. If you mean a file written earlier in "
+                                    "the conversation, say that explicitly instead of "
+                                    "claiming you just saved it."
+                                ),
+                            }
+                        )
+                        continue
 
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
