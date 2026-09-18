@@ -28,7 +28,9 @@ import (
 var dev bool
 
 // fullAccessFlag backs --full-access: the agent runs every gated tool —
-// shell commands, file writes — without asking.
+// shell commands, file writes — without asking, and the shell's own guardrails
+// come off with them (compound commands and heredocs run, the rate limit is
+// lifted).
 //
 // Off unless passed, or saved as the default with /full-access always or
 // `gaia config set full_access true` (see preflight.ReadFullAccess). Either
@@ -210,9 +212,10 @@ func init() {
 		panic(err) // only fails on a flag name that was never registered
 	}
 	rootCmd.PersistentFlags().BoolVar(&fullAccessFlag, "full-access", false,
-		"subprocess agents only: run every tool without asking for confirmation — the agent acts fully "+
-			"autonomously. Off by default; the TUI shows a persistent warning "+
-			"while it is on, and /full-access off turns it off mid-session")
+		"subprocess agents only: run every tool without asking for confirmation, "+
+			"with the shell guardrails off — the agent acts fully autonomously and "+
+			"can execute arbitrary code. Off by default; the TUI shows a persistent "+
+			"warning while it is on, and /full-access off turns it off mid-session")
 	// Retired name: registered only so passing it fails naming the new one.
 	rootCmd.PersistentFlags().BoolVar(&retiredBypassFlag, "bypass-permissions", false, "")
 	if err := rootCmd.PersistentFlags().MarkHidden("bypass-permissions"); err != nil {

@@ -47,6 +47,18 @@ the terminal UI meant building it from source.
   starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
   and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
   it. See SKILL §11.
+- **`--full-access` now lifts the shell guardrails too.** It used to skip
+  only the confirmation prompt, which left the agent unable to run a build or a
+  test suite even with the user's blanket consent: compound commands were
+  refused before they parsed, and no interpreter, test runner or package manager
+  was reachable. Under full access, `&&` / `||` / `;` / `>` now parse and run, the
+  read-only allowlist is replaced by a developer set (`node`, `npm`, `make`,
+  `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`, `export`,
+  `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh`), and the shell rate
+  limit is dropped. Off by default and byte-identical to before when off. `rm`
+  stays excluded. Every command run this way is audit-logged with its full
+  arguments. Stdio only — the HTTP transport cannot be put in full access, and the
+  request body cannot ask for it. See SPEC §5.5.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a

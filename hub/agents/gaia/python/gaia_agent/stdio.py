@@ -169,12 +169,26 @@ class PermissionState:
         if full_access:
             # Starting unattended is the same security event as toggling it on
             # mid-session, and it never went through set_full_access.
-            audit.warning("Full access ENABLED at launch")
+            audit.warning("Full access ENABLED at launch (shell gates off)")
 
     @property
     def full_access(self) -> bool:
         with self._lock:
             return self._full_access
+
+    @staticmethod
+    def _apply(handler: Any, enabled: bool) -> None:
+        """Write this session's full-access decision onto one handler.
+
+        Two attributes, because they are two different grants that happen to be
+        turned on together. ``auto_approve_gated_tools`` skips the confirmation
+        prompt; ``full_access`` additionally lifts the shell guardrails —
+        the operator block, the read-only binary policy and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second.
+        """
+        handler.auto_approve_gated_tools = enabled
+        handler.full_access = enabled
 
     def set_full_access(self, enabled: bool) -> None:
         """Turn full access on or off, taking effect on the very next gated tool.
@@ -185,13 +199,17 @@ class PermissionState:
         with self._lock:
             self._full_access = enabled
             if self._handler is not None:
-                self._handler.auto_approve_gated_tools = enabled
-        audit.warning("Full access %s", "ENABLED" if enabled else "disabled")
+                self._apply(self._handler, enabled)
+        audit.warning(
+            "Full access %s (shell gates %s)",
+            "ENABLED" if enabled else "disabled",
+            "off" if enabled else "on",
+        )
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
-            handler.auto_approve_gated_tools = self._full_access
+            self._apply(handler, self._full_access)
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
@@ -1192,9 +1210,13 @@ def build_parser() -> "argparse.ArgumentParser":
         "--full-access",
         dest="full_access",
         action="store_true",
-        help="Start with confirmation prompts OFF: every gated tool runs "
-        "without asking. Off unless passed, and the host can toggle it at any "
-        "time over the control channel.",
+        help="Start with the permission gates OFF: every gated tool runs "
+        "without asking, shell operators (&&, ||, ;, >) parse and run, the "
+        "read-only binary policy is replaced by the developer set (node, npm, "
+        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh) and the "
+        "shell rate limit is lifted. This is arbitrary code execution. Off "
+        "unless passed, and the host can toggle it at any time over the "
+        "control channel. Every shell command run this way is audit-logged.",
     )
     parser.add_argument(
         "--bypass-permissions",

@@ -34,7 +34,7 @@ import (
 
 const (
 	fullAccessBannerText = "FULL ACCESS — the agent runs every tool " +
-		"without asking. /full-access off to stop."
+		"without asking, shell guardrails off. /full-access off to stop."
 	// Shown when the terminal is too narrow for the sentence. Still says the
 	// two things that matter: what is on, and that it is dangerous.
 	fullAccessBannerShort = "FULL ACCESS ON"
@@ -76,6 +76,9 @@ func (m ChatModel) armFullAccess() (tea.Model, tea.Cmd) {
 		Content: "[!] Full access would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
+			"    It also takes the shell guardrails off: compound commands and " +
+			"heredocs run, and commands outside the read-only list (python, " +
+			"pytest, npm, make, rm) run in this directory without a prompt.\n" +
 			"    Type /full-access confirm to turn it on, or /full-access off at any " +
 			"time to turn it back off.\n" +
 			"    /full-access always keeps it on for every future session too.",
