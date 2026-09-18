@@ -144,8 +144,33 @@ func TestMemoryFetchFailureIsReportedNotSilent(t *testing.T) {
 		t.Error("a failed fetch still populated memoryView")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "agent closed the connection") {
+	if last.Role != RoleError || !strings.Contains(last.Content, "agent closed the connection") {
 		t.Errorf("failure was not reported: %+v", last)
+	}
+}
+
+// A too-old sidecar's own error already names the contract floor and the fix
+// (gaia hub uninstall/install) -- it must survive verbatim, not get
+// flattened into the generic "could not load memory" line above.
+func TestMemoryContractTooOldSurfacesItsOwnMessage(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	tooOld := &client.ErrMemoryContractTooOld{AgentID: "gaia", Version: "2.10"}
+	updated, _ := m.update(memoryDumpMsg{err: tooOld})
+	m = updated.(ChatModel)
+
+	last := m.messages[len(m.messages)-1]
+	if last.Role != RoleError || last.Content != tooOld.Error() {
+		t.Errorf("expected the contract error's own message verbatim, got: %+v", last)
+	}
+	// The type-equality check above passes even if Error() itself went blank or
+	// dropped the recovery commands — assert the words a user actually needs:
+	// the agent it is about, the floor it is below, and both fix commands.
+	for _, want := range []string{"gaia", "2.10", "gaia hub uninstall gaia", "gaia hub install gaia"} {
+		if !strings.Contains(last.Content, want) {
+			t.Errorf("contract-too-old message missing %q: %q", want, last.Content)
+		}
 	}
 }
 
@@ -159,8 +184,9 @@ func TestMemoryUnsupportedClientReportsPlainly(t *testing.T) {
 		t.Error("an unsupported client should not start a fetch")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "/memory") {
-		t.Errorf("no plain explanation for an unsupported client: %+v", last)
+	if last.Role != RoleError || !strings.Contains(last.Content, "/memory") ||
+		!strings.Contains(last.Content, "gaia tui status") {
+		t.Errorf("no actionable explanation for an unsupported client: %+v", last)
 	}
 }
 

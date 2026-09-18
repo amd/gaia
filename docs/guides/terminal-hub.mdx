@@ -33,12 +33,15 @@ gaia-tui
 </Note>
 
 <Warning>
-  GAIA ships **one** agent through this binary: there is nothing to browse and nothing
-  to pick. An earlier version of the TUI opened on an Agent Hub browser — install,
-  uninstall, search, vote — with the flagship agent listed as "Coming Soon." That
-  screen, and the `list` / `install` / `uninstall` / `hub` subcommands that drove it,
-  are gone. Installing a hub sidecar agent (`email`) is now the Python CLI's job —
-  `gaia hub install <id>` — not the terminal's.
+  This binary boots straight into the flagship, and it does not install, uninstall,
+  search, or vote on agents — that stays the Python CLI's job, `gaia hub install <id>`.
+  An earlier version of the TUI opened on an Agent Hub browser that did all of that,
+  with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
+  `uninstall` / `hub` subcommands that drove it, are gone for good.
+
+  What did come back, scoped down: type `/agents` in chat to list every agent already
+  installed on this machine and switch to one, without quitting the TUI. See
+  [`/agents`](#3-chat) below.
 </Warning>
 
 ## Installing
@@ -224,17 +227,22 @@ broken.
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
- GAIA  │ <agent>
+GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: <agent>
+Connected to: agent gaia v0.2.0
 
 Type a message and press Enter to start chatting.
 Type /help for available commands.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
-  ● <agent> connected                                                Ctrl+C quit
+  ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
+
+The `agent <id>` segment is always the stable id, lowercased — the same string
+`--agent <id>` takes, so you can read it straight off the header and pass it back.
+On a narrow terminal this segment is the first thing to give way, never the model
+chip next to it.
 
 | Key | What it does |
 |---|---|
@@ -273,6 +281,18 @@ outright.
 | `/bypass` | Let the agent run tools without asking (off by default) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
+| `/agents` | List agents installed on this machine and switch to one, without quitting |
+
+Commands the current agent can't run drop out of `/help` and the `/` palette on
+their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
+needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-hub-memory)).
+`/agents` is always available.
+
+Selecting a different agent from `/agents` reconnects in place and re-runs the
+readiness gate for it; the transcript stays on screen with a divider noting the
+switch, but the new agent never sees the conversation above that line. Backing
+out of the picker (`Esc`) returns to the chat you were already in — it does not
+quit the TUI.
 
 Typing `/` as the first character of an empty composer opens a palette listing every
 command above with a one-line description, so there's no need to already know them or

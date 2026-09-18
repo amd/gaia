@@ -38,6 +38,7 @@ var paletteCommands = []paletteCommand{
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/cost", "What this session has spent; /cost help for rates"},
+	{"/agents", "List installed agents and switch this session to one"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the
@@ -93,21 +94,31 @@ func filterModelCommands(arg string) []paletteCommand {
 }
 
 // filterPaletteCommands narrows paletteCommands to the ones whose name
-// starts with the composer's current text, case-insensitively. Recomputed
-// fresh on every keystroke rather than cached — the list is 7 entries long,
-// and caching it correctly would mean invalidating on every input change
-// anyway.
-func filterPaletteCommands(value string) []paletteCommand {
+// starts with the composer's current text, case-insensitively, AND that
+// available marks as offered. Recomputed fresh on every keystroke rather
+// than cached — the list is 7 entries long, and caching it correctly would
+// mean invalidating on every input change anyway.
+//
+// available is nil-safe: a nil map (no gating context, e.g. a bare palette
+// unit test) offers everything, same as before per-agent gating existed.
+func filterPaletteCommands(value string, available map[string]bool) []paletteCommand {
 	// The space after `/model` is the switch into the model picker, so this
 	// one case is matched BEFORE trimming — trimming would erase the very
 	// character that distinguishes "/model" (still naming a command) from
-	// "/model " (now naming its argument).
+	// "/model " (now naming its argument). Gated too: an agent that refuses
+	// /model must not let typing the argument form open the picker anyway.
 	if arg, ok := strings.CutPrefix(strings.ToLower(value), modelPalettePrefix); ok {
+		if available != nil && !available[modelCommandPrefix] {
+			return nil
+		}
 		return filterModelCommands(strings.TrimSpace(arg))
 	}
 	q := strings.ToLower(strings.TrimSpace(value))
 	var out []paletteCommand
 	for _, c := range paletteCommands {
+		if available != nil && !available[c.Name] {
+			continue
+		}
 		if strings.HasPrefix(c.Name, q) {
 			out = append(out, c)
 		}
@@ -125,9 +136,10 @@ type commandPalette struct {
 	selected int
 }
 
-// paletteFiltered is the command list for the composer's CURRENT text.
+// paletteFiltered is the command list for the composer's CURRENT text,
+// narrowed to what this session's agent actually supports (availability.go).
 func (m ChatModel) paletteFiltered() []paletteCommand {
-	return filterPaletteCommands(m.input.Value())
+	return filterPaletteCommands(m.input.Value(), m.availableCommandSet())
 }
 
 // syncPalette opens, filters, or closes the palette to match the composer's
@@ -149,7 +161,7 @@ func (m *ChatModel) syncPalette() {
 		m.palette.selected = 0
 		return
 	}
-	if len(filterPaletteCommands(value)) == 0 {
+	if len(filterPaletteCommands(value, m.availableCommandSet())) == 0 {
 		m.palette.open = false
 		m.palette.selected = 0
 		return
@@ -393,21 +405,22 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 	}
 
 	lines := paletteBodyLines(query, items, selected, inner)
-	rendered := paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
-	// Measured on the RENDERED box, not on len(lines): a row whose description
-	// does not fit `inner` wraps, so the line count under-reports the height
-	// and the palette overflowed the window it was asked to fit. It used to
-	// hold because the list was short enough never to wrap; that is an
-	// assumption about content, and content changes.
-	//
-	// No scrolling here (unlike help): a window too short to hold the list is
-	// too short for a usable palette at all — leave the composer visible
-	// instead of clipping.
-	if lipgloss.Height(rendered) > height {
+	if len(lines)+paletteChromeRows > height {
+		// No scrolling here (unlike help): the list is a handful of commands
+		// long, so a window too short to hold it is too short for a usable
+		// palette at all — leave the composer visible instead of clipping.
 		return "", false
 	}
 
-	return rendered, true
+	box = paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
+	// Measured, not counted: Width() soft-wraps any line wider than the box,
+	// so a title too long for a narrow terminal costs a row the line count
+	// above cannot see — and an overflowing box pushes the frame past the
+	// window it was handed.
+	if lipgloss.Height(box)+paletteChromeRows > height {
+		return "", false
+	}
+	return box, true
 }
 
 // paletteBodyPrefixRows is how many rendered lines (title, divider, echoed

@@ -385,6 +385,13 @@ class LemonadeInstaller:
                 self._unreachable_asset_error(url, f"timed out after {timeout}s"),
                 definitive=False,
             ) from e
+        except ConnectionError as e:
+            # http.client.RemoteDisconnected is raised directly by
+            # HTTPConnection.getresponse() and is NOT wrapped in URLError - a
+            # transient drop, not proof the asset is gone.
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, str(e)), definitive=False
+            ) from e
 
         if status != 200:
             raise LemonadeAssetError(
@@ -470,6 +477,12 @@ class LemonadeInstaller:
             raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Download failed: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            # http.client.RemoteDisconnected escapes URLError - see do_open().
+            raise RuntimeError(
+                f"Download of {url} dropped mid-transfer: {e}. This is usually a "
+                f"transient network failure - retry the install."
+            ) from e
         except Exception as e:
             raise RuntimeError(f"Download failed: {e}")
 
