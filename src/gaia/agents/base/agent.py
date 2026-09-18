@@ -1643,10 +1643,13 @@ Do NOT wrap conversational replies in JSON.
         follow-up ("and the one before that?") still carries the prior turn's
         subject instead of matching on four pronouns.
         """
+        # MemoryMixin prepends its per-turn context to the message; to BM25 that
+        # preamble is noise that drops a real match below MIN_SCORE.
+        clean = getattr(self, "_original_user_input", None) or user_input
         builder = getattr(self, "_build_tool_selection_query", None)
         if callable(builder):
-            return builder(user_input)
-        return user_input
+            return builder(clean)
+        return clean
 
     def get_skill_discovery_system_prompt(self) -> str:
         """Sourcing rule + this turn's discovery note.

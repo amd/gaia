@@ -114,6 +114,36 @@ def test_a_described_but_unnamed_request_really_loads_the_skill(agent):
     assert agent._skill_discovery_result.loaded == "github-triage"
 
 
+def test_the_memory_context_preamble_does_not_dilute_the_match(agent):
+    """``MemoryMixin`` prepends per-turn context to every message it forwards.
+
+    Those tokens are real content for the model and pure noise for BM25: on the
+    same query the score drops 0.69 -> 0.24, turning an auto-load into a
+    shortlist the model mostly ignores (#3764) — on turn 1, where discovery
+    matters most. Discovery has to score the user's own words, which the mixin
+    keeps in ``_original_user_input``.
+    """
+    clean = "what's been going on in my github inbox the past few days?"
+    augmented = (
+        "[GAIA Memory Context]\n"
+        "Current time: 2026-09-18T00:14:00-0700 (Friday)\n"
+        f"\n{clean}"
+    )
+
+    # The dilution is real, not hypothetical: scored as handed over, the same
+    # turn does not clear the bar. Without this half the assertion below could
+    # pass for the wrong reason if the retriever were ever retuned.
+    agent._discover_skills_for_turn(augmented)
+    assert agent.loaded_skills == {}
+
+    # What the mixin actually sets on the way in.
+    agent._original_user_input = clean
+    agent._discover_skills_for_turn(augmented)
+
+    assert "github-triage" in agent.loaded_skills
+    assert agent._skill_discovery_result.loaded == "github-triage"
+
+
 def test_the_loaded_skills_instructions_reach_the_prompt(agent):
     """A load that does not change the prompt has not done anything."""
     agent._discover_skills_for_turn("triage my github inbox")
