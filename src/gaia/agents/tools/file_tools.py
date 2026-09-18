@@ -50,6 +50,7 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
         return str(e)
     return None
 
+
 #: Enough of a file to tell text from binary. Executables and archives carry a
 #: NUL well inside this; source files do not.
 _BINARY_SNIFF_BYTES = 4096
