@@ -232,3 +232,144 @@ class TestOAuthPkceDisconnectRevokes:
         assert result["revoked_remotely"] is False
         assert result["revoke_error"]
         assert peek_connection("google") is None
+
+
+def _logged_expressions() -> list[str]:
+    """Every value expression passed to a ``logger.*`` call inside
+    ``revoke_provider_token`` (the %-format template itself excluded)."""
+    import ast
+    import inspect
+
+    import gaia.connectors.flow as flow_mod
+
+    tree = ast.parse(inspect.getsource(flow_mod))
+    func = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and n.name == "revoke_provider_token"
+    )
+    exprs: list[str] = []
+    for node in ast.walk(func):
+        fn = getattr(node, "func", None)
+        if not isinstance(node, ast.Call) or not isinstance(fn, ast.Attribute):
+            continue
+        if not isinstance(fn.value, ast.Name) or fn.value.id != "logger":
+            continue
+        assert isinstance(node.args[0], ast.Constant), (
+            "log templates must be plain literals with %-args, never f-strings "
+            f"(an f-string smuggles values past this guard): {ast.unparse(node.args[0])}"
+        )
+        exprs.extend(ast.unparse(a) for a in node.args[1:])
+    return exprs
+
+
+class TestRevokeLoggingCarriesNoCredentialDerivedValues:
+    """The revoke path's WARNING logs must stay free of anything derived from
+    the stored connection or the connector spec.
+
+    ``provider_id`` comes from ``ConnectorSpec.oauth_provider_ref``, and the
+    credential-name heuristics in common static analysis (CodeQL's included)
+    read any name containing ``oauth`` as secret material — so logging it marks
+    the whole revoke path as leaking credentials, drowning out the real leak
+    this file exists to prevent. The logs name the revoke endpoint's host
+    instead: just as exact about which provider failed, with no such lineage.
+    """
+
+    # Everything the two WARNING calls in ``revoke_provider_token`` may log.
+    # Anything else — the provider id, the blob, the token, the response body,
+    # a stringified exception — is a regression.
+    ALLOWED_LOG_ARGS = {
+        "revoke_host",
+        "type(exc).__name__",
+        "response.status_code",
+    }
+
+    def test_only_allowlisted_expressions_are_logged(self):
+        logged = _logged_expressions()
+        assert logged, "expected revoke_provider_token to still log its failures"
+        assert set(logged) <= self.ALLOWED_LOG_ARGS, (
+            "revoke_provider_token logs an expression outside the allowlist: "
+            f"{sorted(set(logged) - self.ALLOWED_LOG_ARGS)}"
+        )
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_rejection_log_names_the_endpoint(self, seeded_google, caplog):
+        respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(400, text="invalid_token")
+        )
+        with caplog.at_level("WARNING", logger="gaia.connectors.flow"):
+            await revoke_provider_token("google")
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "oauth2.googleapis.com" in log_text
+        assert "400" in log_text
+
+
+class TestProviderRevokeUrlContract:
+    """``revoke_url`` is part of the ``OAuthProvider`` protocol, not an
+    optional extra: ``revoke_provider_token`` reads it directly, so a provider
+    that forgets it raises instead of quietly reporting "revoke unsupported"
+    for a grant that is still live."""
+
+    def test_declared_on_the_protocol(self):
+        from gaia.connectors.providers.base import OAuthProvider
+
+        assert "revoke_url" in OAuthProvider.__annotations__
+
+    def test_every_builtin_provider_declares_it(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        _provider_registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        for provider_id in ("google", "microsoft"):
+            # Attribute access, not getattr-with-default — the exact read
+            # revoke_provider_token performs.
+            assert hasattr(get_provider(provider_id), "revoke_url")
+
+    @pytest.mark.asyncio
+    async def test_provider_without_revoke_url_raises(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+
+        class _ForgetfulProvider:
+            provider_id = "forgetful"
+            client_id_hash = "hash"
+
+        _provider_registry["forgetful"] = _ForgetfulProvider()
+        try:
+            with pytest.raises(AttributeError):
+                await revoke_provider_token("forgetful")
+        finally:
+            _provider_registry.pop("forgetful", None)
+
+
+class TestForwardedGuardIsIndependentOfGaiaCredentials:
+    """The forwarded check must not depend on GAIA's own OAuth client being
+    configured. It runs before provider resolution, so a machine with no
+    ``GAIA_GOOGLE_CLIENT_ID`` still reports the forwarded reason rather than
+    the unrelated "provider could not be resolved"."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_forwarded_reason_without_gaia_client_id(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        _provider_registry.clear()
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            client_id_hash="host-app-client-hash",
+            forwarded=True,
+        )
+        # respx has no route for the revoke endpoint — any outbound call fails
+        # the test, proving the host app's grant is never touched.
+        result = await revoke_provider_token("google")
+        assert result["revoke_supported"] is False
+        assert result["revoked_remotely"] is False
+        assert "forwarded" in result["revoke_error"]
+        assert "could not be resolved" not in result["revoke_error"]
+        assert peek_connection("google")["refresh_token"] == "host-app-rt"

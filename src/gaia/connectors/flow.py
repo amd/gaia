@@ -39,6 +39,7 @@ import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from aiohttp import web
@@ -478,7 +479,10 @@ async def revoke_provider_token(
             "revoked_remotely": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
         }
-    revoke_url = getattr(provider, "revoke_url", None)
+    # Read the attribute directly, never via getattr-with-default: a provider
+    # that forgets to declare it must fail loudly, not silently report
+    # "revoke not supported" — the exact dishonesty #2591 exists to remove.
+    revoke_url = provider.revoke_url
     result: Dict[str, Any] = {
         "revoke_supported": bool(revoke_url),
         "revoked_remotely": False,
@@ -486,6 +490,11 @@ async def revoke_provider_token(
     }
     if not revoke_url:
         return result
+
+    # Logs name the endpoint, not ``provider_id``: the id is derived from
+    # ``spec.oauth_provider_ref``, which every credential-name heuristic reads
+    # as secret material, and the host identifies the provider just as exactly.
+    revoke_host = urlsplit(revoke_url).netloc
 
     refresh_token = (blob or {}).get("refresh_token")
     if not refresh_token:
@@ -508,8 +517,8 @@ async def revoke_provider_token(
             f"{provider_id} revoke request failed: {type(exc).__name__}"
         )
         logger.warning(
-            "flow: provider-side revoke request failed provider=%s error_type=%s",
-            provider_id,
+            "flow: provider-side revoke request failed endpoint=%s error_type=%s",
+            revoke_host,
             type(exc).__name__,
         )
         return result
@@ -528,8 +537,8 @@ async def revoke_provider_token(
         f"(status {response.status_code})"
     )
     logger.warning(
-        "flow: provider-side revoke rejected provider=%s status=%s",
-        provider_id,
+        "flow: provider-side revoke rejected endpoint=%s status=%s",
+        revoke_host,
         response.status_code,
     )
     return result
