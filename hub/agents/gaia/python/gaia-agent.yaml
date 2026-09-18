@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.1.1
+version: 0.2.0
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
@@ -18,24 +18,27 @@ icon: sparkles
 # 57 from ChatAgent's "full" profile (incl. transcribe_media and
 # refine_transcript) + 7 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
+# + 5 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + remember_skill_lesson + the load_tools escape hatch, which registers
 # because dynamic_tools is on.
 # This is the REGISTERED size — what the agent can do. Dynamic tool loading
 # means a single turn only shows the model a subset of it.
-tools_count: 73
+tools_count: 79
 
 language: python
 # 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise
-# this sidecar at all; 0.23.1 is the first core that can (#2932).
-min_gaia_version: "0.23.1"
+# this sidecar at all; 0.24.0 was tagged but never got a completed release
+# (a CI gate bug blocked it — see #3915-#3917), so 0.24.1 is the first
+# actually-released core that can (#2932).
+min_gaia_version: "0.24.1"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.23.1"
+    - "amd-gaia>=0.24.1"
     - "gaia-agent-chat>=0.1.0"
 
 interfaces:

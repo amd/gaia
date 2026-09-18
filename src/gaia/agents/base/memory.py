@@ -34,6 +34,7 @@ Spec: docs/spec/agent-memory-architecture.md
 """
 
 import concurrent.futures
+import ctypes
 import json
 import logging
 import os
@@ -297,6 +298,90 @@ def _omp_conflict_override() -> bool:
         "true",
         "yes",
     }
+
+
+#: Shared-library basenames that are an OpenMP runtime. Two distinct ones in a
+#: process means the second to initialise aborts it ("OMP: Error #15").
+_OMP_RUNTIME_PREFIXES = ("libomp", "libiomp5", "libgomp")
+
+
+def _loaded_omp_runtimes() -> tuple[str, ...]:
+    """Paths of the OpenMP runtimes currently mapped into this process.
+
+    macOS only: the abort is a dyld-level duplicate-runtime check, and on Linux
+    libgomp and libomp coexist routinely, so reporting a "conflict" there would
+    disable recall on healthy hosts. Best-effort — an empty tuple means "could
+    not tell", never "verified safe".
+    """
+    if sys.platform != "darwin":
+        return ()
+    try:
+        libc = ctypes.CDLL(None)
+        libc._dyld_image_count.restype = ctypes.c_uint32
+        libc._dyld_get_image_name.restype = ctypes.c_char_p
+        libc._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+        found = []
+        for i in range(libc._dyld_image_count()):
+            raw = libc._dyld_get_image_name(i)
+            if not raw:
+                continue
+            path = raw.decode("utf-8", "replace")
+            if path.rsplit("/", 1)[-1].startswith(_OMP_RUNTIME_PREFIXES):
+                found.append(path)
+        return tuple(sorted(set(found)))
+    except Exception as e:  # pragma: no cover - platform introspection
+        logger.debug("[MemoryMixin] could not enumerate OpenMP runtimes: %s", e)
+        return ()
+
+
+def assert_faiss_omp_safe(operation: str) -> None:
+    """Refuse a faiss call that would SIGABRT this process.
+
+    faiss-cpu and torch each bundle their own ``libomp.dylib``. Both resident
+    means the next OpenMP region — a faiss search, or torch's first parallel
+    op — initialises the second copy and macOS kills the process. That abort is
+    native: no ``except`` can catch it, so the only place to stop it is before
+    the call. ``_get_cross_encoder`` guards the import direction; this guards
+    the search direction, which is fatal whichever library loaded first.
+
+    Raises:
+        RuntimeError: when a second OpenMP runtime is already resident.
+    """
+    if _omp_conflict_override():
+        return
+    runtimes = _loaded_omp_runtimes()
+    if len(runtimes) < 2:
+        return
+    raise RuntimeError(
+        f"{operation} would abort this process: {len(runtimes)} OpenMP runtimes "
+        f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
+        "one, and the next faiss search initialises the second — macOS aborts "
+        "the process (OMP: Error #15), which no error handler can catch. "
+        "Keep the two out of one process (torch arrives with the [audio] and "
+        "[ui] extras; memory recall needs faiss-cpu), or set "
+        f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
+        "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
+    )
+
+
+def _validated_faiss_query(
+    query_vec: np.ndarray, index, index_label: str
+) -> np.ndarray:
+    """Shape a query vector for ``index.search`` and reject a mismatched one.
+
+    A vector whose width is not the index's is a stale or cross-model index,
+    not something to rank anyway — so it raises with the rebuild instruction
+    rather than returning no matches and looking like an empty memory.
+    """
+    query = np.ascontiguousarray(query_vec.reshape(1, -1), dtype=np.float32)
+    if query.shape[1] != index.d:
+        raise RuntimeError(
+            f"Query vector has {query.shape[1]} dimensions but the {index_label} "
+            f"FAISS index has {index.d} — the index was built with a different "
+            "embedding model. Rebuild it (restart the agent, or re-run "
+            "`gaia memory` onboarding) so both sides use one embedder."
+        )
+    return query
 
 
 def _get_cross_encoder():
@@ -1156,24 +1241,26 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Returns:
             List of (knowledge_id, score) tuples, sorted by score descending.
+
+        Raises:
+            RuntimeError: on a dimension mismatch with the index, or when a
+                second OpenMP runtime makes the native search fatal.
         """
         if self._faiss_index is None or self._faiss_index.ntotal == 0:
             return []
 
-        try:
-            # Clamp top_k to index size
-            k = min(top_k, self._faiss_index.ntotal)
-            query = query_vec.reshape(1, -1).astype(np.float32)
-            scores, indices = self._faiss_index.search(query, k)
+        query = _validated_faiss_query(query_vec, self._faiss_index, "knowledge")
+        k = min(top_k, self._faiss_index.ntotal)
+        if k < 1:
+            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+        assert_faiss_omp_safe("Knowledge memory search")
 
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx >= 0 and idx < len(self._faiss_id_map):
-                    results.append((self._faiss_id_map[idx], float(score)))
-            return results
-        except Exception as e:
-            logger.debug("[MemoryMixin] FAISS search failed: %s", e)
-            return []
+        scores, indices = self._faiss_index.search(query, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx >= 0 and idx < len(self._faiss_id_map):
+                results.append((self._faiss_id_map[idx], float(score)))
+        return results
 
     # ==================================================================
     # Complexity-Aware Recall Depth

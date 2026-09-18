@@ -525,3 +525,43 @@ class TestSessionsRouterDeviceRewrite:
         body = resp.json()
         assert body["title"] == "Renamed"
         assert body["model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_switch_to_npu_rewrites_model_for_session_on_configured_default(
+        self, client
+    ):
+        """A session on a *configured* default_model, not the raw hard-coded
+        one, must still be recognized as "not pinned" and follow a device
+        switch — only a genuinely custom-picked model should block the
+        rewrite.
+        """
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(default_model="agents-a1-q4-k-m").save()
+
+        created = client.post("/api/sessions", json={}).json()
+        assert created["model"] == "agents-a1-q4-k-m"
+
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "npu"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["device"] == "npu"
+        assert body["model"] == "gemma4-it-e2b-FLM"
+
+    def test_create_session_with_corrupt_config_returns_actionable_500(self, client):
+        from gaia import config as config_mod
+
+        config_mod.GAIA_CONFIG_FILE.write_text("not valid json")
+
+        resp = client.post("/api/sessions", json={})
+        assert resp.status_code == 500
+        assert "not valid JSON" in resp.json()["detail"]
+
+    def test_device_switch_with_corrupt_config_returns_actionable_500(self, client):
+        from gaia import config as config_mod
+
+        created = client.post("/api/sessions", json={}).json()
+        config_mod.GAIA_CONFIG_FILE.write_text("not valid json")
+
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "npu"})
+        assert resp.status_code == 500
+        assert "not valid JSON" in resp.json()["detail"]

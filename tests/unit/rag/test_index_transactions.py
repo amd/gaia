@@ -130,3 +130,21 @@ def test_concurrent_same_document_publishes_once_after_persistence(rag, tmp_path
     assert all(result["success"] for result in results)
     assert sum(bool(result.get("already_indexed")) for result in results) == 1
     _assert_documents(rag, {document: "Shared document content."})
+
+
+def test_short_embedding_batch_preserves_existing_document(rag, tmp_path):
+    from unittest.mock import Mock
+
+    existing = tmp_path / "existing.txt"
+    existing.write_text("Keep the existing document.", encoding="utf-8")
+    assert rag.index_document(str(existing))["success"]
+    rag._encode_texts = RAGSDK._encode_texts.__get__(rag, RAGSDK)
+    rag.embedder = Mock()
+    rag.embedder.embeddings.return_value = {"data": [{"embedding": [1, 2, 3, 4]}]}
+    document = tmp_path / "new.txt"
+    document.write_text("New document with many chunks.", encoding="utf-8")
+    with patch.object(rag, "_split_text_into_chunks", return_value=["first", "second"]):
+        result = rag.index_document(str(document))
+    assert not result["success"]
+    assert "1/2 vectors" in result["error"]
+    _assert_documents(rag, {existing: "Keep the existing document."})
