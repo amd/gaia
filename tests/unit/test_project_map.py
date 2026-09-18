@@ -719,3 +719,42 @@ def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
         and any(isinstance(t, ast.Name) and t.id == "index_root" for t in node.targets)
     ]
     assert assigned == ["self._project_map_root() or allowed[0]"]
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "",
+        "src",
+        "a/b/c",
+        "a/b/c/d",
+        # Depths a fixed cap of four silently skipped. Maven/Gradle layout is
+        # six, and this repo's own flagship package sits at five.
+        "a/b/c/d/e",
+        "src/main/java/com/acme/svc",
+        "hub/agents/gaia/python/gaia_agent",
+        "a/b/c/d/e/f/g/h/i/j",
+    ],
+)
+def test_root_is_found_at_any_depth_below_it(tmp_path, monkeypatch, rel):
+    root = tmp_path / "project"
+    (root / ".git").mkdir(parents=True)
+    nested = root.joinpath(*rel.split("/")) if rel else root
+    nested.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(nested)
+    assert resolve_project_root() == str(root.resolve())
+
+
+def test_the_search_still_stops_without_a_repository_above(tmp_path, monkeypatch):
+    """Removing the depth cap must not turn "no project" into a wrong guess.
+
+    The walk is bounded by the home directory and the filesystem root, not by a
+    step count, so a deep directory with no repository anywhere above it still
+    answers ``None``.
+    """
+    nested = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"
+    nested.mkdir(parents=True)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(nested)
+    assert resolve_project_root() is None
