@@ -176,6 +176,7 @@ def _function_span(node, lines: list) -> tuple:
             start -= 1
     return start, node.end_lineno
 
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 

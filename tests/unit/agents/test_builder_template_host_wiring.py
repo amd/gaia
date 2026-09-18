@@ -77,11 +77,19 @@ def test_every_known_tool_generates_a_constructible_agent(tmp_path):
     for tool_name in sorted(KNOWN_TOOLS.keys() - {"sd", "vlm", "skills"}):
         module = _generate_and_exec(tmp_path, tool_name, "ContractTestAgent")
 
+        _TOOL_REGISTRY.clear()
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = module.ContractTestAgent(skip_lemonade=True, silent_mode=True)
 
-        registered = getattr(agent, f"register_{tool_name}_tools")
-        assert isinstance(registered, type(agent.__init__)) or callable(registered)
+        # `callable(getattr(agent, f"register_{tool_name}_tools"))` passes on
+        # any bound method and so proves nothing. What the generated agent
+        # must show is that construction actually ran that registration and
+        # left this mixin's tools callable.
+        assert _TOOL_REGISTRY, f"{tool_name}: construction registered no tools"
+        assert all(
+            callable(entry["function"]) for entry in _TOOL_REGISTRY.values()
+        ), tool_name
+        assert hasattr(agent, f"register_{tool_name}_tools"), tool_name
 
 
 def test_generated_rag_agent_executes_query_documents(tmp_path):

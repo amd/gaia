@@ -52,9 +52,16 @@ skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
   `write_markdown_file`, `write_file`, `edit_file`, `replace_function`)
   report the missing setup and don't touch the target file, instead of
   writing without running the check that would otherwise have applied.
-- **Read tools** (`read_file`, `search_code`, `generate_diff`,
+- **The remaining tools** (`read_file`, `search_code`, `generate_diff`,
   `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
   class, the missing attribute, and this section.
+
+<Warning>
+  `update_gaia_md` writes `GAIA.md` despite sitting in the second group. It
+  checks the allowlist and nothing else — no blocked-directory check, size
+  limit, backup, or audit entry, all of which the six write-capable tools
+  apply. Tracked in [#4006](https://github.com/amd/gaia/issues/4006).
+</Warning>
 
 `self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
 `self.rag`, there is no "intentionally disabled" state here.

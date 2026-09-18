@@ -139,15 +139,37 @@ def test_all_six_write_tools_report_missing_setup(tmp_path):
     to FileIOToolsMixin that skips this list is easy to spot in review."""
     _make(_MissingValidatorHost)
 
-    write_tool_calls = {
+    # Creating tools: nothing may land on disk.
+    create_tool_calls = {
         "write_python_file": dict(file_path=str(tmp_path / "a.py"), content="x = 1\n"),
         "write_markdown_file": dict(file_path=str(tmp_path / "b.md"), content="# hi"),
         "write_file": dict(file_path=str(tmp_path / "c.json"), content="{}"),
     }
-    for tool_name, kwargs in write_tool_calls.items():
+    for tool_name, kwargs in create_tool_calls.items():
         result = _tool(tool_name)(**kwargs)
         assert result["status"] == "error", tool_name
         assert not Path(kwargs["file_path"]).exists(), tool_name
+
+    # Editing tools: the target already exists, so the filesystem proof is
+    # that its bytes are unchanged rather than that it is absent.
+    original = "def f():\n    return 1\n"
+    edit_tool_calls = {
+        "edit_python_file": dict(old_content="return 1", new_content="return 2"),
+        "edit_file": dict(old_content="return 1", new_content="return 2"),
+        "replace_function": dict(
+            function_name="f", new_implementation="def f():\n    return 2"
+        ),
+    }
+    for tool_name, kwargs in edit_tool_calls.items():
+        target = tmp_path / f"edit_{tool_name}.py"
+        target.write_text(original)
+
+        result = _tool(tool_name)(file_path=str(target), **kwargs)
+
+        assert result["status"] == "error", tool_name
+        assert target.read_text() == original, tool_name
+
+    assert len(create_tool_calls) + len(edit_tool_calls) == 6
 
 
 def test_write_file_succeeds_and_is_audited_when_configured(tmp_path):

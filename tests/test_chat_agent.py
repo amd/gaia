@@ -1196,6 +1196,18 @@ class TestChatAgentHostAttributeContract:
     without needing a live model server.
     """
 
+    @pytest.fixture(autouse=True)
+    def _restore_tool_registry(self):
+        """Constructing a real agent rebinds the process-global tool registry;
+        leaving it rebound leaks these agents' tools into the rest of a
+        full-suite run."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        saved = dict(_TOOL_REGISTRY)
+        yield
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
     def _construct(self, cls, config):
         with (
             patch(

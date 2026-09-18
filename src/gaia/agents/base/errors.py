@@ -60,6 +60,11 @@ def require_host_attr(
     ``ChatAgent.rag`` is invoked normally, not probed) but re-raises with a
     message naming the host class, the attribute, and how to fix it.
 
+    An ``AttributeError`` raised *inside* a lazy property's getter is a
+    different failure and is re-raised untouched — blaming the host for
+    "never binding" an attribute whose own build broke sends the reader to
+    the wrong place entirely.
+
     Args:
         host: The tool-mixin instance (``self`` from inside a tool function).
         attr_name: Name of the required attribute (e.g. ``"rag"``).
@@ -73,13 +78,37 @@ def require_host_attr(
 
     Raises:
         MissingHostAttributeError: If ``host`` never bound ``attr_name``.
+        AttributeError: Unchanged, if ``attr_name`` resolves to a descriptor
+            whose getter raised one.
     """
     try:
         return getattr(host, attr_name)
     except AttributeError as e:
+        if _raised_inside_getter(host, attr_name, e):
+            raise
         raise MissingHostAttributeError(
             missing_host_attr_message(host, attr_name, mixin_name, hint, doc_anchor)
         ) from e
+
+
+def _raised_inside_getter(host: Any, attr_name: str, error: AttributeError) -> bool:
+    """Whether ``error`` came from inside a descriptor rather than the lookup.
+
+    ``ChatAgent.rag`` is a property that builds RAG on first read. When that
+    build fails with its own ``AttributeError``, the attribute is declared —
+    the lookup reached a getter and the getter raised. A failed *lookup*, by
+    contrast, names this attribute on this object (CPython sets ``name`` and
+    ``obj`` on the ``AttributeError`` it raises), which is also what an
+    unassigned ``__slots__`` member looks like.
+    """
+    declared = any(attr_name in vars(klass) for klass in type(host).__mro__)
+    if not declared:
+        return False
+    lookup_failed = (
+        getattr(error, "name", None) == attr_name
+        and getattr(error, "obj", None) is host
+    )
+    return not lookup_failed
 
 
 def format_user_error(

@@ -195,6 +195,49 @@ def test_rag_none_is_a_legitimate_disabled_value_not_an_error():
 
 
 # ---------------------------------------------------------------------------
+# A failure raised *inside* a lazy property's getter is a different bug from
+# a host that never bound the attribute, and must not be reported as one —
+# ChatAgent.rag builds RAG on first read, so an AttributeError from that
+# build would otherwise send the reader to the wrong fix entirely.
+# ---------------------------------------------------------------------------
+
+
+class _RagAgentWithBrokenLazyRag(Agent, RAGToolsMixin):
+    """Binds `rag` as a lazy property whose build itself fails."""
+
+    @property
+    def rag(self):
+        return self._never_assigned
+
+    def _register_tools(self):
+        self.register_rag_tools()
+
+
+def test_attribute_error_from_inside_a_property_getter_is_not_mislabeled():
+    _make_agent(_RagAgentWithBrokenLazyRag)
+
+    with pytest.raises(AttributeError) as exc_info:
+        _get_tool("query_documents")(query="q")
+
+    assert not isinstance(exc_info.value, MissingHostAttributeError)
+    # The real cause survives; the host is not blamed for "never binding rag".
+    assert "_never_assigned" in str(exc_info.value)
+    assert "never binds self.rag" not in str(exc_info.value)
+
+
+def test_unassigned_slot_still_counts_as_never_bound():
+    """A declared-but-unassigned __slots__ member is genuinely unbound, even
+    though the name is declared on the class."""
+    from gaia.agents.base.errors import require_host_attr
+
+    class Slotted:
+        __slots__ = ("rag",)
+
+    with pytest.raises(MissingHostAttributeError):
+        require_host_attr(Slotted(), "rag", "RAGToolsMixin", "hint", "doc")
+
+
+# ---------------------------------------------------------------------------
 # AC3 — missing path_validator at the unguarded read sites also raises
 # (same contract as AC2, for the other hard-required attribute).
 # ---------------------------------------------------------------------------
@@ -266,8 +309,10 @@ def test_read_file_schema_unchanged():
     _make_agent(_FileIOAgentNoValidator)
 
     entry = _TOOL_REGISTRY["read_file"]
-    assert set(entry["parameters"]) == {"file_path"}
+    assert set(entry["parameters"]) == {"file_path", "offset", "limit"}
     assert entry["parameters"]["file_path"]["required"] is True
+    assert entry["parameters"]["offset"]["required"] is False
+    assert entry["parameters"]["limit"]["required"] is False
     assert "Read any file" in entry["description"]
 
 
