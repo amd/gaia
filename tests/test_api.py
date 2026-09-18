@@ -15,7 +15,9 @@ Test coverage includes:
 - Edge cases and resilience testing
 """
 
+import asyncio
 import logging
+import threading
 import time
 
 import httpx
@@ -143,6 +145,55 @@ class TestApiUnitValidation:
         assert response.status_code == 200, response.text
         call_args, _ = fake_agent.process_query.call_args
         assert call_args[0] == "second question"
+
+    def test_non_streaming_agent_does_not_block_health_checks(self, mocker):
+        """A synchronous agent turn must yield the event loop to /health."""
+        started = threading.Event()
+        release = threading.Event()
+
+        def process_query(_message):
+            started.set()
+            assert release.wait(timeout=5)
+            return {"result": "ok"}
+
+        fake_agent = mocker.MagicMock()
+        fake_agent.process_query.side_effect = process_query
+
+        from gaia.api import openai_server
+        from gaia.api.openai_server import registry as server_registry
+        from gaia.api.schemas import ChatCompletionRequest, ChatMessage
+
+        mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
+        mocker.patch.object(server_registry, "model_exists", return_value=True)
+        health_started = mocker.Mock()
+
+        async def health_probe():
+            health_started()
+            return {"status": "ok"}
+
+        mocker.patch.object(openai_server, "_lemonade_health", health_probe)
+
+        async def exercise_requests():
+            completion = asyncio.create_task(
+                openai_server.create_chat_completion(
+                    ChatCompletionRequest(
+                        model="gaia",
+                        messages=[ChatMessage(role="user", content="slow request")],
+                        stream=False,
+                    )
+                )
+            )
+            assert await asyncio.to_thread(started.wait, 2)
+
+            health = asyncio.create_task(openai_server.health_check())
+            await asyncio.wait_for(health, timeout=2)
+            release.set()
+            return await completion
+
+        response = asyncio.run(exercise_requests())
+
+        assert response.choices[0].message.content == "ok"
+        health_started.assert_called_once_with()
 
     def test_debug_logging_redacts_chat_request_content(
         self, mocker, monkeypatch, caplog
@@ -564,6 +615,132 @@ class TestApiUnitValidation:
         assert "detail" in error_data
 
 
+class TestRealAgentCallShape:
+    """Drive the endpoint with a REAL Agent subclass, not a MagicMock.
+
+    Regression guard for the class of bug where the server passes a keyword
+    argument no agent accepts. A ``MagicMock`` agent swallows any signature,
+    so mock-based tests stay green while every real request raises
+    ``TypeError``. These tests bind against the actual
+    ``MemoryMixin.process_query`` -> ``Agent.process_query`` chain that the
+    shipped agents use, so a bad call shape fails here.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # Keep the agent off the user's real ~/.gaia memory store.
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        self.client = TestClient(app)
+
+    def _real_agent(self, monkeypatch, captured):
+        """A real Agent subclass with the shipped mixin chain, no LLM.
+
+        Only ``_process_query_impl`` (the step loop, which needs a live model)
+        is stubbed. Everything above it -- including the real
+        ``process_query`` signatures the server actually calls -- is genuine,
+        so an unexpected kwarg raises ``TypeError`` exactly as in production.
+        """
+        from gaia.agents.base.agent import Agent
+        from gaia.agents.base.memory import MemoryMixin
+
+        class _ProbeAgent(MemoryMixin, Agent):
+            def _register_tools(self):
+                pass
+
+        def fake_impl(self, user_input, max_steps=None, trace=False, filename=None):
+            captured["user_input"] = user_input
+            captured["max_steps"] = max_steps
+            return {"status": "success", "result": "probe answer"}
+
+        monkeypatch.setattr(_ProbeAgent, "_process_query_impl", fake_impl)
+        return _ProbeAgent(skip_lemonade=True, silent_mode=True)
+
+    def test_non_streaming_accepts_real_agent_signature(self, monkeypatch, mocker):
+        """POST /v1/chat/completions succeeds against a real Agent."""
+        captured = {}
+        agent = self._real_agent(monkeypatch, captured)
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=agent)
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia",
+                "messages": [{"role": "user", "content": "what is 2+2"}],
+                "stream": False,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["choices"][0]["message"]["content"] == "probe answer"
+        # The real agent received the user's message (MemoryMixin may prepend
+        # dynamic context, so match on the tail).
+        assert captured["user_input"].endswith("what is 2+2")
+
+    def test_streaming_accepts_real_agent_signature(self, monkeypatch, mocker):
+        """The streaming branch calls the agent with the same shape."""
+        captured = {}
+        agent = self._real_agent(monkeypatch, captured)
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=agent)
+
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "gaia",
+                "messages": [{"role": "user", "content": "what is 2+2"}],
+                "stream": True,
+            },
+        ) as response:
+            assert response.status_code == 200, response.text
+            body = "".join(response.iter_text())
+
+        assert "data: [DONE]" in body
+        assert '"error"' not in body, body
+        assert captured["user_input"].endswith("what is 2+2")
+
+    def test_workspace_info_message_does_not_change_the_call(self, monkeypatch, mocker):
+        """A Copilot <workspace_info> block is just message text now.
+
+        The server used to parse it into a ``workspace_root`` kwarg that no
+        agent accepted. Nothing consumes it, so it must not reappear as an
+        extra argument.
+        """
+        captured = {}
+        agent = self._real_agent(monkeypatch, captured)
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=agent)
+
+        workspace_msg = (
+            "<workspace_info>\n"
+            "I am working in a workspace with the following folders:\n"
+            "- /home/user/project\n"
+            "</workspace_info>\n"
+            "explain this repo"
+        )
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia",
+                "messages": [{"role": "user", "content": workspace_msg}],
+                "stream": False,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "probe answer"
+
+
 class TestApiCorsPolicy:
     """CORS must never allow wildcard origins together with credentials."""
 
@@ -614,7 +791,7 @@ class TestApiCorsPolicy:
             assert response.headers.get("access-control-allow-origin") == origin
 
     def test_env_var_adds_explicit_origin(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv(
             "GAIA_API_CORS_ORIGINS", "https://myapp.example.com, https://other.example"
@@ -627,7 +804,7 @@ class TestApiCorsPolicy:
         assert cfg["allow_credentials"] is True
 
     def test_blank_env_var_does_not_become_wildcard(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "")
         cfg = _cors_config()
@@ -635,7 +812,7 @@ class TestApiCorsPolicy:
         assert cfg["allow_origin_regex"]
 
     def test_explicit_wildcard_disables_credentials(self, monkeypatch):
-        from gaia.api.openai_server import _cors_config
+        from gaia.api.local_http import cors_config as _cors_config
 
         monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "*")
         cfg = _cors_config()

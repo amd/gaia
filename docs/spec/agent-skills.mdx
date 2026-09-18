@@ -389,6 +389,60 @@ Tunables: `GAIA_SKILL_DISCOVERY` (`0` to disable) and `GAIA_SKILL_DISCOVERY_TAU`
 (confidence threshold). `util/skill_retrieval_bench.py` reports precision, recall,
 and latency against a labeled query set.
 
+## Learned changes: the effective skill vs. the shipped one
+
+A skill you install is a **starting point**, not a fixed contract. An agent can
+adapt one it was given — correcting a command that fails on your machine, or
+reshaping a procedure written around a workflow you do not follow — and what it
+learns is stored in agent memory, resolved over the authored body at load time.
+
+**The `SKILL.md` on disk is never written.** What changes is the *effective*
+skill the agent runs, which is why two machines with the same installed skill can
+behave differently, and why `gaia skill deltas <name>` exists to show you when
+that is happening.
+
+Three properties are load-bearing:
+
+- **Learned changes replace, they do not accumulate.** A correction substitutes
+  the text it fixes rather than being appended beneath it, and a second
+  correction to the same section supersedes the first. Ten corrections *to the
+  same section* cost what one costs; across different sections they add up, and
+  a total that would push the skill past its overlay budget is refused at write
+  time with the reason. Adapting a skill to the workflow you actually use
+  usually makes it *smaller*, because the workflow you do not use gets replaced
+  rather than kept.
+- **It applies at once, and you are told.** An agent that had to ask permission
+  to act on what it just learned would not be adaptive, so a correction takes
+  effect immediately. What you get instead of a prompt is an announcement: the
+  agent says which skill and section changed, why, and prints the exact command
+  that undoes it. `gaia skill deltas <name> --diff` shows the effective skill
+  against the shipped one at any time.
+- **Only your words can teach it.** A lesson persists across sessions, so it may
+  only be recorded in a turn where nothing but your own message has arrived. The
+  moment any tool has returned anything in that turn — a fetched web page, an
+  email, an issue body, a command's output, another skill's text, an MCP call —
+  the write is refused and the agent has to tell you the correction instead of
+  adopting it. That is what stops text merely *shaped* like an instruction from
+  rewriting the agent's standing instructions. The check is per turn: content
+  pulled in an *earlier* turn is not tracked, which is why the announce-and-undo
+  above is the other half of this and not a nicety.
+- **It is always recoverable.** `gaia skill deltas <name> --reset` returns the
+  agent to the shipped skill from its next launch, and `--archived` lists what
+  was retired. `GAIA_NO_LEARNED_SKILLS=1` runs every agent in every process with
+  none of them — including the ones behind the daemon and the Agent UI, which no
+  chat flag reaches — and `gaia chat --no-learned-skills` does the same for one
+  chat session. Either way the composed prompt is byte-identical to a build with
+  no overlay.
+
+A learned change can only rewrite instruction text. It cannot edit frontmatter,
+so it can never widen a permission or raise a security tier; it cannot introduce
+a tool, because tools come from frontmatter and the live registry, never from
+prose; and it cannot change *when* a skill activates, because selection embeds a
+skill's name and description, never its body. Removing a section is a human
+action, not one the model can take.
+
+Design and current status: [Adaptive Skills](/plans/adaptive-skills).
+
 ## Skill sets
 
 One agent, more than one job. The same email assistant should behave differently

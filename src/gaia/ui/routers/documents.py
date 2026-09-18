@@ -122,14 +122,22 @@ def _is_server_owned(filepath: str) -> bool:
 # but sanitizing to the Windows rules gives cross-platform portability).
 _ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
 
+# Defense in depth: the two characters that can terminate or escape a
+# PowerShell string literal. Uploaded names reach shell-adjacent converters
+# (``rag.pptx_utils.convert_pptx_to_pdf``), which pass paths out-of-band rather
+# than interpolating them — this keeps a name from becoming code even if some
+# future caller forgets that.
+_SHELL_QUOTING_CHARS = "'`"
+
 
 def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     """Sanitize a filename stem for safe cross-platform filesystem use.
 
-    Replaces characters that are illegal on Windows (``<>:"/\\|?*``) and
-    control characters with underscores, trims leading/trailing whitespace
-    and dots (Windows disallows trailing dots/spaces), and truncates to
-    *max_length* characters. Returns ``"file"`` if nothing usable remains.
+    Replaces characters that are illegal on Windows (``<>:"/\\|?*``), the
+    two PowerShell string-literal metacharacters (apostrophe and backtick),
+    and control characters with underscores, trims leading/trailing whitespace
+    and dots (Windows disallows trailing dots/spaces), and truncates to *max_length*
+    characters. Returns ``"file"`` if nothing usable remains.
 
     The returned stem is combined with a UUID prefix to form the final
     on-disk filename, so collisions are impossible regardless of what the
@@ -138,7 +146,12 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     recognize the document by its human-readable name.
     """
     cleaned = "".join(
-        "_" if c in _ILLEGAL_FILENAME_CHARS or ord(c) < 32 else c for c in stem
+        (
+            "_"
+            if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
+            else c
+        )
+        for c in stem
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]

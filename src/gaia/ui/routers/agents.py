@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from gaia.logger import get_logger
 
 from ..models import AgentInfo, AgentListResponse, DiskAgentInfo, DiskAgentListResponse
+from ..security import require_ui_header as _require_ui_header
 
 logger = get_logger(__name__)
 
@@ -53,16 +54,6 @@ def _require_localhost(request: Request) -> None:
         raise HTTPException(
             status_code=403, detail="endpoint only available on localhost"
         )
-
-
-def _require_ui_header(request: Request) -> None:
-    """Require the custom ``X-Gaia-UI: 1`` header as a lightweight CSRF guard.
-
-    Custom headers trigger a CORS preflight in browsers, so drive-by form
-    POSTs from malicious tabs cannot supply this header.
-    """
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 def _require_tunnel_inactive(request: Request) -> None:

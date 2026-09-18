@@ -9,6 +9,7 @@ wire path that carries it out — the ``answer`` event, then the canonical
 what it was before any of this existed.
 """
 
+import contextlib
 import json
 import logging
 import time
@@ -394,7 +395,10 @@ class TestTimingHoldsUpOnTheUnhappyPaths:
         monkeypatch.setenv("GAIA_TURN_LOG", str(log))
         agent = _bare_agent()
         agent._namespaced_agent_id = lambda: "test"
-        agent._agent_identity_context = lambda ns: None
+        # A real (no-op) context manager: process_query always enters this
+        # block now, so that a turn with no namespaced id still counts as an
+        # agent turn and fails credential access closed (#915).
+        agent._agent_identity_context = lambda ns: contextlib.nullcontext()
 
         def _boom(*a, **kw):
             agent._turn_recorder = self._recorder(tmp_path)

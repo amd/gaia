@@ -124,7 +124,7 @@ func blankRows(cfg Config) []Row {
 		{Key: KeyDaemon, Label: "Background service"},
 		{Key: KeySidecar, Label: cfg.AgentName + " agent"},
 		{Key: KeyLemonade, Label: lemonadeRowLabel},
-		{Key: KeyModel, Label: "AI model"},
+		{Key: KeyModel, Label: modelRowLabel},
 	}
 	for _, extra := range cfg.Extras {
 		rows = append(rows, Row{Key: extra.Key, Label: extra.Label, Optional: extra.Optional})
@@ -629,7 +629,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		model.Detail = "About 4 GB. Once downloaded it is reused by every GAIA agent."
 		model.Fix = FixPullModel
 		model.Remedy = Remedy{
-			Action:  "Download it — press f to pull it here, or run the command.",
+			Action:  "It downloads once, then every GAIA agent reuses it.",
 			Command: "gaia init",
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
