@@ -575,7 +575,13 @@ def test_a_missing_file_is_not_uploaded(tmp_path):
 # ----------------------------------------------------------------------
 
 
+SLACK_FILE_URL = "https://files.slack.com/files-pri/T1-F1/download/report.pdf"
+
+
 class _FakeResponse:
+    status_code = 200
+    is_redirect = False
+
     def __init__(self, body):
         self.body = body
 
@@ -593,7 +599,7 @@ def _share(adapter_tuple, monkeypatch, tmp_path, name, body=b"%PDF"):
     a._handle_event(
         dm_event(
             text="what does this say?",
-            files=[{"id": "F1", "name": name, "url_private_download": "https://x"}],
+            files=[{"id": "F1", "name": name, "url_private_download": SLACK_FILE_URL}],
         )
     )
     return channel.turns[-1].text
@@ -802,3 +808,73 @@ def test_more_than_one_allowed_member_is_refused():
     with pytest.raises(SlackAllowlistError) as excinfo:
         SlackAdapter("xoxb-t", "xapp-t", allowed_users={"U0AAAAAAA", "U0BBBBBBB"})
     assert "share one history" in str(excinfo.value)
+
+
+# ----------------------------------------------------------------------
+# The bot token only ever goes to Slack
+# ----------------------------------------------------------------------
+
+
+def _recording_get(monkeypatch, response=None):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return response or _FakeResponse(b"%PDF")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/file.pdf",
+        "http://files.slack.com/files-pri/T1-F1/x.pdf",
+        "https://files.slack.com.evil.example/x.pdf",
+        "https://files.slack.com@evil.example/x.pdf",
+        "https://notslack.com/x.pdf",
+    ],
+)
+def test_the_bot_token_is_never_sent_outside_slack(adapter, monkeypatch, tmp_path, url):
+    """Including a URL that starts with a Slack host but, after the ``@``, is
+    really a request to evil.example."""
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    calls = _recording_get(monkeypatch)
+    a, _, _ = adapter
+
+    with pytest.raises(ValueError, match="outside Slack"):
+        a._download(url, "x.pdf", "F1")
+
+    assert calls == [], "no request may be made to a non-Slack host"
+
+
+def test_a_slack_download_sends_the_token_without_following_redirects(
+    adapter, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    calls = _recording_get(monkeypatch)
+    a, _, _ = adapter
+
+    a._download(SLACK_FILE_URL, "report.pdf", "F1")
+
+    url, kwargs = calls[0]
+    assert url == SLACK_FILE_URL
+    assert kwargs["headers"]["Authorization"] == "Bearer xoxb-t"
+    assert kwargs["allow_redirects"] is False
+
+
+def test_a_redirected_download_is_refused_and_nothing_is_saved(
+    adapter, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    redirect = _FakeResponse(b"")
+    redirect.status_code, redirect.is_redirect = 302, True
+    _recording_get(monkeypatch, response=redirect)
+    a, _, _ = adapter
+
+    with pytest.raises(ValueError, match="redirected"):
+        a._download(SLACK_FILE_URL, "report.pdf", "F1")
+
+    inbox = tmp_path / "slack" / "inbox"
+    assert not inbox.exists() or list(inbox.iterdir()) == []

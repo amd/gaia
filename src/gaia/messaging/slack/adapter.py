@@ -141,6 +141,26 @@ CONFIRM_TIMEOUT_SECONDS = 600
 
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
+#: Domains a shared file may be fetched from. The bot token rides along as a
+#: bearer header, so a URL anywhere else would hand it to that host.
+_SLACK_FILE_DOMAINS = ("slack.com", "slack-edge.com")
+
+
+def _is_slack_file_url(url: str) -> bool:
+    """True for an https URL on a Slack-owned host.
+
+    Compares ``hostname``, not ``netloc``, so userinfo and a port are stripped
+    before matching: ``files.slack.com@evil.com`` is judged as evil.com, and a
+    Slack host with an explicit port is still recognised.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and any(
+        host == d or host.endswith("." + d) for d in _SLACK_FILE_DOMAINS
+    )
+
 
 def inbox_dir() -> Path:
     """Where files shared over Slack are saved for the agent to read."""
@@ -542,6 +562,12 @@ class SlackAdapter:
         """Fetch a private Slack file into the inbox using the bot token."""
         import requests
 
+        if not _is_slack_file_url(url):
+            raise ValueError(
+                f"Slack gave a file URL outside Slack's own domains ({url!r}); "
+                "refusing to send the bot token to it."
+            )
+
         # Slack's filename is user-controlled: keep only a safe basename so a
         # name like "../../.ssh/config" cannot write outside the inbox.
         safe = _UNSAFE_NAME.sub("_", Path(name).name).lstrip(".") or "file"
@@ -556,7 +582,15 @@ class SlackAdapter:
             headers={"Authorization": f"Bearer {self.bot_token}"},
             timeout=60,
             stream=True,
+            # A redirect is refused, not followed: following one is how a token
+            # checked against one host ends up sent to another.
+            allow_redirects=False,
         )
+        if response.is_redirect or 300 <= response.status_code < 400:
+            raise ValueError(
+                f"Slack redirected the download of {name} instead of serving it; "
+                "refusing to follow, since the bot token would go with it."
+            )
         response.raise_for_status()
         written = 0
         try:
