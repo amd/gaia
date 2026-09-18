@@ -877,9 +877,21 @@ func (s *SSEClient) Supports(c Capability) (supported, known bool) {
 	}
 	switch c {
 	case CapabilityMemory:
-		return contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
+		// Scoped to the agent that implements it, not to the contract number
+		// alone. Each sidecar versions its own contract independently, so a
+		// different agent can already be numerically past this floor while
+		// having no memory route at all — `email` is at 2.14 today. Version
+		// answers "is this build new enough", never "does this agent have the
+		// route"; both have to hold.
+		return s.agentID == memoryAgentID &&
+			contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
 	default:
-		return false, true
+		// Not (false, true): claiming to KNOW a capability this build has
+		// never heard of would hide it on whichever transport was not taught
+		// about it, silently — the exact failure the tri-state exists to
+		// prevent. An unrecognized capability is unknown, so callers show it
+		// and let the attempt explain itself.
+		return false, false
 	}
 }
 

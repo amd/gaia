@@ -172,7 +172,7 @@ func TestSSEFetchMemoryReturnsParsedDump(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.memoryBody = `{"available":true,"stats":{"total_knowledge":2,"by_category":{"fact":1,"preference":1},"by_context":{"global":2},"sensitive_count":0,"entity_count":0,"avg_confidence":0.6},"contexts":[{"context":"global","count":2}],"shown":2,"total":2,"items":[{"id":"1","category":"fact","content":"likes go","context":"global","confidence":0.6,"sensitive":false}]}`
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -199,7 +199,7 @@ func TestSSEFetchMemoryReturnsParsedDump(t *testing.T) {
 func TestSSEFetchMemoryRefusesAnOldPeerContract(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.12" // predates memory (2.13)
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -221,7 +221,7 @@ func TestSSEFetchMemoryRefusesAnOldPeerContract(t *testing.T) {
 func TestSSEFetchMemoryAcceptsExactFloorVersion(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -239,7 +239,7 @@ func TestSSEFetchMemorySurfacesNonOKDetail(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.memoryStatus = http.StatusServiceUnavailable
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

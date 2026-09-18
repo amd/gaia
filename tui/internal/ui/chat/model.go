@@ -158,8 +158,8 @@ type ChatModel struct {
 	// silently doing nothing.
 	hubClient agents.HubAgentLister
 	messages  []Message
-	activity      []ActivityItem
-	streaming     bool
+	activity  []ActivityItem
+	streaming bool
 	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
 	// doneMsg confirms the run's channel actually closed. It exists only to
 	// let the doneMsg handler distinguish "this settlement was a cancel" (so

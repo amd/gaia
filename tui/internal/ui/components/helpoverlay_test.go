@@ -361,3 +361,29 @@ func TestATinyWindowKeepsTheViewItHas(t *testing.T) {
 		t.Errorf("a 2-row window rendered a panel anyway: %q", got)
 	}
 }
+
+// renderCommandsSection replaces the Commands block by POSITION — the label
+// line plus exactly one continuation — because several unrelated lines share
+// the same indent and matching on that would eat them too. Pin the shape it
+// assumes: grow the block to three lines and the third would leak into every
+// filtered render, silently.
+func TestChatHelpCommandsBlockIsExactlyTwoLines(t *testing.T) {
+	lines := strings.Split(chatHelpText, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, helpCommandsLabel) {
+			continue
+		}
+		if i+2 >= len(lines) {
+			t.Fatalf("the Commands block runs to the end of the help text; renderCommandsSection expects a line after it")
+		}
+		if !strings.HasPrefix(lines[i+1], helpCommandsIndent) {
+			t.Fatalf("line %d should be the Commands block's continuation, got %q", i+1, lines[i+1])
+		}
+		if strings.HasPrefix(lines[i+2], helpCommandsIndent) {
+			t.Fatalf("the Commands block grew past two lines (line %d: %q) — "+
+				"renderCommandsSection skips exactly one continuation and would leak this one", i+2, lines[i+2])
+		}
+		return
+	}
+	t.Fatalf("no Commands block found in chatHelpText")
+}

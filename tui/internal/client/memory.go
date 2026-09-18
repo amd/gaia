@@ -134,6 +134,20 @@ func (e *ErrMemoryContractTooOld) Error() string {
 // shape (prescan.go) -- ensure the sidecar, negotiate the peer's contract,
 // gate on it before trusting the response, then relay the request.
 func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
+	// First, before any network work: this answer needs nothing from the peer,
+	// and asking anyway would spawn a sidecar just to refuse — and a probe that
+	// then failed would report a version problem for a situation that has
+	// nothing to do with versions.
+	if s.agentID != memoryAgentID {
+		// A different agent entirely, not an out-of-date one: telling the user
+		// to reinstall it would be wrong, and calling the route anyway would
+		// turn a 404 into the "advertised then refused" shape #3978 removes.
+		return MemoryDump{}, fmt.Errorf(
+			"the '%s' agent does not keep a memory store — only '%s' does. "+
+				"Run `gaia tui` to talk to it, or `gaia tui status` to see what is installed",
+			s.agentID, memoryAgentID)
+	}
+
 	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
 	if err != nil {
 		return MemoryDump{}, err
