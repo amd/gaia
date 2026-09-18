@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -109,4 +112,88 @@ func (s *SubprocessClient) FetchMemory(ctx context.Context) (MemoryDump, error) 
 		}
 	}
 	return MemoryDump{}, fmt.Errorf("the agent closed the connection before answering")
+}
+
+var _ MemoryProvider = (*SSEClient)(nil)
+
+// ErrMemoryContractTooOld signals a peer whose contract predates
+// GET /v1/<agent>/memory (#3978, schema 2.13) -- the caller must render an
+// honest refusal naming the floor and the fix, never an empty memory view
+// that reads as "the agent remembers nothing".
+type ErrMemoryContractTooOld struct {
+	AgentID string
+	Version string
+}
+
+func (e *ErrMemoryContractTooOld) Error() string {
+	return noticeForMissingMemory(e.AgentID, e.Version)
+}
+
+// FetchMemory implements MemoryProvider for the daemon-relayed transport:
+// GET /v1/<agent>/memory through the daemon relay, cloning FetchPreScan's
+// shape (prescan.go) -- ensure the sidecar, negotiate the peer's contract,
+// gate on it before trusting the response, then relay the request.
+func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
+	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
+	if err != nil {
+		return MemoryDump{}, err
+	}
+
+	// Check the peer's contract BEFORE trusting a response body, not after: a
+	// pre-2.13 sidecar has no /memory route at all, and calling it anyway
+	// would surface whatever a stray 404 handler answers as if it were a
+	// real (if empty) memory dump.
+	peer := s.negotiate(ctx, inst)
+	if !peer.answered {
+		// The /version probe never actually heard from the peer (relay error,
+		// timeout, 401, 503, ...) -- that is NOT the same fact as "the peer
+		// answered and is too old" (#3978 A1), and must not be reported as
+		// ErrMemoryContractTooOld, which tells the user to reinstall a
+		// possibly-current agent.
+		return MemoryDump{}, fmt.Errorf(
+			"could not confirm the '%s' agent's contract version, so its memory "+
+				"route cannot be trusted yet. Check `gaia daemon status` and try "+
+				"again once the agent responds",
+			s.agentID)
+	}
+	if !contractAtLeast(peer.version, memoryContractMajor, memoryContractMinor) {
+		return MemoryDump{}, &ErrMemoryContractTooOld{AgentID: s.agentID, Version: peer.version}
+	}
+
+	relayPath := fmt.Sprintf("/v1/%s/memory", s.agentID)
+	resp, inst, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodGet,
+		Path:   relayPath,
+		Header: http.Header{
+			"Accept": []string{"application/json"},
+		},
+		Op: fmt.Sprintf("fetch the '%s' agent's memory through the daemon relay", s.agentID),
+	})
+	if err != nil {
+		return MemoryDump{}, err
+	}
+	defer resp.Body.Close()
+
+	s.mu.Lock()
+	s.inst = inst
+	s.mu.Unlock()
+
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return MemoryDump{}, fmt.Errorf("could not read the '%s' memory response: %w", s.agentID, readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return MemoryDump{}, fmt.Errorf(
+			"the daemon relay refused the '%s' memory fetch (%s)",
+			s.agentID, errorDetailFromBody(resp.StatusCode, raw),
+		)
+	}
+
+	// Unlike /prescan, the route returns build_memory_dump()'s payload
+	// directly as the response body -- no `result` envelope to unwrap.
+	var dump MemoryDump
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		return MemoryDump{}, fmt.Errorf("could not decode the '%s' memory response: %w", s.agentID, err)
+	}
+	return dump, nil
 }

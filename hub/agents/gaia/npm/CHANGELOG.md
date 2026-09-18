@@ -242,5 +242,8 @@ the terminal UI meant building it from source.
   This package mints no token, so a sidecar it spawns comes up in dev mode (token
   check skipped, loudly warned, Host/Origin still enforced) — pass your own
   through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
-- Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
+- Tracks sidecar contract `apiVersion` **2.13**; a differing major raises
   `VersionMismatchError`.
+- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
+  stdio transport's `/memory` sentinel produces, so a daemon-supervised
+  install of the flagship exposes `/memory` too, not just a subprocess one.

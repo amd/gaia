@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,9 +44,17 @@ type memoryDumpMsg struct {
 func (m ChatModel) startMemoryFetch() (tea.Model, tea.Cmd) {
 	provider, ok := m.client.(client.MemoryProvider)
 	if !ok {
+		// Both real transports implement MemoryProvider (SubprocessClient and
+		// SSEClient, memory.go) -- this only fires for a client that
+		// genuinely has no memory route at all (a test double, or a future
+		// third transport). A too-old daemon sidecar is a DIFFERENT case,
+		// caught below by FetchMemory's own contract check
+		// (client.ErrMemoryContractTooOld) -- that gets its own,
+		// version-specific message, not this one.
 		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "This agent does not support /memory.",
+			Role: RoleError,
+			Content: "/memory is not available over this connection (daemon transport). " +
+				"Run `gaia tui status` to see how this agent is connected.",
 		})
 		m.updateViewport()
 		return m, nil
@@ -78,7 +87,7 @@ func (m ChatModel) dismissMemoryView() tea.Model {
 }
 
 // handleMemoryDump lands a /memory fetch's result. A failure (including a
-// cancelled/timed-out fetch) is reported as a status line, not a blank or
+// cancelled/timed-out fetch) is reported as an error, not a blank or
 // silently-dropped view — an agent that never answered is a different fact
 // from "you have no memories" (CLAUDE.md: no silent fallbacks).
 func (m ChatModel) handleMemoryDump(msg memoryDumpMsg) (tea.Model, tea.Cmd) {
@@ -86,10 +95,18 @@ func (m ChatModel) handleMemoryDump(msg memoryDumpMsg) (tea.Model, tea.Cmd) {
 	m.memoryCancelFn = nil
 
 	if msg.err != nil {
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] could not load memory: %v", msg.err),
-		})
+		var tooOld *client.ErrMemoryContractTooOld
+		if errors.As(msg.err, &tooOld) {
+			// Its own message already names the floor and the fix
+			// (gaia hub uninstall/install) -- flattening it into the generic
+			// line below would lose that specificity.
+			m.messages = append(m.messages, Message{Role: RoleError, Content: tooOld.Error()})
+		} else {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: fmt.Sprintf("could not load memory: %v", msg.err),
+			})
+		}
 		m.updateViewport()
 		return m, nil
 	}
