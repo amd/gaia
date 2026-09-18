@@ -407,6 +407,10 @@ type ChatModel struct {
 	// memoryLoading is true from /memory until its fetch resolves (or times
 	// out) — drives the spinner and lets Esc cancel a stuck fetch.
 	memoryLoading bool
+	// memoryColdStart records that the agent was not yet running when the
+	// fetch began, so the wait can say the agent is starting rather than
+	// implying the read itself is slow.
+	memoryColdStart bool
 	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
 	memoryCancelFn context.CancelFunc
 }
@@ -2155,7 +2159,11 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.memoryLoading {
-		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		note := "Loading memory…"
+		if m.memoryColdStart {
+			note = "Starting the agent, then loading memory… (first run takes a moment)"
+		}
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render(note))
 		sb.WriteString("\n")
 	}
 	if m.memoryView != nil {
