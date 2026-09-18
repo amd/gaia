@@ -301,9 +301,12 @@ class TestRevokeLoggingCarriesNoCredentialDerivedValues:
         )
         with caplog.at_level("WARNING", logger="gaia.connectors.flow"):
             await revoke_provider_token("google")
-        log_text = "\n".join(r.getMessage() for r in caplog.records)
-        assert "oauth2.googleapis.com" in log_text
-        assert "400" in log_text
+        # Assert the %-args themselves, not a substring of the rendered line:
+        # exact, and it can't pass on an unrelated line that happens to
+        # mention the host.
+        rejected = [r for r in caplog.records if "revoke rejected" in r.msg]
+        assert len(rejected) == 1
+        assert rejected[0].args == ("oauth2.googleapis.com", 400)
 
 
 class TestProviderRevokeUrlContract:
