@@ -475,7 +475,7 @@ def _assert_actionable_lemonade_detail(detail: str) -> None:
     # command: the manual fallback is resolved per machine (CLAUDE.md — never
     # hardcode how Lemonade is started), so pinning a literal here is how a
     # command that exists on no modern install stayed asserted-as-real.
-    assert any(c in lower for c in ("gaia daemon start", "gaia init", "lemonade"))
+    assert any(c in lower for c in ("gaia daemon start", "gaia init"))
     assert "amd-gaia.ai/docs/guides/email" in lower  # where to look
 
 

@@ -2641,6 +2641,8 @@ contract; every route needs `Authorization: Bearer <token>` from
 | Route | Purpose |
 |-------|---------|
 | `GET /daemon/v1/status` | pid / port / uptime / API version |
+| `POST /daemon/v1/lemonade/start` | Start or attach the local model server; returns 503 with actionable detail on refusal. Host API ≥ 1.2 |
+| `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.2 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
@@ -2787,20 +2789,15 @@ one-shot over the daemon transport (the agents the background service supervises
 runs the same readiness check the interactive launch's gate runs — background
 service, sidecar, local model server, model, and for email the mailbox — and if
 one of them is not ready it prints that row and its remedy to stderr and exits
-non-zero. Against an unreachable dependency that is about a second; the ceiling
-is the time it takes to start the sidecar. Nothing is sent to the agent, and the
+non-zero. A stopped local model server is started through the daemon before
+readiness is decided; this cold-start check can take up to 210 seconds after
+sidecar setup. Nothing is sent to the agent until it is ready, and the
 gate screen is never rendered: a script has nobody to press a key. The flagship
 runs as a local subprocess and is checked the same way, just with its own
 three-row gate (agent binary, Lemonade, models) instead of the daemon's five.
 
-```bash
-$ gaia tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: <the start command resolved for this machine>
-$ echo $?   # 1, after about a second
-```
+If startup fails, stderr names the failing readiness row, the recovery action,
+and the relevant log. A stopped server alone is no longer an immediate refusal.
 
 The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
 2h` to change it — so an agent that accepts the query and then stops answering is

@@ -509,15 +509,14 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
     argv, so a spawn that dropped it would come up health-green and then fail
     every long request.
     """
-    import shutil
     import sys
 
     # Named so resolve_lemonade classifies the override as MODERN — the form
-    # whose ctx_size rides in the environment. The binary is just a Python
-    # interpreter; only the env is under test, so the argv is redirected to the
-    # probe script below while spec.env is left exactly as the launcher built it.
+    # whose ctx_size rides in the environment. The placeholder exercises real
+    # resolution; argv then uses this environment's Python to run the probe,
+    # while spec.env is left exactly as the launcher built it.
     fake_server = tmp_path / ("lemonade.exe" if os.name == "nt" else "lemond")
-    shutil.copy(sys.executable, fake_server)
+    fake_server.touch()
 
     out = tmp_path / "child-env.txt"
     probe = tmp_path / "probe.py"
@@ -536,7 +535,8 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
             "the launcher did not put the context window in the environment, so "
             "this test would pass for the wrong reason"
         )
-        spec.argv[1:] = [str(probe), str(out)]
+        # A copied Windows venv launcher cannot locate its Python installation.
+        spec.argv[:] = [sys.executable, str(probe), str(out)]
         return spec
 
     monkeypatch.setattr(sup, "build_start_command", redirect_argv_keep_env)

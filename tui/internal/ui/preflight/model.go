@@ -28,14 +28,14 @@ type ConnectMailboxMsg struct {
 // Timeouts for the work the screen kicks off. Each is bounded so a wedged
 // daemon or sidecar surfaces as an actionable row instead of a frozen screen.
 const (
-	// checkTimeout has to cover the one thing the walk DOES rather than merely
+	// CheckTimeout has to cover the one thing the walk DOES rather than merely
 	// probes: starting the local model server when it is down (checkInit ->
 	// autoStartLemonade). The starter's own budget is 120s
 	// (lemonade_supervisor.DEFAULT_START_TIMEOUT_S), so a client deadline under
 	// that would abort a start that was about to succeed and then report the
 	// wrong cause. It costs the common path nothing — a deadline is a ceiling,
 	// and an all-green walk still finishes in well under a second.
-	checkTimeout     = 210 * time.Second
+	CheckTimeout     = 210 * time.Second
 	startTimeout     = 60 * time.Second
 	ensureTimeout    = 15 * time.Minute
 	provisionTimeout = 60 * time.Minute
@@ -259,7 +259,7 @@ func (m Model) begin(timeout time.Duration) context.Context {
 }
 
 func (m Model) checkCmd() tea.Cmd {
-	ctx := m.begin(checkTimeout)
+	ctx := m.begin(CheckTimeout)
 	r, cfg := m.r, m.cfg
 	return func() tea.Msg { return reportMsg{rep: r.Check(ctx, cfg)} }
 }

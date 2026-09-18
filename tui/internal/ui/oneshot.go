@@ -500,9 +500,9 @@ const (
 	// refuse a cold start the hub completes on the same machine.
 	readinessEnsureTimeout = 15 * time.Minute
 	// readinessCheckTimeout bounds the readiness probe. Same value as the gate's
-	// checkTimeout, over the same call — two paths asking the same question must
+	// CheckTimeout, over the same call — two paths asking the same question must
 	// not disagree about how long the answer may take.
-	readinessCheckTimeout = 90 * time.Second
+	readinessCheckTimeout = preflight.CheckTimeout
 	// DefaultOneShotTimeout bounds one whole non-interactive turn. The relay
 	// reads with a 300s idle timeout per chunk and an agent loop can take several
 	// steps, so this sits well above a healthy-but-slow run — including one whose
