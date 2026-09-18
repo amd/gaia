@@ -8,6 +8,7 @@ import { useChatStore } from '../stores/chatStore';
 import {
     compatLevel,
     compatLabel,
+    displayVersion,
     formatBytes,
     isInstalling,
 } from '../utils/agentHub';
@@ -91,6 +92,8 @@ export function AgentHubCard({
     const installing = isInstalling(installStatus);
     const installFailed = installStatus?.state === 'failed';
     const hasUpdate = agent.status === 'update_available';
+    // Installed cards show what you have; catalog cards show what you'd get.
+    const version = isAvailable ? agent.latest_version : displayVersion(agent);
     const level = compatLevel(agent);
     const incompatible = level === 'incompatible';
 
@@ -166,8 +169,8 @@ export function AgentHubCard({
                                 <ArrowUpCircle size={10} /> Update
                             </span>
                         )}
-                        {agent.version && !isAvailable && (
-                            <span className="agent-badge agent-badge-version">v{agent.version}</span>
+                        {version && (
+                            <span className="agent-badge agent-badge-version">v{version}</span>
                         )}
                         {tierBadge(agent.security_tier)}
                         {agent.deprecated && (
