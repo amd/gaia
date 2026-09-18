@@ -180,7 +180,7 @@ class TestRepeatedCallLoop:
         agent.max_consecutive_repeats = 3
         result = agent.process_query("Read src.txt and answer.")
         assert "Task completed" not in result["result"]
-        assert "not finished" in result["result"]
+        assert "can't confirm the task is finished" in result["result"]
 
 
 class TestWorkspaceIsCwd:

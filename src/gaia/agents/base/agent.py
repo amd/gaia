@@ -7060,7 +7060,11 @@ Do NOT wrap conversational replies in JSON.
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
                 can_reprompt_unfinished = (
-                    steps_taken < steps_limit - 1
+                    # NO_STEP_LIMIT is 0, so the bare comparison reads
+                    # `steps_taken < -1` and is False forever — the re-prompt
+                    # could never fire on the default unlimited budget. Same
+                    # guard the other step comparisons in this loop use.
+                    (steps_limit == NO_STEP_LIMIT or steps_taken < steps_limit - 1)
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
                 )
                 if unfinished_kind and not can_reprompt_unfinished:
@@ -7614,14 +7618,13 @@ Do NOT wrap conversational replies in JSON.
         consecutive_count: int,
         step_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; never claims success.
+        """Final-answer text when the loop breaks on repeats; honest on errors.
 
-        This path is reached only after the model was already told it was
-        repeating itself and did it again, so the turn is ending on a stall.
-        It used to end on "Task completed with {tool}. No further action
-        needed." — a claim of success for work that was never finished, which
-        is worse than no answer at all because nothing downstream can tell the
-        difference.
+        Reached only after the guard already asked the model to change
+        approach and it repeated itself anyway, so the turn ends on a stall.
+        Neither branch may report success — see the source invariant in
+        tests/unit/agents/test_agent_source_invariants.py, which scans every
+        literal here including this docstring.
         """
         last = step_results[-1] if step_results else None
         if Agent._is_error_result(last):

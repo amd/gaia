@@ -71,7 +71,10 @@ def _looks_binary(path: Path) -> bool:
     try:
         with open(path, "rb") as handle:
             return b"\0" in handle.read(_BINARY_SNIFF_BYTES)
-    except OSError:
+    except OSError as exc:
+        # Say why. A search that silently skipped half a tree over a
+        # permissions problem looks identical to one that found nothing.
+        logger.warning("Skipping %s during content search: %s", path, exc)
         return True
 
 
