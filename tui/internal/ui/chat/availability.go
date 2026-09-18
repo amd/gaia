@@ -5,11 +5,17 @@ package chat
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/client"
 )
+
+// capabilityProbeTimeout bounds the one-shot warm-up. Generous next to the
+// 8s round-trip inside it, because a first probe may spawn the sidecar — but
+// finite, so a wedged daemon cannot leave a goroutine running for the session.
+const capabilityProbeTimeout = 60 * time.Second
 
 // capabilityProber is implemented by transports that need an async warm-up
 // before client.CapabilityReporter.Supports has a real answer (SSEClient's
@@ -37,7 +43,12 @@ func (m ChatModel) probeCapabilitiesCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		return capabilitiesProbedMsg{err: prober.ProbeCapabilities(context.Background())}
+		// Bounded: the probe can spawn a sidecar, and an unbounded one would
+		// leave a goroutine alive for the whole session. Timing out leaves the
+		// capability unknown, which shows the command rather than hiding it.
+		ctx, cancel := context.WithTimeout(context.Background(), capabilityProbeTimeout)
+		defer cancel()
+		return capabilitiesProbedMsg{err: prober.ProbeCapabilities(ctx)}
 	}
 }
 

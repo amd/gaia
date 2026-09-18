@@ -79,7 +79,9 @@ func (m FlagshipModel) switchAgent(id string) (tea.Model, tea.Cmd) {
 		carried = m.chat.Messages()
 	}
 
-	m.pendingTranscript = append(carried, chat.Message{
+	// Copied, not appended in place: Messages() hands back the live chat's own
+	// slice, so appending could write the divider into its spare capacity.
+	m.pendingTranscript = append(append([]chat.Message(nil), carried...), chat.Message{
 		Role:    chat.RoleStatus,
 		Content: switchDivider(m.agent, *next),
 	})

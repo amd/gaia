@@ -53,7 +53,7 @@ func (m ChatModel) startMemoryFetch() (tea.Model, tea.Cmd) {
 		// version-specific message, not this one.
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
-			Content: "/memory is not available over this connection (daemon transport). " +
+			Content: "/memory is not available over this session's connection. " +
 				"Run `gaia tui status` to see how this agent is connected.",
 		})
 		m.updateViewport()

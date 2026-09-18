@@ -178,7 +178,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		switch v.String() {
-		case "esc", "ctrl+c":
+		case "ctrl+c":
+			// Quits, matching providers.Model and the status bar's own
+			// "Ctrl+C quit" on every frame — a panel where it silently meant
+			// Esc would make leaving take two presses.
+			m.abandonLoad()
+			return m, tea.Quit
+		case "esc":
 			m.abandonLoad()
 			return m, func() tea.Msg { return ClosedMsg{} }
 		case "up":

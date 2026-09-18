@@ -517,7 +517,9 @@ async def memory() -> Dict[str, Any]:
     """
     agent = None
     try:
-        agent = build_query_agent()
+        # Off the event loop: constructing the agent registers every tool and
+        # loads its skills, which would stall concurrent runs' SSE heartbeats.
+        agent = await asyncio.to_thread(build_query_agent)
         return await asyncio.to_thread(build_memory_dump, agent)
     except Exception as exc:
         raise HTTPException(
