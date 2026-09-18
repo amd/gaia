@@ -16,7 +16,7 @@ import (
 // Claude mode: the agent's inference runs against Anthropic's Claude API
 // instead of the local Lemonade backend, so the conversation leaves the
 // machine. That is a mode the user chose at launch, not a danger — it gets a
-// persistent header chip, not bypass's warning band.
+// persistent header chip, not full access's warning band.
 
 var claudeChipStyle = lipgloss.NewStyle().
 	Bold(true).

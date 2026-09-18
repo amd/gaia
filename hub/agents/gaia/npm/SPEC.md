@@ -394,8 +394,8 @@ It emits the identical canonical event vocabulary, but its input channel accepts
 a JSON line carrying a `gaia_control` key, which gives it something HTTP does
 not have: a back-channel that can answer a confirmation prompt *while* a turn is
 in flight, and stop that turn (`cancel`) without ending the process — so loaded
-skills, "always" grants, history and the bypass mode survive a cancel. It also
-takes `--bypass-permissions` (start with gating off) and
+skills, "always" grants, history and full access survive a cancel. It also
+takes `--full-access` (start with gating off) and
 `--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
 local Lemonade; embeddings stay on Lemonade either way). None of that is
 reachable over `/v1/gaia/query`.

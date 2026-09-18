@@ -112,13 +112,13 @@ type ToolPermissionResponder interface {
 	RespondToolPermission(confirmID string, decision PermissionDecision) error
 }
 
-// PermissionBypasser is implemented by transports that can put the agent into
-// (or take it out of) bypass-permissions mode, where gated tools run without
+// FullAccessSetter is implemented by transports that can put the agent into
+// (or take it out of) full-access mode, where gated tools run without
 // asking.
-type PermissionBypasser interface {
-	// SetBypassPermissions turns unattended approval on or off. It takes
+type FullAccessSetter interface {
+	// SetFullAccess turns unattended approval on or off. It takes
 	// effect on the next gated tool, including one in a turn already running.
-	SetBypassPermissions(enabled bool) error
+	SetFullAccess(enabled bool) error
 }
 
 // Capability names one optional thing a session can do, so the UI can offer

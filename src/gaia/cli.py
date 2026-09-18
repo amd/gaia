@@ -5116,7 +5116,10 @@ def handle_config_command(args):
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
         cfg.save(path)
-        print(f"✅ Set {args.key} = {args.value}")
+        # Echo what was STORED, not what was typed: `set full_access yes`
+        # saves True, and confirming "= yes" would leave the user guessing
+        # whether the word was understood.
+        print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
 
