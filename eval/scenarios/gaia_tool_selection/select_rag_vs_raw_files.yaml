@@ -1,0 +1,46 @@
+id: select_rag_vs_raw_files
+name: "Tool Selection — Indexed Question Uses Retrieval"
+category: gaia_tool_selection
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  A document is already indexed. Asking what it says should route to RAG
+  retrieval (query_documents), not to re-discovering the file with search
+  tools or re-reading it raw.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+  notes: "Dynamic tool selection enabled."
+
+turns:
+  - turn: 1
+    objective: "Ask what the indexed handbook says about PTO for first-year employees"
+    user_message: "What does the indexed handbook say about PTO for first-year employees?"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent answers 15 days via retrieval tooling (query_documents /
+      query_specific_file / search_indexed_chunks in agent_tools[]).
+      Flailing through search_file + raw read_file when the document is
+      already indexed is inefficient routing — score tool_selection down;
+      answering with no tool call at all is a FAIL.
+
+  - turn: 2
+    objective: "Ask the remote-work policy from the same document"
+    user_message: "And the remote-work policy, from the same document?"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval; fully remote needs VP approval"
+    success_criteria: "Agent answers both parts via retrieval against the indexed doc."
+
+expected_outcome: |
+  Indexed-document questions route to RAG retrieval and return the planted
+  policies.

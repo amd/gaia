@@ -43,14 +43,14 @@ def _write_card(directory: Path, version: str, accuracy: float) -> Path:
     """Write a valid SCORECARD.md to directory/SCORECARD.md."""
     payload = _make_payload(version=version, accuracy=accuracy)
     path = directory / "SCORECARD.md"
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 
 def _write_card_named(path: Path, version: str, accuracy: float) -> Path:
     """Write a valid SCORECARD.md to an explicit path."""
     payload = _make_payload(version=version, accuracy=accuracy)
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 
@@ -210,13 +210,15 @@ class TestBaselineFileMissing:
 class TestInvalidCandidate:
     def test_corrupt_candidate_returns_1(self, tmp_path):
         corrupt_path = tmp_path / "SCORECARD.md"
-        corrupt_path.write_text("this is not valid yaml front matter at all\ngarbage\n")
+        corrupt_path.write_text(
+            "this is not valid yaml front matter at all\ngarbage\n", encoding="utf-8"
+        )
         result = main(["--scorecard", str(corrupt_path)])
         assert result == 1
 
     def test_empty_candidate_returns_1(self, tmp_path):
         empty_path = tmp_path / "SCORECARD.md"
-        empty_path.write_text("")
+        empty_path.write_text("", encoding="utf-8")
         result = main(["--scorecard", str(empty_path)])
         assert result == 1
 
@@ -231,7 +233,9 @@ class TestInvalidPrior:
         baseline_dir = tmp_path / "baseline"
         baseline_dir.mkdir()
         corrupt = baseline_dir / "SCORECARD.md"
-        corrupt.write_text("this is not valid yaml front matter at all\ngarbage\n")
+        corrupt.write_text(
+            "this is not valid yaml front matter at all\ngarbage\n", encoding="utf-8"
+        )
 
         candidate_dir = tmp_path / "candidate"
         candidate_dir.mkdir()
@@ -244,7 +248,7 @@ class TestInvalidPrior:
         baseline_dir = tmp_path / "baseline"
         baseline_dir.mkdir()
         empty = baseline_dir / "SCORECARD.md"
-        empty.write_text("")
+        empty.write_text("", encoding="utf-8")
 
         candidate_dir = tmp_path / "candidate"
         candidate_dir.mkdir()
@@ -268,7 +272,7 @@ class TestWorkflowYaml:
             / "release_agent_email.yml"
         )
         assert workflow_path.exists(), f"Workflow file not found: {workflow_path}"
-        content = workflow_path.read_text()
+        content = workflow_path.read_text(encoding="utf-8")
         parsed = yaml.safe_load(content)
 
         assert "jobs" in parsed, "Workflow has no 'jobs' key"
@@ -353,7 +357,7 @@ def _make_acceptance_card(
     )
     if environment is not None:
         payload.environment = environment
-    path.write_text(render_scorecard(payload))
+    path.write_text(render_scorecard(payload), encoding="utf-8")
     return path
 
 

@@ -1,0 +1,41 @@
+id: task_checkin_records_items
+name: "Skill Task — check-in Records Open Items"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  A first check-in: the user states what they're working on; the skill must
+  record the items in memory so a later check-in can follow up.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "check-in installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the check-in skill"
+    user_message: "Load the check-in skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Do a check-in stating two open items"
+    user_message: "morning! quick check-in: this week i need to finish my slide deck by thursday and book a dentist appointment"
+    ground_truth:
+      expected_behavior: "Both items recorded in memory (real remember calls); a brief check-in summary"
+    success_criteria: "Agent runs the check-in and RECORDS both items — agent_tools[] must show memory writes (remember). Merely chatting about the items without storing them defeats the skill and is a FAIL."
+
+  - turn: 3
+    objective: "Verify the recorded state"
+    user_message: "what did you note down from that?"
+    ground_truth:
+      expected_answer: "Slide deck due Thursday; book dentist appointment"
+    success_criteria: "Agent reports exactly the two items (deck by Thursday, dentist booking) — no invented extras."
+
+expected_outcome: |
+  The check-in produces real memory writes matching the user's two items.

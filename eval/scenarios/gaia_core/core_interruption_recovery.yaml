@@ -1,0 +1,51 @@
+id: core_interruption_recovery
+name: "Core — Mid-Task Interruption and Recovery"
+category: gaia_core
+agent_type: gaia
+severity: high
+tags: [t3_stress]
+description: |
+  The user interrupts an in-progress multi-part answer with an urgent
+  unrelated request, then says "continue". The agent must resume the
+  interrupted task at the right place instead of starting over or losing it.
+
+persona: creative_professional
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Start a multi-part task: name 5 poster design principles one at a time"
+    user_message: "I need 5 principles for poster design. Give me just the first two for now, I'll ask for more."
+    ground_truth:
+      expected_behavior: "Exactly two principles, numbered 1 and 2"
+    success_criteria: "Agent gives exactly two principles (numbered), holding the rest."
+
+  - turn: 2
+    objective: "Interrupt with an urgent unrelated question"
+    user_message: "wait, urgent — what's the standard print bleed in millimetres?"
+    ground_truth:
+      expected_answer: "3mm (3-5mm acceptable)"
+    success_criteria: "Agent answers ~3mm without abandoning composure."
+
+  - turn: 3
+    objective: "Resume with a bare 'continue'"
+    user_message: "ok continue"
+    ground_truth:
+      expected_behavior: "Resumes at principle 3 — not restarting from 1"
+    success_criteria: |
+      Agent continues the principles list from #3 (may give 3, or 3-5).
+      CRITICAL FAIL if it restarts from #1, repeats 1-2 as new items, or
+      asks what to continue.
+
+  - turn: 4
+    objective: "Ask for the complete list as a recap"
+    user_message: "recap all 5 in one list?"
+    ground_truth:
+      expected_behavior: "A single coherent list where items 1-2 match turn 1 and the rest match turn 3+"
+    success_criteria: "The recap's first two items are the SAME principles given in turn 1 (same concepts, wording may vary) and the list totals exactly 5 distinct items."
+
+expected_outcome: |
+  The interrupted list resumes at the correct position and the final recap is
+  consistent with what was already delivered.

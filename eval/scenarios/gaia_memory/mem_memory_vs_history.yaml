@@ -1,0 +1,60 @@
+id: mem_memory_vs_history
+name: "Memory — Store vs Session-History Disambiguation"
+category: gaia_memory
+agent_type: gaia
+severity: critical
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  The exact conflation a green L3 masked: persistent memory and this-session
+  history are different mechanisms. The user explicitly distinguishes "things
+  I asked you to remember" from "things I merely said in this chat" — the
+  agent must keep the two straight in both directions.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Store one fact explicitly in persistent memory"
+    user_message: "Please remember permanently: my work timezone is CET."
+    ground_truth:
+      expected_answer: "Stored: CET"
+    success_criteria: "Agent stores it (agent_tools[] shows a remember call)."
+
+  - turn: 2
+    objective: "State a fact conversationally WITHOUT asking to remember"
+    user_message: "By the way — just for this conversation — I'm currently travelling in Japan this week. Don't save that, it's temporary."
+    ground_truth:
+      expected_behavior: "Acknowledges without storing"
+    success_criteria: "Agent acknowledges. It must NOT call remember for the Japan fact — the user explicitly said not to save it. A remember call here in agent_tools[] is a FAIL."
+
+  - turn: 3
+    objective: "Question that needs both facts combined"
+    user_message: "If someone books a call at 3pm my WORK timezone, what time is that where I am right now?"
+    ground_truth:
+      expected_answer: "3pm CET is 10pm or 11pm in Japan (JST = CET+8 in winter, +7 in summer; late August = +7, so 10pm)"
+    success_criteria: "Agent combines the stored CET fact with the session-only Japan fact: answers 10pm JST (accept 10pm or an answer showing JST = CET+7/+8 reasoning)."
+
+  - turn: 4
+    objective: "Ask what is in persistent memory specifically"
+    user_message: "What have I actually asked you to store in your long-term memory, as opposed to things I just mentioned in this chat?"
+    ground_truth:
+      expected_answer: "Stored: work timezone CET. Merely mentioned this session: travelling in Japan."
+    success_criteria: |
+      Agent draws the line correctly: CET is in the persistent store; the
+      Japan trip is session context only. CRITICAL FAIL if it claims the
+      Japan trip is stored, or denies the CET fact.
+
+  - turn: 5
+    objective: "Cross-check the boundary from the other side"
+    user_message: "Next week when I'm home and we talk again, would you still know I was in Japan?"
+    ground_truth:
+      expected_answer: "No — that wasn't saved, at your request; only the CET timezone persists"
+    success_criteria: "Agent correctly says the Japan fact won't persist beyond this session (it wasn't stored), while the CET fact will."
+
+expected_outcome: |
+  The agent uses both facts fluently while never confusing which mechanism
+  holds which — stored CET persists, session-only Japan does not.

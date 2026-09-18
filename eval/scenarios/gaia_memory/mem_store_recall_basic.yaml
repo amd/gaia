@@ -1,0 +1,42 @@
+id: mem_store_recall_basic
+name: "Memory — Store and Recall (L2/L3)"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t1_basic, tui, local_blocked_no_embedder]
+description: |
+  Ladder rungs L2/L3 against the persistent memory store: remember a fact on
+  request, recall it on demand. Hardened port of memory_store_and_recall to
+  the flagship agent.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask the agent to remember a colour preference"
+    user_message: "Remember that my favourite colour is teal. Just acknowledge."
+    ground_truth:
+      expected_answer: "Acknowledged; stored"
+    success_criteria: "Agent acknowledges storing the fact. agent_tools[] must include a real remember call — FAIL if it claims to remember with no memory tool call."
+
+  - turn: 2
+    objective: "Recall the colour, one word"
+    user_message: "What is my favourite colour? One word."
+    ground_truth:
+      expected_answer: "Teal"
+    success_criteria: "Agent answers Teal. FAIL if it doesn't know, asks again, or names another colour."
+
+  - turn: 3
+    objective: "Ask what the agent knows about the user"
+    user_message: "What do you know about me so far?"
+    ground_truth:
+      expected_answer: "Favourite colour: teal"
+    success_criteria: "Agent recalls the teal preference. FAIL on an empty or generic response."
+
+expected_outcome: |
+  The preference is stored via a real memory tool call and recalled
+  accurately in later turns.

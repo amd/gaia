@@ -1,0 +1,35 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/fixture_hub/ catalog (github-triage 2.1.0,
+# rss-digest 1.0.0, experimental-notes 0.0.1) served with GAIA_HUB_URL pointing
+# at the fixture server — see GAIA_FIXTURE_VALUES.md.
+id: skills_hub_search
+name: "Skills — Search the Hub for a Capability"
+category: gaia_skills_lifecycle
+agent_type: gaia
+severity: high
+description: |
+  Search the (fixture) Agent Hub for a skill by capability. Results must
+  come from a real search_skill_hub call against the local fixture hub.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub."
+
+turns:
+  - turn: 1
+    objective: "Ask if there's a skill for summarizing RSS feeds"
+    user_message: "Is there a skill I could get for summarizing RSS feeds?"
+    ground_truth:
+      expected_answer: "Yes — rss-digest (v1.0.0) on the hub"
+    success_criteria: "agent_tools[] must include search_skill_hub, and the answer names rss-digest from the fixture catalog. Recommending it without a real hub search is a FAIL."
+
+  - turn: 2
+    objective: "Ask what else the hub offers"
+    user_message: "what else does the hub have?"
+    ground_truth:
+      expected_behavior: "Reports the real fixture catalog contents"
+    success_criteria: "Agent lists only skills that exist in the fixture hub catalog (github-triage, rss-digest, experimental-notes). Inventing catalog entries is a FAIL."
+
+expected_outcome: |
+  Hub answers grounded in real search results against the fixture catalog.

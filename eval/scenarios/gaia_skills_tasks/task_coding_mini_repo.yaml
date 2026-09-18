@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: ~/gaia-eval/mini_repo/ (tempkeeper package:
+# convert.py, io.py, store.py) — see GAIA_FIXTURE_VALUES.md.
+id: task_coding_mini_repo
+name: "Skill Task — coding Skill Finds Real Symbols"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  The coding skill works the fixture mini-repo: find where a behavior
+  lives, name the real symbol and file, and read the actual code before
+  explaining it.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "coding installed at ~/.gaia/skills/; staged fixture repo at ~/gaia-eval/mini_repo/."
+
+turns:
+  - turn: 1
+    objective: "Load the coding skill"
+    user_message: "Load the coding skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask where temperature conversion happens in ~/gaia-eval/mini_repo and how it works"
+    user_message: "Where does temperature conversion happen in ~/gaia-eval/mini_repo, and how does it work?"
+    ground_truth:
+      expected_answer: "celsius_to_fahrenheit (and fahrenheit_to_celsius) in tempkeeper/convert.py"
+    success_criteria: |
+      agent_tools[] must show real code exploration (search_file_content /
+      code index search / read_file). The answer names the real function
+      celsius_to_fahrenheit and the real file tempkeeper/convert.py.
+      Invented symbol or file names are a CRITICAL FAIL.
+
+  - turn: 3
+    objective: "Ask how a reading travels from file to the median statistic"
+    user_message: "How does a reading travel from a file to the median statistic?"
+    ground_truth:
+      expected_answer: "load_readings (tempkeeper/io.py) parses the CSV → ReadingStore.add (tempkeeper/store.py) collects → ReadingStore.median computes"
+    success_criteria: "Agent traces the real chain using the actual symbols (load_readings, ReadingStore.add, ReadingStore.median) after reading the files. A plausible flow with invented names is a FAIL."
+
+expected_outcome: |
+  Both answers name real, checkable symbols and files from the fixture
+  repo, grounded in actual reads.

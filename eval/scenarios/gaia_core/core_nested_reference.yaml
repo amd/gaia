@@ -1,0 +1,51 @@
+id: core_nested_reference
+name: "Core — Nested References Into Prior Lists"
+category: gaia_core
+agent_type: gaia
+severity: high
+tags: [t3_stress]
+description: |
+  Chained references: a list is produced, then referenced ("the second one of
+  those three"), then the reference itself is referenced ("the one you just
+  explained"). Each hop resolves only through accumulated history.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask for exactly three renewable energy sources as a numbered list"
+    user_message: "List exactly three renewable energy sources, numbered, one word each."
+    ground_truth:
+      expected_behavior: "Numbered list of three (e.g. 1. Solar 2. Wind 3. Hydro)"
+    success_criteria: "Agent lists exactly three renewable sources, numbered."
+
+  - turn: 2
+    objective: "Reference the second item of the list"
+    user_message: "Explain how the second one of those three actually generates electricity, in two sentences."
+    ground_truth:
+      expected_behavior: "Explains the mechanism of ITS OWN item #2"
+    success_criteria: "Agent explains the generation mechanism of exactly the source it listed second. FAIL if it explains a different item or asks which one is meant."
+
+  - turn: 3
+    objective: "Reference the previous reference"
+    user_message: "What's the biggest practical drawback of the one you just explained?"
+    ground_truth:
+      expected_behavior: "A real drawback of the SAME source explained in turn 2"
+    success_criteria: "Agent names a genuine drawback of the same source it explained in turn 2 (e.g. intermittency for wind). The subject must not drift to another item."
+
+  - turn: 4
+    objective: "Reference by elimination"
+    user_message: "And of the two we haven't dug into, which is cheaper to deploy at household scale?"
+    ground_truth:
+      expected_behavior: "Compares exactly the two list items NOT discussed in turns 2-3 and picks one"
+    success_criteria: |
+      Agent correctly identifies the two remaining items from its turn-1 list
+      (excluding the one covered in turns 2-3), compares them, and picks one.
+      FAIL if it re-includes the already-discussed source or asks which two.
+
+expected_outcome: |
+  Every reference hop ("the second one", "the one you just explained", "the
+  two we haven't dug into") resolves correctly against the evolving history.

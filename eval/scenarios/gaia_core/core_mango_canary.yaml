@@ -1,0 +1,40 @@
+id: core_mango_canary
+name: "Core — Mango History Canary"
+category: gaia_core
+agent_type: gaia
+severity: critical
+tags: [t1_basic, tui]
+description: |
+  The cheap conversation-history canary from the testing skill: two short
+  turns, no tools, no network. If the agent answers "no fruit has been
+  mentioned", conversation history is broken and every other multi-turn
+  result is measuring an agent with amnesia. This tests SESSION HISTORY,
+  not the persistent memory store — the answer must come from the previous
+  turn, and no memory tool is required for a pass.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "State a fruit preference and ask only for acknowledgement"
+    user_message: "My favourite fruit is mango. Just acknowledge."
+    ground_truth:
+      expected_answer: "Brief acknowledgement"
+    success_criteria: "Agent briefly acknowledges. No lengthy digression required or wanted."
+
+  - turn: 2
+    objective: "Ask what fruit was just mentioned, one word"
+    user_message: "What fruit did I just mention? One word."
+    ground_truth:
+      expected_answer: "Mango"
+    success_criteria: |
+      Agent answers Mango. CRITICAL FAIL if it says no fruit has been
+      mentioned, asks the user to repeat, or names any other fruit — that
+      is the lost-conversation-history signature.
+
+expected_outcome: |
+  Turn 2 is answered from turn 1's content. Any "you haven't mentioned a
+  fruit" response is a critical history failure.

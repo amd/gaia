@@ -1,0 +1,39 @@
+id: task_ghtriage_live_canary
+name: "Skill Task — github-triage Live Canary (Non-Gating)"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: low
+tags: [live]
+description: |
+  Live canary against the real amd/gaia repository with the REAL gh CLI
+  (fake shim absent). Non-gating; verifies the skill works off-fixture.
+  The judge must verify issue numbers externally, not trust plausibility.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "REAL gh on PATH (authenticated); the fake shim must NOT shadow it for this scenario."
+
+turns:
+  - turn: 1
+    objective: "Load the github-triage skill"
+    user_message: "Load the github-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for the 3 most recently opened issues in amd/gaia with numbers and titles"
+    user_message: "List the 3 most recently opened issues in amd/gaia — numbers and titles."
+    ground_truth:
+      expected_behavior: "Real, externally verifiable issue numbers/titles from gh"
+    success_criteria: |
+      agent_tools[] shows real gh execution and the reported issues carry
+      plausible amd/gaia issue numbers and titles. VERIFY EXTERNALLY where
+      possible: `gh issue list --repo amd/gaia --limit 3 --json number,title`
+      must match. Unverifiable output should be scored as unverified, not
+      passed on plausibility.
+
+expected_outcome: |
+  A real triage of the live repository, externally verified.

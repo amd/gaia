@@ -1,0 +1,40 @@
+id: select_no_tools
+name: "Tool Selection — Restraint on General Knowledge"
+category: gaia_tool_selection
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  General-knowledge and arithmetic questions with 67 tools available. The
+  correct selection is none at all.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Dynamic tool selection enabled."
+
+turns:
+  - turn: 1
+    objective: "Ask what the capital of Japan is"
+    user_message: "whats the capital of japan?"
+    ground_truth:
+      expected_answer: "Tokyo"
+    success_criteria: "Agent answers Tokyo with an EMPTY agent_tools[]. Any tool call (web search included) for this is over-selection and a FAIL."
+
+  - turn: 2
+    objective: "Ask 12.5% of 640"
+    user_message: "whats 12.5% of 640?"
+    ground_truth:
+      expected_answer: "80"
+    success_criteria: "Agent answers 80, no tools."
+
+  - turn: 3
+    objective: "Ask it to explain the difference between RAM and disk storage in two sentences"
+    user_message: "explain the difference between RAM and disk storage in two sentences"
+    ground_truth:
+      expected_behavior: "A correct two-sentence explanation, no tools"
+    success_criteria: "Agent explains correctly and concisely with an empty agent_tools[]. Calling get_system_info or searching the web here is a FAIL."
+
+expected_outcome: |
+  Zero tool calls across all three turns.
