@@ -23,12 +23,13 @@ import json
 import time
 
 import pytest
-from gaia.connectors import setup_routes as sr
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob
 from onboarding_fakes import FakeAgent as _FakeAgent
 from onboarding_fakes import ScriptedConsole as _ScriptedConsole
+
+from gaia.connectors import setup_routes as sr
 
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
