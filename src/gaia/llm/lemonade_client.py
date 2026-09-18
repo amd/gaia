@@ -3607,9 +3607,15 @@ class LemonadeClient:
         # Resolved BEFORE the already-loaded comparison below, so a model
         # resident at its (clamped) ceiling short-circuits instead of
         # reloading forever at the same ceiling every call.
-        _ceiling = self.get_model_max_context_window(
-            model, status=status, allow_catalog_lookup=False
-        )
+        # Probe failure stays non-fatal here, same as the get_status() above —
+        # only the load below is allowed to abort the call.
+        try:
+            _ceiling = self.get_model_max_context_window(
+                model, status=status, allow_catalog_lookup=False
+            )
+        except Exception as e:  # pylint: disable=broad-except
+            self.log.debug(f"Could not resolve max_context_window for {model!r}: {e}")
+            _ceiling = None
         if _ceiling and expected_ctx > _ceiling:
             if model not in self._ceiling_clamp_warned:
                 self.log.warning(
