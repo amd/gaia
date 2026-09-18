@@ -839,14 +839,13 @@ round-trip against their `tools.py`.
 
 <Warning>
 **Several examples declare permissions GAIA refuses.** `rag-search` (4a) and
-`file-operations` (4c) declare `filesystem:*`, and the migrated `git-status` (6)
-declares `shell:execute:git` — a binary with no entry in `BINARY_POLICIES`. These
-are **valid manifests** — they parse and validate — but `load_skill` refuses them
-until the sandbox lands
+`file-operations` (4c) declare `filesystem:*`. These are **valid manifests** —
+they parse and validate — but `load_skill` refuses them until the sandbox lands
 ([#1019](https://github.com/amd/gaia/issues/1019)), because GAIA will not load a
 grant it cannot enforce. They are kept here as the format's target state; the
-examples that load **today** are the instruction-only ones (1, 3) and the
-`network`/`mcp`-scoped ones (2, 4b).
+examples that load **today** are the instruction-only ones (1, 3), the
+`network`/`mcp`-scoped ones (2, 4b), and the migrated `git-status` (6) — `git`
+now has a `BINARY_POLICIES` entry, so its grant is enforceable and loads.
 </Warning>
 
 <AccordionGroup>
@@ -1106,15 +1105,14 @@ An OpenClaw skill and the mapping `migrate` computes for it.
 `metadata.openclaw` requirements map to `metadata.gaia` fields and trust resets
 to `experimental`.
 
-<Warning>
-**This particular skill does not install in v1.** `bins: [git]` maps to
-`shell:execute:git`, and `git` has no entry in `BINARY_POLICIES`, so nothing could
-gate its subcommands; `gaia skill migrate` reports `git-status` as **unmigratable
-with that reason** rather than writing it. The AFTER block below is the mapping —
-the target state once a `git` policy exists — not a file v1 produces. A skill
-needing local access is never silently stripped of the permission to make the
-migration succeed.
-</Warning>
+<Note>
+**This skill migrates.** `bins: [git]` maps to `shell:execute:git`, and `git`
+has a `BINARY_POLICIES` entry gating its subcommands, so `gaia skill migrate`
+writes the AFTER block below. A binary with no policy is still reported
+**unmigratable with that reason** rather than written — a skill needing local
+access is never silently stripped of the permission to make the migration
+succeed. `docker` is the example that still refuses.
+</Note>
 
 ```yaml
 # BEFORE — OpenClaw
