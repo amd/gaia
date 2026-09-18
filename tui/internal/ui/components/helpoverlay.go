@@ -44,7 +44,17 @@ const (
 // the top. The caller (root model) owns and clamps this across key presses —
 // HelpMaxScroll reports the ceiling it should clamp to.
 func RenderHelpOverlay(ctx HelpContext, background string, width, height, scroll int) string {
-	content := helpTextFor(ctx)
+	return RenderHelpOverlayForCommands(ctx, background, width, height, scroll, nil)
+}
+
+// RenderHelpOverlayForCommands is RenderHelpOverlay, but with the panel's
+// Commands line narrowed to commands — nil means "show every command",
+// exactly RenderHelpOverlay's own behavior. HelpState is the caller that
+// actually has a session's available-command set to pass; every other
+// caller (context-free rendering, most tests) wants the unfiltered master
+// list and goes through RenderHelpOverlay instead.
+func RenderHelpOverlayForCommands(ctx HelpContext, background string, width, height, scroll int, commands []string) string {
+	content := helpTextFor(ctx, commands)
 
 	boxWidth, inner, rows, ok := helpBoxSize(width, height)
 	if !ok {
@@ -68,18 +78,90 @@ func RenderHelpOverlay(ctx HelpContext, background string, width, height, scroll
 // has to use EXACTLY the row math fitHelpLines uses below, or a Home jump on
 // one and a real line count on the other disagree.
 func HelpMaxScroll(ctx HelpContext, width, height int) int {
+	return HelpMaxScrollForCommands(ctx, width, height, nil)
+}
+
+// HelpMaxScrollForCommands is HelpMaxScroll for a panel rendered with
+// RenderHelpOverlayForCommands — the two must agree on commands, or a
+// filtered panel's Home/End jump clamps against a line count that assumes
+// the unfiltered text.
+func HelpMaxScrollForCommands(ctx HelpContext, width, height int, commands []string) int {
 	_, _, rows, ok := helpBoxSize(width, height)
 	if !ok {
 		return 0
 	}
-	lines := strings.Split(helpTextFor(ctx), "\n")
+	lines := strings.Split(helpTextFor(ctx, commands), "\n")
 	if len(lines) <= rows {
 		return 0
 	}
 	return maxScrollFor(len(lines), helpContentRows(rows))
 }
 
-func helpTextFor(HelpContext) string { return chatHelpText }
+func helpTextFor(_ HelpContext, commands []string) string {
+	return renderCommandsSection(chatHelpText, commands)
+}
+
+// helpCommandsLabel/helpCommandsIndent match the fixed two-line layout
+// chatHelpText's Commands block uses, so a filtered list wraps the same way
+// the full one always has.
+const (
+	helpCommandsLabel  = "  Commands    "
+	helpCommandsIndent = "              "
+)
+
+// renderCommandsSection swaps chatHelpText's Commands block for commands. An
+// empty/nil commands set means the caller has nothing to filter (no session
+// yet, or a context that isn't gated) — the master list passes through
+// unchanged rather than showing a blank block.
+//
+// The block is known to be exactly two physical lines in chatHelpText (the
+// label line and one continuation), so the second line is always skipped by
+// position, not by matching its indent — several unrelated lines share the
+// same 14-space continuation indent (the Esc and "/" entries above and
+// below it), and matching by indent would eat those too.
+func renderCommandsSection(text string, commands []string) string {
+	if len(commands) == 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], helpCommandsLabel) {
+			out = append(out, wrapCommandLines(commands)...)
+			i++ // skip the fixed layout's second Commands line
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrapCommandLines lays commands out the same way chatHelpText's own
+// Commands block is hand-wrapped: a label-prefixed first line, continuation
+// lines indented to match, each kept under the panel's width budget.
+func wrapCommandLines(commands []string) []string {
+	const maxWidth = helpBoxMaxWidth - 4 // same budget TestHelpTextFitsItsBudget enforces
+	var out []string
+	line := helpCommandsLabel
+	empty := true
+	for _, c := range commands {
+		candidate := line
+		if !empty {
+			candidate += " "
+		}
+		candidate += c
+		if !empty && ansi.StringWidth(candidate) > maxWidth {
+			out = append(out, line)
+			line = helpCommandsIndent + c
+			empty = false
+			continue
+		}
+		line = candidate
+		empty = false
+	}
+	out = append(out, line)
+	return out
+}
 
 // helpBoxSize returns the box's own width, the content columns inside its
 // padding, and the content row budget for a panel at width x height — the
@@ -198,7 +280,7 @@ const chatHelpText = `  GAIA Chat
   Ctrl+C      Quit
 
   Commands    /help /clear /bypass
-              /setup /memory /model /provider
+              /setup /memory /model /provider /agents
               /slack
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or

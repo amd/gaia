@@ -2226,6 +2226,11 @@ Examples:
         help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
     )
     agent_eval_parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="With --compare, fail when baseline scenarios are missing or unmeasured",
+    )
+    agent_eval_parser.add_argument(
         "--save-baseline",
         action="store_true",
         help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
@@ -2781,8 +2786,11 @@ Examples:
         default=None,
         help=(
             "Explicit dev-mode source directory (escape hatch for --mode dev "
-            "when this shell isn't inside a git work tree). Default: resolved "
-            "from this checkout via `git rev-parse --show-toplevel`."
+            "when this shell isn't inside a git work tree). Must be an "
+            "absolute path ending in hub/agents/<agent_id>/python (e.g. "
+            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "Default: resolved from this checkout via "
+            "`git rev-parse --show-toplevel`."
         ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
@@ -3490,7 +3498,9 @@ def main():
                     if resp.status == 200 and body == "ok":
                         print(f"Telegram adapter: healthy ({url})")
                         return
-            except urllib.error.URLError:
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                # ConnectionError catches http.client.RemoteDisconnected, which
+                # is not a URLError - see AbstractHTTPHandler.do_open.
                 pass
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
@@ -4019,37 +4029,49 @@ Let me know your answer!
                                 "  Run `gaia eval agent --save-baseline` first to save a baseline."
                             )
                             sys.exit(1)
+                        current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), compare_paths[0]
+                            str(baseline_path), str(current_path)
                         )
                     elif len(compare_paths) == 2:
-                        result = compare_scorecards(compare_paths[0], compare_paths[1])
+                        baseline_path, current_path = map(Path, compare_paths)
+                        result = compare_scorecards(
+                            str(baseline_path), str(current_path)
+                        )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero.
-                    # Scenarios with no measurement are deliberately NOT counted:
-                    # an infra failure is not a quality regression. Completeness
-                    # is the integrity gate's verdict (gaia.eval.integrity_gate),
-                    # so it is surfaced here and blocks there.
+                    # Quality and completeness are separate checks. The strict
+                    # opt-in uses exactly the CI integrity gate's missing/blocked/
+                    # skipped/error semantics, including newly added scenarios.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
-                    unmeasured = result.get("unmeasured", [])
-                    if unmeasured:
-                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
-                        print(
-                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
-                            f"excluded from this verdict: {ids}. Run "
-                            "`python -m gaia.eval.integrity_gate --help` for the completeness check."
-                        )
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
+                    if getattr(args, "require_complete", False):
+                        from gaia.eval.integrity_gate import check_category
+
+                        problems, status_line = check_category(
+                            baseline_path, current_path, "comparison"
+                        )
+                        print(status_line)
+                        for problem in problems:
+                            print(f"[ERROR] {problem}")
+                        total_issues += len(problems)
+                    elif result.get("unmeasured"):
+                        unmeasured = result["unmeasured"]
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from the quality verdict: {ids}. Add "
+                            "--require-complete to also enforce measurement completeness."
+                        )
                     if total_issues > 0:
                         print(
-                            f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
+                            f"[ERROR] Detected {total_issues} regression or required-completeness issue(s); failing."
                         )
                         sys.exit(2)
                     # Otherwise success
@@ -7803,7 +7825,7 @@ def handle_mcp_status(args):
                                 print("⚠️  Server is running but may not be healthy")
                     else:
                         raise
-                except urllib.error.URLError:
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
                     print("⚠️  Server is running but status endpoint not accessible")
                     print("   Server may be starting up or using an older version")
             except Exception as e:
@@ -7839,7 +7861,7 @@ def handle_mcp_test(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7902,6 +7924,8 @@ def handle_mcp_test(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
@@ -7935,7 +7959,7 @@ def handle_mcp_agent(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -8032,6 +8056,8 @@ def handle_mcp_agent(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:

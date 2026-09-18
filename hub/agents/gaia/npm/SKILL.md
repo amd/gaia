@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.13**; the stream is
+package — call it with plain `fetch`. Contract version **2.14**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -238,7 +238,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
-| `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.13), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
+| `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` names a Claude model. |
 | `max_steps` | no | ≥ 1. |
 
@@ -334,7 +334,7 @@ writes third-party code under `~/.gaia/skills` and removing one deletes it.
 Everything else — reading, indexing, querying, web fetching, memory — runs
 without asking.
 
-**Contract ≥ 2.13 can answer one.** Send a `session_id` and leave
+**Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
 `can_answer_questions` unset (or `true`). The stream emits `needs_confirmation`
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
@@ -566,7 +566,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.14","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

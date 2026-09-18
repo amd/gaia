@@ -22,9 +22,9 @@ import (
 // stream.
 func liveRun(t *testing.T, f *fakeRelay) (*SSEClient, func()) {
 	t.Helper()
-	// 2.13 is the contract that introduced /tool_decision and /bypass; below it
+	// 2.14 is the contract that introduced /tool_decision and /bypass; below it
 	// the client refuses to call them at all.
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	started := make(chan struct{})
 	release := make(chan struct{})
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
@@ -210,15 +210,14 @@ func TestBypassBeforeTheConversationStartsExplainsItself(t *testing.T) {
 
 func TestAnOlderAgentIsNotAskedForPermission(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.12"
-	c, done := liveRunAtContract(t, f, "2.12")
+	c, done := liveRunAtContract(t, f, "2.13")
 	defer done()
 
 	err := c.RespondToolPermission("c1", PermissionAllow)
 	if err == nil {
-		t.Fatal("a 2.12 agent has no tool_decision route; calling it must be refused")
+		t.Fatal("a 2.13 agent has no tool_decision route; calling it must be refused")
 	}
-	if !strings.Contains(err.Error(), "2.13") {
+	if !strings.Contains(err.Error(), "2.14") {
 		t.Errorf("the error must name the contract that added it, got: %v", err)
 	}
 	f.mu.Lock()
@@ -230,12 +229,12 @@ func TestAnOlderAgentIsNotAskedForPermission(t *testing.T) {
 
 func TestAnOlderAgentIsNotAskedToBypass(t *testing.T) {
 	f := newFakeRelay(t)
-	c, done := liveRunAtContract(t, f, "2.12")
+	c, done := liveRunAtContract(t, f, "2.13")
 	defer done()
 
 	err := c.SetBypassPermissions(true)
 	if err == nil {
-		t.Fatal("a 2.12 agent has no bypass route; calling it must be refused")
+		t.Fatal("a 2.13 agent has no bypass route; calling it must be refused")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

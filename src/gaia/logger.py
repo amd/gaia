@@ -7,6 +7,8 @@ import sys
 import warnings
 from pathlib import Path
 
+from gaia.tool_cancellation import AbandonedWorkerLogFilter
+
 
 def configure_console_encoding():
     """Configure console encoding to support Unicode characters on Windows."""
@@ -150,6 +152,15 @@ class GaiaLogger:
 
         # Add color filter to console handler
         console_handler.addFilter(self.add_color_filter)
+
+        # Drop records from a tool-call worker thread the agent has stopped
+        # waiting for (#2600). gaia.tool_cancellation is stdlib-only and sits
+        # below gaia.agents, which itself depends on gaia.logger -- importing
+        # gaia.agents.base.tools here instead would be a circular import.
+        abandoned_worker_filter = AbandonedWorkerLogFilter()
+        console_handler.addFilter(abandoned_worker_filter)
+        if file_handler is not None:
+            file_handler.addFilter(abandoned_worker_filter)
 
         # Default levels for different modules
         self.default_levels = {

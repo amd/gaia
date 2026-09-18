@@ -83,8 +83,10 @@ type SSEClient struct {
 	transcript []Turn
 	closed     bool
 	active     *runHandle
-	// peer is what negotiation learned about the sidecar's contract version;
-	// peerProbed guards the one-shot probe. See negotiate.go.
+	// peer is what negotiation learned about the sidecar's contract version --
+	// peer.answered distinguishes a real answer from a failed probe; peerProbed
+	// guards the one-shot probe attempt itself, so a failed probe is cached as
+	// "unanswered" rather than retried every call. See negotiate.go.
 	peer       peerContract
 	peerProbed bool
 	// noticedOldPeer records that the "this agent cannot be asked anything"
@@ -854,6 +856,50 @@ func newRunID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
+// Supports implements CapabilityReporter by reading the cached peer contract
+// under the mutex -- NO probe, NO blocking. paletteFiltered/syncPalette run
+// per keystroke, synchronously, and cannot wait on a network round-trip.
+//
+// known is false until the peer has actually ANSWERED the /version probe
+// (peerContract.answered) -- not merely until one was attempted. A probe that
+// failed (relay error, timeout, 401, 503) never learned the peer's version,
+// so it stays unknown for the life of this client, same as before any probe
+// ran at all; negotiate caches the failure so this does not retry every
+// keystroke. Callers MUST treat known == false as "do not hide the command
+// yet", not as "unsupported" -- hiding a command this client simply hasn't
+// gotten a real answer about is worse than a refusal that explains itself
+// (#3978 A1).
+func (s *SSEClient) Supports(c Capability) (supported, known bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.peer.answered {
+		return false, false
+	}
+	switch c {
+	case CapabilityMemory:
+		return contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
+	default:
+		return false, true
+	}
+}
+
+// ProbeCapabilities populates the cached peer contract Supports reads, so a
+// capability answer is available before the user ever tries the command it
+// gates. Blocking -- callers dispatch it as an async tea.Cmd at chat start
+// rather than calling it from the UI goroutine.
+//
+// Cheap in practice: for a daemon-transport session the preflight readiness
+// gate has already ensured the sidecar, so EnsureAgent here is a fast attach,
+// not a cold spawn.
+func (s *SSEClient) ProbeCapabilities(ctx context.Context) error {
+	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
+	if err != nil {
+		return err
+	}
+	s.negotiate(ctx, inst)
+	return nil
+}
+
 // Compile-time proof the daemon transport satisfies the same interface as the
 // subprocess one.
 var (
@@ -862,6 +908,8 @@ var (
 	_ AgentConfirmer     = (*SSEClient)(nil)
 	_ AgentCanceler      = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
+	_ CapabilityReporter = (*SSEClient)(nil)
+	_ MemoryProvider     = (*SSEClient)(nil)
 )
 
 // The live permission seam (docs/plans/daemon-convergence.mdx §3.4).

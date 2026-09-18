@@ -39,6 +39,21 @@ type fakeRelay struct {
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
+	// versionStatus, when non-zero, makes GET /v1/<agent>/version answer with
+	// this HTTP status instead of contractVersion -- standing in for an
+	// operational failure (401 stale token, 503 sidecar still binding) that is
+	// NOT a version signal, unlike the 404 contractVersion == "" produces.
+	versionStatus int
+	// agentReleaseVersion is the "version" field GET /v1/<agent>/version
+	// reports (the shipped agent release, e.g. "0.2.0") -- distinct from
+	// contractVersion, which is the wire contract. Empty omits the field.
+	agentReleaseVersion string
+	// memoryStatus, when non-zero, is the HTTP status GET /v1/<agent>/memory
+	// returns instead of memoryBody.
+	memoryStatus int
+	// memoryBody is the raw JSON body GET /v1/<agent>/memory returns on
+	// success (memoryStatus == 0, defaulting to 200).
+	memoryBody string
 	// strictBody replicates the sidecar's pydantic `extra="forbid"`: an unknown
 	// request field is a 422, not an ignored key. This is what makes a published
 	// older sidecar reject a field a newer TUI invented.
@@ -182,13 +197,35 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.versionHits++
 		f.mu.Unlock()
+		if f.versionStatus != 0 {
+			w.WriteHeader(f.versionStatus)
+			_, _ = w.Write([]byte(`{"detail":"not available yet"}`))
+			return
+		}
 		if f.contractVersion == "" {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"no route"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"apiVersion":%q,"agentVersion":"0.5.0"}`, f.contractVersion)
+		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"email"}`,
+			f.contractVersion, f.agentReleaseVersion)
+
+	case strings.HasSuffix(r.URL.Path, "/memory"):
+		if r.Method != http.MethodGet {
+			f.t.Errorf("memory request method = %q, want GET", r.Method)
+		}
+		if f.memoryStatus != 0 {
+			w.WriteHeader(f.memoryStatus)
+			_, _ = w.Write([]byte(`{"detail":"memory store unavailable"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		body := f.memoryBody
+		if body == "" {
+			body = `{"available":true,"stats":{"total_knowledge":0,"by_category":{},"by_context":{},"sensitive_count":0,"entity_count":0,"avg_confidence":0},"contexts":[],"shown":0,"total":0,"items":[]}`
+		}
+		_, _ = w.Write([]byte(body))
 
 	case strings.HasSuffix(r.URL.Path, "/prescan"):
 		if r.Method != http.MethodPost {

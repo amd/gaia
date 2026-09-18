@@ -17,8 +17,11 @@ import (
 
 // --- discoverability: "/" opens, mid-word doesn't ---------------------------
 
+// Uses gaiaTestModel, not newTestModel: only the flagship agent is offered
+// every command (availability.go gates /setup, /model, /provider to it), so
+// an empty filter offering all 7 needs a flagship-capable session.
 func TestSlashOnAnEmptyComposerOpensThePalette(t *testing.T) {
-	m, _ := newTestModel(t)
+	m := gaiaTestModel(t)
 	m = typeInto(t, m, "/")
 
 	if !m.palette.open {
@@ -26,6 +29,29 @@ func TestSlashOnAnEmptyComposerOpensThePalette(t *testing.T) {
 	}
 	if got := len(m.paletteFiltered()); got != len(paletteCommands) {
 		t.Errorf("an empty filter should offer every command, got %d of %d", got, len(paletteCommands))
+	}
+}
+
+// A non-flagship agent never runs /model, /setup, or /provider (submit
+// refuses all three), so the palette must not offer them either — offering a
+// command that can only end in a refusal is worse than not listing it.
+// /memory stays offered: this agent's client (nullClient) implements neither
+// CapabilityReporter nor MemoryProvider, which availableCommandSet treats as
+// "not yet known" rather than "unsupported".
+func TestPaletteHidesFlagshipOnlyCommandsForOtherAgents(t *testing.T) {
+	m, _ := newTestModel(t)
+	m = typeInto(t, m, "/")
+
+	names := paletteNames(m.paletteFiltered())
+	for _, hidden := range []string{"/model", "/setup", "/provider"} {
+		for _, got := range names {
+			if got == hidden {
+				t.Errorf("a non-flagship agent must not offer %q, got %v", hidden, names)
+			}
+		}
+	}
+	if !containsAll(names, "/memory") {
+		t.Errorf("an unresolved capability must still be offered, got %v", names)
 	}
 }
 
@@ -42,9 +68,12 @@ func TestSlashMidSentenceDoesNotOpenThePalette(t *testing.T) {
 // having opened it — the user is back to plain text either way.
 func TestBackspacingTheSlashAwayClosesThePalette(t *testing.T) {
 	m, _ := newTestModel(t)
-	m = typeInto(t, m, "/mo")
+	// /clear rather than /model: this agent is non-flagship, and /model is
+	// now gated away from it (availability.go) — /clear is offered to every
+	// agent, and this test only needs SOME open palette to backspace out of.
+	m = typeInto(t, m, "/cl")
 	if !m.palette.open {
-		t.Fatal("test setup: \"/mo\" should have opened the palette")
+		t.Fatal("test setup: \"/cl\" should have opened the palette")
 	}
 
 	m, _ = press(t, m, tea.KeyBackspace)
@@ -60,8 +89,10 @@ func TestBackspacingTheSlashAwayClosesThePalette(t *testing.T) {
 
 // --- filtering ---------------------------------------------------------------
 
+// gaiaTestModel, not newTestModel: /model is flagship-only, so narrowing to
+// "/model and /memory" needs a session where /model is actually offered.
 func TestPaletteFiltersAsYouType(t *testing.T) {
-	m, _ := newTestModel(t)
+	m := gaiaTestModel(t)
 
 	m = typeInto(t, m, "/m")
 	names := paletteNames(m.paletteFiltered())
@@ -73,6 +104,22 @@ func TestPaletteFiltersAsYouType(t *testing.T) {
 	names = paletteNames(m.paletteFiltered())
 	if len(names) != 1 || names[0] != "/model" {
 		t.Fatalf("\"/mo\" should narrow to just /model, got %v", names)
+	}
+}
+
+// An agent that refuses /model must not let the second-level picker open just
+// because the user typed the space by hand — filterPaletteCommands's own
+// CutPrefix branch has to re-check availability, not just the top-level list.
+func TestModelPaletteSecondLevelGatedByAvailability(t *testing.T) {
+	blocked := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{})
+	if len(blocked) != 0 {
+		t.Fatalf("typing %q on an agent that refuses /model must not open the model picker, got %v",
+			modelPalettePrefix+"haiku", blocked)
+	}
+
+	allowed := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{modelCommandPrefix: true})
+	if len(allowed) == 0 {
+		t.Fatal("test setup: an agent that supports /model should still get the picker")
 	}
 }
 
@@ -192,7 +239,10 @@ func TestPaletteEscClosesWithoutQuittingOrCancelling(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m.cancelFn = func() {} // present, so a real cancel path is reachable if wrongly triggered
-	m = typeInto(t, m, "/mo")
+	// /clear rather than /model: this test runs on newTestModel's non-flagship
+	// agent, and /model is now gated away from it (availability.go) — /clear
+	// is what every agent always offers, and this test only needs A command.
+	m = typeInto(t, m, "/cl")
 	if !m.palette.open {
 		t.Fatal("test setup: palette should be open")
 	}
@@ -214,7 +264,7 @@ func TestPaletteEscClosesWithoutQuittingOrCancelling(t *testing.T) {
 	if !m.streaming || m.cancelPending {
 		t.Error("Esc on an open palette must not touch a running turn")
 	}
-	if m.input.Value() != "/mo" {
+	if m.input.Value() != "/cl" {
 		t.Errorf("Esc must not clear the composer, got %q", m.input.Value())
 	}
 }
@@ -408,7 +458,7 @@ func containsAll(haystack []string, want ...string) bool {
 // "tight") made a 14-row window — taller than a 13-row one that worked —
 // silently draw nothing.
 func TestPaletteRendersOnEveryWindowTallEnoughForItsLines(t *testing.T) {
-	items := filterPaletteCommands("/")
+	items := filterPaletteCommands("/", nil)
 	lines := len(paletteBodyLines("/", items, 0, paletteBoxMaxWidth-4))
 	for h := lines; h <= lines+6; h++ {
 		if _, ok := buildPaletteBox("/", items, 0, 100, h); !ok {

@@ -1115,32 +1115,16 @@ async def forward_connection(
     token or client secret.
 
     Required scopes are resolved from the granted agents' ``REQUIRED_CONNECTORS``
-    declarations (single source of truth). This means scope requirements
-    auto-tighten as agents add new ``ConnectorRequirement`` entries — no
-    duplication in the router.
+    declarations via the same shared ``_resolve_grant_scopes`` used by
+    ``configure``/``authorize``/``authorize-device`` (#2606) — one resolver so
+    the two surfaces cannot drift. An agent that is registered but declares no
+    requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
+    rather than silently granting it zero required scopes.
     """
+    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
     required: set[str] = set()
-    if body.grant_agents:
-        registry = getattr(request.app.state, "agent_registry", None)
-        if registry is None:
-            raise HTTPException(
-                status_code=503, detail="Agent registry not initialized"
-            )
-        by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-        unknown_agents = [nsid for nsid in body.grant_agents if nsid not in by_nsid]
-        if unknown_agents:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "unknown_agent",
-                    "agent_ids": unknown_agents,
-                },
-            )
-        for nsid in body.grant_agents:
-            reg = by_nsid[nsid]
-            for cr in reg.required_connections:
-                if cr.connector_id == provider:
-                    required.update(cr.scopes)
+    for scopes in grant_map.values():
+        required.update(scopes)
 
     try:
         summary = connections.import_forwarded_connection(

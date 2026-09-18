@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.13"`                  |
+| Contract version   | `API_VERSION = "2.14"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -265,16 +265,29 @@ the header.
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
+| `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
-| `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.13) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.13) |
+| `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
+`GET /v1/gaia/memory` returns the read-only snapshot behind the TUI's
+`/memory` view: `{ "available", "reason", "stats", "contexts", "shown",
+"total", "items" }`. `available: false` means the session has no live memory
+store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
+names why, so an outage never renders as "you have no memories". This is the
+daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
+paths call the same `build_memory_dump()` and return the identical shape.
+
 ### 5.2 `session_id` and agent retention
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
@@ -320,7 +333,7 @@ A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would
 leave the earlier run with no way to be cancelled. A `/query` supplying a `model`
 that differs from the one its `session_id` was built with **switches the retained
-agent in place** (≥ 2.13), so the conversation and any loaded skills survive the
+agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
 change; the same machinery the stdio transport's `/model` uses. A switch that
 fails — a missing Claude credential, an unknown local model — is a `409` naming
 the reason, and leaves the session on its previous model.
@@ -386,7 +399,7 @@ confirmation prompt *while* a turn is in flight, toggles bypass, and stops a tur
 (`cancel`) without ending the process — so loaded skills, "always" grants,
 history and the bypass mode survive a cancel.
 
-Contract 2.13 gave the HTTP surface the same three capabilities per run and per
+Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass`, and `provider: "claude"`.
 What remains stdio-only is the *launch* form of those switches:
 `--bypass-permissions` starts a process with gating already off, and

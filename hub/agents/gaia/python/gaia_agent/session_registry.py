@@ -325,11 +325,16 @@ class _SessionRegistry:
         return [s.session_id for s in evicted]
 
     def delete(self, session_id: str) -> bool:
+        """Delete an idle session; return False if absent or running a turn.
+
+        Callers must not interpret False as proof the session does not exist.
+        """
         with self._lock:
-            session = self._sessions.pop(session_id, None)
+            session = self._sessions.get(session_id)
+            if session is None or not session.run_lock.acquire(blocking=False):
+                return False
+            self._sessions.pop(session_id)
             self._last_used.pop(session_id, None)
-        if session is None:
-            return False
         close_agent(session.agent)
         return True
 
