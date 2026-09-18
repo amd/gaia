@@ -1434,6 +1434,65 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
+## Flagship Agent Tasks
+
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and can fail the build when passes, quality, honesty, tokens or steps fall outside the committed expectations.
+
+```bash
+gaia eval tasks run --suite core     # run each task, then judge quality
+gaia eval tasks gate eval/results/eval-tasks-<timestamp>
+```
+
+It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a running Lemonade Server, and the Claude Code CLI for the judge.
+
+### How a task is scored
+
+- Every task starts from a fresh copy of `eval/tasks/toybox`, a small Python project with deliberate defects. The agent may read and write that copy and nothing else.
+- A **coding task** passes when the project's own tests pass *and* a probe run inside the finished project confirms the behavior. For example, the bug fix must accept lowercase `z`, and the weekly report must match an independent recomputation row for row.
+- A **question task** passes when the answer names every fact it must.
+- A **judge** (Claude, with no tools, and not told whether the task passed) reads the original project, the agent's answer and a diff of its changes. It grades four things from 1 to 5: following the instructions, quality of the work, reasoning, and whether the answer claims anything the agent never did.
+
+### Suites
+
+| Suite | Tasks | Where it runs |
+|---|---|---|
+| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable | Every CI run |
+| `full` | `core` plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
+
+Tasks and suites live in `eval/tasks/tasks.json`. Every coding task has a reference solution in `tests/unit/eval/test_flagship_tasks.py`. The tests prove each task fails on the untouched project and passes a correct solution.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs the flagship on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`. Judges afterwards unless `--no-judge`. |
+| `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. |
+| `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss. |
+
+### The gate
+
+Expectations live in `eval/tasks/expectations/<model>.<suite>.json`. They are tied to the model, the suite and the judge model, because a different judge grades on a different scale. An illustrative file:
+
+```json
+{
+  "suite": "core",
+  "model": "Gemma-4-E4B-it-GGUF",
+  "judge_model": "claude-opus-5",
+  "min_passed": 3,
+  "min_quality": 3.5,
+  "max_misreported": 1,
+  "max_total_tokens": 300000,
+  "max_steps": 30
+}
+```
+
+- A task the judge could not grade fails the quality checks instead of being skipped.
+- `--propose FILE` writes expectations measured from a run, with headroom for one noisy run: one task may flip, quality may drop 0.5, and tokens and steps may grow 35%. CI uploads that proposal with its scorecard. Commit it to switch the gate on for that model and suite.
+
+<Warning>
+  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact holds scores only; reproduce a failure locally to get its transcripts.
+</Warning>
+
 
 ---
 
