@@ -335,6 +335,7 @@ def check_startup_ping(event: dict) -> None:
             f"to name: {event}"
         )
     backend = event.get("model_backend")
+    # Keep aligned with gaia_agent.stdio's startup-ping backend contract.
     if backend not in ("lemonade", "claude"):
         raise StdioContractBreak(
             f"the startup ping's model_backend is {backend!r}, expected "
