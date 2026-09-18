@@ -197,7 +197,6 @@ func TestAnUnknownModelHasNoPrice(t *testing.T) {
 	}
 }
 
-
 // A rate card that fails to load is a different state from never having set
 // one, and the readout has to say which. Reported as "no price configured",
 // the user edits a file that is already being discarded.
@@ -245,6 +244,21 @@ func TestCostHelpNamesThePriceFileAndTheRateSource(t *testing.T) {
 	noPriceFile(t)
 	help := costHelp("fireworks.glm-5p3")
 	for _, want := range []string{priceFilePath(), pricesSource, "input_per_mtok", "cached_per_mtok", "GAIA_MODEL_PRICES"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("/cost help does not mention %q:\n%s", want, help)
+		}
+	}
+}
+
+// A Claude or local model has no built-in rate; sending that user to the
+// Fireworks price table would point them at a list their model is not on.
+func TestCostHelpDoesNotCiteFireworksPricesForOtherProviders(t *testing.T) {
+	noPriceFile(t)
+	help := costHelp("claude-sonnet-5")
+	if strings.Contains(help, pricesSource) {
+		t.Errorf("/cost help for a non-Fireworks model cites the Fireworks price page:\n%s", help)
+	}
+	for _, want := range []string{priceFilePath(), "input_per_mtok", "no dollars"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("/cost help does not mention %q:\n%s", want, help)
 		}

@@ -156,10 +156,17 @@ func costHelp(model string) string {
 	b.WriteString("Where cost figures come from\n\n")
 	b.WriteString("  Token counts are measured — every figure is summed from what the\n")
 	b.WriteString("  backend reported for each turn. Nothing is estimated.\n\n")
-	fmt.Fprintf(&b, "  Rates are the provider's published serverless prices, read on %s:\n", pricesAsOf)
-	fmt.Fprintf(&b, "  %s\n\n", pricesSource)
-	b.WriteString("  A model with no published rate here shows tokens and no dollars,\n")
-	b.WriteString("  rather than a guess.\n\n")
+	// Every built-in rate is Fireworks', so citing that page to anyone else
+	// sends them to a price table that does not cover their model.
+	if model == "" || strings.HasPrefix(model, "fireworks.") {
+		fmt.Fprintf(&b, "  Rates are the provider's published serverless prices, read on %s:\n", pricesAsOf)
+		fmt.Fprintf(&b, "  %s\n\n", pricesSource)
+		b.WriteString("  A model with no published rate here shows tokens and no dollars,\n")
+		b.WriteString("  rather than a guess.\n\n")
+	} else {
+		b.WriteString("  GAIA carries no published rates for this model, so it shows tokens\n")
+		b.WriteString("  and no dollars rather than a guess — until you set a rate below.\n\n")
+	}
 	b.WriteString("To set your own rate — a negotiated price, a tier not listed, or a\n")
 	b.WriteString("correction after the provider moves its prices:\n\n")
 	fmt.Fprintf(&b, "  %s\n", priceFilePath())

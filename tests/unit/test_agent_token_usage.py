@@ -635,3 +635,36 @@ class TestSumCachedTokens:
 
     def test_an_empty_conversation_is_zero(self):
         assert _sum_cached_tokens([]) == 0
+
+
+def test_usage_dict_surfaces_a_failing_model_dump():
+    """A broken ``model_dump`` must raise, not fall back silently (CLAUDE.md)."""
+    import pytest
+
+    from gaia.llm.lemonade_client import _usage_dict
+
+    class Broken:
+        prompt_tokens = 5
+
+        def model_dump(self, **_):
+            raise RuntimeError("sdk shape changed")
+
+    with pytest.raises(RuntimeError, match="sdk shape changed"):
+        _usage_dict(Broken())
+
+
+def test_usage_dict_reads_attributes_when_there_is_no_model_dump():
+    from gaia.llm.lemonade_client import _usage_dict
+
+    class Plain:
+        prompt_tokens = 7
+        completion_tokens = 3
+        total_tokens = 10
+        prompt_tokens_details = None
+        completion_tokens_details = None
+
+    assert _usage_dict(Plain()) == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+    }

@@ -653,10 +653,7 @@ def _usage_dict(usage: Any) -> Dict[str, Any]:
     trip to the caller.
     """
     if hasattr(usage, "model_dump"):
-        try:
-            return usage.model_dump(exclude_none=True)
-        except Exception:  # pragma: no cover - defensive, SDK-version specific
-            pass
+        return usage.model_dump(exclude_none=True)
     out: Dict[str, Any] = {}
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         value = getattr(usage, key, None)
