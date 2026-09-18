@@ -16,9 +16,9 @@ reported success for every one of them.
 
 from __future__ import annotations
 
-import pytest
-
 from pathlib import Path
+
+import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
