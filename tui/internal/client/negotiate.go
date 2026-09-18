@@ -62,7 +62,12 @@ const (
 )
 
 // memoryContract is the contract version that introduced GET /v1/<agent>/memory
-// (#3978, schema 2.13). A peer below it has no memory route at all.
+// (#3978, schema 2.13) on the agent named by memoryAgentID. A peer below it has
+// no memory route at all.
+//
+// The floor is only meaningful for that one agent: every sidecar numbers its
+// own contract, so the same number means different things across them. Pair it
+// with memoryAgentID — never read it as a capability on its own.
 const (
 	memoryContractMajor = 2
 	memoryContractMinor = 13
@@ -72,10 +77,24 @@ const (
 // `POST /query/{run_id}/tool_decision` and `POST /sessions/{id}/bypass`
 // (schema 2.14). A peer below it has no such route, and its plain 404 reads as
 // "the run already finished" rather than "this agent is too old to be asked".
+// Read it together with toolDecisionAgentID, never on its own.
 const (
 	toolDecisionContractMajor = 2
 	toolDecisionContractMinor = 14
 )
+
+// toolDecisionAgentID is the only agent that serves those routes. `email` also
+// reports 2.14 and has neither, so a version-only gate would offer them there
+// and then 404 — the same reason memoryAgentID exists.
+const toolDecisionAgentID = "gaia"
+
+// memoryAgentID is the only agent that serves a memory dump. The flagship owns
+// the memory store; `email` reports a numerically HIGHER contract (2.14) and
+// has no such route, so a version-only gate would offer /memory there and then
+// 404 — the advertised-then-refused shape #3978 exists to remove. Mirrors
+// modelSwitchAgentID's reasoning in ui/chat/modelcmd.go: the feature lives
+// agent-side, so it is gated by WHICH agent.
+const memoryAgentID = "gaia"
 
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
@@ -95,8 +114,8 @@ type peerContract struct {
 	canAnswerQuestions bool
 	// supportsSession is true only when the peer is provably >= 2.12.
 	supportsSession bool
-	// supportsToolDecision is true only when the peer is provably >= 2.14, and
-	// so has the routes that answer a permission prompt and toggle bypass.
+	// supportsToolDecision is true only when the peer is the gaia agent at
+	// >= 2.14, and so has the routes that answer a permission prompt and toggle bypass.
 	supportsToolDecision bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
@@ -194,9 +213,14 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		s.opts.Logf("sse: could not read the '%s' /version body (%v)", s.agentID, err)
 		return peerContract{}
 	}
+	// Both spellings: the flagship's /v1/gaia/version calls it "version",
+	// while email's /v1/email/version and BOTH agents' top-level /version call
+	// it "agentVersion". Decoding one leaves the release version permanently
+	// empty for the other.
 	var payload struct {
-		APIVersion string `json:"apiVersion"`
-		Version    string `json:"version"`
+		APIVersion   string `json:"apiVersion"`
+		Version      string `json:"version"`
+		AgentVersion string `json:"agentVersion"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || payload.APIVersion == "" {
 		s.opts.Logf("sse: '%s' /version returned no readable apiVersion", s.agentID)
@@ -205,12 +229,17 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	supportsDecision := contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
+	supportsDecision := s.agentID == toolDecisionAgentID &&
+		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
 	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, tool decisions: %t)",
 		s.agentID, payload.APIVersion, supports, supportsSession, supportsDecision)
+	agentVersion := payload.Version
+	if agentVersion == "" {
+		agentVersion = payload.AgentVersion
+	}
 	return peerContract{
 		version:              payload.APIVersion,
-		agentVersion:         payload.Version,
+		agentVersion:         agentVersion,
 		canAnswerQuestions:   supports,
 		supportsSession:      supportsSession,
 		supportsToolDecision: supportsDecision,

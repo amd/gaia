@@ -34,7 +34,7 @@ func liveRun(t *testing.T, f *fakeRelay) (*SSEClient, func()) {
 		<-release
 	}
 
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	ch, err := c.Send(context.Background(), "do a gated thing")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -255,13 +255,80 @@ func liveRunAtContract(t *testing.T, f *fakeRelay, version string) (*SSEClient, 
 		close(started)
 		<-release
 	}
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	ch, err := c.Send(context.Background(), "do a gated thing")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if _, ok := <-ch; !ok {
 		t.Fatal("expected the status event before answering")
+	}
+	<-started
+	return c, func() { close(release); c.Close() }
+}
+
+// email also reports contract 2.14 but serves neither route, so a version-only
+// gate would send it both — the advertised-then-refused shape.
+
+func TestTheEmailAgentAtTheSameContractIsNotAskedForPermission(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14"
+	c, done := liveRunOnAgent(t, f, "email")
+	defer done()
+
+	if c.SupportsLivePermissions() {
+		t.Error("email must not report live permissions just because it speaks 2.14")
+	}
+	err := c.RespondToolPermission("c1", PermissionAllow)
+	if err == nil {
+		t.Fatal("email has no tool_decision route; calling it must be refused")
+	}
+	if !strings.Contains(err.Error(), "no such route") {
+		t.Errorf("an agent that never serves the route must not be told to update, got: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.decisions) != 0 {
+		t.Errorf("nothing may be sent to email: %+v", f.decisions)
+	}
+}
+
+func TestTheGaiaAgentReportsLivePermissionsOnceNegotiated(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14"
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+	if c.SupportsLivePermissions() {
+		t.Error("nothing is known before a turn negotiates")
+	}
+	_, done := liveRunOnAgentWith(t, f, c)
+	defer done()
+	if !c.SupportsLivePermissions() {
+		t.Error("gaia at 2.14 serves the routes")
+	}
+}
+
+func liveRunOnAgent(t *testing.T, f *fakeRelay, agentID string) (*SSEClient, func()) {
+	t.Helper()
+	return liveRunOnAgentWith(t, f, f.clientFor(t, agentID))
+}
+
+func liveRunOnAgentWith(t *testing.T, f *fakeRelay, c *SSEClient) (*SSEClient, func()) {
+	t.Helper()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+	ch, err := c.Send(context.Background(), "do a gated thing")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the status event")
 	}
 	<-started
 	return c, func() { close(release); c.Close() }

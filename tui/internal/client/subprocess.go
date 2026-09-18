@@ -732,7 +732,10 @@ func (s *SubprocessClient) Supports(c Capability) (supported, known bool) {
 	case CapabilityMemory:
 		return true, true
 	default:
-		return false, true
+		// Unknown, not "known to be unsupported": a capability this build has
+		// never heard of would otherwise be hidden by whichever transport was
+		// not taught about it, with nothing on screen saying why.
+		return false, false
 	}
 }
 

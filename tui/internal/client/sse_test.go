@@ -44,6 +44,11 @@ type fakeRelay struct {
 	// operational failure (401 stale token, 503 sidecar still binding) that is
 	// NOT a version signal, unlike the 404 contractVersion == "" produces.
 	versionStatus int
+	// versionBody, when set, is the raw JSON GET /v1/<agent>/version returns,
+	// overriding contractVersion/agentReleaseVersion — the two sidecars spell
+	// the release version differently and a test needs to pin the exact wire
+	// shape, not a reconstruction of it.
+	versionBody string
 	// agentReleaseVersion is the "version" field GET /v1/<agent>/version
 	// reports (the shipped agent release, e.g. "0.2.0") -- distinct from
 	// contractVersion, which is the wire contract. Empty omits the field.
@@ -200,6 +205,11 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		if f.versionStatus != 0 {
 			w.WriteHeader(f.versionStatus)
 			_, _ = w.Write([]byte(`{"detail":"not available yet"}`))
+			return
+		}
+		if f.versionBody != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(f.versionBody))
 			return
 		}
 		if f.contractVersion == "" {
@@ -456,7 +466,16 @@ func (f *fakeRelay) lastQuery() queryRequest {
 	return f.queries[len(f.queries)-1]
 }
 
+// client builds a relay-backed client for the `email` agent, which is what
+// most of this file's tests exercise. Memory tests must use clientFor with the
+// flagship id instead — memory is gaia-only, so a relay client named `email`
+// is refused before any request is made.
 func (f *fakeRelay) client(t *testing.T) *SSEClient {
+	t.Helper()
+	return f.clientFor(t, "email")
+}
+
+func (f *fakeRelay) clientFor(t *testing.T, agentID string) *SSEClient {
 	t.Helper()
 	// consume() fires cancelRun in a detached goroutine that outlives the turn,
 	// and it logs on a best-effort cancel failure. Routing that straight to
@@ -486,7 +505,7 @@ func (f *fakeRelay) client(t *testing.T) *SSEClient {
 		},
 		Logf: safeLogf,
 	})
-	return NewSSEClient("email", dc, SSEOptions{
+	return NewSSEClient(agentID, dc, SSEOptions{
 		ReadTimeout: 5 * time.Second,
 		Logf:        safeLogf,
 	})

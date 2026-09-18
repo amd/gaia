@@ -877,9 +877,21 @@ func (s *SSEClient) Supports(c Capability) (supported, known bool) {
 	}
 	switch c {
 	case CapabilityMemory:
-		return contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
+		// Scoped to the agent that implements it, not to the contract number
+		// alone. Each sidecar versions its own contract independently, so a
+		// different agent can already be numerically past this floor while
+		// having no memory route at all — `email` is at 2.14 today. Version
+		// answers "is this build new enough", never "does this agent have the
+		// route"; both have to hold.
+		return s.agentID == memoryAgentID &&
+			contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
 	default:
-		return false, true
+		// Not (false, true): claiming to KNOW a capability this build has
+		// never heard of would hide it on whichever transport was not taught
+		// about it, silently — the exact failure the tri-state exists to
+		// prevent. An unrecognized capability is unknown, so callers show it
+		// and let the attempt explain itself.
+		return false, false
 	}
 }
 
@@ -923,7 +935,31 @@ var (
 var (
 	_ ToolPermissionResponder = (*SSEClient)(nil)
 	_ PermissionBypasser      = (*SSEClient)(nil)
+	_ LivePermissionReporter  = (*SSEClient)(nil)
 )
+
+// SupportsLivePermissions reports whether the negotiated peer serves the
+// permission routes. False before any turn has negotiated, which is also before
+// any prompt can arrive.
+func (s *SSEClient) SupportsLivePermissions() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerProbed && s.peer.supportsToolDecision
+}
+
+// noLivePermissions explains why the permission routes cannot be used: this
+// agent never serves them, or it predates them. The two need different fixes.
+func (s *SSEClient) noLivePermissions(action string, peer peerContract, outcome string) error {
+	if s.agentID != toolDecisionAgentID {
+		return fmt.Errorf("the '%s' agent cannot %s over the daemon — it has no such route. %s",
+			s.agentID, action, outcome)
+	}
+	return fmt.Errorf(
+		"this '%s' agent cannot %s over the daemon: it speaks contract %s, and %d.%d "+
+			"added the route. Update the agent with `gaia agent install %s`. %s",
+		s.agentID, action, peer.versionLabel(),
+		toolDecisionContractMajor, toolDecisionContractMinor, s.agentID, outcome)
+}
 
 type toolDecisionRequest struct {
 	Decision  string `json:"decision"`
@@ -974,12 +1010,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
 		// Without this the peer's plain 404 surfaces as "the run had already
 		// finished", which sends the user looking for the wrong problem.
-		return fmt.Errorf(
-			"this '%s' agent cannot be asked for permission over the daemon: it speaks "+
-				"contract %s, and %d.%d added the route. Update the agent with "+
-				"`gaia agent install %s`. Nothing was sent",
-			s.agentID, peer.versionLabel(),
-			toolDecisionContractMajor, toolDecisionContractMinor, s.agentID)
+		return s.noLivePermissions("be asked for permission", peer, "Nothing was sent")
 	}
 
 	payload, err := json.Marshal(toolDecisionRequest{Decision: wire, ConfirmID: confirmID})
@@ -1037,12 +1068,7 @@ func (s *SSEClient) SetBypassPermissions(enabled bool) error {
 				"Send a message first", s.agentID)
 	}
 	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
-		return fmt.Errorf(
-			"this '%s' agent cannot toggle bypass over the daemon: it speaks contract "+
-				"%s, and %d.%d added the route. Update the agent with "+
-				"`gaia agent install %s`. Nothing was changed",
-			s.agentID, peer.versionLabel(),
-			toolDecisionContractMajor, toolDecisionContractMinor, s.agentID)
+		return s.noLivePermissions("toggle bypass", peer, "Nothing was changed")
 	}
 
 	payload, err := json.Marshal(bypassRequest{Enabled: enabled})
