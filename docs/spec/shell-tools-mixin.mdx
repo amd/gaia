@@ -45,7 +45,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 2. **Rate Limiting**
    - Max 10 commands per minute (sustained)
-   - Max 3 commands per 10 seconds (burst)
+   - Max 3 commands per 10 seconds (burst); read-only allowlisted commands are exempt from the burst limit but still count toward the per-minute cap
    - Clear wait time messaging
    - Timestamp tracking with deque
 
@@ -119,9 +119,12 @@ class ShellToolsMixin:
         """Register shell command execution tools."""
         pass
 
-    def _check_rate_limit(self) -> tuple:
+    def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
         """
         Check if rate limit allows another command.
+
+        Allowlisted commands skip the 10-second burst limit but still count
+        toward the per-minute cap.
 
         Returns:
             (allowed: bool, reason: str, wait_time: float)
@@ -139,7 +142,21 @@ class ShellToolsMixin:
         timeout: int = 30
     ) -> Dict[str, Any]:
         """
-        Execute a shell command and return output.
+        Run ONE read-only shell command and return its output.
+
+        Rules — a command that breaks one is blocked, not run:
+        - One command per call. No shell operators: &&, ||, ;, &, >, >>, <,
+          backticks, $(...), heredocs. Pipes (|) are allowed.
+        - To run somewhere else, pass working_directory — never "cd DIR && cmd".
+        - Only read-only commands run without approval: ls, cat, head, tail,
+          grep, find, wc, sort, uniq, diff, stat, du, ps, which, echo, and
+          read-only git (status, log, show, diff, branch, ls-files, rev-parse;
+          git -C DIR is fine). rm, mv, cp, python, pip, curl and git writes
+          are blocked.
+        - A loaded skill may grant extra commands (e.g. gh, pytest). If a
+          skill tells you to run one, run it — the grant covers it.
+        - To run a Python script use execute_python_file; to change files use
+          edit_file or write_file — when those tools are available.
 
         Security Layers:
         1. Rate limit check (burst + sustained)
@@ -150,9 +167,9 @@ class ShellToolsMixin:
         6. Argument path validation
 
         Args:
-            command: Shell command to execute (e.g., 'ls -la')
-            working_directory: Optional directory to run in
-            timeout: Max execution time in seconds (default: 30)
+            command: A single command, optionally piped with |. No &&, ;, >, < or $().
+            working_directory: Directory to run the command in. Use this instead of cd.
+            timeout: Maximum execution time in seconds
 
         Returns:
             {
@@ -170,13 +187,6 @@ class ShellToolsMixin:
                 "wait_time_seconds": float,  # Time to wait
                 "timed_out": bool  # If command timed out
             }
-
-        Allowed Commands:
-            File operations: ls, cat, head, tail, grep, find
-            File info: file, stat, du, df
-            System info: whoami, hostname, uname, date
-            Git (read-only): status, log, show, diff, branch
-            Path utils: which, basename, dirname
         """
         pass
 ```
@@ -188,7 +198,7 @@ class ShellToolsMixin:
 ### Rate Limiting
 
 ```python
-def _check_rate_limit(self) -> tuple:
+def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
     current_time = time.time()
     minute_ago = current_time - 60
     ten_sec_ago = current_time - 10
@@ -196,8 +206,9 @@ def _check_rate_limit(self) -> tuple:
     recent_minute = sum(1 for t in self.shell_command_times if t > minute_ago)
     recent_10_sec = sum(1 for t in self.shell_command_times if t > ten_sec_ago)
 
-    # Check burst limit first
-    if recent_10_sec >= self.max_commands_per_10_seconds:
+    # Burst limit — skipped for allowlisted commands (orienting in a repo is a
+    # rapid run of ls/cat); the per-minute cap still applies to them.
+    if not allowlisted and recent_10_sec >= self.max_commands_per_10_seconds:
         wait_time = 10 - (current_time - min(recent_times))
         return False, f"Rate limit: max 3 commands per 10 seconds", wait_time
 
@@ -239,21 +250,43 @@ if cmd_base not in ALLOWED_COMMANDS:
 
 ### Git Command Filtering
 
+Git's global options sit *before* the subcommand, so the subcommand is never
+simply `cmd_parts[1]`: in `git -C /repo status` that token is `-C`. The walk
+steps over the known global flags to reach the real subcommand, and refuses any
+flag it does not recognize rather than skipping it — an unlisted value-taking
+flag would shift the subcommand index and let an unsafe subcommand through.
+
 ```python
+SAFE_GIT_COMMANDS = {
+    "status", "log", "show", "diff", "branch",
+    "remote", "ls-files", "ls-tree", "describe",
+    "rev-parse", "help"
+}
+
 if cmd_base == "git":
-    safe_git_commands = {
-        "status", "log", "show", "diff", "branch",
-        "remote", "ls-files", "ls-tree", "describe",
-        "rev-parse", "config", "help"
-    }
-    git_subcmd = cmd_parts[1].lower()
-    if git_subcmd not in safe_git_commands:
+    git_subcmd, error_message = _resolve_git_subcommand(cmd_parts)
+    if error_message is not None:
+        return {"status": "error", "error": error_message, "has_errors": True}
+    if git_subcmd not in SAFE_GIT_COMMANDS | GIT_TERMINAL_FLAGS:
         return {
             "status": "error",
             "error": f"Git command '{git_subcmd}' is not allowed",
-            "allowed_git_commands": list(safe_git_commands)
+            "allowed_git_commands": sorted(SAFE_GIT_COMMANDS)
         }
 ```
+
+Global-flag classes (`_resolve_git_subcommand` in `shell_tools.py`):
+
+| Class | Members | Handling |
+|-------|---------|----------|
+| `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
+| `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
+| `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+
+Note `config` is **not** in `SAFE_GIT_COMMANDS`: `git config` writes repo and
+global configuration, including values (`core.pager`, `alias.*`) that execute
+commands.
 
 ### Path Traversal Prevention
 
