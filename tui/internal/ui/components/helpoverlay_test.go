@@ -184,12 +184,17 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/memory":   "/memory",
 		"/setup":    "/setup",
 		"/bypass":   "/bypass",
+		"/cost":     "/cost",
 		"/agents":   "/agents",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		key := cmd
-		if strings.HasPrefix(cmd, "/bypass") {
-			key = "/bypass"
+		// Sub-forms document under their command: "/bypass on|confirm|off"
+		// and "/cost help" are not separate rows in the help panel.
+		for _, prefix := range []string{"/bypass", "/cost"} {
+			if strings.HasPrefix(cmd, prefix) {
+				key = prefix
+			}
 		}
 		want, ok := commandText[key]
 		if !ok {
