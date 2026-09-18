@@ -7,6 +7,7 @@ message reading ``[Tool result: read_file] ...``. The model could not see which
 call it had made or which result answered it.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -138,6 +139,38 @@ def test_a_call_that_never_got_a_result_is_dropped(sdk):
         ],
     )
     assert [tc["id"] for tc in out[1]["tool_calls"]] == ["a"]
+
+
+def test_dropping_a_call_is_logged_not_silent(sdk, caplog):
+    """A downgrade hides the ordering bug that caused it unless it is logged."""
+    with caplog.at_level(logging.WARNING, logger="gaia.chat.sdk"):
+        _structure(
+            sdk,
+            [
+                {"role": "user", "content": "go"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [_call("a"), _call("b")],
+                },
+                _result("a", "A"),
+            ],
+        )
+    assert "Dropping 1 of 2 tool call(s)" in caplog.text
+
+
+def test_a_matched_history_logs_nothing(sdk, caplog):
+    with caplog.at_level(logging.DEBUG, logger="gaia.chat.sdk"):
+        _structure(
+            sdk,
+            [
+                {"role": "user", "content": "go"},
+                {"role": "assistant", "content": "", "tool_calls": [_call("a")]},
+                _result("a", "A"),
+            ],
+        )
+    assert "Dropping" not in caplog.text
+    assert "as text" not in caplog.text
 
 
 def test_a_result_with_a_fallback_id_is_sent_as_text(sdk):

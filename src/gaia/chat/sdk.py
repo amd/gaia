@@ -177,9 +177,9 @@ class AgentSDK:
     def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         """Convert one history entry to the provider's message shape.
 
-        Native tool calls stay native for every backend: flattened to text, the
-        call vanishes from its (empty) assistant turn and the result reads as
-        something the user said.
+        Native tool calls stay native for every backend. Flattened to text,
+        the call would vanish from its (empty) assistant turn and the result
+        would read as something the user said.
         """
         role = msg.get("role", "user")
         content = self._normalize_message_content(msg.get("content", ""))
@@ -201,7 +201,7 @@ class AgentSDK:
         return {"role": role, "content": content}
 
     @staticmethod
-    def _tool_result_as_text(msg: Dict[str, Any], name: str = "tool") -> Dict[str, Any]:
+    def _tool_result_as_text(msg: Dict[str, Any], name: str) -> Dict[str, Any]:
         """A tool result with no native call to answer, sent as plain text."""
         return {
             "role": "user",
@@ -233,6 +233,14 @@ class AgentSDK:
                     if tc.get("id") and tc.get("id") in result_ids
                 ]
                 call_ids = {tc["id"] for tc in calls}
+                dropped = len(msg["tool_calls"]) - len(calls)
+                if dropped:
+                    self.log.warning(
+                        "Dropping %d of %d tool call(s) from an assistant turn: "
+                        "no result follows them directly.",
+                        dropped,
+                        len(msg["tool_calls"]),
+                    )
                 if calls:
                     out.append({**msg, "tool_calls": calls})
                 else:
@@ -248,6 +256,14 @@ class AgentSDK:
                         out.append(structured[k])
                     else:
                         leftover.append(k)
+                if leftover:
+                    self.log.debug(
+                        "Sending %d tool result(s) as text: they answer no call "
+                        "in the turn before them.",
+                        len(leftover),
+                    )
+                # Text results go after the native block on purpose: a text
+                # message inside it would split the pairs the server checks.
                 out.extend(
                     self._tool_result_as_text(structured[k], names.get(k, "tool"))
                     for k in leftover
