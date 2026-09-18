@@ -397,9 +397,9 @@ def _classify_auth_status(
 def _is_env_token(token_source: str) -> bool:
     """True when the credential came from the environment, not a credential store.
 
-    CLIs name the variable itself (``GH_TOKEN``) and their own stores in lower
-    case (``keyring``, ``oauth_token``), so the shape is the test — an
-    allowlist of variable names would go stale the first time one is added.
+    The current gh policy reports uppercase variable names (``GH_TOKEN``) and
+    lowercase stores (``keyring``, ``oauth_token``). A future CLI with mixed-case
+    credential sources must provide a different classifier before using this.
     """
     source = token_source.strip()
     return bool(source) and source.isupper()
