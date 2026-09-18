@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -59,7 +60,7 @@ type loadedMsg struct {
 	// one. A plain counter rather than the client or the context: comparing
 	// interface values panics at runtime if the dynamic type is uncomparable,
 	// which a HubAgentLister passed by value could be.
-	gen          int
+	gen          int64
 	rows         []row
 	onlyFlagship bool
 	err          error
@@ -80,15 +81,31 @@ type Model struct {
 
 	selected      int
 	width, height int
-	// gen increments every time a load is abandoned, so a late result can be
-	// matched against the load that is actually current.
-	gen int
+	// gen identifies the load that is currently current for this panel. Unique
+	// process-wide (see loadGen), so a result can be matched not only against
+	// an earlier load of THIS panel but against one from a panel already gone.
+	gen int64
 }
+
+// loadGen hands out generation numbers that are unique across every panel this
+// process ever opens, not just within one. A per-panel counter starting at zero
+// would let a closed panel's in-flight fetch land on a freshly opened one —
+// both would be at generation zero — and replace its list with the cancelled
+// load's error.
+var loadGen atomic.Int64
 
 // New builds a panel that will load its data on Init. client must not be nil.
 func New(client HubAgentLister, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
-	return Model{ctx: ctx, cancel: cancel, client: client, loading: true, width: width, height: height}
+	return Model{
+		ctx:     ctx,
+		cancel:  cancel,
+		client:  client,
+		gen:     loadGen.Add(1),
+		loading: true,
+		width:   width,
+		height:  height,
+	}
 }
 
 func (m Model) Init() tea.Cmd { return m.load() }
@@ -104,7 +121,7 @@ func (m Model) Init() tea.Cmd { return m.load() }
 func (m *Model) abandonLoad() {
 	m.cancel()
 	m.ctx, m.cancel = context.WithCancel(context.Background())
-	m.gen++
+	m.gen = loadGen.Add(1)
 }
 
 // load attaches to a running daemon only (start=false), matching `gaia tui

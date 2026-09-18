@@ -257,3 +257,24 @@ func TestThePanelStaysUsableAfterAnAbandonedSelection(t *testing.T) {
 		t.Error("the panel stopped responding to navigation after an abandoned selection")
 	}
 }
+
+// A panel that was closed while its list fetch was still in flight must not be
+// able to overwrite the NEXT panel's list when that fetch finally returns.
+// Reproduced on review: with a per-panel counter both panels start at zero, so
+// the dead panel's "context canceled" error landed on the fresh one.
+func TestAStalePanelsLoadCannotLandOnTheNextPanel(t *testing.T) {
+	first := New(&stubLister{catalogOut: &catalog.HubCatalog{}}, 80, 24)
+	inFlight := first.gen // the generation its Init() load is carrying
+	first.abandonLoad()   // user pressed Esc while it was still loading
+
+	second := New(&stubLister{catalogOut: &catalog.HubCatalog{}}, 80, 24)
+	next, _ := second.Update(loadedMsg{gen: inFlight, err: context.Canceled})
+	second = next.(Model)
+
+	if second.loadErr != "" {
+		t.Fatalf("a closed panel's abandoned load reached the next panel: %q", second.loadErr)
+	}
+	if !second.loading {
+		t.Error("the fresh panel stopped showing its own load as in-progress")
+	}
+}

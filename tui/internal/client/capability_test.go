@@ -332,3 +332,23 @@ func TestAgentVersionAcceptsBothWireSpellings(t *testing.T) {
 		})
 	}
 }
+
+// The "this agent keeps no memory" answer needs nothing from the peer, so it
+// must not spawn a sidecar or probe just to refuse — and a probe that then
+// failed would report a version problem for a situation with no version in it.
+func TestFetchMemoryOnAnAgentWithoutAStoreCostsNoRoundTrip(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14"
+	c := f.clientFor(t, "email")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := c.FetchMemory(ctx); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if got := f.versionProbes(); got != 0 {
+		t.Errorf("refusing an agent with no memory store cost %d /version probe(s), want 0", got)
+	}
+}
