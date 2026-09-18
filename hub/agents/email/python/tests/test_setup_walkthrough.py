@@ -500,10 +500,7 @@ def test_google_client_id_shape_check_rejects_a_bad_value_without_echoing_it():
 
     assert collected["client_id"] == _VALID_GOOGLE_CLIENT_ID
     assert not any(bogus in m for m in agent.console.info)
-    assert any(
-        "apps.googleusercontent.com" in m and "doesn't look like" in m
-        for m in agent.console.info
-    )
+    assert sw._GOOGLE_CLIENT_ID_SHAPE_ERROR in agent.console.info
 
 
 def test_google_route_faq_is_reachable_and_confirms_the_secret_is_needed():

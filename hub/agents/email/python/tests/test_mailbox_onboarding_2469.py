@@ -23,6 +23,7 @@ import json
 import time
 
 import pytest
+from gaia.connectors import setup_routes as sr
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob
@@ -464,7 +465,9 @@ def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):
 
     # The walkthrough's own steps are what explains this now — not a single
     # ad hoc question — but the Cloud Console must still be named to the user.
-    assert any("console.cloud.google.com" in m for m in agent.console.info)
+    # Asserted against the route's own first step so the two can't drift.
+    project_step = sr.GOOGLE_PERSONAL.steps[0].instruction
+    assert any(project_step in m for m in agent.console.info)
 
     # The secret is asked for with the sensitive flag, so the surface can mask it.
     secret_q = [
