@@ -18,6 +18,7 @@ and hub agents all consume it.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
@@ -110,7 +111,7 @@ def verification_check_label(
     ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
     """
     name = (tool_name or "").strip()
-    if name == "execute_python_file" and isinstance(result, dict):
+    if name in ("execute_python_file", "run_python") and isinstance(result, dict):
         return_code = result.get("return_code")
         if (
             not check_was_executed(result)
@@ -159,6 +160,22 @@ def verification_check_label(
     return None
 
 
+def verification_check_target(tool_name: str, tool_args: Any) -> str:
+    """What a check ran against, so only reruns of the same command group.
+
+    ``pytest tests/`` and ``pytest tests/test_cart.py`` share the label
+    ``"pytest"`` but are different checks: the narrow one passing says nothing
+    about the suite that failed.
+    """
+    if isinstance(tool_args, dict):
+        for key in _COMMAND_KEYS:
+            command = tool_args.get(key)
+            if isinstance(command, str) and command.strip():
+                return " ".join(command.split())
+        return f"{tool_name} {json.dumps(tool_args, sort_keys=True, default=str)}"
+    return f"{tool_name} {tool_args!r}"
+
+
 def check_was_executed(result: Any) -> bool:
     """False only when *result* says the call was stopped before it ran (#3677).
 
@@ -202,13 +219,21 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     passed), ``partially verified`` (checks ran, not all passed), and
     ``unverified`` (no check ran at all).
 
+    A check that ran more than once counts once, by its most recent run: a
+    test that failed and then passed after a fix is verified, and one that
+    passed and then failed after an edit is not (#3989). A check is one
+    runner on one command, so a narrower rerun that passes does not hide a
+    wider run that failed.
+
     A check the agent *requested* and never got to run — refused by the shell
     allowlist, declined by the user — is none of those three. It is named as
     not having run, and never counted as one that did (#3677).
 
     Each execution is ``{"tool": str, "check_label": str | None,
-    "failed": bool, "ran": bool}`` — see ``Agent._note_verification_signal``.
-    ``ran`` defaults to True for a record written before the field existed.
+    "check_target": str | None, "failed": bool, "ran": bool}`` — see
+    ``Agent._note_verification_signal``. ``ran`` defaults to True for a record
+    written before the field existed; a record without ``check_target`` groups
+    by its label alone.
     """
     executions = list(executions or [])
     ran = [e for e in executions if e.get("ran", True)]
@@ -241,8 +266,11 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
                 "test, lint, or build."
             )
     else:
-        passed = [e for e in checks if not e.get("failed")]
-        failed = [e for e in checks if e.get("failed")]
+        # A check that ran more than once is judged by its latest run, so a
+        # fix that made it pass and an edit that made it fail stay distinct.
+        latest = {(e["check_label"], e.get("check_target")): e for e in checks}
+        passed = [e for e in latest.values() if not e.get("failed")]
+        failed = [e for e in latest.values() if e.get("failed")]
         # A check left unrun keeps the claim below "verified", whatever the
         # ones that did run reported.
         unrun = f" {_names(blocked)} did not run." if blocked else ""

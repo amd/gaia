@@ -170,13 +170,15 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (13 tools). Deliberately a smaller share of the registry than
+# Always-on set (15 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``load_skill`` for the skill
+# signalling), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# through a result that was cut short, ``load_skill`` for the skill
 # catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
-# documents say" without a round trip, and the two file-edit tools. Editing is
+# documents say" without a round trip, ``run_python`` so a number is computed
+# rather than guessed, and the two file-edit tools. Editing is
 # always on because semantic selection cannot rank it: on explicit edit
 # requests the edit tools lost the dynamic slots to unrelated bundles (#3752).
 # Everything else, shell and the web included, is a bundle: it arrives when the
@@ -197,6 +199,9 @@ FULL_CORE_TOOLS = frozenset(
         # file editing -- ranked out of the dynamic slots on edit requests (#3752)
         "write_file",
         "edit_file",
+        # computation -- without it the model does arithmetic in its head or
+        # writes a throwaway script into the user's repo to get a number
+        "run_python",
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
@@ -364,10 +369,11 @@ FULL_BUNDLES = [
             {
                 "run_shell_command",
                 "execute_python_file",
+                "run_python",
                 "get_system_info",
             }
         ),
-        description="Run shell commands and Python scripts, and query the system.",
+        description="Run shell commands, Python scripts and snippets, and query the system.",
     ),
     ToolBundle(
         name="clipboard",
