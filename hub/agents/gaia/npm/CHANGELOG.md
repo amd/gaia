@@ -14,6 +14,8 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- Clearing a TUI conversation now also clears the flagship stdio agent’s prior
+  conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
 
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
