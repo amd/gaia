@@ -65,12 +65,13 @@ export function mergeCatalogStatus(
     return installed.map((agent) => {
         const cat = byId.get(agent.id);
         if (!cat) return agent;
-        const hasUpdate =
-            cat.status === 'update_available' ||
-            (!!cat.latest_version && !!cat.version && cat.latest_version !== cat.version);
+        const hasUpdate = cat.status === 'update_available';
         return {
             ...agent,
-            version: cat.version ?? agent.version,
+            // The catalog wire payload carries the installed version as
+            // ``installed_version`` (see gaia.hub.catalog.merge_with_registry),
+            // never as ``version`` — that key never appears on the wire.
+            version: cat.installed_version ?? agent.version,
             latest_version: cat.latest_version,
             compatibility: cat.compatibility ?? agent.compatibility,
             security_tier: cat.security_tier ?? agent.security_tier,

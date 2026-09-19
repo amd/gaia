@@ -57,7 +57,7 @@ func TestNoLaunchFrameOverflowsItsTerminal(t *testing.T) {
 func TestNoChatFrameOverflowsItsTerminal(t *testing.T) {
 	for _, size := range terminalSizes {
 		w, h := size[0], size[1]
-		m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", false, true)
+		m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", "", false, true)
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		assertFits(t, "chat", updated.(chat.ChatModel).View(), w, h)
 	}
