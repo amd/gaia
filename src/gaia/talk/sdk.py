@@ -14,6 +14,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional
 from gaia.audio.audio_client import AudioClient
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
@@ -47,7 +48,7 @@ class TalkConfig:
     # General settings
     use_claude: bool = False  # Use Claude API
     use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
-    claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
+    claude_model: str = DEFAULT_CLAUDE_MODEL  # Claude model when use_claude=True
     base_url: Optional[str] = (
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
     )

@@ -6,6 +6,7 @@
 from unittest.mock import MagicMock, patch
 
 from gaia.audio.audio_client import AudioClient
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.talk.sdk import TalkConfig, TalkSDK
 
 
@@ -91,6 +92,14 @@ def test_audio_client_uses_claude_model_with_claude():
     with patch("gaia.audio.audio_client.create_client") as mock_create:
         AudioClient(use_claude=True, model="local-m", claude_model="claude-x")
         assert mock_create.call_args[1]["model"] == "claude-x"
+
+
+def test_claude_model_defaults_match_the_provider_default():
+    """TalkConfig and AudioClient default to the Claude provider's model."""
+    assert TalkConfig().claude_model == DEFAULT_CLAUDE_MODEL
+    with patch("gaia.audio.audio_client.create_client") as mock_create:
+        AudioClient(use_claude=True)
+        assert mock_create.call_args[1]["model"] == DEFAULT_CLAUDE_MODEL
 
 
 def test_agent_sdk_passes_model_and_base_url_to_provider():

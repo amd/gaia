@@ -8,6 +8,7 @@ import threading
 import time
 
 from gaia.llm import create_client
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
@@ -51,7 +52,7 @@ class AudioClient:
         use_chatgpt=False,
         system_prompt=None,
         model=None,
-        claude_model="claude-sonnet-5",
+        claude_model=DEFAULT_CLAUDE_MODEL,
         base_url=None,
     ):
         self.log = get_logger(__name__)

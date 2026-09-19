@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.talk.sdk import TalkSDK
 
 # asyncio uses a local socketpair for its Windows event-loop wakeup.
@@ -90,8 +91,10 @@ def test_defaults_without_backend_flags(monkeypatch):
     chat_config = agent_sdk.call_args[0][0]
     assert chat_config.model == DEFAULT_MODEL_NAME
     assert chat_config.max_tokens == 512
-    assert chat_config.claude_model == "claude-sonnet-4-20250514"
-    assert audio_client.call_args[1]["claude_model"] == "claude-sonnet-4-20250514"
+    # CLI and SDK share one default, so `gaia talk --use-claude` and
+    # `TalkSDK(TalkConfig(use_claude=True))` reach the same model.
+    assert chat_config.claude_model == DEFAULT_CLAUDE_MODEL
+    assert audio_client.call_args[1]["claude_model"] == DEFAULT_CLAUDE_MODEL
     assert chat_config.show_stats is False
     assert chat_config.use_claude is False and chat_config.use_chatgpt is False
     assert chat_config.base_url is None
