@@ -28,6 +28,9 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- Opt-in developer-mode skill and consent-gated MCP handoffs to Claude Code/Codex,
+  with managed worktrees, approved feedback snapshots and reported preview results.
+  Python `[mcp]` installation is required for the bridge; normal mode has no access.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it

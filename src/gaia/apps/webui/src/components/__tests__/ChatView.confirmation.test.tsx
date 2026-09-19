@@ -259,3 +259,30 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
         expect(mockedApi.confirmTool).not.toHaveBeenCalled();
     });
 });
+
+
+describe('engineering permission requests require a fresh user decision', () => {
+    afterEach(() => {
+        useNotificationStore.setState({ alwaysAllowGrants: [] });
+    });
+
+    it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code'])(
+        'ignores a chat grant for %s and shows the prompt', async (tool) => {
+            useNotificationStore.setState({
+                alwaysAllowGrants: [{ sessionId: SESSION.id, tool, grantedAt: 1 }],
+            });
+            await driveSend();
+            act(() => {
+                capturedCallbacks!.onAgentEvent({
+                    type: 'permission_request', tool, confirm_id: 'fresh-decision',
+                    args: { context: 'selected evidence' },
+                } as unknown as StreamEvent);
+            });
+            expect(mockedApi.confirmTool).not.toHaveBeenCalled();
+            const prompt = selectActivePermissionPrompt(useNotificationStore.getState());
+            expect(prompt?.id).toBe('fresh-decision');
+            expect(prompt?.tool).toBe(tool);
+            expect(prompt?.toolArgs).toEqual({ context: 'selected evidence' });
+        }
+    );
+});
