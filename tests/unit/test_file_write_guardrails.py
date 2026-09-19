@@ -1588,6 +1588,7 @@ class TestEditingLeavesTheWorkspaceClean:
 
     @staticmethod
     def _tool(mixin_cls, register, name, repo, validated=True):
+        """*name* on a fresh host, reading an existing target first like an agent."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         mixin = mixin_cls()
@@ -1600,7 +1601,11 @@ class TestEditingLeavesTheWorkspaceClean:
         _TOOL_REGISTRY.clear()
         try:
             getattr(mixin, register)()
-            return _TOOL_REGISTRY[name]["function"], mixin.path_validator
+            change = _TOOL_REGISTRY[name]["function"]
+            read = _TOOL_REGISTRY.get("read_file", {}).get("function")
+            return (_reading_first(read, change) if read else change), (
+                mixin.path_validator
+            )
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved)
