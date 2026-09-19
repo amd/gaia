@@ -233,12 +233,22 @@ class FileIOToolsMixin:
         preferred about half the time (#3600) — but the omission was not
         deliberate and this is the largest single lever measured.
         """
+        registry = getattr(self, "_tools_registry", {})
+        # edit_file alone, not both: ChatAgent pops edit_python_file out of
+        # every profile that registers this mixin, so requiring the pair would
+        # silence the fragment everywhere it is supposed to apply.
+        if "edit_file" not in registry:
+            return ""
+        python_clause = (
+            ", or edit_python_file for .py when you want the edit syntax-checked"
+            if "edit_python_file" in registry
+            else ""
+        )
         return (
             "==== CHANGING A FILE ====\n"
             "To change a file, call edit_file with the exact existing text as "
-            "old_content, or edit_python_file for .py when you want the edit "
-            "syntax-checked. Both work on any text file — source, documentation, "
-            "configuration.\n"
+            f"old_content{python_clause}. It works on any text file — source, "
+            "documentation, configuration.\n"
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
