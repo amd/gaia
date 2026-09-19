@@ -211,6 +211,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if content == "" {
 			content = m.buffer
 		}
+		content = StripVerificationScope(content)
 		m.buffer = ""
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
