@@ -24,6 +24,7 @@ var (
 	_ PermissionBypasser      = (*SubprocessClient)(nil)
 	_ AgentCanceler           = (*SubprocessClient)(nil)
 	_ LocalAgentStopper       = (*SubprocessClient)(nil)
+	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
 // closeGrace bounds how long Close() waits for an in-flight turn's reader to
@@ -722,6 +723,36 @@ func (s *SubprocessClient) Cancel(context.Context) error {
 // child, so abandoning a turn kills it rather than leaving it running
 // somewhere this client cannot reach.
 func (s *SubprocessClient) AbortStopsAgent() bool { return true }
+
+// Supports implements CapabilityReporter. The stdio memory-dump sentinel
+// (memory.go) is always there for a local child -- there is nothing to probe,
+// so the answer is immediate and always known.
+func (s *SubprocessClient) Supports(c Capability) (supported, known bool) {
+	switch c {
+	case CapabilityMemory:
+		return true, true
+	default:
+		// Unknown, not "known to be unsupported": a capability this build has
+		// never heard of would otherwise be hidden by whichever transport was
+		// not taught about it, with nothing on screen saying why.
+		return false, false
+	}
+}
+
+// ProbeCapabilities implements the async-probe seam client.CapabilityReporter
+// callers dispatch at chat start. A subprocess child has nothing to negotiate
+// -- Supports already answers immediately -- so this is a no-op.
+func (s *SubprocessClient) ProbeCapabilities(context.Context) error { return nil }
+
+// AgentStarted reports whether the child is already spawned, so a caller can
+// tell a fast round-trip to a warm agent from one that has to pay the cold
+// start first (imports, skill loading, backend probe -- tens of seconds). The
+// UI uses it to say which of the two the user is waiting on.
+func (s *SubprocessClient) AgentStarted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.started
+}
 
 // BypassAtLaunch reports whether the child was spawned with bypass already on,
 // so the UI can show the warning from the very first frame rather than only
