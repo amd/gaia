@@ -30,10 +30,18 @@
 # `workflow_dispatch` now supports TWO profiles, selected by `limit` AND
 # `experiments` together:
 #   - FULL (limit >= 249 AND experiments >= the committed card's n_runs,
-#     defaults 250 / 3): reproduces the committed card's methodology
-#     (250 x 3). This is the ONLY profile allowed to commit a refreshed card.
-#     ~10.5h wall-clock -- dispatch deliberately, and check `gh run list`
+#     defaults 250 / 1): reproduces the committed card's methodology
+#     (250 x 1). This is the ONLY profile allowed to commit a refreshed card.
+#     ~2.5-3h wall-clock -- dispatch deliberately, and check `gh run list`
 #     first (see the slot-occupancy warning below).
+#
+#     ONE-TIME: the committed card still records n_runs=3 (the old default), so
+#     until it is re-cut the basis guard below rejects the 250/1 default. Move
+#     the basis once, deliberately:
+#       gh workflow run email_scorecard_refresh.yml --ref <branch> \
+#         -f limit=250 -f experiments=1 -f rebaseline=true \
+#         -f rebaseline_reason="drop repeats: stdev 0.0023 (cv 0.27%)"
+#     After that card lands, plain 250/1 dispatches work normally.
 #   - SUBSET (limit < 249): an end-to-end smoke/dry-run. Runs the benchmark,
 #     all three judge evals, gen_scorecard, and (skipped by `if:`, not just
 #     printed) the two regression-gate steps, then NEVER commits -- it
@@ -49,7 +57,7 @@
 # committed card's `n_runs`, fails immediately naming both bases and the exact
 # re-dispatch command -- unless `rebaseline=true` (with a required
 # `rebaseline_reason`) marks the basis change deliberate. This is what stops a
-# fast/lucky run from silently overwriting the real 250x3 card with a weaker
+# fast/lucky run from silently overwriting the real full-basis card with a weaker
 # one; subset runs skip this guard entirely (they can never commit). Dispatch
 # also refuses to auto-commit against `main` -- `workflow_dispatch` has no
 # `branches:` restriction, so a careless full dispatch against `main` would
@@ -66,12 +74,15 @@
 # hosted-CI backstop (it parses committed files only, no eval).
 #
 # SLOT-OCCUPANCY WARNING: a FULL run holds the serial `lemonade-eval`
-# concurrency slot for ~10h. Six sibling workflows (test_api, test_embeddings,
+# concurrency slot for ~2.5-3h (measured 6.4h at the old experiments=3; the
+# often-quoted "~10h" was a padded budget ceiling, never a measurement --
+# run 29464281335 is the only FULL run that has ever completed, at 384min).
+# Six sibling workflows (test_api, test_embeddings,
 # test_lemonade_server, test_rag, build_cpp, test_examples) share the same
 # [self-hosted, Windows, stx] runner LABEL *outside* that concurrency group --
 # they are not blocked by it, but most of them run
 # installer/scripts/cleanup-lemonade.ps1, which force-kills whatever owns port
-# 13305. That means an unrelated PR landing mid-run can kill a 10h eval, and
+# 13305. That means an unrelated PR landing mid-run can kill a multi-hour eval, and
 # conversely those six workflows queue behind a full run for hours if it grabs
 # the box first. Before dispatching a FULL run: check `gh run list` for
 # in-flight/queued stx work, and expect (do not "fix" by restarting the
@@ -107,14 +118,14 @@ on:
         description: >-
           Messages to triage. full profile (>=249, with experiments >=
           the committed card's n_runs) reproduces the committed card's
-          methodology (~10.5h serial-slot occupancy -- dispatch
+          methodology (~2.5-3h serial-slot occupancy -- dispatch
           deliberately); smaller = smoke run that never commits.
         required: false
         default: '250'
       experiments:
-        description: 'Repeated full-eval runs (matches the committed card''s n_runs methodology; must be >= the committed n_runs for a full-profile run to be allowed to commit)'
+        description: 'Repeat runs of the full eval. Default 1 -- measured run-to-run stdev is 0.0023 (cv 0.27%), so repeats cost hours and buy ~0.26pp of CI; the regression gate uses --regression-floor-pp instead. Must be >= the committed card''s n_runs to commit (or pass rebaseline=true).'
         required: false
-        default: '3'
+        default: '1'
       model:
         description: 'Lemonade model id'
         required: false
@@ -150,7 +161,7 @@ env:
   MANIFEST: hub/agents/email/python/gaia-agent.yaml
   THRESHOLDS: tests/fixtures/email/quality_gate_thresholds.json
   LIMIT: ${{ inputs.limit || '250' }}
-  EXPERIMENTS: ${{ inputs.experiments || '3' }}
+  EXPERIMENTS: ${{ inputs.experiments || '1' }}
   MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   CTX_SIZE: ${{ inputs.ctx_size || '16384' }}
   REBASELINE: ${{ inputs.rebaseline }}
@@ -190,25 +201,26 @@ jobs:
     # Judge-step ceilings are profile-independent: their corpora are fixed
     # size (drafting 19, action-item 21, briefing 11 cases) regardless of the
     # triage `limit`.
-    #   benchmark full:    3 experiments x 249 emails x 45s (41.4 measured
-    #                        + margin) ~= 560min                          -> 620
+    #   benchmark full:    1 experiment x 250 emails x 45s ~= 187min      -> 210
+    #                        (measured 115.4min/run of 250 in run
+    #                         29464281335; 45s/email keeps headroom)
     #   benchmark subset:  25 emails x 45s ~= 19min + model-load variance -> 45
     #   drafting judge:    measured 21:00 (19 cases ~= 66s/case)          -> 35
     #   action-item judge: measured >=27:05 (21 cases)                   -> 45
     #   briefing judge:    est. 11 cases x ~75s ~= 14min                 -> 25
     #   setup (checkout + venv + install-lemonade + start; the "start" step
     #     already carries its own 15-min cap)                            -> 35
-    #   FIVE short steps (pre, gen_scorecard, same-version gate,
-    #     cross-version gate, commit) @ 10 each                          -> 50
-    #   job full:   620+35+45+25+35+50 = 810 -> timeout-minutes 840 (margin)
-    #   job subset:  45+35+45+25+35+50 = 235 -> timeout-minutes 240 (margin)
-    # These are CEILINGS, not expectations — expected wall-clock is ~10.5h
+    #   SIX short steps (pre, llm-coverage assert, gen_scorecard,
+    #     same-version gate, cross-version gate, commit) @ 10 each       -> 60
+    #   job full:   210+35+45+25+35+60 = 410 -> timeout-minutes 440 (margin)
+    #   job subset:  45+35+45+25+35+60 = 245 -> timeout-minutes 275 (margin)
+    # These are CEILINGS, not expectations — expected wall-clock is ~2.5-3h
     # full, ~100min subset. The job timeout is only the backstop: every step
     # above the "short steps" bucket carries its OWN timeout-minutes so an
     # overrun fails at a NAMED step, never a silent job-level `cancelled`
     # (this is the root fix for #2094 — the old value, 90, wasn't even
     # derived from a measurement).
-    timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 840 || 240 }}
+    timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 440 || 275 }}
     steps:
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
@@ -340,7 +352,7 @@ jobs:
             }
 
             if (($COMMITTED_N -ne "") -and ([int]$env:EXPERIMENTS -lt [int]$COMMITTED_N) -and ($env:REBASELINE -ne "true")) {
-              Write-Host "::error::Basis mismatch -- committed card n_runs=$COMMITTED_N vs requested experiments=$env:EXPERIMENTS. A lower experiments count would silently downgrade the published sample-size basis. Re-dispatch with experiments >= $COMMITTED_N, or pass rebaseline=true with a rebaseline_reason to move the basis deliberately. Re-dispatch command: gh workflow run email_scorecard_refresh.yml --ref $env:GITHUB_REF_NAME -f limit=$env:LIMIT -f experiments=$COMMITTED_N -f ctx_size=$env:CTX_SIZE -f rebaseline=true -f rebaseline_reason=`"...`""
+              Write-Host "::error::Basis mismatch -- committed card n_runs=$COMMITTED_N vs requested experiments=$env:EXPERIMENTS. A lower experiments count would silently downgrade the published sample-size basis, so it needs an explicit decision. If you MEANT to lower it (the default is now 1 -- repeats were dropped because measured stdev is 0.0023), re-dispatch with rebaseline=true and a reason: gh workflow run email_scorecard_refresh.yml --ref $env:GITHUB_REF_NAME -f limit=$env:LIMIT -f experiments=$env:EXPERIMENTS -f ctx_size=$env:CTX_SIZE -f rebaseline=true -f rebaseline_reason=`"why this basis change is deliberate`" . To instead reproduce the committed basis unchanged, re-dispatch with -f experiments=$COMMITTED_N ."
               exit 1
             }
           }
@@ -349,7 +361,7 @@ jobs:
           Write-Host "PROFILE: $profileName -- limit=$env:LIMIT experiments=$env:EXPERIMENTS ctx_size=$env:CTX_SIZE rebaseline=$env:REBASELINE | committed: limit=$COMMITTED_LIMIT n_runs=$COMMITTED_N ctx_size=$committedCtxDisplay aggregate=$committedAggDisplay | prev_tag=$PREV"
 
       - name: Run the email-triage benchmark (real eval)
-        timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 620 || 45 }}
+        timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 210 || 45 }}
         env:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
@@ -357,9 +369,12 @@ jobs:
           # Bounds ONE tool call (agent.py _call_tool_bounded), and benchmark.py
           # builds a fresh agent per experiment, so this need only cover a
           # single experiment's triage call, not the whole run. Full-corpus:
-          # ~249 emails x 41.4s measured -> ~2h52m per experiment -> 14400s (4h)
-          # margin. Subset (~25 emails): 3600s (1h) covers it with margin.
-          GAIA_AGENT_TOOL_TIMEOUT: ${{ fromJSON(inputs.limit || '250') >= 249 && '14400' || '3600' }}
+          # 250 emails x 27.7s measured -> ~115min per experiment -> 10800s (3h)
+          # margin. Subset (~25 emails ~= 12min): 2400s (40min) covers it.
+          # Keep BOTH values BELOW the step's own timeout-minutes (210 full /
+          # 45 subset): the tool timeout must fire first so an overrun surfaces as
+          # a named agent error rather than an anonymous step kill.
+          GAIA_AGENT_TOOL_TIMEOUT: ${{ fromJSON(inputs.limit || '250') >= 249 && '10800' || '2400' }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
           Remove-Item -Recurse -Force eval-out -ErrorAction SilentlyContinue
@@ -381,6 +396,17 @@ jobs:
             --ctx-size "$env:CTX_SIZE" `
             --output-dir eval-out
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
+
+      - name: Assert the eval actually reached the LLM
+        timeout-minutes: 10
+        run: |
+          # Higher stakes here than in the PR gate: this workflow COMMITS the
+          # published card. EmailTriageAgent's heuristic path returns verdicts
+          # without calling the model and omits `llm_classified_count` entirely,
+          # so a rules-only run would publish accuracy numbers that measure rules
+          # rather than the model. Block before any judge spend or commit.
+          python hub/agents/email/python/packaging/assert_llm_coverage.py eval-out
+          if ($LASTEXITCODE -ne 0) { throw "email triage eval never reached the LLM" }
 
       - name: Voice-drafting quality eval (judge-scored) — for the scorecard metric
         timeout-minutes: 35
@@ -439,9 +465,12 @@ jobs:
         run: |
           # Reuse gaia.eval.scorecard_gate instead of hand-rolling this
           # comparison (#2094, Reflection C4) -- it is already tested and
-          # already implements the variance-aware regression band
-          # (--regression-k) that a strict '<' lacks (it would reject a fresh
-          # 0.833 against a committed 0.834 despite stdev 0.0116).
+          # already implements the regression band a strict '<' lacks (it would
+          # reject a fresh 0.833 against a committed 0.834 despite stdev 0.0116).
+          # The band is max(--regression-k x stdev, --regression-floor-pp). At
+          # experiments=1 the recorded stdev is 0.0, so the floor (default 1.5pp,
+          # set in scorecard_gate.py) is what provides the tolerance -- deliberately
+          # NOT re-specified here, so the policy lives in exactly one place.
           $gateArgs = @("--scorecard", "$env:SCORECARD")
           if ("${{ steps.pre.outputs.committed_path }}") {
             $gateArgs += @("--baseline-file", "${{ steps.pre.outputs.committed_path }}")

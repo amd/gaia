@@ -441,7 +441,7 @@ def build_scenario_prompt(
     adversarial_root = str(CORPUS_DIR / "adversarial").replace("\\", "/")
     real_world_root = str(REAL_WORLD_CORPUS_DIR).replace("\\", "/")
     # Inline all three prompt files so the full rubric is always available — the claude
-    # subprocess has no file-read tool and cannot access these paths from disk.
+    # subprocess runs with ``--tools ""`` and cannot read these paths from disk.
     # JSON examples below use {{ and }} as f-string escaped literal braces.
     # If you switch to .replace()-style templating, change all {{ → { and }} → }.
     simulator_content = _load_simulator_content()
@@ -729,7 +729,9 @@ def preflight_check(backend_url, scenarios=None):
         with urllib.request.urlopen(f"{backend_url}/api/health", timeout=5) as r:
             if r.status != 200:
                 errors.append(f"Agent UI returned HTTP {r.status}")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        # ConnectionError catches http.client.RemoteDisconnected, which is not a
+        # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         errors.append(f"Agent UI not reachable at {backend_url}: {e}")
 
     # Check corpus manifest
@@ -816,7 +818,7 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
             f"Memory admin probe failed with HTTP {e.code} from {backend_url}: "
             f"{e.reason}"
         )
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         return (
             f"Memory admin probe could not reach {backend_url}: {e}. "
             "Is the Agent UI backend running?"
@@ -968,6 +970,10 @@ def run_scenario_subprocess(
             "--mcp-config",
             str(MCP_CONFIG),
             "--strict-mcp-config",
+            # No built-in tools: the driver works only through the agent UI's
+            # MCP tools, and holds the judge's credentials.
+            "--tools",
+            "",
             "--model",
             model,
             "--dangerously-skip-permissions",
