@@ -305,6 +305,59 @@ def test_summary_for_prose_about_refusing_is_a_plain_failure(agent):
     assert "kept failing: refusing to overwrite" in summary
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        "unblocked 3 connections, then the write failed",
+        "processing blocked ports list failed: timeout",
+        "read failed: IO blocked on fd 3",
+    ],
+)
+def test_summary_for_output_that_mentions_blocked_is_a_plain_failure(agent, error):
+    """The word alone is not a verdict; only "blocked by" and its kin are."""
+    summary = _summary(agent, {"status": "error", "error": error})
+    assert "not permitted here" not in summary
+    assert f"kept failing: {error}" in summary
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Downloaded file blocked by security policy: payload.exe",
+        "Edit blocked: replacement content matches a secret pattern",
+        "Only read-only wmic queries are allowed (get, list). Modifying "
+        "operations (call, create, delete, set) are blocked.",
+    ],
+)
+def test_summary_for_a_blocked_verdict_says_not_permitted(agent, error):
+    summary = _summary(agent, {"status": "error", "error": error})
+    assert "not permitted here" in summary
+
+
+@pytest.mark.parametrize("repeats", [1, 0, -1])
+def test_a_repeat_limit_below_two_is_refused(repeats):
+    """At 1 the call being made counts as its own repeat, so nothing would run
+    and the correction would say "called X 0 times"."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        with pytest.raises(ValueError, match="at least 2"):
+            _DummyAgent(
+                silent_mode=True, skip_lemonade=True, max_consecutive_repeats=repeats
+            )
+
+
+def test_the_smallest_repeat_limit_counts_one_real_call(agent):
+    """At 2 the correction reports the one call that actually ran."""
+    agent.max_consecutive_repeats = 2
+    sent = _stub_chat(agent, *[_legacy_call()] * 2, _answer("done"))
+
+    agent.process_query("go", max_steps=10)
+
+    assert agent.calls == 1
+    corrections = _corrections(sent)
+    assert len(corrections) == 1
+    assert f"called {_TOOL} 1 times" in str(corrections[0]["content"])
+
+
 def test_summary_for_a_plain_failure_does_not_blame_a_service(agent):
     summary = _summary(agent, {"status": "error", "error": "404 Not Found"})
     assert "kept failing: 404 Not Found" in summary

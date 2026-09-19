@@ -990,7 +990,7 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -1033,6 +1033,12 @@ Do NOT wrap conversational replies in JSON.
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        if max_consecutive_repeats < 2:
+            raise ValueError(
+                f"max_consecutive_repeats must be at least 2, got "
+                f"{max_consecutive_repeats}: the guard counts the call being made, "
+                "so below 2 every tool call is a repeat of itself and none runs."
+            )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -7433,7 +7439,10 @@ Do NOT wrap conversational replies in JSON.
     )
     _LOOP_NOT_PERMITTED_RE = re.compile(
         r"not allowed|not permitted|not in (?:the )?allowed|access denied"
-        r"|permission denied|blocked|refused (?:by|to)"
+        # "blocked" only as a verdict, not as a word in unrelated output
+        # ("unblocked", "blocked ports", "IO blocked").
+        r"|permission denied|\bblocked by\b|\b(?:is|are|was|were|been) blocked\b"
+        r"|\bedit blocked\b|refused (?:by|to)"
         r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
         re.IGNORECASE,
     )
