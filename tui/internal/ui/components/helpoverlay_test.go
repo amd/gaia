@@ -184,6 +184,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/memory":   "/memory",
 		"/setup":    "/setup",
 		"/bypass":   "/bypass",
+		"/agents":   "/agents",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		key := cmd
@@ -321,6 +322,34 @@ func TestHelpScrollReachesTheLastLineAndTheIndicatorAgrees(t *testing.T) {
 	}
 }
 
+// --- per-agent command gating (#3978) ---------------------------------------
+
+// A nil/empty commands set is "nothing to filter" -- the unfiltered master
+// list (every command chatHelpText documents) passes through, same as
+// RenderHelpOverlay's own behavior.
+func TestRenderHelpOverlayForCommandsNilShowsEverything(t *testing.T) {
+	got := ansi.Strip(RenderHelpOverlayForCommands(HelpContextChat, "", 100, 40, 0, nil))
+	want := ansi.Strip(RenderHelpOverlay(HelpContextChat, "", 100, 40, 0))
+	if got != want {
+		t.Errorf("a nil commands set rendered differently from RenderHelpOverlay:\n%s\n---\n%s", got, want)
+	}
+}
+
+// A narrowed commands set must actually narrow the rendered Commands line —
+// gating that only reached the palette and never the help panel would leave
+// /help still advertising a command submit refuses.
+func TestRenderHelpOverlayForCommandsNarrowsTheCommandsLine(t *testing.T) {
+	got := ansi.Strip(RenderHelpOverlayForCommands(HelpContextChat, "", 100, 40, 0, []string{"/help", "/clear"}))
+	if !strings.Contains(got, "/help") || !strings.Contains(got, "/clear") {
+		t.Fatalf("the offered commands are missing from the panel:\n%s", got)
+	}
+	for _, hidden := range []string{"/memory", "/bypass", "/setup", "/model", "/provider"} {
+		if strings.Contains(got, hidden) {
+			t.Errorf("a filtered panel still mentions %q:\n%s", hidden, got)
+		}
+	}
+}
+
 // A window with no room for a panel gets the view it already had, not a box
 // with one column of border in it.
 func TestATinyWindowKeepsTheViewItHas(t *testing.T) {
@@ -331,4 +360,30 @@ func TestATinyWindowKeepsTheViewItHas(t *testing.T) {
 	if got := RenderHelpOverlay(HelpContextChat, background, 80, 2, 0); got != background {
 		t.Errorf("a 2-row window rendered a panel anyway: %q", got)
 	}
+}
+
+// renderCommandsSection replaces the Commands block by POSITION — the label
+// line plus exactly one continuation — because several unrelated lines share
+// the same indent and matching on that would eat them too. Pin the shape it
+// assumes: grow the block to three lines and the third would leak into every
+// filtered render, silently.
+func TestChatHelpCommandsBlockIsExactlyTwoLines(t *testing.T) {
+	lines := strings.Split(chatHelpText, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, helpCommandsLabel) {
+			continue
+		}
+		if i+2 >= len(lines) {
+			t.Fatalf("the Commands block runs to the end of the help text; renderCommandsSection expects a line after it")
+		}
+		if !strings.HasPrefix(lines[i+1], helpCommandsIndent) {
+			t.Fatalf("line %d should be the Commands block's continuation, got %q", i+1, lines[i+1])
+		}
+		if strings.HasPrefix(lines[i+2], helpCommandsIndent) {
+			t.Fatalf("the Commands block grew past two lines (line %d: %q) — "+
+				"renderCommandsSection skips exactly one continuation and would leak this one", i+2, lines[i+2])
+		}
+		return
+	}
+	t.Fatalf("no Commands block found in chatHelpText")
 }

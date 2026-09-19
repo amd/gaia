@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import ChainMap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -32,6 +33,7 @@ from typing import (
     FrozenSet,
     List,
     Literal,
+    MutableMapping,
     Optional,
     Tuple,
     Union,
@@ -44,7 +46,9 @@ from gaia.agents.base.verification import (
     NOT_EXECUTED,
     build_verification_scope,
     check_was_executed,
+    strip_verification_scope,
     verification_check_label,
+    verification_check_target,
 )
 
 # First-party imports
@@ -302,6 +306,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
+    # The same arbitrary code execution, from a snippet instead of a file.
+    "run_python",
     "write_file",
     "write_python_file",
     "edit_file",
@@ -1135,6 +1141,11 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        self._output_artifacts = ArtifactStore()
+        if any(name != "read_tool_output" for name in self._tools_registry):
+            self._register_output_reader()
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1468,8 +1479,42 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    def _register_output_reader(self):
+        from gaia.agents.base.artifacts import store_for
+
+        def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
+            """Read exact omitted tool output by handle, without rerunning the tool.
+
+            Args:
+                artifact: Output handle returned by a truncated result.
+                offset: Zero-based character offset in the original output.
+                limit: Page size in characters, 1 to 8000.
+            """
+            return store_for(self).read(artifact, offset, limit)
+
+        self._output_reader_entry = {
+            "name": "read_tool_output",
+            "description": read_tool_output.__doc__,
+            "parameters": {
+                "artifact": {"type": "string", "required": True},
+                "offset": {"type": "integer", "required": False},
+                "limit": {"type": "integer", "required": False},
+            },
+            "function": read_tool_output,
+            "atomic": True,
+            "display_label": None,
+            "timeout": None,
+        }
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+        self._tool_overrides["read_tool_output"] = self._output_reader_entry
+        if self._instance_tools is not None:
+            self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
     @property
-    def _tools_registry(self) -> Dict[str, Any]:
+    def _tools_registry(self) -> MutableMapping[str, Any]:
         """Return this agent's effective tool registry.
 
         Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
@@ -1478,6 +1523,10 @@ Do NOT wrap conversational replies in JSON.
         """
         if self._instance_tools is not None:
             return self._instance_tools
+        if hasattr(self, "_tool_overrides"):
+            # Keep legacy in-place registry additions visible across lookups,
+            # without sharing this agent's continuation reader with another one.
+            return ChainMap(self._tool_overrides, _TOOL_REGISTRY)
         return _TOOL_REGISTRY
 
     def _snapshot_tools(self) -> None:
@@ -1488,6 +1537,8 @@ Do NOT wrap conversational replies in JSON.
         will not affect other agents or the global dict.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
+        if hasattr(self, "_tool_overrides"):
+            self._instance_tools.update(self._tool_overrides)
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -1651,11 +1702,24 @@ Do NOT wrap conversational replies in JSON.
         Reuses ChatAgent's tool-selection query when the agent has one, so a
         follow-up ("and the one before that?") still carries the prior turn's
         subject instead of matching on four pronouns.
+
+        ``user_input`` may already carry ``MemoryMixin``'s per-turn dynamic
+        context (current time, upcoming/overdue items) prepended to it —
+        ``process_query`` augments the message before this ever runs. That
+        preamble is real content to the LLM but pure noise to a lexical BM25
+        matcher: "Current time: 2026-09-18T00:14 (Friday)" dilutes a genuine
+        match enough to drop it below the auto-load floor on turn 1 of every
+        session (measured: a workout-video request scored 0.61 clean, 0.27
+        augmented — the difference between auto-loading and merely being
+        shortlisted). ``self._original_user_input`` is the clean text
+        ``MemoryMixin.process_query`` saved before augmenting; prefer it here
+        so discovery scores what the user actually said.
         """
+        clean = getattr(self, "_original_user_input", None) or user_input
         builder = getattr(self, "_build_tool_selection_query", None)
         if callable(builder):
-            return builder(user_input)
-        return user_input
+            return builder(clean)
+        return clean
 
     def get_skill_discovery_system_prompt(self) -> str:
         """Sourcing rule + this turn's discovery note.
@@ -4240,7 +4304,26 @@ Do NOT wrap conversational replies in JSON.
             )
 
             return budget_for_ctx(CLAUDE_CTX_SIZE)
-        return truncation_budget(self.device)
+        device = self.device
+        if str(getattr(self, "model_id", "")).lower().endswith("-flm"):
+            device = "npu"
+        elif device is None:
+            from gaia.config import GaiaConfig
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+
+            model = getattr(self, "model_id", None)
+            backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+            cloud = (
+                backend.cloud_model_provider(model)
+                if isinstance(backend, LemonadeClient)
+                else cloud_model_provider(model)
+            )
+            # Gateway sessions do not depend on local hardware configuration.
+            # Preserve their conservative admission budget until metadata supplies
+            # a provider-specific window; do not guess one from the host profile.
+            if not cloud:
+                device = GaiaConfig.load().default_device
+        return truncation_budget(device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module
     #: using postponed annotations hands us the string "int", not ``int``, and
@@ -4334,6 +4417,28 @@ Do NOT wrap conversational replies in JSON.
             )
         return converted, None
 
+    @staticmethod
+    def _as_structured_payload(tool_result: Any) -> Optional[Any]:
+        """The dict/list to truncate item-by-item, or ``None`` for plain text.
+
+        A JSON object or array that arrived as a ``str`` counts: dropping whole
+        records from it keeps every surviving record parseable, where a
+        head-and-tail excerpt would cut one in half at each end.
+
+        A bare JSON scalar (``"null"``, a quoted word, a number) does not — it
+        carries no records to drop, and prose that happens to be a valid JSON
+        scalar should still read as prose.
+        """
+        if isinstance(tool_result, (dict, list)):
+            return tool_result
+        if not isinstance(tool_result, str):
+            return None
+        try:
+            parsed = json.loads(tool_result)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, (dict, list)) else None
+
     def _handle_large_tool_result(
         self,
         tool_name: str,
@@ -4354,27 +4459,71 @@ Do NOT wrap conversational replies in JSON.
             The truncated result or original if within limits
         """
         truncated_result = tool_result
-        if isinstance(tool_result, (dict, list)):
+        if isinstance(tool_result, (dict, list, str)):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
             # wire format re-parsed on the other end -- escaping would hand it
             # literal \uXXXX sequences instead of the actual characters.
-            result_str = json.dumps(
-                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            result_str = (
+                tool_result
+                if isinstance(tool_result, str)
+                else json.dumps(
+                    tool_result,
+                    default=self._json_serialize_fallback,
+                    ensure_ascii=False,
+                )
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                # Truncate large results to prevent overwhelming the LLM. The
-                # result is re-parsed just below, so this path must always
-                # come back as valid JSON (#2620).
-                truncated_str = self._truncate_large_content(
-                    tool_result, max_chars=target, as_json=True
-                )
-                try:
+                from gaia.agents.base.artifacts import store_for
+
+                if not hasattr(self, "_output_reader_entry"):
+                    self._register_output_reader()
+                handle = store_for(self).put(result_str)
+                metadata = {
+                    "artifact": handle,
+                    "continuation": "read_tool_output",
+                    "total_chars": len(result_str),
+                }
+                target -= len(json.dumps(metadata, ensure_ascii=False)) + 4
+                # Some tools hand back json.dumps(...) as a str (code search,
+                # index status). Eliding those mid-record leaves the model half
+                # an entry at each end, so parse first and let the structured
+                # path drop whole items instead.
+                structured = self._as_structured_payload(tool_result)
+                if structured is None:
+                    from gaia.agents.base.tool_output import elide_text
+
+                    truncated_result = elide_text(tool_result, target)
+                else:
+                    # Structured results must remain valid JSON for the model.
+                    truncated_str = self._truncate_large_content(
+                        structured, max_chars=target, as_json=True
+                    )
                     truncated_result = json.loads(truncated_str)
-                except json.JSONDecodeError:
-                    # If truncated string isn't valid JSON, use it as-is
-                    truncated_result = truncated_str
+                    if isinstance(tool_result, str):
+                        # It arrived as text; hand text back so the tool's
+                        # declared result type does not change under the caller.
+                        truncated_result = json.dumps(
+                            truncated_result, ensure_ascii=False
+                        )
+                was_text = isinstance(truncated_result, str)
+                if was_text:
+                    truncated_result = json.loads(truncated_result)
+                if isinstance(truncated_result, dict):
+                    truncated_result.update(metadata)
+                elif (
+                    truncated_result
+                    and isinstance(truncated_result[-1], dict)
+                    and truncated_result[-1].get("truncated") is True
+                    and truncated_result != structured
+                ):
+                    truncated_result[-1].update(metadata)
+                else:
+                    # Whitespace-heavy JSON can fit after parsing, with no marker.
+                    truncated_result.append(metadata)
+                if was_text:
+                    truncated_result = json.dumps(truncated_result, ensure_ascii=False)
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
@@ -5042,10 +5191,14 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
+        label = verification_check_label(tool_name, tool_args, result)
         log.append(
             {
                 "tool": tool_name,
-                "check_label": verification_check_label(tool_name, tool_args, result),
+                "check_label": label,
+                "check_target": (
+                    verification_check_target(tool_name, tool_args) if label else None
+                ),
                 "failed": self._is_error_result(result),
                 "ran": check_was_executed(result),
             }
@@ -5058,14 +5211,25 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Append the scope statement to a non-empty answer (#3376).
+        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+
+        Any statement the model wrote itself comes out first. The line rides in
+        the answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's — and the user then read the same
+        verification paragraph twice, once from the model and once from here.
+        Only the one derived from this turn's tool log is authoritative.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
         """
         if not answer or not answer.strip():
             return answer
-        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+        body = strip_verification_scope(answer)
+        statement = self.verification_scope_statement()
+        if not body.strip():
+            # The whole "answer" was an echoed scope line; one is still one.
+            return statement
+        return f"{body.rstrip()}\n\n{statement}"
 
     def process_query(
         self,
