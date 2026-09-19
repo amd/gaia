@@ -70,7 +70,8 @@ least confident about — not timestamps or speaker labels in the result itself.
 separate `refine_transcript` call then attaches real names to those voices,
 inferred from what's said, and writes the speaker-labelled transcript.
 If the naming or speaker-consolidation request fails, refinement returns an
-error so it can be retried; it does not report an incomplete result as success.
+error (with the untouched raw transcript as `source_transcript`) so it can be
+retried; it does not report an incomplete result as success.
 </Note>
 
 ```python

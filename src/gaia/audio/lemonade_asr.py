@@ -612,10 +612,11 @@ class LemonadeASRClient:
     def _unreachable(self, error: Exception) -> ConnectionError:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
+        # The hint owns start/install advice; repeating it here doubled it.
         return ConnectionError(
             f"Lemonade Server is not reachable at {self.base_url} ({error}). "
-            f"{describe_start_hint().instruction} Run `gaia init` to install "
-            f"it, or set LEMONADE_BASE_URL to a running server. See {DOCS_URL}"
+            f"{describe_start_hint().instruction} If it runs elsewhere, set "
+            f"LEMONADE_BASE_URL to that server. See {DOCS_URL}"
         )
 
     def _decode(self, response, url: str, what: str) -> Dict[str, Any]:

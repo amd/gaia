@@ -1068,7 +1068,31 @@ class TestErrors:
         assert "http://localhost:13305/api/v1" in message
         assert "Open the installed Lemonade app." in message
         assert "lemonade-server serve" not in message
-        assert "gaia init" in message
+        assert "LEMONADE_BASE_URL" in message
+
+    def test_unreachable_without_lemonade_gives_install_advice_once(
+        self, monkeypatch, client, wav_file
+    ):
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_launcher.resolve_lemonade",
+            lambda: SimpleNamespace(found=False),
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_launcher._macos_app_installed", lambda: False
+        )
+
+        def refuse(_session, _request, **_kwargs):
+            raise requests.ConnectionError("connection refused")
+
+        monkeypatch.setattr(requests.sessions.Session, "send", refuse)
+
+        with pytest.raises(ConnectionError) as excinfo:
+            client.transcribe(wav_file)
+        message = str(excinfo.value)
+        assert "not installed" in message
+        assert message.count("gaia init") == 1
 
     def test_timeout_suggests_a_bigger_timeout(self, monkeypatch, client, wav_file):
         def stall(_session, _request, **_kwargs):

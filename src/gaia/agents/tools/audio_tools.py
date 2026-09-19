@@ -483,7 +483,6 @@ class AudioToolsMixin:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-        wav_path = None
         scratch = None
         saved_path = None
         try:
@@ -582,17 +581,8 @@ class AudioToolsMixin:
                 )
             return failure
         finally:
-            # The decoded WAV is a large scratch file; the transcript is
-            # the artifact. Never let cleanup mask the real exception.
-            if wav_path is not None:
-                try:
-                    Path(wav_path).unlink(missing_ok=True)
-                except OSError as cleanup_error:
-                    logger.warning(
-                        "Could not remove scratch WAV %s: %s",
-                        wav_path,
-                        cleanup_error,
-                    )
+            # The decoded WAV lives in scratch; the transcript is the artifact.
+            # Never let cleanup mask the real exception.
             if scratch is not None:
                 try:
                     scratch.cleanup()
@@ -705,7 +695,15 @@ class AudioToolsMixin:
             raise
         except Exception as e:
             logger.error("Refinement failed for %s: %s", source, e)
-            return {"status": "error", "error": str(e)}
+            return {
+                "status": "error",
+                "error": (
+                    f"Speaker identification failed: {e}. The raw transcript "
+                    f"at {source} and its timings are unchanged; fix the cause "
+                    "and call refine_transcript on it again."
+                ),
+                "source_transcript": str(source),
+            }
 
         blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
         speakers = list(dict.fromkeys(name for name, _ in named))

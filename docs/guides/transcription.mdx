@@ -160,7 +160,8 @@ possible — but not the voice split behind them: that part doesn't depend on
 what was said.
 
 If a model request for naming or consolidating speakers fails, refinement
-returns an error. Retry after restoring the model connection; anonymous labels
+returns an error naming the raw transcript, which is left unchanged. Retry
+`refine_transcript` on it after restoring the model connection; anonymous labels
 are reserved for voices without naming evidence, not failed requests.
 
 If diarization can't run at all (see [First run](#first-run)), `refine_transcript`
