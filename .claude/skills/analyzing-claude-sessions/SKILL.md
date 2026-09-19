@@ -98,7 +98,9 @@ catch them.
 3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`.
    It carries session-id prefixes, so it belongs in the cache directory like everything
    else derived — not in a repo.
-4. Re-run `report --labels "$FACTORY/labels.txt"`.
+4. Re-run `report --labels "$FACTORY/labels.txt"`. It validates the prefixes against
+   the corpus: nothing matching is an error, and partial coverage is stated in every
+   use-case table so the labelled subset is never read as the whole corpus.
 
 Classify from the **first user message**, not the auto-generated title — the title is a
 summary of what happened, which leaks the outcome into the label.
