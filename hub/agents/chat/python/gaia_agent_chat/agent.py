@@ -30,6 +30,7 @@ from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.project_map import resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -81,6 +82,33 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
+
+
+def _python_script_run_context(
+    script: Path, project_dir: os.PathLike | str | None
+) -> tuple[Path, Dict[str, str]]:
+    """Working directory and environment for running *script* as a subprocess.
+
+    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
+    ``tests/test_x.py`` can import the project's packages. Anything else — and
+    every run with no project at all, where *project_dir* is ``None`` — runs
+    from its own folder with the environment unchanged.
+
+    Only flat-layout projects become importable this way: a ``src/`` layout
+    needs ``src/`` on the path, which this does not add.
+    """
+    script = Path(script).resolve()
+    env = dict(os.environ)
+    if project_dir is None:
+        return script.parent, env
+    project = Path(project_dir).resolve()
+    if not script.is_relative_to(project):
+        return script.parent, env
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        os.pathsep.join([str(project), existing]) if existing else str(project)
+    )
+    return project, env
 
 
 @dataclass
@@ -1216,6 +1244,17 @@ No documents are currently indexed.
         """
         return self.path_validator.is_path_allowed(path, prompt_user=False)
 
+    def _script_project_root(self) -> Optional[str]:
+        """This session's project root, or ``None`` when there is no project.
+
+        Defers to :class:`ProjectMapMixin` when the subclass mixes it in, so the
+        project map and a script's working directory can never name two
+        different trees.
+        """
+        if hasattr(self, "_project_map_root"):
+            return self._project_map_root()
+        return resolve_project_root(getattr(self.config, "project_root", None))
+
     def _validate_and_open_file(self, file_path: str, mode: str = "r"):
         """
         Safely open a file with path validation using O_NOFOLLOW to prevent TOCTOU attacks.
@@ -1445,6 +1484,13 @@ No documents are currently indexed.
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
+                A script inside the agent's project runs from the project root,
+                with it on PYTHONPATH, so a test file such as tests/test_x.py
+                can import the project's own packages. Any other script — and
+                every script when there is no project — runs from its own
+                folder. Relative paths in the script resolve against that
+                working directory.
+
                 Args:
                     file_path: Path to the .py file to run
                     args: Space-separated CLI arguments to pass to the script
@@ -1475,9 +1521,13 @@ No documents are currently indexed.
                 )
                 start = time.monotonic()
                 try:
+                    run_dir, env = _python_script_run_context(
+                        p, self._script_project_root()
+                    )
                     r = subprocess.run(
                         cmd,
-                        cwd=str(p.parent.resolve()),
+                        cwd=str(run_dir),
+                        env=env,
                         capture_output=True,
                         # An inherited stdin leaves the child waiting on a pipe
                         # nobody writes to, and the run only ends at the timeout.
