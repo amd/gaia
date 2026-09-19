@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from gaia.config import GaiaConfigError
 
 from .._chat_helpers import (
+    _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
     get_agent_registry,
@@ -109,11 +110,16 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     registry = get_agent_registry()
     if not _agent_type_unknown(agent_type, registry):
         return
-    valid_ids = sorted({reg.id for reg in registry.list()} | {"chat"})
+    # Every id _agent_type_unknown accepts, legacy aliases aside.
+    valid_ids = sorted(
+        {reg.id for reg in registry.list()} | {"chat"} | _SIDECAR_AGENT_TYPES
+    )
+    load_error = registry.get_load_error(agent_type)
+    reason = f" It failed to load: {load_error}." if load_error else ""
     raise HTTPException(
         status_code=422,
         detail=(
-            f"Unknown agent_type '{agent_type}'. Registered agent ids: "
+            f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
             f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
             "from the Agent Hub (`gaia hub`) and restart the server."
         ),

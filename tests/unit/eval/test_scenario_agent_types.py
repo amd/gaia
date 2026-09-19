@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from gaia.agents.registry import AgentRegistry
+from gaia.ui._chat_helpers import _SIDECAR_AGENT_TYPES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIO_DIR = REPO_ROOT / "eval" / "scenarios"
@@ -51,6 +52,26 @@ def _scenario_agent_types() -> list[tuple[str, str]]:
     return pairs
 
 
+def _builtin_registry() -> AgentRegistry:
+    registry = AgentRegistry()
+    registry._register_builtin_agents()
+    return registry
+
+
+def _known_agent_ids(registry: AgentRegistry) -> set[str]:
+    """The ids ``POST /api/sessions`` accepts, sidecars included.
+
+    A sidecar (``email``) ships no ``gaia.agent`` entry point, yet the endpoint
+    accepts it, so the guard must too or the two disagree on the same rule.
+    """
+    return {reg.id for reg in registry.list()} | _hub_agent_ids() | _SIDECAR_AGENT_TYPES
+
+
+def test_a_sidecar_agent_type_passes_the_guard():
+    registry = _builtin_registry()
+    assert registry.canonical_id("email") in _known_agent_ids(registry)
+
+
 def test_scenarios_declare_agent_types():
     assert _scenario_agent_types(), f"no scenario declares agent_type in {SCENARIO_DIR}"
 
@@ -67,9 +88,8 @@ def test_hub_entry_points_parsed():
     ids=lambda v: v if "/" in str(v) else None,
 )
 def test_scenario_agent_type_resolves(scenario, agent_type):
-    registry = AgentRegistry()
-    registry._register_builtin_agents()
-    known = {reg.id for reg in registry.list()} | _hub_agent_ids()
+    registry = _builtin_registry()
+    known = _known_agent_ids(registry)
 
     assert registry.canonical_id(agent_type) in known, (
         f"{scenario} sets agent_type '{agent_type}', which no registered agent "

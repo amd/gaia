@@ -1039,7 +1039,7 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "chat, gaia" in detail
+        assert "chat, email, gaia" in detail
         assert client.get("/api/sessions").json()["total"] == 0
 
     def test_create_session_registered_agent_type_accepted(
@@ -1056,6 +1056,33 @@ class TestSessionEndpoints:
         resp = client.put(f"/api/sessions/{sid}", json={"agent_type": "data"})
         assert resp.status_code == 422
         assert client.get(f"/api/sessions/{sid}").json()["agent_type"] == "gaia"
+
+    def test_rejection_names_why_an_installed_agent_failed_to_load(
+        self, client, gaia_only_registry
+    ):
+        """An agent that is installed but broke on import must not be told to
+        install itself; the recorded reason is what the user can act on."""
+        gaia_only_registry._record_load_error(
+            "my-bot", "ImportError: No module named 'pandas'"
+        )
+        resp = client.post("/api/sessions", json={"agent_type": "my-bot"})
+        assert resp.status_code == 422
+        assert "It failed to load: ImportError: No module named 'pandas'." in (
+            resp.json()["detail"]
+        )
+
+    def test_the_listed_ids_include_every_accepted_one(
+        self, client, gaia_only_registry
+    ):
+        """A sidecar id is accepted without a registry entry, so it is listed."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "email"}).status_code
+            == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "Registered agent ids: chat, email, gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
