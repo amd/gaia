@@ -100,7 +100,7 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
 
-An agent that runs out of steps before finishing still answers: it gets one more model call with no tools and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
+An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
 
 - **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.

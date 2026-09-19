@@ -4,9 +4,9 @@
 
 The loop used to end with a canned note ("Reached maximum steps limit", plus a
 tools list that was always empty) that never said what the agent found or why
-it stopped. It now asks the model once more, with no tools offered, and that
-reply is the answer. If that call fails, the canned note comes back with a
-line saying why.
+it stopped. It now asks the model once more, with the same tools but
+``tool_choice="none"``, and that reply is the answer. If that call fails, the
+canned note comes back with a line saying why.
 """
 
 import json
@@ -154,11 +154,11 @@ def _scope_lines(text: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# The step limit runs out: the model's tool-less reply is the answer
+# The step limit runs out: the model's no-tool-call reply is the answer
 # ---------------------------------------------------------------------------
 
 
-def test_step_cap_answer_is_the_models_tool_less_reply(agent):
+def test_step_cap_answer_is_the_models_no_tool_call_reply(agent):
     _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), _SUMMARY)
 
     result = agent.process_query("summarize issue 42", max_steps=3)
@@ -185,10 +185,12 @@ def test_json_protocol_model_answers_at_the_cap_too():
 
     assert result["result"].startswith(_SUMMARY)
     assert chat.send_messages.call_count == 4
+    # No native tools to send, so nothing for tool_choice to govern.
     assert chat.send_messages.call_args.kwargs["tools"] is None
+    assert "tool_choice" not in chat.send_messages.call_args.kwargs
 
 
-def test_step_cap_request_offers_no_tools(agent):
+def test_step_cap_request_keeps_the_tools_but_forbids_calls(agent):
     agent.tool_result = {"status": "success", "body": "issue text"}
     chat = _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), _SUMMARY)
 
@@ -199,9 +201,13 @@ def test_step_cap_request_offers_no_tools(agent):
     for loop_call in calls[:3]:
         offered = [t["function"]["name"] for t in loop_call.kwargs["tools"]]
         assert _TOOL in offered
+        assert "tool_choice" not in loop_call.kwargs
 
     wrap_up = calls[3].kwargs
-    assert wrap_up["tools"] is None
+    # Same tools as the loop (Anthropic rejects tool history without them, and
+    # an unchanged prefix keeps the prompt cache); calling one is forbidden.
+    assert wrap_up["tools"] == calls[2].kwargs["tools"]
+    assert wrap_up["tool_choice"] == "none"
     assert wrap_up["system_prompt"] == calls[0].kwargs["system_prompt"]
     # Same conversation, tool results included, plus one closing instruction.
     sent = wrap_up["messages"]
@@ -257,8 +263,9 @@ def test_answer_before_the_cap_is_untouched(agent):
             json.dumps({"thought": "retry", "tool": _TOOL, "tool_args": {"number": 4}}),
             f"asked to run {_TOOL} instead of answering",
         ),
+        (_tool_call(4), f"asked to run {_TOOL} instead of answering"),
     ],
-    ids=["call-raises", "empty-reply", "asks-for-a-tool"],
+    ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
 )
 def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, reason):
     _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), reply)
