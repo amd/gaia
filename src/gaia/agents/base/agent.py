@@ -51,6 +51,7 @@ from gaia.agents.base.verification import (
     check_was_executed,
     project_has_tests,
     strip_verification_scope,
+    summary_reports_failure,
     unverified_change,
     verification_check_label,
     verification_check_target,
@@ -5196,7 +5197,8 @@ Do NOT wrap conversational replies in JSON.
                 "check_target": (
                     verification_check_target(tool_name, tool_args) if label else None
                 ),
-                "failed": self._is_error_result(result),
+                "failed": self._is_error_result(result)
+                or summary_reports_failure(tool_name, result),
                 "ran": check_was_executed(result),
                 "args": tool_args if isinstance(tool_args, dict) else {},
                 "output": check_output(tool_name, result),

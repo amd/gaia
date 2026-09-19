@@ -1416,3 +1416,42 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         )
         == runner
     )
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "========================= 1 failed, 3 passed in 10.03s =========================",
+        "==================== 3 passed, 1 error in 0.20s ====================",
+        "Ran 4 tests in 0.001s\n\nFAILED (failures=1)",
+    ],
+)
+def test_a_failing_summary_is_a_failed_check_whatever_the_exit_code(
+    agent, tool, summary
+):
+    """A snippet that prints pytest's result exits 0 whatever pytest said.
+
+    A benchmark run read "1 failed, 3 passed" that way and the line said
+    "verified — pytest ran and passed".
+    """
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        tool,
+        {"code": "subprocess.run(['pytest']); print(r.stdout)"},
+        {"status": "success", "stdout": summary + "\nReturn code: 1", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is True
+    statement = agent.verification_scope_statement()
+    assert "ran and passed" not in statement
+    assert "did not pass" in statement
+
+
+def test_a_passing_summary_from_a_snippet_stays_passed(agent):
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is False
