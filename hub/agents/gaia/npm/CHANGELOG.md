@@ -23,6 +23,20 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
+  five other confirmation-gated tools can now run through `/v1/gaia/query`:
+  the stream stays open on `needs_confirmation` and
+  `POST /v1/gaia/query/{run_id}/tool_decision` answers it. Previously the only
+  possible answer was a refusal, so those tools were unreachable over HTTP.
+  `POST /v1/gaia/sessions/{session_id}/bypass` turns the asking off for a
+  session. A run that cannot answer — no `session_id`, or
+  `can_answer_questions: false` — is still refused. See SKILL §8.
+- **Claude as an inference backend.** `provider: "claude"` sends the
+  conversation to Anthropic's API instead of the local server; `model` then
+  names a Claude model. Anything outside `lemonade` / `claude` is still a 400.
+- **`gaia-agent --serve` works from a pip install.** The console script pointed
+  past the transport dispatcher, so the documented HTTP mode exited with
+  "unrecognized arguments".
 - **`run_python`, always on.** A quick calculation or data transform is now one
   confirmation-gated call that runs from the project root and returns what it
   printed, instead of a throwaway script left in your repository. It joins the
@@ -137,6 +151,12 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently
@@ -249,7 +269,7 @@ the terminal UI meant building it from source.
   This package mints no token, so a sidecar it spawns comes up in dev mode (token
   check skipped, loudly warned, Host/Origin still enforced) — pass your own
   through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
-- Tracks sidecar contract `apiVersion` **2.13**; a differing major raises
+- Tracks sidecar contract `apiVersion` **2.14**; a differing major raises
   `VersionMismatchError`.
 - `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
   stdio transport's `/memory` sentinel produces, so a daemon-supervised

@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.13"`                  |
+| Contract version   | `API_VERSION = "2.14"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -269,6 +269,8 @@ the header.
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
+| `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
@@ -330,10 +332,11 @@ not survive and should be reloaded.
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would
 leave the earlier run with no way to be cancelled. A `/query` supplying a `model`
-that differs from the one its `session_id` was built with also gets `409`: only
-agent construction reads a model, so the request cannot be honoured on the
-retained agent. Omit `model` to continue on the session's current one, or start a
-new `session_id` to switch.
+that differs from the one its `session_id` was built with **switches the retained
+agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
+change; the same machinery the stdio transport's `/model` uses. A switch that
+fails — a missing Claude credential, an unknown local model — is a `409` naming
+the reason, and leaves the session on its previous model.
 
 ### 5.3 Version gate
 
@@ -391,14 +394,17 @@ the hub, which is what this package delivers, is supervised by the daemon over
 the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
-a JSON line carrying a `gaia_control` key, which gives it something HTTP does
-not have: a back-channel that can answer a confirmation prompt *while* a turn is
-in flight, and stop that turn (`cancel`) without ending the process — so loaded
-skills, "always" grants, history and the bypass mode survive a cancel. It also
-takes `--bypass-permissions` (start with gating off) and
-`--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
-local Lemonade; embeddings stay on Lemonade either way). None of that is
-reachable over `/v1/gaia/query`.
+a JSON line carrying a `gaia_control` key: a back-channel that answers a
+confirmation prompt *while* a turn is in flight, toggles bypass, and stops a turn
+(`cancel`) without ending the process — so loaded skills, "always" grants,
+history and the bypass mode survive a cancel.
+
+Contract 2.14 gave the HTTP surface the same three capabilities per run and per
+session — `/tool_decision`, `/sessions/{id}/bypass`, and `provider: "claude"`.
+What remains stdio-only is the *launch* form of those switches:
+`--bypass-permissions` starts a process with gating already off, and
+`--use-claude` / `--claude-model` pin the backend for the life of the process
+(embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;
