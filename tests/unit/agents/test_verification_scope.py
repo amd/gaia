@@ -39,6 +39,7 @@ from gaia.agents.base.verification import (
     check_was_executed,
     strip_verification_scope,
     verification_check_label,
+    verification_check_target,
 )
 from gaia.llm.lemonade_client import _cloud_request_error
 
@@ -176,8 +177,11 @@ def test_non_dict_args_do_not_raise():
 # ---------------------------------------------------------------------------
 
 
-def _execution(label=None, failed=False, name="some_tool"):
-    return {"tool": name, "check_label": label, "failed": failed}
+def _execution(label=None, failed=False, name="some_tool", target=None):
+    record = {"tool": name, "check_label": label, "failed": failed}
+    if target is not None:
+        record["check_target"] = target
+    return record
 
 
 def test_no_tools_at_all_is_unverified():
@@ -335,6 +339,61 @@ def test_a_refused_attempt_then_a_fail_then_a_fix_is_verified():
         ]
     )
     assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in statement
+
+
+def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_the_check_target_is_the_command_with_whitespace_collapsed():
+    assert verification_check_target(
+        "run_shell_command", {"command": "  pytest   tests/ -q "}
+    ) == verification_check_target("run_shell_command", {"command": "pytest tests/ -q"})
+    assert verification_check_target(
+        "run_shell_command", {"command": "pytest tests/"}
+    ) != verification_check_target(
+        "run_shell_command", {"command": "pytest tests/test_cart.py"}
+    )
+
+
+def test_a_named_check_tool_is_targeted_by_its_arguments():
+    assert verification_check_target(
+        "run_tests", {"path": "tests/"}
+    ) != verification_check_target("run_tests", {"path": "tests/unit"})
+    assert verification_check_target(
+        "run_tests", {"path": "tests/", "quiet": True}
+    ) == verification_check_target("run_tests", {"quiet": True, "path": "tests/"})
+
+
+def test_loop_keeps_a_failed_suite_visible_after_a_narrow_rerun(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest tests/"),
+        (
+            {"status": "success", "return_code": 0, "stdout": "1 passed"},
+            "pytest tests/test_cart.py",
+        ),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in line
 
 
 def test_loop_reports_a_fixed_test_as_verified(agent):

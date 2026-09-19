@@ -904,7 +904,9 @@ that tests ran. Other unrecognized runners remain `unverified`.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix reads `verified`; one that passed
-and then failed after an edit reads `ran and did not pass`.
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and

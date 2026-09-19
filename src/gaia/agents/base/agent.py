@@ -45,6 +45,7 @@ from gaia.agents.base.verification import (
     build_verification_scope,
     check_was_executed,
     verification_check_label,
+    verification_check_target,
 )
 
 # First-party imports
@@ -5033,10 +5034,14 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
+        label = verification_check_label(tool_name, tool_args, result)
         log.append(
             {
                 "tool": tool_name,
-                "check_label": verification_check_label(tool_name, tool_args, result),
+                "check_label": label,
+                "check_target": (
+                    verification_check_target(tool_name, tool_args) if label else None
+                ),
                 "failed": self._is_error_result(result),
                 "ran": check_was_executed(result),
             }
