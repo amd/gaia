@@ -91,7 +91,7 @@ def clean_context(text: str) -> str:
         flags=re.S,
     )
     text = re.sub(
-        r"(?i)(\b(?:api[_-]?key|access[_-]?token|password|secret|authorization)\s*[:=]\s*)([^\n]+)",
+        r"(?i)(\b(?:api[_-]?key|access[_-]?token|password|secret|authorization)[\"']?\s*[:=]\s*)([^\n]+)",
         r"\1[REDACTED]",
         text,
     )
@@ -199,7 +199,11 @@ class JobStore:
             raise PermissionError("No active sharing grant for this client and job")
 
     def context(self, job_id: str, backend: str, after_seq: int = 0) -> dict:
-        if type(after_seq) is not int or after_seq < 0:
+        if (
+            isinstance(after_seq, bool)
+            or not isinstance(after_seq, int)
+            or after_seq < 0
+        ):
             raise ValueError("after_seq must be a nonnegative integer")
         job = self.read(job_id)
         self.require_access(job, backend)

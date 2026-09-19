@@ -88,6 +88,8 @@ def test_service_worktree_gate_idempotency_and_preview(repo, tmp_path):
     revision = service.status(job["id"])["revision"]
     first = service.prepare_worktree(job["id"], "codex", "request-1", revision)
     assert service.prepare_worktree(job["id"], "codex", "request-1", revision) == first
+    # Vendor-neutral: the same branch name whichever coding app does the work.
+    assert first["branch"] == f"gaia/engineering-{job['id']}"
     preview = service.register_preview(
         job["id"],
         "codex",

@@ -598,12 +598,18 @@ marks remote inference. This is a TUI/stdio capability, not an HTTP query comman
 
 ## Developer engineering mode
 
-The flagship supports opt-in `--developer-mode` (or `GAIA_DEVELOPER_MODE=1` for
-the host process), separate from diagnostic `--dev`. It loads a developer-only
-skill and tools for explicitly approved context snapshots to Claude Code/Codex.
-The local MCP server also requires explicit developer mode; normal sessions cannot
-share through it. Coding stays in the native app with managed worktrees and
-reported preview/results. No self-assessment or automatic updating is enabled.
-Configure pairing from a Python GAIA installation with `[mcp]`; the frozen agent
-can reuse that configuration but is not itself a Python MCP launcher.
+Available only when GAIA was started with `--developer-mode` (or
+`GAIA_DEVELOPER_MODE=1`). If the engineering tools are missing, say that developer
+mode is off; don't route around it with shell or file tools. When describing a
+handoff, claim only what happened:
+
+- Context was shared only after the user approved that exact snapshot in the prompt.
+  Approval can't be remembered, so each share or append asks again.
+- Opening the coding app never creates or submits a task, and for Codex it doesn't
+  prefill a prompt either. Never say the context was "posted" or "sent" to Codex;
+  give the user the directory and the prompt to paste.
+- Preview and test results come from the coding app. Report them as app-reported,
+  not as checks GAIA ran.
+- Revoking stops future reads; it cannot recall data already delivered.
+
 See the [usage guide](https://amd-gaia.ai/docs/guides/harness-engineering).

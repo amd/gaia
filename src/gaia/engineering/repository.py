@@ -161,7 +161,7 @@ class Repository:
                 )
                 self.git("--git-dir", str(self.repo), "update-ref", base_ref, commit)
             path = self.root / "worktrees" / job_id
-            branch = f"codex/engineering-{job_id}"
+            branch = f"gaia/engineering-{job_id}"
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             if path.is_symlink():
                 raise ValueError("Worktree cannot be a symlink")

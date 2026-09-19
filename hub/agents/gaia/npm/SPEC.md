@@ -551,12 +551,21 @@ stdout belongs to the TUI once it is exec'd, and to machine-readable JSON for
 
 ## Developer engineering mode
 
-The flagship supports opt-in `--developer-mode` (or `GAIA_DEVELOPER_MODE=1` for
-the host process), separate from diagnostic `--dev`. It loads a developer-only
-skill and tools for explicitly approved context snapshots to Claude Code/Codex.
-The local MCP server also requires explicit developer mode; normal sessions cannot
-share through it. Coding stays in the native app with managed worktrees and
-reported preview/results. No self-assessment or automatic updating is enabled.
-Configure pairing from a Python GAIA installation with `[mcp]`; the frozen agent
-can reuse that configuration but is not itself a Python MCP launcher.
+- **Opt-in.** The agent enables it with `--developer-mode` or `GAIA_DEVELOPER_MODE=1`
+  in the host process. `gaia engineering` and the engineering MCP server accept only
+  the explicit `--developer-mode` flag. It is separate from diagnostic `--dev`.
+- **Surface.** Only in that mode does the agent load the `gaia-harness-engineering`
+  skill and the `share_engineering_context`, `append_engineering_context`,
+  `approve_engineering_code`, `engineering_status`, `open_engineering_app` and
+  `revoke_engineering_context` tools. Sessions without it have none of them.
+- **Consent.** Sharing, appending and code approval each ask for a fresh approval of
+  the exact content or scope shown. None of them can be remembered or auto-approved.
+  Snapshots are recipient-bound and expire; revoking stops future reads.
+- **Pairing.** Configure the coding app's MCP connection from a Python GAIA install
+  with the `[mcp]` extra. The frozen binary this package ships can reuse that
+  configuration but cannot launch the Python MCP server itself.
+- **Code.** Fixes happen in the coding app, in worktrees from GAIA's managed source
+  cache. Preview results are reported by that app, not verified by GAIA. Nothing
+  self-assesses or updates the installed GAIA.
+
 See the [usage guide](https://amd-gaia.ai/docs/guides/harness-engineering).

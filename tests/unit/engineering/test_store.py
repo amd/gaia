@@ -73,10 +73,19 @@ def test_context_limits_and_redaction():
         clean_context("\x1b[31mhello\x1b[0m\nAPI_KEY=topsecret")
         == "hello\nAPI_KEY=[REDACTED]"
     )
+    # JSON- and dict-shaped secrets, the shape most logs and config dumps take.
+    assert clean_context('{"api_key": "abc123"}') == '{"api_key": [REDACTED]'
+    assert clean_context("{'password': 'hunter2'}") == "{'password': [REDACTED]"
     with pytest.raises(ValueError):
         clean_context("x" * (128 * 1024 + 1))
     with pytest.raises(ValueError):
         clean_context("")
+
+
+@pytest.mark.parametrize("after_seq", [True, -1, "1", 1.0])
+def test_context_cursor_must_be_a_nonnegative_int(tmp_path, after_seq):
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        JobStore(tmp_path).context("job", "codex", after_seq=after_seq)
 
 
 def test_pairing_has_no_access_and_no_server_consent_tools(tmp_path):
