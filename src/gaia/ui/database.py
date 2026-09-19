@@ -208,8 +208,19 @@ class ChatDatabase:
         migrated = migrated.replace(
             "CREATE TABLE messages", "CREATE TABLE messages_history_migration", 1
         )
+        stale = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'messages_history_migration'"
+        ).fetchone()
+        if stale:
+            # ``messages`` still has the old schema, so it holds every row.
+            logger.warning(
+                "Dropping leftover messages_history_migration table before "
+                "re-running the messages role migration"
+            )
         with self._transaction():
             self._conn.execute("BEGIN")
+            self._conn.execute("DROP TABLE IF EXISTS messages_history_migration")
             self._conn.execute(migrated)
             self._conn.execute(
                 "INSERT INTO messages_history_migration SELECT * FROM messages"

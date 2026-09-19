@@ -365,6 +365,8 @@ class _HistoryAgent(_FakeAgent):
     def __init__(self):
         super().__init__()
         self.conversation_history = []
+        # An explicit device keeps the history budget off the user's config file.
+        self.device = "gpu"
 
 
 def test_a_turn_is_recorded_for_the_next_prompt():
@@ -390,17 +392,23 @@ def test_history_accumulates_across_turns():
     assert len(agent.conversation_history) == 4
 
 
-def test_history_is_trimmed_in_whole_turns():
+def test_history_is_trimmed_in_whole_turns(monkeypatch):
     """A window opening on an answer whose question was dropped reads as the
     model asserting something unprompted."""
+    from gaia.agents.base import history
+
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
     agent = _HistoryAgent()
 
     for i in range(18):
         stdio._record_turn(agent, f"q{i}", f"a{i}")
 
-    assert len(agent.conversation_history) == 36
-    assert agent.conversation_history[0]["role"] == "user"
-    assert agent.conversation_history[-1]["role"] == "assistant"
+    window = list(agent.conversation_history)
+    assert len(window) == 12
+    assert [m["role"] for m in window] == ["user", "assistant"] * 6
+    assert window[0]["content"] == "q12"
+    assert window[-1]["content"] == "a17"
 
 
 def test_an_empty_query_is_not_recorded():

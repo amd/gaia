@@ -180,6 +180,34 @@ def test_role_migration_failure_rolls_back_ddl_and_can_retry():
     db.close()
 
 
+def test_role_migration_survives_a_leftover_temp_table(tmp_path, caplog):
+    path = str(tmp_path / "leftover.db")
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    db.add_message(session, "user", "preserve me")
+    legacy = "\n".join(db._conn.iterdump()).replace(
+        "'system', 'autonomous'", "'system'"
+    )
+    db.close()
+    with sqlite3.connect(path) as connection:
+        connection.executescript(legacy)
+        connection.execute("CREATE TABLE messages_history_migration (junk TEXT)")
+
+    with caplog.at_level("WARNING", logger="gaia.ui.database"):
+        migrated = ChatDatabase(path)
+
+    assert "leftover messages_history_migration" in caplog.text
+    assert migrated.get_messages(session)[0]["content"] == "preserve me"
+    migrated.add_message(session, "autonomous", "tick", model_messages=_trace())
+    assert (
+        migrated._conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'messages_history_migration'"
+        ).fetchone()
+        is None
+    )
+    migrated.close()
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_autonomous_execution_restores_and_persists_real_database(monkeypatch, fails):
     from gaia.ui.agent_loop import AgentLoop
