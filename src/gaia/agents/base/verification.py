@@ -110,7 +110,7 @@ def verification_check_label(
     ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
     """
     name = (tool_name or "").strip()
-    if name == "execute_python_file" and isinstance(result, dict):
+    if name in ("execute_python_file", "run_python") and isinstance(result, dict):
         return_code = result.get("return_code")
         if (
             not check_was_executed(result)
