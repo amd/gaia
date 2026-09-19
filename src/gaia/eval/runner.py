@@ -21,6 +21,7 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,67 @@ RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+# ── MCP interpreter resolution ────────────────────────────────────────────
+#
+# ``mcp-config.json`` is a template: hosts with ``python3`` but no bare
+# ``python`` (macOS, most Linux distros) would ENOENT the server, and the
+# scenario scores INFRA_ERROR rather than naming the cause. ``sys.executable``
+# is the one Python guaranteed to exist *and* to have ``gaia`` importable.
+_PYTHON_COMMAND_RE = re.compile(r"python[0-9.]*(\.exe)?$", re.IGNORECASE)
+
+
+def _is_python_command(command: str) -> bool:
+    """True if ``command`` names a generic Python interpreter to be resolved."""
+    return bool(_PYTHON_COMMAND_RE.fullmatch(Path(command).name))
+
+
+def _resolve_mcp_command(command: str) -> str:
+    """Map a generic interpreter name onto the running interpreter."""
+    return sys.executable if _is_python_command(command) else command
+
+
+def load_mcp_config_template() -> dict:
+    """Read the tracked MCP config template.
+
+    Raises with context rather than returning a partial config — a malformed
+    template means every scenario would lose its tools.
+    """
+    try:
+        return json.loads(MCP_CONFIG.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise OSError(f"Cannot read MCP config template at {MCP_CONFIG}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"MCP config template at {MCP_CONFIG} is not valid JSON: {e}"
+        ) from e
+
+
+def resolve_mcp_config(run_dir) -> Path:
+    """Write a runnable copy of the MCP config into ``run_dir``; return its path.
+
+    The tracked template is never modified; the resolved copy ships with the
+    run's artifacts. The path is absolute because ``claude -p`` runs from
+    ``REPO_ROOT``, not the caller's cwd.
+    """
+    config = load_mcp_config_template()
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = server.get("command")
+        if isinstance(command, str):
+            server["command"] = _resolve_mcp_command(command)
+            if server["command"] != command:
+                logger.debug(
+                    "MCP server %r: resolved command %r -> %r",
+                    name,
+                    command,
+                    server["command"],
+                )
+
+    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return resolved
+
 
 # ── Single-runner lock ────────────────────────────────────────────────────
 #
@@ -707,6 +769,49 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         result["performance_summary"] = None
 
 
+def _check_mcp_server_commands() -> list:
+    """Verify every MCP server in the config has a runnable command.
+
+    Without this, a missing interpreter surfaces mid-run as a scenario with no
+    callable tools — scored ``INFRA_ERROR 0.0/10``, which reads like an agent
+    failure rather than a broken host.
+    """
+    errors = []
+    try:
+        config = load_mcp_config_template()
+    except (OSError, ValueError) as e:
+        return [str(e)]
+
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = (server or {}).get("command")
+        if not isinstance(command, str) or not command:
+            errors.append(
+                f"MCP server '{name}' in {MCP_CONFIG} has no 'command' — "
+                f"add one naming the executable that serves it."
+            )
+            continue
+
+        resolved = _resolve_mcp_command(command)
+        found = shutil.which(resolved)
+        if not found and Path(resolved).is_file() and os.access(resolved, os.X_OK):
+            found = resolved
+        if not found:
+            hint = (
+                f"the eval is running under {sys.executable}, which is missing or "
+                f"not executable"
+                if resolved != command
+                else f"install it or correct 'command' in {MCP_CONFIG}"
+            )
+            errors.append(
+                f"MCP server '{name}' command not executable: {resolved!r} "
+                f"(from 'command': {command!r} in {MCP_CONFIG}) — {hint}. "
+                f"Without it no eval tools are callable and every scenario "
+                f"scores INFRA_ERROR."
+            )
+
+    return errors
+
+
 def preflight_check(backend_url, scenarios=None):
     """Check prerequisites before running scenarios.
 
@@ -741,6 +846,8 @@ def preflight_check(backend_url, scenarios=None):
     # Check MCP config
     if not MCP_CONFIG.exists():
         errors.append(f"MCP config not found: {MCP_CONFIG}")
+    else:
+        errors.extend(_check_mcp_server_commands())
 
     # Check claude CLI
     claude_bin = shutil.which("claude")
@@ -968,7 +1075,7 @@ def run_scenario_subprocess(
             "--json-schema",
             result_schema,
             "--mcp-config",
-            str(MCP_CONFIG),
+            str(resolve_mcp_config(run_dir)),
             "--strict-mcp-config",
             # No built-in tools: the driver works only through the agent UI's
             # MCP tools, and holds the judge's credentials.
@@ -2250,7 +2357,6 @@ def capture_session(session_id, output_dir=None, db_path=None):
     Returns:
         Path to the written YAML file
     """
-    import re
     import sqlite3
 
     db = Path(db_path) if db_path else GAIA_DB_PATH
