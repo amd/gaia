@@ -21,9 +21,16 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
-      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
-      # blocks, so a docs-only change can still break the guard.
+      # tests/unit/test_doc_examples_runnable.py execs these guides' own code
+      # blocks, so a docs-only change to any of them can still break the guard.
       - 'docs/quickstart.mdx'
+      - 'docs/sdk/core/custom-agents.mdx'
+      - 'docs/sdk/infrastructure/mcp.mdx'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
+      - 'docs/sdk/sdks/chat.mdx'
+      - 'docs/sdk/sdks/memory.mdx'
+      - 'docs/sdk/testing.mdx'
+      - 'docs/spec/database-mixin.mdx'
       # tests/unit/test_docs_json_release.py pins the navbar label and the
       # Releases nav to src/gaia/version.py, so a docs-only change can break
       # it too — and that is the exact drift that made v0.23.1 untaggable.
@@ -42,9 +49,16 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
-      # tests/unit/test_doc_examples_runnable.py execs this guide's own code
-      # blocks, so a docs-only change can still break the guard.
+      # tests/unit/test_doc_examples_runnable.py execs these guides' own code
+      # blocks, so a docs-only change to any of them can still break the guard.
       - 'docs/quickstart.mdx'
+      - 'docs/sdk/core/custom-agents.mdx'
+      - 'docs/sdk/infrastructure/mcp.mdx'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
+      - 'docs/sdk/sdks/chat.mdx'
+      - 'docs/sdk/sdks/memory.mdx'
+      - 'docs/sdk/testing.mdx'
+      - 'docs/spec/database-mixin.mdx'
       # tests/unit/test_docs_json_release.py pins the navbar label and the
       # Releases nav to src/gaia/version.py, so a docs-only change can break
       # it too — and that is the exact drift that made v0.23.1 untaggable.
