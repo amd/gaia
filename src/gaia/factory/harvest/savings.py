@@ -328,12 +328,13 @@ def main() -> None:
     ap.add_argument(
         "--projects", type=Path, default=Path.home() / ".claude" / "projects"
     )
-    ap.add_argument(
+    snapshot = ap.add_mutually_exclusive_group()
+    snapshot.add_argument(
         "--refresh",
         action="store_true",
         help="Re-measure the request snapshot instead of reusing requests.json.",
     )
-    ap.add_argument(
+    snapshot.add_argument(
         "--frozen",
         action="store_true",
         help="Use the existing snapshot even if scan has since seen new sessions.",

@@ -145,6 +145,8 @@ python -m gaia.factory.harvest.context --refresh > "$FACTORY/context.md"   # re-
 python -m gaia.factory.harvest.context --frozen  > "$FACTORY/context.md"   # keep the old snapshot on purpose
 ```
 
+The two flags are mutually exclusive; passing both is rejected.
+
 Both outputs carry a line naming the snapshot they were measured on, so a report
 always says which corpus it describes.
 

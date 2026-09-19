@@ -330,12 +330,13 @@ def main() -> None:
         help="Root of the raw Claude Code transcripts.",
     )
     ap.add_argument("--labels", type=Path, default=None)
-    ap.add_argument(
+    snapshot = ap.add_mutually_exclusive_group()
+    snapshot.add_argument(
         "--refresh",
         action="store_true",
         help="Re-measure the request snapshot instead of reusing requests.json.",
     )
-    ap.add_argument(
+    snapshot.add_argument(
         "--frozen",
         action="store_true",
         help="Use the existing snapshot even if scan has since seen new sessions.",

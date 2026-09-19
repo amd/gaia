@@ -13,6 +13,7 @@ import os
 
 import pytest
 
+from gaia.factory.harvest import context, savings
 from gaia.factory.harvest.context import (
     SNAPSHOT,
     require_fresh_snapshot,
@@ -70,3 +71,18 @@ def test_stamp_names_the_snapshot(tmp_path):
 
 def test_stamp_is_empty_without_a_snapshot(tmp_path):
     assert snapshot_stamp(tmp_path) == ""
+
+
+@pytest.mark.parametrize("module", [context, savings])
+def test_refresh_and_frozen_are_mutually_exclusive(
+    module, tmp_path, monkeypatch, capsys
+):
+    """Contradictory intents are rejected, not silently resolved to --refresh."""
+    monkeypatch.setattr(
+        "sys.argv",
+        [module.__name__, "--cache", str(tmp_path), "--refresh", "--frozen"],
+    )
+    with pytest.raises(SystemExit) as err:
+        module.main()
+    assert err.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
