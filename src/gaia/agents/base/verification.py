@@ -103,6 +103,45 @@ def _is_scope_line(line: str) -> bool:
     return bool(_SCOPE_BODY_RE.match(_SCOPE_MARKUP_RE.sub("", line)))
 
 
+_PYTEST_SUMMARY_RE = re.compile(
+    r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
+    r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$"
+)
+_UNITTEST_SUMMARY_RE = re.compile(
+    r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
+    r"(OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$"
+)
+
+
+def _python_run_output(result: Dict[str, Any]) -> str:
+    return "\n".join(
+        value
+        for key in ("stdout", "stderr")
+        if isinstance((value := result.get(key)), str)
+    )
+
+
+def summary_reports_failure(tool_name: str, result: Any) -> bool:
+    """True when a Python run's own test summary says something failed.
+
+    A snippet that runs pytest and prints the result exits 0 whatever pytest
+    reported, so its exit code cannot decide pass or fail. The last summary
+    printed wins: a snippet may run the suite more than once.
+    """
+    if (tool_name or "").strip() not in ("execute_python_file", "run_python"):
+        return False
+    if not isinstance(result, dict):
+        return False
+    output = _python_run_output(result)
+    summaries = list(_PYTEST_SUMMARY_RE.finditer(output))
+    if summaries and re.search(
+        r"\b[1-9]\d* (?:failed|errors?)\b", summaries[-1].group(0)
+    ):
+        return True
+    unittest = list(_UNITTEST_SUMMARY_RE.finditer(output))
+    return bool(unittest) and unittest[-1].group(1).startswith("FAILED")
+
+
 def verification_check_label(
     tool_name: str, tool_args: Any, result: Any = None
 ) -> Optional[str]:
@@ -119,26 +158,14 @@ def verification_check_label(
             or isinstance(return_code, bool)
         ):
             return None
-        output = "\n".join(
-            value
-            for key in ("stdout", "stderr")
-            if isinstance((value := result.get(key)), str)
-        )
-        summary = re.search(
-            r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
-            r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$",
-            output,
-        )
+        output = _python_run_output(result)
+        summary = _PYTEST_SUMMARY_RE.search(output)
         if summary and re.search(
             r"\b[1-9]\d* (?:passed|failed|error|errors|xfailed|xpassed)\b",
             summary.group(0),
         ):
             return "pytest"
-        if re.search(
-            r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
-            r"(?:OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$",
-            output,
-        ):
+        if _UNITTEST_SUMMARY_RE.search(output):
             return "unittest"
         return None
     if name in _CHECK_TOOLS:
