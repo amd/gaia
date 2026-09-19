@@ -366,7 +366,8 @@ jobs:
         if: always()
         run: gaia lemonade embedded stop
 
-      # The artifact is public and, unlike the job log, not secret-masked.
+      # The artifact is public and, unlike the job log, not secret-masked. The
+      # file list here must match the upload step's `path:` below.
       - name: Refuse to upload a credential
         if: always()
         env:
@@ -390,9 +391,14 @@ jobs:
             Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
             exit 1
           }
-          Write-Host "Scanned $($files.Count) file(s): no credential found."
+          if ($files.Count -eq 0) {
+            Write-Host "::warning::No scorecard under $env:TASKS_OUT - nothing was scanned, and nothing will upload."
+          } else {
+            Write-Host "Scanned $($files.Count) file(s): no credential found."
+          }
 
       # Scores only: transcripts and diffs stay on the runner; reproduce locally.
+      # Must match the scan step's -Include list above.
       - name: Upload the scorecard
         if: always()
         uses: actions/upload-artifact@v7
