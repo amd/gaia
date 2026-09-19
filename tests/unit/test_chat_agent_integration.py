@@ -405,6 +405,28 @@ class TestChatAgentScratchDirectory:
                 str(scratch / "run_tests.py"), prompt_user=False
             )
             assert str(scratch) in agent._get_system_prompt()
+            assert scratch == agent.path_validator.scratch_dir
+        finally:
+            agent.__del__()
+
+    def test_profile_without_file_writing_tools_gets_no_scratch_dir(self):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        # "chat" reads the shared registry; earlier agents' tools would leak in.
+        with patch.dict(_TOOL_REGISTRY, clear=True):
+            agent = _build_agent(prompt_profile="chat")
+            try:
+                assert "write_file" not in agent._tools_registry
+                assert agent.scratch_dir is None
+                assert agent.path_validator.scratch_dir is None
+                assert "Scratch directory" not in agent._get_system_prompt()
+            finally:
+                agent.__del__()
+
+    def test_cached_prompt_includes_the_scratch_line(self):
+        agent = _build_agent()
+        try:
+            assert str(agent.scratch_dir) in agent.system_prompt
         finally:
             agent.__del__()
 

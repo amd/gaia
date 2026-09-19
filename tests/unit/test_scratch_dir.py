@@ -2,12 +2,17 @@
 # SPDX-License-Identifier: MIT
 """The agent gets one scratch directory; the system temp dir stays out of scope."""
 
+import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.agents.tools.search_scope import search_roots
+from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
 
 
@@ -15,9 +20,7 @@ from gaia.security import PathValidator
 def scratch():
     path = Path(tempfile.mkdtemp(prefix="gaia-scratch-test-"))
     yield path
-    for child in path.iterdir():
-        child.unlink()
-    path.rmdir()
+    shutil.rmtree(path)
 
 
 @pytest.fixture
@@ -113,3 +116,56 @@ class TestScratchIsNotASearchRoot:
         host = type("Host", (), {"path_validator": v})()
 
         assert search_roots(host) == [project.resolve()]
+
+
+class TestToolDenialsNameTheScratchDir:
+    """Tools that build their own "not in allowed paths" error still add the hint."""
+
+    @pytest.fixture
+    def outside_temp(self):
+        path = Path(tempfile.mkdtemp(prefix="gaia-not-scratch-"))
+        yield path
+        shutil.rmtree(path)
+
+    @pytest.fixture
+    def no_prompt(self, validator):
+        with patch.object(validator, "_prompt_user_for_access", return_value=False):
+            yield
+
+    @pytest.fixture
+    def file_io_tools(self, validator, no_prompt):
+        host = FileIOToolsMixin()
+        host.path_validator = validator
+        host.console = None
+        with patch.dict(_TOOL_REGISTRY, clear=True):
+            host.register_file_io_tools()
+            yield {name: entry["function"] for name, entry in _TOOL_REGISTRY.items()}
+
+    def test_edit_file_denial_names_scratch_dir(
+        self, file_io_tools, outside_temp, scratch
+    ):
+        result = file_io_tools["edit_file"](
+            file_path=str(outside_temp / "x.py"), old_content="a", new_content="b"
+        )
+        assert result["status"] == "error"
+        assert str(scratch) in result["error"]
+
+    def test_search_code_denial_names_scratch_dir(
+        self, file_io_tools, outside_temp, scratch
+    ):
+        result = file_io_tools["search_code"](directory=str(outside_temp), pattern="x")
+        assert result["status"] == "error"
+        assert str(scratch) in result["error"]
+
+    def test_shell_working_directory_denial_names_scratch_dir(
+        self, validator, no_prompt, outside_temp, scratch
+    ):
+        host = ShellToolsMixin()
+        host.path_validator = validator
+        with patch.dict(_TOOL_REGISTRY, clear=True):
+            host.register_shell_tools()
+            result = _TOOL_REGISTRY["run_shell_command"]["function"](
+                command="ls", working_directory=str(outside_temp)
+            )
+        assert result["status"] == "error"
+        assert str(scratch) in result["error"]

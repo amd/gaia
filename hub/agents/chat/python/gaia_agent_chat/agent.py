@@ -76,6 +76,11 @@ from gaia.vlm.mixin import VLMToolsMixin
 # yet" and rebuilt on every access.
 _UNSET = object()
 
+# Tools that create files; an agent with none of them gets no scratch directory.
+_FILE_CREATING_TOOLS = frozenset(
+    {"write_file", "write_python_file", "write_markdown_file"}
+)
+
 # ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
 # through the child's environment, never as text inside ``-Command``. A "'" in
 # a model-supplied message would otherwise close the string literal and the
@@ -277,11 +282,8 @@ class ChatAgent(
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
         )
-        # Without this, throwaway scripts land in the user's project.
-        self.scratch_dir: Optional[Path] = Path(
-            tempfile.mkdtemp(prefix="gaia-scratch-")
-        )
-        self.path_validator.set_scratch_dir(str(self.scratch_dir))
+        # Created after tool registration, once we know the agent can write files.
+        self.scratch_dir: Optional[Path] = None
 
         # Store config for access in other methods
         self.config = config
@@ -479,6 +481,15 @@ class ChatAgent(
                 else 32768
             ),
         )
+
+        # Without this, throwaway scripts land in the user's project.
+        if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
+            self.path_validator.set_scratch_dir(
+                tempfile.mkdtemp(prefix="gaia-scratch-")
+            )
+            self.scratch_dir = self.path_validator.scratch_dir
+            # A prompt cached during init predates the scratch line.
+            self.__dict__.pop("_system_prompt_cache", None)
 
         # Index initial documents (only if RAG is available)
         if self.rag_documents and self.rag:
@@ -2619,7 +2630,7 @@ No documents are currently indexed.
                 self.scratch_dir = None
             except FileNotFoundError:
                 self.scratch_dir = None
-            except OSError as e:
+            except Exception as e:
                 logger.error(
                     "Could not remove scratch directory %s during cleanup: %s",
                     scratch_dir,
