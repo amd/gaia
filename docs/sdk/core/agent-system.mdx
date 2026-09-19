@@ -160,10 +160,16 @@ initialization errors and some backend recovery errors can raise to the caller.
 A call counts as a check when the tool is one of `run_tests`, `run_lint`,
 `typecheck`, or `build`, or when its `command` argument names a known runner
 (`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
-classifier also recognizes completed `execute_python_file` results containing a
-pytest summary or unittest run summary and an integer exit code. Reading a file
-containing test output, a refusal, or an ordinary script exit does not establish
-that tests ran. Other unrecognized runners remain `unverified`.
+classifier also recognizes completed `execute_python_file` and `run_python`
+results containing a pytest summary or unittest run summary and an integer exit
+code. Reading a file containing test output, a refusal, or an ordinary script
+exit does not establish that tests ran. Other unrecognized runners remain `unverified`.
+
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
 
 ## Conversation and context ownership
 
@@ -173,12 +179,44 @@ history persistence. Calling `process_query()` twice on a bare subclass does not
 by itself provide durable memory. Do not assign `result["conversation"]` as chat
 history without adapting its trace format to model messages.
 
-Large structured tool results are truncated using a context/device budget and the
-truncation is logged. Context-overflow recovery can replace older tool results with
+Large tool results are bounded before they reach the model; see
+[Large tool results](#large-tool-results). Context-overflow recovery can replace older tool results with
 explicit omission notices and shorten assistant text before a retry. This is
 bounded context recovery, not durable memory or a guarantee that every earlier
 result remains visible. Return focused, bounded tool results and use the relevant
 memory or retrieval capabilities when the application needs persistent knowledge.
+
+## Large tool results
+
+The agent applies a character budget to plain-string tool results as well as
+structured results before sending them to the model. Strings at or below the
+threshold remain unchanged. Oversized strings become a JSON envelope containing
+`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
+serialized envelope, including escaping, fits the target budget, so long logs
+retain both their initial context and final diagnostic lines. Structured excerpts
+retain whole records.
+
+Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
+for GPU/CPU. An omitted device follows the configured profile; FLM models retain
+the NPU budget. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens.
+
+An excerpt includes an `artifact` handle and `continuation: read_tool_output`.
+Call `read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
+`next_offset` is the next character offset, or `null` at the end. Pages are
+limited to 8,000 characters, and offsets count Unicode characters, not bytes. The
+archived text is the original string, or JSON for a structured result.
+
+Shell, Python execution and browser excerpts retain omitted output before
+applying their own display limits. File readers accept `offset` and `limit`
+for bounded text pages, including files too large for a full read. Their normal
+path permissions still apply; paging does not authorize a new path.
+
+Output handles belong to the producing agent process, expire after one hour,
+and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
+quota exhaustion return explicit errors. Restarting an agent invalidates its
+output handles; rerun the source tool if the session has ended. A continuation
+reads captured output rather than re-executing a potentially state-changing tool.
 
 ## Extension points
 

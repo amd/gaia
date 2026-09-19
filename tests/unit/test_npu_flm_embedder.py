@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from gaia.agents.base.memory_store import MemoryStore
+from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
 # Device -> embedder resolution
@@ -121,7 +122,7 @@ class TestDynamicDim:
         assert host._embedding_model == "embed-gemma-300m-FLM"
         # When faiss is available, the index is built at the derived dim, not
         # the module default. faiss is optional, so skip this leg without it.
-        pytest.importorskip("faiss")
+        require_faiss()
         assert host._faiss_index is not None
         assert host._faiss_index.d == 512
 

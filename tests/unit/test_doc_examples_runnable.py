@@ -161,6 +161,7 @@ def test_composition_example_registers_code_index_tools():
             "search_code_index",
             "get_index_status",
             "clear_code_index",
+            "read_tool_output",
         }
 
 

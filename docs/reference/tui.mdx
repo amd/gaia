@@ -63,7 +63,7 @@ transcript can therefore contain more detail than the model receives.
 
 | Action | Flagship subprocess | Daemon-backed session |
 | --- | --- | --- |
-| `/clear` | Clears the display only; child history, skills, and grants remain | Clears displayed and transmitted context, and drops the session ID |
+| `/clear` | Clears the display and the child's conversation context after it acknowledges; the process, model, skills, and grants remain | Clears displayed and transmitted context, and drops the session ID |
 | First Esc during a turn | Requests cooperative cancellation | Requests cancellation through the client |
 | Quit and relaunch | Starts a new child with fresh in-memory state | Starts a new client conversation; daemon lifecycle is separate |
 

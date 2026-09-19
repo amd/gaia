@@ -12,7 +12,7 @@ For application code that only needs document Q&A, start with the
 [Chat SDK's RAG methods](/sdk/sdks/chat). For agent composition, read the
 [tool-mixin guide](/sdk/mixins/tool-mixins) before adopting this component.
 
-## Registration and host requirements
+## Host agent contract
 
 Import `RAGToolsMixin` from `gaia.agents.tools.rag_tools` and call
 `self.register_rag_tools()` inside your agent's `_register_tools` hook.
@@ -39,9 +39,13 @@ universal boundary on every tool. A working reference is
 [ChatAgent](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py).
 
 Initialize required state before `Agent.__init__` calls `_register_tools`.
-Registration currently does not validate the contract; missing state may surface
-only on the first tool call. [#3316](https://github.com/amd/gaia/issues/3316)
-tracks enforcing this at registration time.
+Registration does not validate the contract. Only `rag` is enforced at the point
+of use: `query_documents` and `query_specific_file` raise
+`MissingHostAttributeError`, naming the host class and attribute, when it was
+never set. `None` remains a valid "RAG disabled" value. The other members are
+enforced by convention, so missing state may surface only on the first tool call.
+[#3316](https://github.com/amd/gaia/issues/3316) records why a construction-time
+check was rejected.
 
 ## Registered tools
 

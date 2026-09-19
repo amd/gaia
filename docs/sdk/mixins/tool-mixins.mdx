@@ -68,9 +68,11 @@ uv run python research_agent.py
 ```
 
 In a fresh process, this lists `clear_code_index`, `get_index_status`,
-`index_codebase`, and `search_code_index` without requesting inference or indexing
-files. To run a real query, construct it with your repository path and a configured
-backend, omitting `skip_lemonade=True`. Indexing also needs the
+`index_codebase`, `read_tool_output`, and `search_code_index` without requesting
+inference or indexing files. The base agent adds `read_tool_output` to any agent
+with tools so the model can recover output omitted from a large result. To run a
+real query, construct it with your repository path and a configured backend,
+omitting `skip_lemonade=True`. Indexing also needs the
 [code-index dependencies and embedding model](/sdk/sdks/code-index).
 The configured repository is the default file-scope ceiling.
 

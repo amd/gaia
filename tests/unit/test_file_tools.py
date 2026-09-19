@@ -1020,6 +1020,16 @@ class TestReadToolsSandbox:
         assert result["content"] == "no validator here"
 
 
+def test_large_text_file_supports_bounded_page(read_file_fn, tmp_path):
+    path = tmp_path / "large.txt"
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write("x" * 10_000_001 + "EXACT-MIDDLE")
+    result = read_file_fn(str(path), offset=10_000_001, limit=12)
+    assert result["status"] == "success"
+    assert result["content"] == "EXACT-MIDDLE"
+    assert result["next_offset"] is None
+
+
 @pytest.mark.parametrize("limit", [1, 20, 200])
 def test_recent_files_bounds_every_output_field(tmp_path, monkeypatch, limit):
     import os

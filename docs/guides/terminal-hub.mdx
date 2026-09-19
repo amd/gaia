@@ -108,27 +108,36 @@ or select a row with the mouse. `/help` shows the full shortcuts.
 | Command | Action |
 | --- | --- |
 | `/help` | Show help |
-| `/clear` | Clear the visible transcript; see session behavior below |
+| `/clear` | Clear the conversation; see session behavior below |
 | `/memory` | Inspect agent memory |
 | `/setup` | Run flagship setup |
 | `/model` | List models; `/model <id>` requests a switch |
 | `/provider` | Configure local or cloud inference |
 | `/bypass` | Show the warning before enabling permission bypass |
 | `/bypass off` | Restore tool confirmation |
+| `/agents` | List agents installed on this machine and switch to one without quitting |
 
 Commands that depend on a subprocess capability are unavailable on daemon-backed
 sessions. Permission bypass is off by default. A daemon-backed session rejects
 `--bypass-permissions`; it does not silently disable its approval policy.
+
+`/agents` is always available. Choosing a different agent reconnects in place and
+re-runs readiness for it; the transcript stays on screen with a divider, but the
+new agent never sees the conversation above it. `Esc` in the picker returns to the
+chat you were in.
 
 When a question appears, select an option with arrows, Tab, or its number and press
 Enter. Esc cancels the turn. Read the requested action before approving a tool.
 
 ## Clear or start over
 
-`/clear` clears the screen. With the flagship subprocess, the agent still retains
-its recent conversation, loaded skills, and temporary grants. To start a new
-subprocess conversation, quit while idle and relaunch `gaia-tui`. Persistent
-memory remains available after relaunch.
+With the flagship subprocess, `/clear` clears the agent's conversation context as
+well as the screen. The agent keeps its running process, selected model, loaded
+skills, and permission settings. If the agent cannot acknowledge the reset, the
+transcript stays visible with an error. Legacy `--subprocess` and `--mock`
+connections clear only the view and say that the agent-side context is unchanged.
+To also drop loaded skills and temporary grants, quit while idle and relaunch
+`gaia-tui`. Persistent memory remains available after relaunch.
 
 On a daemon-backed session, `/clear` also drops the client’s conversation context
 and session ID, so the next message starts a new session. Neither path deletes
@@ -145,6 +154,9 @@ gaia-tui run email --query "How many unread messages do I have?" --timeout 90s
 
 Only trust packages whose publisher and requested access you accept. Installation
 and removal belong to the Python CLI, not the terminal client.
+
+The chat header's `agent <id>` segment is the stable, lowercase id that
+`run <id>` and `chat --agent <id>` accept.
 
 For `run --query` and `chat --agent --query`, the answer goes to stdout and progress
 to stderr. Exit `0` means answered without an unrecovered failure, `1` means failure,

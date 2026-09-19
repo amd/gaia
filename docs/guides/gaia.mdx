@@ -63,6 +63,7 @@ that ran during the turn. `verified` means the recognized tests, lint checks,
 or builds ran and passed; `partially verified` means at least one check ran, but a check failed or another
 remained blocked; `unverified` means no recognized check ran. A refused command is reported
 as not run. Reading a file or producing a summary alone does not count as a test.
+A check that ran more than once is judged by its most recent run of the same command.
 
 This line describes the checks GAIA observed, not independent proof that every
 claim in the answer is correct. Inspect the named checks and their scope when
@@ -72,21 +73,24 @@ reviewing a code change.
 
 The full registry includes the following tool groups. Dynamic selection sends a
 subset to the model on each call; `load_tools` can bring in additional groups
-mid-turn. The registered count is not the per-call prompt size.
+mid-turn. The registered count is not the per-call prompt size. The default
+construction registers 80 tools; `search_documentation` registers only when `npx`
+is on your PATH, so without Node.js the count is 79.
 
 | Area | Main tools |
 | --- | --- |
 | Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `summarize_document`, `search_indexed_chunks` |
-| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file_content`, `browse_directory`, `tree` |
+| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file_content`, `browse_directory`, `tree`, `run_python` |
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
+| Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Audio/video | `transcribe_media`, `refine_transcript` |
 | Desktop/system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `load_tools` |
+| Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
 Document Q&A supports PDF, Word, PowerPoint, and text. Data tools query CSV/Excel
 content through a local SQL scratchpad. Audio tools save and refine transcripts;
@@ -96,14 +100,16 @@ Diffusion and can evict the resident chat model, requiring a reload afterward.
 `run_shell_command` applies an allowlist and rate limit. An active skill grant
 can allow a named CLI under its command policy: covered read-only calls can run
 without another prompt, while confirmable writes still require approval. This
-is not unrestricted shell execution.
+is not unrestricted shell execution. `run_python` runs a Python snippet from the
+project root and returns its output, so the agent can compute or check something
+without leaving a script in your project.
 
 ## Permissions and file scope
 
 The built-in tools subject to confirmation policy include `write_file`, `edit_file`,
-`run_shell_command`, `execute_python_file`, `notify_desktop`, `install_skill`, and
-`remove_skill`. The stdio terminal displays confirmations and returns your decision;
-bypass mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
+`run_shell_command`, `execute_python_file`, `run_python`, `notify_desktop`,
+`install_skill`, and `remove_skill`. The stdio terminal displays confirmations and
+returns your decision; bypass mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
 
 The native terminal normally starts a persistent **stdio subprocess**, which
 can ask for approval. A flagship installed as a Hub binary uses a
