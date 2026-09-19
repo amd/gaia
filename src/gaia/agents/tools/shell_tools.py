@@ -20,13 +20,16 @@ from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
 
-# Commands that run WITHOUT ASKING — not the set of commands that exist.
+# The no-prompt list: what a blanket pre-approval may run — not the set of
+# commands that exist.
 #
-# Membership here buys one thing: no confirmation prompt. A command that is not
-# on this list is not refused; it is shown to the user, who approves it or does
-# not (``TIER_CONFIRM``). That distinction is the whole permission model — an
-# allowlist used as a refusal list makes the agent unable to do ordinary work
-# its user is sitting right there to approve.
+# ``run_shell_command`` is confirmation-gated, so interactively every call is
+# shown to the user. A command that is not on this list is not refused; it is
+# shown the same way and runs if approved (``TIER_CONFIRM``). Membership buys
+# one thing: running under ``GAIA_AUTO_APPROVE_TOOLS`` or
+# ``auto_approve_gated_tools``, which refuse everything else. An allowlist used
+# as a refusal list makes the agent unable to do ordinary work its user is
+# sitting right there to approve.
 #
 # So the bar for adding an entry is "safe to run unattended, every time, with
 # arguments nobody reviewed", which in practice still means read-only.
@@ -131,19 +134,16 @@ DANGEROUS_FIND_ACTIONS = {
 # `rm file`. The user is shown the exact command and answers y / n / always.
 # These MUST NOT be refused here — refusing a command that would run on
 # approval is the dead end this tier exists to remove.
+#
+# Only an explicit TIER_CONFIRM reaches the prompt. A block with no tier is
+# refused, so a guard that forgets to say which tier it is fails closed.
 TIER_CONFIRM = "confirm"
 TIER_REFUSE = "refuse"
 
 
-def _blocked(tier: str, error: str, **extra) -> dict:
-    """One blocked-command result, tagged with the tier that decided it."""
-    return {
-        "status": "error",
-        "error": error,
-        "has_errors": True,
-        "tier": tier,
-        **extra,
-    }
+def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
+    """True when *error* is a block the user may approve at the prompt."""
+    return error is not None and error.get("tier") == TIER_CONFIRM
 
 
 # Safe read-only git subcommands
@@ -470,6 +470,26 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
+#: Another name for a program the rules below already cover.
+_PROGRAM_ALIASES = {"pwsh": "powershell"}
+
+
+def _program_behind(token: str) -> Optional[str]:
+    """The bare program *token* names when it spells one another way, else None.
+
+    ``/usr/bin/git``, ``git.exe`` and ``pwsh`` run the programs the rules below
+    call ``git`` and ``powershell``, so they earn the same refusals. They never
+    earn the no-prompt pass: that list names bare programs only.
+    """
+    if token in ALLOWED_COMMANDS:
+        return None
+    name = re.split(r"[\\/]", token)[-1]
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    name = _PROGRAM_ALIASES.get(name, name)
+    return name if name and name != token else None
+
+
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
     """True when *token* names a CLI this agent's skills granted."""
     if not granted:
@@ -643,9 +663,9 @@ class ShellToolsMixin:
 
         ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
         through to the prompt: refusing a command that would run on approval is
-        the dead end this tier removes. The exception is a run where only
-        ``GAIA_AUTO_APPROVE_TOOLS`` would approve it; see
-        :meth:`_approval_is_environment_only`.
+        the dead end this tier removes. The exception is a run where only a
+        blanket pre-approval would answer the prompt; see
+        :meth:`_approval_is_blanket_only`.
 
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -658,10 +678,10 @@ class ShellToolsMixin:
         error, _ = self._validate_shell_command(command)
         if error is None:
             return None
-        if error.get("tier") != TIER_REFUSE:
-            if not self._approval_is_environment_only():
+        if _reaches_the_prompt(error):
+            if not self._approval_is_blanket_only():
                 return None
-            error = self._environment_only_refusal(error)
+            error = self._blanket_approval_refusal(error)
         logger.info(
             "Refusing %r before the confirmation prompt: %s",
             command,
@@ -669,33 +689,36 @@ class ShellToolsMixin:
         )
         return error
 
-    def _approval_is_environment_only(self) -> bool:
-        """True when nothing but ``GAIA_AUTO_APPROVE_TOOLS`` would approve a prompt.
+    def _approval_is_blanket_only(self) -> bool:
+        """True when only a blanket pre-approval would answer a prompt.
 
-        A host that opted in explicitly (the TUI's full access sets
-        ``auto_approve_gated_tools`` on the turn's handler) is a person deciding
-        for this session. The environment variable is a blanket pre-approval for
-        unattended runs, granted when commands outside the no-prompt list could
-        not be approved at all; it never agreed to widen what those runs execute.
+        ``GAIA_AUTO_APPROVE_TOOLS`` and ``auto_approve_gated_tools=True`` both
+        pre-approve for unattended runs. They were granted when commands outside
+        the no-prompt list could not be approved at all, so neither widens what
+        such a run executes. Only the console's ``full_access`` (the TUI's
+        ``/full-access``, on screen for the whole session) runs them unasked.
         """
         console = getattr(self, "console", None)
-        if bool(getattr(console, "auto_approve_gated_tools", False)):
+        if getattr(console, "full_access", False) is True:
             return False
+        if getattr(console, "auto_approve_gated_tools", False):
+            return True
         # Deferred: the console module imports the package root.
         from gaia.agents.base import console as console_mod
 
         return console_mod.auto_approve_env_enabled()
 
     @staticmethod
-    def _environment_only_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
+    def _blanket_approval_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
         """A confirmable command's block, re-explained for an unattended run."""
         return {
             **error,
             "tier": TIER_REFUSE,
             "hint": (
-                "This run approves prompts through GAIA_AUTO_APPROVE_TOOLS, which "
-                "does not extend to commands outside the no-prompt list. Run it "
-                "interactively to approve it, or turn on full access in the TUI."
+                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
+                "or auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list. Run it interactively to approve it, "
+                "or turn on full access in the TUI."
             ),
         }
 
@@ -866,6 +889,16 @@ class ShellToolsMixin:
             classify_invocation,
             normalize_binary,
         )
+
+        program = _program_behind(cmd_base)
+        if program is not None:
+            # A refusal follows the program, not its spelling; what it would
+            # merely ask about still asks, as the unlisted spelling below.
+            behind = ShellToolsMixin._validate_command(
+                program, [program, *cmd_parts[1:]], command
+            )
+            if behind is not None and not _reaches_the_prompt(behind):
+                return behind
 
         binary = normalize_binary(cmd_base)
         policy = BINARY_POLICIES.get(binary)
@@ -1266,13 +1299,13 @@ class ShellToolsMixin:
                 # A CONFIRM-tier command has already been through
                 # ``Agent._execute_tool``'s gate (the same single funnel that has
                 # always gated ``write_file``), so it runs here unless the only
-                # approval was the environment opt-in.
-                env_only = self._approval_is_environment_only()
+                # approval was a blanket pre-approval.
+                blanket_only = self._approval_is_blanket_only()
                 error, segments = self._validate_shell_command(command)
-                if error and error.get("tier") != TIER_REFUSE and env_only:
-                    return self._environment_only_refusal(error)
-                if error and error.get("tier") == TIER_REFUSE:
+                if error and not _reaches_the_prompt(error):
                     return error
+                if error and blanket_only:
+                    return self._blanket_approval_refusal(error)
 
                 granted = skill_granted_binaries(self)
                 cmd_parts = [part for segment in segments for part in segment]
@@ -1350,7 +1383,7 @@ class ShellToolsMixin:
                         command if len(segments) == 1 else " ".join(seg),
                         granted_binaries=granted,
                     )
-                    if error and (error.get("tier") == TIER_REFUSE or env_only):
+                    if error and (not _reaches_the_prompt(error) or blanket_only):
                         return error
 
                 # Log command execution (debug mode)

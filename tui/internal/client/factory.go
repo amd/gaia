@@ -46,10 +46,10 @@ type ForAgentOptions struct {
 // FullAccessFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
 // SubprocessClient.FullAccessAtLaunch scans argv for exactly this string.
-// The flag passed to the AGENT CHILD, deliberately still the old spelling.
-// The sidecar ships and versions separately from this TUI, so a newer TUI can
-// be paired with an older agent; renaming it here would break that pairing.
-// The user-facing flag is --full-access (see cli.root).
+// Deliberately the same name as the TUI's own flag: an agent too old to know
+// it exits on the unrecognized argument instead of starting with prompts on
+// under a full-access banner, and a new agent refuses the retired
+// --bypass-permissions the same way.
 const FullAccessFlag = "--full-access"
 
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's

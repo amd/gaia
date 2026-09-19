@@ -82,6 +82,12 @@ class GaiaConfig:
     }
 
     @classmethod
+    def _is_bool_field(cls, key: str) -> bool:
+        """True when *key* is declared ``bool``."""
+        declared = {f.name: f.type for f in fields(cls)}.get(key)
+        return declared is bool or declared == "bool"
+
+    @classmethod
     def _coerce(cls, key: str, value: Any) -> Any:
         """Convert a raw value to the type the field declares.
 
@@ -89,9 +95,7 @@ class GaiaConfig:
         given ``"false"`` would otherwise be stored truthy and read back as
         enabled.
         """
-        declared = {f.name: f.type for f in fields(cls)}.get(key)
-        is_bool = declared is bool or declared == "bool"
-        if not is_bool or isinstance(value, bool):
+        if not cls._is_bool_field(key) or isinstance(value, bool):
             return value
         word = str(value).strip().lower()
         if word not in cls._BOOL_WORDS:
@@ -151,9 +155,17 @@ class GaiaConfig:
             )
 
         known = set(cls.field_names())
-        # Coerce on the way in too: config.json is hand-editable, and
-        # "full_access": "no" must not read back as enabled.
-        kwargs = {k: cls._coerce(k, v) for k, v in data.items() if k in known}
+        for key, value in data.items():
+            # Strict, as the TUI's reader is: a string is never a true/false
+            # setting on disk, so "yes" cannot mean on here and off there.
+            if key in known and cls._is_bool_field(key):
+                if not isinstance(value, bool):
+                    raise GaiaConfigError(
+                        f"GAIA config at {config_file}: '{key}' must be true or "
+                        f"false (unquoted), but it is {value!r}. Fix it by hand, "
+                        f"or delete the key to go back to the default."
+                    )
+        kwargs = {k: v for k, v in data.items() if k in known}
         return cls(**kwargs)
 
     def save(self, path: Optional[Path] = None) -> None:

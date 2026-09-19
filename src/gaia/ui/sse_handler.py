@@ -977,9 +977,7 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": (
-                        f"Full access is ON — ran '{tool_name}' without " "asking."
-                    ),
+                    "message": f"Full access is ON — ran '{tool_name}' without asking.",
                 }
             )
             return True

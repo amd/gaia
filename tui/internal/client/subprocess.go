@@ -761,7 +761,7 @@ func (s *SubprocessClient) FullAccessAtLaunch() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, a := range s.args {
-		if a == "--full-access" {
+		if a == FullAccessFlag {
 			return true
 		}
 	}

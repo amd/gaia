@@ -537,17 +537,25 @@ class TestFullAccessSetting:
         with pytest.raises(self._err(), match="true/false"):
             self._cfg()().set("full_access", junk)
 
-    def test_a_hand_edited_string_is_coerced_on_load(self, tmp_path):
-        """config.json is hand-editable; "no" must not read back as enabled."""
-        path = tmp_path / "config.json"
-        path.write_text('{"full_access": "no"}', encoding="utf-8")
-        assert self._cfg().load(path).full_access is False
+    @pytest.mark.parametrize(
+        "raw", ['"yes"', '"true"', '"no"', '"false"', '"sometimes"', "1", "0", "null"]
+    )
+    def test_a_hand_edited_non_boolean_fails_loudly_on_load(self, tmp_path, raw):
+        """Strict on disk, like the TUI's reader, so the two never disagree.
 
-    def test_a_hand_edited_unreadable_value_fails_loudly(self, tmp_path):
+        The TUI reads anything but a JSON boolean as off; reading ``"yes"`` as
+        on here would give opposite answers from one file.
+        """
         path = tmp_path / "config.json"
-        path.write_text('{"full_access": "sometimes"}', encoding="utf-8")
-        with pytest.raises(self._err(), match="true/false"):
+        path.write_text(f'{{"full_access": {raw}}}', encoding="utf-8")
+        with pytest.raises(self._err(), match="must be true or false"):
             self._cfg().load(path)
+
+    @pytest.mark.parametrize("raw,expected", [("true", True), ("false", False)])
+    def test_a_json_boolean_loads_as_itself(self, tmp_path, raw, expected):
+        path = tmp_path / "config.json"
+        path.write_text(f'{{"full_access": {raw}}}', encoding="utf-8")
+        assert self._cfg().load(path).full_access is expected
 
     def test_round_trips_through_the_file(self, tmp_path):
         path = tmp_path / "config.json"

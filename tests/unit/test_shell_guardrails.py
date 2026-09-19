@@ -622,24 +622,40 @@ class TestPowerShellRunsAFileInsteadOfACmdlet:
 
 
 class _Host(ShellToolsMixin):
-    """A host whose console says how a prompt would be approved."""
+    """A host whose console says how a prompt would be approved.
+
+    ``full_access`` is the TUI's switch, which sets both attributes the way
+    ``gaia_agent.stdio.PermissionState`` does. ``auto_approve`` alone is an
+    SDK embedder's unattended opt-in.
+    """
 
     debug = False
 
-    def __init__(self, host_opt_in=False):
+    def __init__(self, full_access=False, auto_approve=False):
         super().__init__()
 
         class _Console:
-            auto_approve_gated_tools = host_opt_in
+            pass
 
         self.console = _Console()
+        self.console.auto_approve_gated_tools = full_access or auto_approve
+        self.console.full_access = full_access
 
 
-def refusal(command, host_opt_in=False):
+def refusal(command, full_access=False, auto_approve=False):
     """What the pre-prompt gate returns -- None means the user gets asked."""
-    return _Host(host_opt_in).policy_refusal_for_call(
+    return _Host(full_access, auto_approve).policy_refusal_for_call(
         "run_shell_command", {"command": command}
     )
+
+
+def run_tool(host, command, cwd):
+    """Call run_shell_command directly, the way a pre-approved call reaches it."""
+    from gaia.agents.base.tools import get_tool_metadata
+
+    host.register_shell_tools()
+    run = get_tool_metadata("run_shell_command")["function"]
+    return run(command=command, working_directory=str(cwd))
 
 
 @pytest.fixture
@@ -685,6 +701,49 @@ class TestTiers:
         error, _ = _Host()._validate_shell_command(command)
         assert error["tier"] == TIER_REFUSE
 
+    def test_a_block_with_no_tier_is_refused_not_asked(self, monkeypatch):
+        """A guard that forgets its tier fails closed instead of reaching a yes."""
+        monkeypatch.setattr(
+            ShellToolsMixin,
+            "_validate_command",
+            staticmethod(lambda *a, **k: {"status": "error", "error": "no tier"}),
+        )
+        assert refusal("npm test") is not None
+
+
+class TestASpellingDoesNotChangeTheTier:
+    """A refusal follows the program, however its name is written."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/bin/git -c core.pager=evil.sh status",
+            "git.exe -c core.pager=evil.sh status",
+            '"C:\\Program Files\\Git\\cmd\\git.exe" -c core.pager=x status',
+            "/usr/local/bin/powershell -EncodedCommand aQBlAHgA",
+            "pwsh -EncodedCommand aQBlAHgA",
+            "pwsh.exe -enc aQBlAHgA",
+            "/opt/homebrew/bin/gh auth token",
+        ],
+    )
+    def test_a_refused_invocation_stays_refused_by_path_or_alias(self, command):
+        assert refusal(command) is not None
+        assert refusal(command, full_access=True) is not None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/bin/git status",
+            "git.exe log --oneline",
+            "pwsh -Command Get-Process",
+            "/opt/homebrew/bin/gh issue list",
+        ],
+    )
+    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(self, command):
+        """The no-prompt list names bare programs; nothing else joins it."""
+        assert validate(command)["tier"] == TIER_CONFIRM
+        assert refusal(command) is None
+
 
 class TestConfirmableCommandsReachThePrompt:
     """The regression this tier exists to prevent: refusing an approvable call."""
@@ -699,12 +758,17 @@ class TestConfirmableCommandsReachThePrompt:
     @pytest.mark.parametrize(
         "command", ["git -c core.pager=evil.sh status", "cat a && rm b"]
     )
-    def test_refused_escalations_stay_refused_even_with_a_host_opt_in(self, command):
-        assert refusal(command, host_opt_in=True) is not None
+    def test_refused_escalations_stay_refused_even_with_full_access(self, command):
+        assert refusal(command, full_access=True) is not None
 
 
-class TestEnvironmentOnlyApproval:
-    """GAIA_AUTO_APPROVE_TOOLS skips prompts; it never widened what a run executes."""
+class TestBlanketApproval:
+    """A blanket pre-approval skips prompts; it never widens what a run executes.
+
+    Two doors lead to one: GAIA_AUTO_APPROVE_TOOLS, and an embedder passing
+    ``auto_approve_gated_tools=True``. Only full access -- a person's choice,
+    on screen for the session -- runs a command outside the no-prompt list.
+    """
 
     def test_a_confirmable_command_is_refused_when_only_the_env_approves(
         self, env_pre_approves
@@ -713,32 +777,30 @@ class TestEnvironmentOnlyApproval:
         assert error is not None
         assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
 
-    def test_the_no_prompt_list_still_runs_under_the_env(self, env_pre_approves):
-        assert refusal("git status") is None
+    def test_an_embedders_opt_in_is_refused_the_same_way(self):
+        error = refusal("rm notes.txt", auto_approve=True)
+        assert error is not None
+        assert "auto_approve_gated_tools" in error["hint"]
 
-    def test_a_host_opt_in_is_a_person_deciding(self, env_pre_approves):
-        """The TUI's full access sets the handler attribute, not the env var."""
-        assert refusal("rm notes.txt", host_opt_in=True) is None
+    def test_the_no_prompt_list_still_runs_under_either(self, env_pre_approves):
+        assert refusal("git status") is None
+        assert refusal("git status", auto_approve=True) is None
+
+    def test_full_access_is_a_person_deciding(self, env_pre_approves):
+        assert refusal("rm notes.txt", full_access=True) is None
 
     def test_the_execution_path_refuses_too(self, env_pre_approves, tmp_path):
         """Defence in depth: a direct tool call never skips the same rule."""
-        from gaia.agents.base.tools import get_tool_metadata
-
-        host = _Host()
-        host.register_shell_tools()
-        run = get_tool_metadata("run_shell_command")["function"]
-
-        result = run(command="touch made.txt", working_directory=str(tmp_path))
+        result = run_tool(_Host(), "touch made.txt", tmp_path)
         assert result["status"] == "error"
         assert not (tmp_path / "made.txt").exists()
 
-    def test_a_host_opt_in_runs_it(self, env_pre_approves, tmp_path):
-        from gaia.agents.base.tools import get_tool_metadata
+    def test_the_execution_path_refuses_an_embedders_opt_in(self, tmp_path):
+        result = run_tool(_Host(auto_approve=True), "touch made.txt", tmp_path)
+        assert result["status"] == "error"
+        assert not (tmp_path / "made.txt").exists()
 
-        host = _Host(host_opt_in=True)
-        host.register_shell_tools()
-        run = get_tool_metadata("run_shell_command")["function"]
-
-        result = run(command="touch made.txt", working_directory=str(tmp_path))
+    def test_full_access_runs_it(self, env_pre_approves, tmp_path):
+        result = run_tool(_Host(full_access=True), "touch made.txt", tmp_path)
         assert result["status"] == "success", result
         assert (tmp_path / "made.txt").exists()

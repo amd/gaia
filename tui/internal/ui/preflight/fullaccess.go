@@ -29,7 +29,9 @@ import (
 //     and the launch notice says WHICH source turned it on, so "why is this
 //     on?" always has a visible answer.
 //   - Unreadable or absent means OFF. A config that cannot be parsed must not
-//     be read as permission; the safe direction is the silent one.
+//     be read as permission; the safe direction is the silent one. Only a
+//     JSON boolean counts: GaiaConfig.load refuses a string like "yes" for
+//     this key, so the two readers of this file never disagree.
 
 // FullAccessConfig is the persisted preference plus where it came from, so the
 // UI can tell the user which file to edit without guessing the path again.

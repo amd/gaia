@@ -186,12 +186,14 @@ class PermissionState:
             self._full_access = enabled
             if self._handler is not None:
                 self._handler.auto_approve_gated_tools = enabled
+                self._handler.full_access = enabled
         audit.warning("Full access %s", "ENABLED" if enabled else "disabled")
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
             handler.auto_approve_gated_tools = self._full_access
+            handler.full_access = self._full_access
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The

@@ -199,6 +199,25 @@ class TestFullAccessMode:
     def test_off_by_default(self):
         assert PermissionState().full_access is False
 
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_the_handler_is_told_it_is_full_access_not_just_auto_approve(self, enabled):
+        """The shell widens only on ``full_access``; auto-approve alone is the
+        unattended opt-in and must not run commands off the read-only list."""
+
+        class _Handler:
+            def session_grants(self):
+                return set()
+
+        state = PermissionState(full_access=enabled)
+        handler = _Handler()
+        state.attach(handler)
+        assert handler.full_access is enabled
+        assert handler.auto_approve_gated_tools is enabled
+
+        state.set_full_access(not enabled)
+        assert handler.full_access is (not enabled)
+        assert handler.auto_approve_gated_tools is (not enabled)
+
     def test_on_runs_gated_tools_without_asking(self):
         state = PermissionState()
         state.set_full_access(True)

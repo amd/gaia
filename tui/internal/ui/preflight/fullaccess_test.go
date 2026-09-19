@@ -30,6 +30,8 @@ func TestReadFullAccessOffWhenNothingSaysOtherwise(t *testing.T) {
 		"explicitoff": `{"full_access":false}`,
 		"corrupt":     `{not json`,
 		"wrong-type":  `{"full_access":"yes"}`,
+		"string-true": `{"full_access":"true"}`,
+		"number":      `{"full_access":1}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(dir, name+".json")
