@@ -82,6 +82,9 @@ class AudioClient:
         use_claude=False,
         use_chatgpt=False,
         system_prompt=None,
+        model=None,
+        claude_model="claude-sonnet-5",
+        base_url=None,
     ):
         """
         Initialize audio client.
@@ -97,6 +100,9 @@ class AudioClient:
             use_claude: Use Claude API for LLM
             use_chatgpt: Use ChatGPT API for LLM
             system_prompt: Default system prompt for LLM
+            model: Model ID for the local/OpenAI provider (None = provider default)
+            claude_model: Claude model ID, used when use_claude=True
+            base_url: Lemonade server URL (None = LEMONADE_BASE_URL or default)
         """
         pass
 
@@ -118,6 +124,9 @@ class AudioClient:
         """
         Process transcribed voice input and get AI response.
 
+        Capture stays paused until streamed playback has fully finished;
+        transcriptions queued meanwhile are discarded before capture resumes.
+
         Args:
             text: Transcribed text to process
             get_stats_callback: Optional callback for performance stats
@@ -125,7 +134,15 @@ class AudioClient:
         pass
 
     async def speak_text(self, text: str):
-        """Speak text using TTS."""
+        """Speak text using TTS.
+
+        Returns once playback has finished. The microphone is paused for the
+        whole utterance and anything transcribed meanwhile is discarded, so
+        the assistant never hears its own reply as the next user turn.
+        Playback cleanup is bounded by synthesized audio duration plus five
+        seconds. On a device timeout, the call raises and capture stays paused;
+        restart voice chat after checking the output device.
+        """
         pass
 
     async def halt_generation(self):

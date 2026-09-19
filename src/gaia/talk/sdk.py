@@ -14,6 +14,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional
 from gaia.audio.audio_client import AudioClient
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 
@@ -47,6 +48,10 @@ class TalkConfig:
     # General settings
     use_claude: bool = False  # Use Claude API
     use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    claude_model: str = DEFAULT_CLAUDE_MODEL  # Claude model when use_claude=True
+    base_url: Optional[str] = (
+        None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
+    )
     show_stats: bool = False
     logging_level: str = "INFO"
 
@@ -121,6 +126,8 @@ class TalkSDK:
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,
             use_chatgpt=self.config.use_chatgpt,
+            claude_model=self.config.claude_model,
+            base_url=self.config.base_url,
         )
         self.chat_sdk = AgentSDK(chat_config)
 
@@ -135,6 +142,9 @@ class TalkSDK:
             use_claude=self.config.use_claude,
             use_chatgpt=self.config.use_chatgpt,
             system_prompt=self.config.system_prompt,
+            model=self.config.model,
+            claude_model=self.config.claude_model,
+            base_url=self.config.base_url,
         )
 
         self.show_stats = self.config.show_stats

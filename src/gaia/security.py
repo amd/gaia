@@ -364,6 +364,7 @@ class PathValidator:
         allowed_paths: Optional[List[str]] = None,
         on_prompt_start: Optional[Callable[[], None]] = None,
         on_prompt_end: Optional[Callable[[], None]] = None,
+        interactive_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize PathValidator.
@@ -379,6 +380,11 @@ class PathValidator:
                 user for input (e.g. to pause a progress spinner).
             on_prompt_end: Optional callback invoked after user input is
                 collected (e.g. to resume a progress spinner).
+            interactive_check: Optional predicate answering "is the *requester*
+                reachable on this process's stdin?". A TTY alone does not mean
+                yes — a server launched from a terminal has one, but its users
+                are on HTTP. Evaluated per prompt, so a host that swaps the
+                agent's console mid-session is honoured.
         """
         self.allowed_paths: Set[Path] = set()
 
@@ -405,6 +411,7 @@ class PathValidator:
         # indicators that would otherwise race with ``input()`` on stdout).
         self._on_prompt_start = on_prompt_start
         self._on_prompt_end = on_prompt_end
+        self._interactive_check = interactive_check
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -531,6 +538,14 @@ class PathValidator:
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
+    def _can_prompt(self) -> bool:
+        """True when a blocking ``input()`` would actually reach the requester."""
+        if not _is_interactive():
+            return False
+        if self._interactive_check is None:
+            return True
+        return bool(self._interactive_check())
+
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
         Check if a path is allowed. If not, optionally prompt the user.
@@ -601,10 +616,11 @@ class PathValidator:
         agent surfaces a clean "access denied" error instead of hanging.
         Interactive CLI usage (TTY) still prompts normally.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.warning(
-                "Path %s outside allowlist; auto-denying (non-interactive "
-                "context — no TTY). Configure allowed_paths to grant access.",
+                "Path %s outside allowlist; auto-denying (no interactive "
+                "requester on this process's stdin). Configure allowed_paths "
+                "to grant access.",
                 path,
             )
             return False
@@ -883,9 +899,10 @@ class PathValidator:
         Returns:
             True if user approves overwrite (or non-interactive), False otherwise.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.info(
-                "Auto-approving overwrite of %s (non-interactive context, "
+                "Auto-approving overwrite of %s (no interactive requester on "
+                "this process's stdin, "
                 "backup will be created)",
                 path,
             )

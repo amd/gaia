@@ -11,6 +11,39 @@ import numpy as np
 import pytest
 
 
+@pytest.mark.parametrize("resume", [False, True])
+def test_streaming_asr_drains_paused_audio_and_discards_overlap(mock_sd, resume):
+    from gaia.audio.audio_recorder import AudioRecorder
+    from gaia.audio.whisper_asr import WhisperAsr
+
+    asr = WhisperAsr.__new__(WhisperAsr)
+    AudioRecorder.__init__(asr, device_index=0)
+    asr.RATE = 10
+    asr.CHUNK = 10
+    asr.is_recording = True
+    reads = 0
+
+    def read(_size):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            asr.pause_recording()
+        if reads == 3:
+            if resume:
+                asr.resume_recording()
+            asr.is_recording = False
+        return np.full((10, 1), reads, dtype=np.float32), False
+
+    mock_sd.InputStream.return_value.read.side_effect = read
+    with patch("gaia.audio.whisper_asr.sd", mock_sd):
+        asr._record_audio_streaming()
+
+    assert reads == 3, "paused capture must drain the device instead of sleeping"
+    if resume:
+        np.testing.assert_array_equal(asr.audio_queue.get_nowait(), np.full(10, 3))
+    assert asr.audio_queue.empty()
+
+
 @pytest.fixture
 def mock_sd():
     """Mock sounddevice module."""
@@ -184,3 +217,38 @@ class TestRecording:
         assert not recorder.is_paused
 
         recorder.stop_recording()
+
+
+class TestPauseAndCaptureFailure:
+    def test_pause_discards_mic_audio_but_keeps_draining(self, recorder, mock_sd):
+        """While paused the device is read and thrown away, never queued."""
+        mock_stream = mock_sd.InputStream.return_value
+        loud_audio = np.full((2048, 1), 0.1, dtype=np.float32)
+        mock_stream.read.return_value = (loud_audio, False)
+
+        recorder.pause_recording()
+        recorder.is_recording = True
+        recorder.record_thread = threading.Thread(target=recorder._record_audio)
+        recorder.record_thread.start()
+        try:
+            time.sleep(0.5)
+        finally:
+            recorder.is_recording = False
+            recorder.record_thread.join(timeout=2.0)
+
+        assert mock_stream.read.call_count > 1
+        assert recorder.audio_queue.empty()
+
+    def test_dead_capture_thread_reads_as_not_recording(self, recorder, mock_sd):
+        """A device error must not leave callers waiting on 'Listening...'."""
+        mock_stream = mock_sd.InputStream.return_value
+        mock_stream.read.side_effect = OSError("device unplugged")
+
+        recorder.start_recording()
+        try:
+            recorder.record_thread.join(timeout=2.0)
+            assert not recorder.is_recording
+            assert recorder.capture_failed
+        finally:
+            recorder.stop_recording()  # also ends the non-daemon process thread
+        assert not recorder.capture_failed
