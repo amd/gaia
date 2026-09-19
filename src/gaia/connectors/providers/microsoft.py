@@ -287,6 +287,17 @@ class MicrosoftOAuthProvider:
         self.device_code_url: str = (
             f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/devicecode"
         )
+        # The Microsoft identity platform has no public endpoint that revokes
+        # a single app's refresh/access token (#2591). The closest primitive,
+        # ``invalidateAllRefreshTokens``, is account-wide (kills every app's
+        # session, not just GAIA's) and requires Graph admin consent GAIA
+        # does not request. ``None`` here is what tells
+        # ``flow.revoke_provider_token`` to report ``revoke_supported=False``
+        # instead of silently claiming a revoke that cannot happen — the
+        # user must remove GAIA from https://myaccount.microsoft.com/ (or
+        # https://account.live.com/consent/Manage for personal accounts)
+        # to fully revoke access.
+        self.revoke_url: str | None = None
 
     def authorization_params(self) -> dict:
         """

@@ -157,22 +157,33 @@ class ProceduralMemoryMixin:
 
         Returns:
             ``(procedure_id, score)`` tuples, score descending.
+
+        Raises:
+            RuntimeError: on a dimension mismatch with the index, or when a
+                second OpenMP runtime makes the native search fatal.
         """
+        # Deferred to break the memory <-> procedural_memory import cycle.
+        from gaia.agents.base.memory import (
+            _validated_faiss_query,
+            assert_faiss_omp_safe,
+        )
+
         index = getattr(self, "_proc_faiss_index", None)
         if index is None or index.ntotal == 0:
             return []
-        try:
-            k = min(top_k, index.ntotal)
-            query = query_vec.reshape(1, -1).astype(np.float32)
-            scores, indices = index.search(query, k)
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if 0 <= idx < len(self._proc_faiss_id_map):
-                    results.append((self._proc_faiss_id_map[idx], float(score)))
-            return results
-        except Exception as e:
-            logger.debug("[MemoryMixin] procedure FAISS search failed: %s", e)
-            return []
+
+        query = _validated_faiss_query(query_vec, index, "procedures")
+        k = min(top_k, index.ntotal)
+        if k < 1:
+            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+        assert_faiss_omp_safe("Procedure recall search")
+
+        scores, indices = index.search(query, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if 0 <= idx < len(self._proc_faiss_id_map):
+                results.append((self._proc_faiss_id_map[idx], float(score)))
+        return results
 
     # ==================================================================
     # Skill Recall (procedural memory, #887 — RECALL)
@@ -218,6 +229,11 @@ class ProceduralMemoryMixin:
             Matched ``DistilledProcedure`` objects (full bodies; injection
             truncates, the row keeps the full body), best match first; ``[]``
             on any off-state.
+
+        Raises:
+            RuntimeError: a stale index (embedding dimension mismatch) or a
+                second resident OpenMP runtime — both mean the search cannot
+                run, which is a broken install rather than an off-state.
         """
         from gaia.agents.base.memory import (
             _load_memory_settings,  # deferred (cycle break)

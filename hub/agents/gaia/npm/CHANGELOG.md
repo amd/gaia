@@ -18,6 +18,8 @@ the terminal UI meant building it from source.
   out of scope, so the agent wrote throwaway test runners and intermediate files
   into the repository instead. It now gets its own scratch directory, named in its
   prompt and deleted when the agent closes; the rest of the temp dir stays denied.
+- Clearing a TUI conversation now also clears the flagship stdio agent’s prior
+  conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
   package script as argv[1], preserving unrelated tools in shared PATH directories.
@@ -245,5 +247,8 @@ the terminal UI meant building it from source.
   This package mints no token, so a sidecar it spawns comes up in dev mode (token
   check skipped, loudly warned, Host/Origin still enforced) — pass your own
   through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
-- Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
+- Tracks sidecar contract `apiVersion` **2.13**; a differing major raises
   `VersionMismatchError`.
+- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
+  stdio transport's `/memory` sentinel produces, so a daemon-supervised
+  install of the flagship exposes `/memory` too, not just a subprocess one.

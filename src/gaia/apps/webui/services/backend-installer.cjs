@@ -1456,10 +1456,27 @@ async function installBackend(opts = {}) {
     "--python",
     GAIA_PYTHON_BIN,
   ];
-  // Linux/macOS: use CPU-only PyTorch to avoid huge CUDA wheels.
-  // Skip when installing from a local wheel — PyPI index not needed.
-  if (!IS_WINDOWS && !localWheel) {
-    pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
+  // A local GAIA wheel still downloads PyTorch and its transitive dependencies,
+  // so the CPU index is needed either way — without it PyPI serves the CUDA
+  // build and the download balloons.
+  //
+  // `--index-strategy unsafe-best-match` is required WITH it, not optional:
+  // uv gives an --extra-index-url priority over PyPI and, by default, takes
+  // every version of a package from the first index that carries it at all.
+  // download.pytorch.org carries its own pinned `requests` (2.28.1), so the
+  // default strategy resolved `requests` there, never consulted PyPI, and
+  // failed the whole install against gaia's `requests>=2.32.3`. The strategy
+  // flag makes uv consider both indexes and pick the best version. The
+  // dependency-confusion risk it normally guards against does not apply
+  // between PyPI and a first-party, curated PyTorch index that accepts no
+  // third-party uploads.
+  if (!IS_WINDOWS) {
+    pipArgs.push(
+      "--extra-index-url",
+      "https://download.pytorch.org/whl/cpu",
+      "--index-strategy",
+      "unsafe-best-match"
+    );
   }
 
   // Retry the install on transient PyPI/network failures. The heavy
@@ -1540,8 +1557,18 @@ async function installBackend(opts = {}) {
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
       }\nThen restart GAIA. See https://amd-gaia.ai/docs/quickstart#cli-install`;
     }
+    // Carry pip's own last words. Without them the only record of a failed
+    // install is an exit code, which is not something a user or a CI log can
+    // act on.
+    const tail = output
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .slice(-20)
+      .join("\n");
     throw new InstallError(
-      `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
+      `Failed to install ${pipPackage} (pip exit ${installResult.code}).` +
+        (tail ? `\npip said:\n${tail}` : ""),
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
