@@ -886,7 +886,8 @@ def shell_tool(monkeypatch):
 
         def fake_tool(**kwargs):
             def wrap(fn):
-                captured[kwargs["name"]] = fn
+                # The real decorator defaults the tool name to the function's.
+                captured[kwargs.get("name", fn.__name__)] = fn
                 return fn
 
             return wrap
