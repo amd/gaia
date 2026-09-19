@@ -163,7 +163,7 @@ on:
         type: boolean
         default: false
       task_suite:
-        description: 'Flagship task suite from eval/tasks/tasks.json (core runs on PRs; full is the deeper set)'
+        description: 'Flagship task suite from eval/tasks/tasks.json (core runs on PRs; adversarial is the trap tasks; full is everything)'
         required: false
         default: 'core'
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
@@ -270,8 +270,8 @@ jobs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
   # with separate environments: the agent runs with no credentials (it runs
   # shell commands), Claude judges quality (and decides the question tasks) in
-  # one call with no tools, and the gate compares passes, quality, honesty,
-  # tokens, steps and runtime with main's committed results in
+  # one call with no tools, and the gate compares passes, tested changes,
+  # quality, honesty, tokens, steps and runtime with main's committed results in
   # eval/tasks/expectations/<model>.<suite>.json. The gate always enforces: a
   # missed expectation fails this job. A model with no committed expectations
   # is reported, not failed, and a task the backend could not serve is "not
