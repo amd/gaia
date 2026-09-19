@@ -347,13 +347,13 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
-def _is_granted_binary(token: str, granted: frozenset) -> bool:
-    """True when *token* names a CLI this agent's skills granted."""
+def _is_granted_segment(segment: list, granted: frozenset) -> bool:
+    """True when *segment* runs a CLI this agent's skills granted."""
     if not granted:
         return False
-    from gaia.skills.binaries import normalize_binary
+    from gaia.skills.binaries import normalize_binary, policy_argv
 
-    return normalize_binary(token) in granted
+    return normalize_binary(policy_argv(segment)[0]) in granted
 
 
 def _outside_double_quotes(text: str) -> str:
@@ -394,6 +394,9 @@ def _operator_check_text(command: str) -> str:
             continue
         outer.append(part)
     return " ".join(outer)
+
+
+_ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _split_pipeline(cmd_parts: list) -> list:
@@ -588,10 +591,11 @@ class ShellToolsMixin:
         from gaia.skills.binaries import (
             BINARY_POLICIES,
             normalize_binary,
+            policy_argv,
             validate_invocation,
         )
 
-        for segment in segments:
+        for segment in map(policy_argv, segments):
             binary = normalize_binary(segment[0])
             if binary not in granted:
                 return False
@@ -700,9 +704,11 @@ class ShellToolsMixin:
             REFUSE,
             classify_invocation,
             normalize_binary,
+            policy_argv,
         )
 
-        binary = normalize_binary(cmd_base)
+        policy_parts = policy_argv(cmd_parts)
+        binary = normalize_binary(policy_parts[0])
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
             if binary not in granted_binaries:
@@ -717,7 +723,7 @@ class ShellToolsMixin:
                     "has_errors": True,
                     "hint": f"{policy.summary} {policy.install_hint}",
                 }
-            decision = classify_invocation(policy, cmd_parts)
+            decision = classify_invocation(policy, policy_parts)
             if decision.outcome == REFUSE:
                 return {
                     "status": "error",
@@ -973,6 +979,17 @@ class ShellToolsMixin:
                     ),
                     "examples": "edit_file(file_path=..., old_content=..., new_content=...)",
                 }
+            if _ENV_ASSIGNMENT_RE.match(cmd_parts[0]):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_parts[0]}' sets an environment variable for the "
+                        "command, and inline assignments (VAR=value command) "
+                        "are not supported."
+                    ),
+                    "has_errors": True,
+                    "hint": "Run the command without the assignment.",
+                }
             return {
                 "status": "error",
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
@@ -1073,7 +1090,7 @@ class ShellToolsMixin:
                 # Exempt per SEGMENT, never per line: a granted CLI's operands are
                 # remote ids, but 'gh … | cat ../secret' must still be checked.
                 scanned = [
-                    seg for seg in segments if not _is_granted_binary(seg[0], granted)
+                    seg for seg in segments if not _is_granted_segment(seg, granted)
                 ]
                 if hasattr(self, "path_validator"):
                     for arg in [a for seg in scanned for a in seg[1:]]:
@@ -1170,7 +1187,7 @@ class ShellToolsMixin:
                 lone_granted_segment = (
                     len(segments) == 1
                     and bool(granted)
-                    and _is_granted_binary(segments[0][0], granted)
+                    and _is_granted_segment(segments[0], granted)
                 )
                 use_shell = os.name == "nt" and not lone_granted_segment
 

@@ -198,6 +198,9 @@ class BinaryPolicy:
             ``<binary> [operands] [flags]`` with no subcommand step at all
             (``pytest tests/unit -k foo``, vs. ``gh issue list``). When set,
             every token in the invocation is validated against this one rule.
+        python_module: The module that runs this CLI as ``python -m <module>``.
+            That spelling is then judged as the binary itself — same grant,
+            same policy — instead of as an ungranted ``python``.
     """
 
     binary: str
@@ -206,6 +209,7 @@ class BinaryPolicy:
     subcommands: Mapping[str, Subcommand] = field(default_factory=dict)
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
     positional: Subcommand | None = None
+    python_module: str | None = None
 
     def __post_init__(self) -> None:
         if bool(self.subcommands) == bool(self.positional is not None):
@@ -503,6 +507,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
     #   anything plugin-shaped that isn't `-p no:...` (see denied below)
     "pytest": BinaryPolicy(
         binary="pytest",
+        python_module="pytest",
         summary=(
             "pytest — runs the project's own test suite. This EXECUTES "
             "project code (the same class as execute_python_file), not a "
@@ -716,6 +721,28 @@ def normalize_binary(token: str) -> str:
     if os.name == "nt" and name.endswith(".exe"):
         name = name[: -len(".exe")]
     return name if BINARY_NAME_RE.match(name) else ""
+
+
+#: Interpreters whose ``-m <module>`` form can stand in for a policy's binary.
+PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
+
+
+def policy_argv(argv: Sequence[str]) -> list[str]:
+    """*argv* as the grant sees it: ``python -m pytest -q`` → ``pytest -q``.
+
+    Only the exact ``<launcher> -m <module>`` shape of a policy that declares
+    :attr:`BinaryPolicy.python_module`. An interpreter flag before ``-m`` keeps
+    it an ordinary ``python`` call, which the command whitelist refuses.
+    """
+    if (
+        len(argv) >= 3
+        and normalize_binary(argv[0]) in PYTHON_LAUNCHERS
+        and argv[1] == "-m"
+    ):
+        for policy in BINARY_POLICIES.values():
+            if policy.python_module is not None and argv[2] == policy.python_module:
+                return [policy.binary, *argv[3:]]
+    return list(argv)
 
 
 def _split_flag(token: str) -> tuple[str, str | None]:
