@@ -86,6 +86,11 @@ jobs:
           echo ""
           python -m pytest hub/agents/gaia/python/tests/ -v --tb=short
 
+      - name: Run shared history budgeting and persistence tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: python -m pytest tests/unit/agents/test_model_history.py -v --tb=short
+
       - name: Run Skill Framework Tests
         env:
           GAIA_MEMORY_DISABLED: "1"

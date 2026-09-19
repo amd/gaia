@@ -18,6 +18,9 @@ on:
       - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'src/gaia/ui/**'
+      - 'tests/unit/chat/ui/**'
+      - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/test_browser_tools.py'
       - 'tests/unit/test_file_tools.py'
       - 'tests/unit/test_filesystem_tools_mixin.py'
@@ -40,6 +43,9 @@ on:
       - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'src/gaia/ui/**'
+      - 'tests/unit/chat/ui/**'
+      - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/test_browser_tools.py'
       - 'tests/unit/test_file_tools.py'
       - 'tests/unit/test_filesystem_tools_mixin.py'
@@ -85,11 +91,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev,rag,api]
+          uv pip install --system -e .[dev,rag,ui,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
           uv pip install --system -e hub/agents/chat/python
+
+      - name: Test persistent model history
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          python -m pytest tests/unit/agents/test_model_history.py tests/unit/agents/test_parallel_tool_calls.py tests/unit/chat/ui/test_model_history.py tests/unit/chat/ui/test_database.py tests/unit/chat/ui/test_history_limits.py tests/unit/chat/ui/test_recent_chat_history.py -v --tb=short
 
       - name: Test bounded tool output
         env:

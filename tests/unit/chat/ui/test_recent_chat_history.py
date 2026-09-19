@@ -92,7 +92,7 @@ async def test_chat_dispatch_receives_latest_completed_exchanges(transcript, str
             )
 
     assert [entry["content"] for entry in captured] == [
-        content for i in range(7, 12) for content in (f"USER_{i}", f"ASST_{i}")
+        content for i in range(12) for content in (f"USER_{i}", f"ASST_{i}")
     ]
 
 
@@ -157,6 +157,7 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
 
         def process_query(self, _message):
             captured.extend(self.conversation_history)
+            return {"result": "latest history received"}
 
     loop = AgentLoop()
     loop._db = db
@@ -168,5 +169,30 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
     ):
         await loop._execute_tick(session["id"], session, [])
     assert [entry["content"] for entry in captured] == [
-        content for i in range(9, 12) for content in (f"USER_{i}", f"ASST_{i}")
+        content for i in range(12) for content in (f"USER_{i}", f"ASST_{i}")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.allow_network
+async def test_switching_to_email_preserves_prior_pairs(transcript):
+    db, session = transcript
+    captured = []
+
+    def dispatch(handler, request, history, model):
+        captured.extend(history)
+        handler._emit({"type": "agent_done"})
+
+    request = ChatRequest(
+        session_id=session["id"], message="follow-up", agent_type="email", stream=True
+    )
+    with (
+        patch.object(helpers, "_get_cached_agent", return_value=None),
+        patch.object(helpers, "_dispatch_email_query", side_effect=dispatch),
+        patch.object(helpers, "_maybe_update_session_title", new_callable=AsyncMock),
+    ):
+        async for _ in helpers._stream_chat_impl(
+            SimpleNamespace(handler=None), db, session, request
+        ):
+            pass
+    assert captured[-1] == ("USER_11", "ASST_11")

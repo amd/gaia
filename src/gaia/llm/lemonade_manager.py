@@ -21,6 +21,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     LemonadeStatus,
     is_llm_model_entry,
+    resolve_ctx_size,
     resolve_effective_ctx_size,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
@@ -585,7 +586,7 @@ class LemonadeManager:
     @classmethod
     def ensure_ready(
         cls,
-        min_context_size: int = DEFAULT_CONTEXT_SIZE,
+        min_context_size: Optional[int] = None,
         quiet: bool = True,
         base_url: Optional[str] = None,
         host: Optional[str] = None,
@@ -601,7 +602,7 @@ class LemonadeManager:
         unset config value) means "the default floor", never a crash.
 
         Args:
-            min_context_size: Minimum context size required (default: 32768).
+            min_context_size: Minimum context size; unset resolves the configured device and override.
             quiet: Suppress output (default: True for SDK, set False for CLI)
             base_url: Full base URL (e.g., "http://localhost:13305/api/v1").
                      If provided, host and port are parsed from it.
@@ -631,7 +632,7 @@ class LemonadeManager:
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
         if min_context_size is None:
-            min_context_size = DEFAULT_CONTEXT_SIZE
+            min_context_size = resolve_ctx_size(device=device)
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
