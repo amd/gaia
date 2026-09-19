@@ -93,6 +93,9 @@ def _python_script_run_context(
     ``tests/test_x.py`` can import the project's packages. Anything else — and
     every run with no project at all, where *project_dir* is ``None`` — runs
     from its own folder with the environment unchanged.
+
+    Only flat-layout projects become importable this way: a ``src/`` layout
+    needs ``src/`` on the path, which this does not add.
     """
     script = Path(script).resolve()
     env = dict(os.environ)

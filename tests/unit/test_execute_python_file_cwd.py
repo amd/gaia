@@ -28,7 +28,10 @@ from gaia_agent_chat.agent import (  # noqa: E402
     _python_script_run_context,
 )
 
-from gaia.agents.base.project_map import PROJECT_ROOT_ENV  # noqa: E402
+from gaia.agents.base.project_map import (  # noqa: E402
+    AUTO_INDEX_ENV,
+    PROJECT_ROOT_ENV,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
 
@@ -127,6 +130,40 @@ class TestTheToolRunsProjectTests:
 
         assert result["status"] == "error"
         assert "not a directory" in result["error"]
+
+
+class TestTheFlagshipFollowsItsProjectMap:
+    """GaiaAgent mixes in ProjectMapMixin, whose root is resolved once per
+    session. A script must run in that tree even after the process ``chdir``s,
+    or the project map and the script's working directory name two projects."""
+
+    def test_the_script_runs_in_the_mapped_project_after_a_chdir(
+        self, project, tmp_path, monkeypatch
+    ):
+        gaia_agent = pytest.importorskip("gaia_agent.agent")
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        monkeypatch.setenv(AUTO_INDEX_ENV, "0")
+        monkeypatch.chdir(project / "tests")
+        saved = dict(_TOOL_REGISTRY)
+        try:
+            agent = gaia_agent.GaiaAgent(
+                config=gaia_agent.GaiaAgentConfig(
+                    silent_mode=True, allowed_paths=[str(tmp_path)]
+                )
+            )
+            execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+            assert agent._project_map_root() == str(project)
+            # Nothing here is a project; a fresh resolve would find none.
+            monkeypatch.chdir(tmp_path)
+
+            result = execute_python_file(file_path=str(project / "tests" / "test_x.py"))
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+
+        assert result["status"] == "success", result
+        assert result["return_code"] == 0, result["stderr"]
+        assert f"cwd {project}" in result["stdout"]
 
 
 class TestNoProject:
