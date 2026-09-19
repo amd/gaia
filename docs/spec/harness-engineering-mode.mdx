@@ -127,7 +127,7 @@ Proposed source organization: `src/gaia/engineering/` containing `models.py`, `s
 
 ## 6. Developer-mode skill and startup
 
-Draft: [gaia-harness-engineering/SKILL.md](skills/gaia-harness-engineering/SKILL.md). It is stored outside active discovery until the runtime gate exists. Proposed shipped location: `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`.
+The skill ships at `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`; the host loads it only in developer mode.
 
 - Resolve explicit developer mode before the first interactive turn. Proposed flag: `--developer-mode`; existing `--dev`/`--debug` retain logging semantics.
 - Load the skill exactly once and keep it resident in that enabled session despite semantic skill filtering. Do not add it to unconditional `skills:` or the global default skill set.
