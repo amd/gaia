@@ -509,6 +509,8 @@ class ShellToolsMixin:
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
+    - A command over either limit waits for the window (up to
+      ``max_rate_limit_wait_seconds``) instead of being refused
     """
 
     def __init__(self, *args, **kwargs):
@@ -695,6 +697,23 @@ class ShellToolsMixin:
             ", ".join(sorted(granted)),
         )
         return True
+
+    def _pace_rate_limit(self) -> tuple:
+        """Wait out the rate limit rather than refuse, up to a cap.
+
+        A refusal only makes the model send the same command again after the
+        same wait, at the cost of a step. Returns ``(allowed, reason,
+        wait_time, waited)``; a wait past ``max_rate_limit_wait_seconds`` is
+        still refused.
+        """
+        cap = getattr(self, "max_rate_limit_wait_seconds", 60.0)
+        waited = 0.0
+        while True:
+            allowed, reason, wait_time = self._check_rate_limit()
+            if allowed or waited + wait_time > cap:
+                return allowed, reason, wait_time, waited
+            time.sleep(wait_time)
+            waited += wait_time
 
     def _check_rate_limit(self) -> tuple:
         """
@@ -1107,7 +1126,7 @@ class ShellToolsMixin:
             """
             try:
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time = self._check_rate_limit()
+                allowed, reason, wait_time, waited = self._pace_rate_limit()
                 if not allowed:
                     return {
                         **NOT_EXECUTED,
@@ -1412,7 +1431,7 @@ class ShellToolsMixin:
                         f"Command completed in {duration:.2f}s with return code {result.returncode}"
                     )
 
-                return {
+                outcome = {
                     "status": "success",
                     "command": command,
                     "stdout": stdout,
@@ -1424,6 +1443,9 @@ class ShellToolsMixin:
                     "cwd": cwd,
                     "output_truncated": truncated,
                 }
+                if waited:
+                    outcome["waited_seconds"] = round(waited, 1)
+                return outcome
 
             except FileNotFoundError as exc:
                 # The executable is not there, so nothing started. Said out loud
