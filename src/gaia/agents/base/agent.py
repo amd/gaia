@@ -707,6 +707,27 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+def _offer_skill_tools(agent: Any, skill: Any) -> None:
+    """Add *skill*'s tools to the turn's tool subset so the next step can call them.
+
+    The subset is picked from the user's message before the first model call, so
+    a skill loaded mid-turn otherwise names tools the model cannot call until the
+    next turn — and a one-turn task has no next turn.
+    """
+    current = getattr(agent, "_active_tool_filter", None)
+    if current is None:
+        return
+    wanted = [
+        *skill.gaia.tools_required,
+        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
+    ]
+    missing = [
+        tool for tool in wanted if tool in agent._tools_registry and tool not in current
+    ]
+    if missing:
+        agent._apply_tool_filter(sorted({*current, *missing}))
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -1973,6 +1994,7 @@ Do NOT wrap conversational replies in JSON.
                 self._note_skill_active(name)
                 if filter_changed:
                     self.rebuild_system_prompt()
+            _offer_skill_tools(self, self.loaded_skills[name])
             return self.loaded_skills[name]
 
         skill = resolver.load(name)
@@ -2010,6 +2032,7 @@ Do NOT wrap conversational replies in JSON.
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
             raise
+        _offer_skill_tools(self, skill)
 
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
