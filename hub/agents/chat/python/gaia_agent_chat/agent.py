@@ -713,6 +713,11 @@ class ChatAgent(
         "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
         (no recall / memory disabled), so the loader runs on CORE + semantic
         exactly as in Parts 1-2.
+
+        The ``tools_required`` of loaded skills whose body renders this turn
+        join the same signal, ahead of recalled-procedure tools: the user's
+        skill is the stronger signal. A skill stops contributing when the body
+        filter hides it or it is unloaded.
         """
         if not self._dynamic_tools_active():
             return None
@@ -722,8 +727,12 @@ class ChatAgent(
             self.tool_loader.validate_registry(self._tools_registry)
             self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
+        skill_tools = self._loaded_skill_tools()
+        for name in self._recalled_skill_tools():
+            if name not in skill_tools:
+                skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=self._recalled_skill_tools()
+            query, self._tools_registry, skill_tools=skill_tools
         )
 
     def _on_tool_invoked(self, tool_name: str) -> None:

@@ -615,6 +615,10 @@ class BinaryGrants:
         """Every currently granted binary."""
         return frozenset(self._holders)
 
+    def holders(self) -> frozenset[str]:
+        """Every skill that currently holds at least one grant."""
+        return frozenset(s for skills in self._holders.values() for s in skills)
+
     def __contains__(self, binary: object) -> bool:
         return binary in self._holders
 

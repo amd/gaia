@@ -251,6 +251,8 @@ def test_discovery_runs_before_the_turn_tool_filter(agent, monkeypatch):
     """A skill auto-loaded this turn registers tools, and the tool filter fixes
     the turn's tool list. Filtering first hands the model a recipe naming tools
     the same prompt does not contain — the exact failure this feature prevents.
+    The body filter runs before the tool filter too, because the tool filter
+    admits the ``tools_required`` of the skills active this turn.
     """
     order: list[str] = []
 
@@ -283,4 +285,4 @@ def test_discovery_runs_before_the_turn_tool_filter(agent, monkeypatch):
     with pytest.raises(_TurnSetupDone):
         agent._process_query_impl("read me an rss feed")
 
-    assert order == ["discover", "tools", "bodies"]
+    assert order == ["discover", "bodies", "tools"]
