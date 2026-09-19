@@ -739,13 +739,15 @@ class TestResolveMcpConfig:
         assert runner.MCP_CONFIG.read_bytes() == before
         assert json.loads(before)["mcpServers"]["gaia-agent-ui"]["command"] == "python"
 
-    def test_falls_back_to_a_temp_file_without_a_run_dir(self):
-        resolved = runner.resolve_mcp_config()
-        try:
-            config = json.loads(resolved.read_text(encoding="utf-8"))
-            assert config["mcpServers"]["gaia-agent-ui"]["command"] == sys.executable
-        finally:
-            resolved.unlink(missing_ok=True)
+    def test_relative_run_dir_yields_an_absolute_path(self, tmp_path, monkeypatch):
+        # claude -p runs from REPO_ROOT, so a relative path would miss the file.
+        monkeypatch.chdir(tmp_path)
+
+        resolved = runner.resolve_mcp_config(Path("run"))
+
+        assert resolved.is_absolute()
+        assert resolved == tmp_path.resolve() / "run" / "mcp-config.resolved.json"
+        assert resolved.is_file()
 
     def test_non_python_commands_are_preserved(self, tmp_path, monkeypatch):
         template = tmp_path / "mcp-config.json"
@@ -759,6 +761,15 @@ class TestResolveMcpConfig:
 
         config = json.loads(resolved.read_text(encoding="utf-8"))
         assert config["mcpServers"]["node-server"]["command"] == "npx"
+
+    def test_rewritten_interpreter_is_logged(self, tmp_path, caplog):
+        with caplog.at_level("DEBUG", logger=runner.logger.name):
+            runner.resolve_mcp_config(tmp_path)
+
+        assert any(
+            "gaia-agent-ui" in r.getMessage() and sys.executable in r.getMessage()
+            for r in caplog.records
+        )
 
     @pytest.mark.parametrize(
         "command", ["python", "python3", "python3.12", "/usr/bin/python3"]

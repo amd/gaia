@@ -87,26 +87,28 @@ def load_mcp_config_template() -> dict:
         ) from e
 
 
-def resolve_mcp_config(run_dir=None) -> Path:
-    """Write a runnable copy of the MCP config and return its path.
+def resolve_mcp_config(run_dir) -> Path:
+    """Write a runnable copy of the MCP config into ``run_dir``; return its path.
 
-    The tracked template is never modified; the resolved copy lands in
-    ``run_dir`` (so it ships with the run's artifacts) or a temp file.
+    The tracked template is never modified; the resolved copy ships with the
+    run's artifacts. The path is absolute because ``claude -p`` runs from
+    ``REPO_ROOT``, not the caller's cwd.
     """
     config = load_mcp_config_template()
-    for server in (config.get("mcpServers") or {}).values():
+    for name, server in (config.get("mcpServers") or {}).items():
         command = server.get("command")
         if isinstance(command, str):
             server["command"] = _resolve_mcp_command(command)
+            if server["command"] != command:
+                logger.debug(
+                    "MCP server %r: resolved command %r -> %r",
+                    name,
+                    command,
+                    server["command"],
+                )
 
-    if run_dir is not None:
-        resolved = Path(run_dir) / "mcp-config.resolved.json"
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        fd, tmp_path = tempfile.mkstemp(prefix="gaia-eval-mcp-", suffix=".json")
-        os.close(fd)
-        resolved = Path(tmp_path)
-
+    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     return resolved
 
@@ -2355,7 +2357,6 @@ def capture_session(session_id, output_dir=None, db_path=None):
     Returns:
         Path to the written YAML file
     """
-    import re
     import sqlite3
 
     db = Path(db_path) if db_path else GAIA_DB_PATH
