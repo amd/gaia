@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 """Retired providers fail before imports, model loading, or remote requests."""
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -63,13 +62,13 @@ def test_cli_initialization_cannot_silently_accept_removed_backend():
 
 def test_real_cli_returns_actionable_migration_error():
     root = Path(__file__).resolve().parents[2]
+    # Inherit the root conftest's PYTHONPATH (src plus hub agent roots).
     result = subprocess.run(
         [sys.executable, "-m", "gaia.cli", "llm", "--use-chatgpt", "hello"],
         cwd=root,
         capture_output=True,
         text=True,
         timeout=30,
-        env={**os.environ, "PYTHONPATH": str(root / "src")},
     )
     assert result.returncode == 2
     assert "discarded tool calls" in result.stderr

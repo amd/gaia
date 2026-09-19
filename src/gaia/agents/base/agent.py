@@ -1064,7 +1064,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
-        if not (use_claude or use_chatgpt or skip_lemonade):
+        if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -1159,7 +1159,6 @@ Do NOT wrap conversational replies in JSON.
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             claude_model=claude_model,
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking

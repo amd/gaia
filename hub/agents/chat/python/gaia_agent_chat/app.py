@@ -991,7 +991,6 @@ def main():
         # Create agent config
         config = ChatAgentConfig(
             use_claude=args.use_claude,
-            use_chatgpt=args.use_chatgpt,
             claude_model=args.claude_model,
             model_id=args.model_id,
             max_steps=args.max_steps,
