@@ -48,6 +48,7 @@ from gaia.agents.base.verification import (
     check_was_executed,
     strip_verification_scope,
     verification_check_label,
+    verification_check_target,
 )
 
 # First-party imports
@@ -305,6 +306,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
+    # The same arbitrary code execution, from a snippet instead of a file.
+    "run_python",
     "write_file",
     "write_python_file",
     "edit_file",
@@ -5179,10 +5182,14 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
+        label = verification_check_label(tool_name, tool_args, result)
         log.append(
             {
                 "tool": tool_name,
-                "check_label": verification_check_label(tool_name, tool_args, result),
+                "check_label": label,
+                "check_target": (
+                    verification_check_target(tool_name, tool_args) if label else None
+                ),
                 "failed": self._is_error_result(result),
                 "ran": check_was_executed(result),
             }

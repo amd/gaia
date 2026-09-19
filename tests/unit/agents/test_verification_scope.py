@@ -40,6 +40,7 @@ from gaia.agents.base.verification import (
     split_verification_scope,
     strip_verification_scope,
     verification_check_label,
+    verification_check_target,
 )
 from gaia.llm.lemonade_client import _cloud_request_error
 
@@ -177,8 +178,11 @@ def test_non_dict_args_do_not_raise():
 # ---------------------------------------------------------------------------
 
 
-def _execution(label=None, failed=False, name="some_tool"):
-    return {"tool": name, "check_label": label, "failed": failed}
+def _execution(label=None, failed=False, name="some_tool", target=None):
+    record = {"tool": name, "check_label": label, "failed": failed}
+    if target is not None:
+        record["check_target"] = target
+    return record
 
 
 def test_no_tools_at_all_is_unverified():
@@ -261,6 +265,176 @@ def test_label_list_is_capped_with_a_count():
 def test_duplicate_labels_collapse():
     statement = build_verification_scope([_execution("pytest")] * 5)
     assert statement.count("pytest") == 1
+
+
+# ---------------------------------------------------------------------------
+# A check that ran more than once is judged by its latest run (#3989)
+# ---------------------------------------------------------------------------
+
+
+def test_a_check_that_failed_then_passed_after_a_fix_is_verified():
+    statement = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_check_that_passed_then_failed_after_an_edit_did_not_pass():
+    statement = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest ran and did not pass" in statement
+    assert "passed," not in statement
+
+
+def test_the_two_orders_no_longer_read_the_same():
+    fixed = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    broken = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert fixed != broken
+
+
+def test_only_the_last_of_many_runs_counts():
+    statement = build_verification_scope(
+        [
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+        ]
+    )
+    assert "pytest ran and did not pass" in statement
+
+
+def test_distinct_labels_are_each_judged_on_their_own_latest_run():
+    statement = build_verification_scope(
+        [
+            _execution("ruff", failed=True),
+            _execution("pytest"),
+            _execution("ruff"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "ruff, pytest passed" in statement
+    assert "mypy did not" in statement
+
+
+def test_distinct_labels_with_one_run_each_are_unchanged():
+    statement = build_verification_scope(
+        [_execution("ruff"), _execution("pytest", failed=True)]
+    )
+    assert "ruff passed, pytest did not." in statement
+
+
+def test_a_refused_attempt_then_a_fail_then_a_fix_is_verified():
+    statement = build_verification_scope(
+        [
+            _blocked("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in statement
+
+
+def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_the_check_target_is_the_command_with_whitespace_collapsed():
+    assert verification_check_target(
+        "run_shell_command", {"command": "  pytest   tests/ -q "}
+    ) == verification_check_target("run_shell_command", {"command": "pytest tests/ -q"})
+    assert verification_check_target(
+        "run_shell_command", {"command": "pytest tests/"}
+    ) != verification_check_target(
+        "run_shell_command", {"command": "pytest tests/test_cart.py"}
+    )
+
+
+def test_a_named_check_tool_is_targeted_by_its_arguments():
+    assert verification_check_target(
+        "run_tests", {"path": "tests/"}
+    ) != verification_check_target("run_tests", {"path": "tests/unit"})
+    assert verification_check_target(
+        "run_tests", {"path": "tests/", "quiet": True}
+    ) == verification_check_target("run_tests", {"quiet": True, "path": "tests/"})
+
+
+def test_loop_keeps_a_failed_suite_visible_after_a_narrow_rerun(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest tests/"),
+        (
+            {"status": "success", "return_code": 0, "stdout": "1 passed"},
+            "pytest tests/test_cart.py",
+        ),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in line
+
+
+def test_loop_reports_a_fixed_test_as_verified(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("refactor", max_steps=5)["result"])
+    assert "pytest ran and did not pass" in line
+    assert "pytest passed" not in line
+
+
+def _scripted_runs(agent_, *runs):
+    """Script the model to run each command in turn, the shell returning each result."""
+    results = [result for result, _ in runs]
+    real_tool_result = _DummyAgent.shell_result
+
+    def _next_result():
+        return results.pop(0) if results else real_tool_result
+
+    responses = [_tool_call(command) for _, command in runs] + [_answer("Done.")]
+    chat = _stub_chat(agent_, *responses)
+    send = chat.send_messages.side_effect
+
+    def _send(*args, **kwargs):
+        agent_.shell_result = _next_result()
+        return send(*args, **kwargs)
+
+    chat.send_messages.side_effect = _send
 
 
 def test_every_state_fits_the_bound():
@@ -1166,6 +1340,11 @@ def test_python_runner_results_identify_checks(stdout, stderr, code, label):
         verification_check_label("read_file", {"file_path": "output.txt"}, result)
         is None
     )
+
+
+def test_a_run_python_pytest_summary_is_a_check():
+    result = {"stdout": "3 passed in 0.01s", "return_code": 0}
+    assert verification_check_label("run_python", {"code": "..."}, result) == ("pytest")
 
 
 def test_refused_python_runner_is_not_a_check():

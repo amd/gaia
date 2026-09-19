@@ -1843,6 +1843,21 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ---
 
+### Flagship Agent Tasks
+
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+
+```bash
+gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
+gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+```
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
+
+---
+
 ### Email Throughput Benchmark
 
 Measure end-to-end email-triage throughput (tokens/sec), time-to-first-token, and pipeline latency for an on-device model. Direct-drives the email agent over the committed synthetic corpus and harvests metrics from the agent's per-step stats. The committed bar is **≥10 tok/s** (snappy-UX stretch ~30 tok/s); the benchmark is **non-gating** — a miss is reported, not failed.
