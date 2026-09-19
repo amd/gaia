@@ -212,6 +212,29 @@ def _names(executions: List[Dict[str, Any]], limit: int = 3) -> str:
     return f"{shown} +{extra} more" if extra > 0 else shown
 
 
+def _mixed(passed: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
+    """What passed and what did not, naming no check on both sides.
+
+    Two runs of one runner on different commands share a label, so listing them
+    by label read "pytest passed, pytest did not" — a line that contradicts
+    itself. A label on both sides is counted instead.
+    """
+    split = {e["check_label"] for e in passed} & {e["check_label"] for e in failed}
+    parts = []
+    only_passed = [e for e in passed if e["check_label"] not in split]
+    if only_passed:
+        parts.append(f"{_names(only_passed)} passed")
+    for label in dict.fromkeys(e["check_label"] for e in (*passed, *failed)):
+        if label in split:
+            bad = sum(1 for e in failed if e["check_label"] == label)
+            total = bad + sum(1 for e in passed if e["check_label"] == label)
+            parts.append(f"{bad} of {total} {label} runs did not pass")
+    only_failed = [e for e in failed if e["check_label"] not in split]
+    if only_failed:
+        parts.append(f"{_names(only_failed)} did not")
+    return ", ".join(parts)
+
+
 def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     """One bounded line naming what ran, what passed, and what went unchecked.
 
@@ -281,10 +304,7 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
             tail = unrun or " Nothing else was checked."
             body = f"partially verified — {_names(failed)} ran and did not pass.{tail}"
         else:
-            body = (
-                f"partially verified — {_names(passed)} passed, "
-                f"{_names(failed)} did not.{unrun}"
-            )
+            body = f"partially verified — {_mixed(passed, failed)}.{unrun}"
     statement = VERIFICATION_SCOPE_PREFIX + body
     if len(statement) > VERIFICATION_SCOPE_MAX_CHARS:
         statement = statement[: VERIFICATION_SCOPE_MAX_CHARS - 1].rstrip() + "…"

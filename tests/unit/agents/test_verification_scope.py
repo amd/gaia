@@ -353,6 +353,37 @@ def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
     assert "did not" in statement
 
 
+def test_one_label_on_both_sides_is_counted_not_named_twice():
+    """ "pytest passed, pytest did not." read as the harness contradicting itself.
+
+    It came from a shell pytest that failed at collection and a later pytest run
+    through run_python that passed: two targets, one label.
+    """
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest -q tests/test_archive.py"),
+            _execution("pytest", target='run_python {"code": "..."}'),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest passed, pytest did not" not in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+
+
+def test_a_split_label_sits_beside_labels_that_did_not_split():
+    statement = build_verification_scope(
+        [
+            _execution("ruff"),
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert "ruff passed" in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+    assert "mypy did not" in statement
+
+
 def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
     statement = build_verification_scope(
         [
