@@ -23,6 +23,7 @@ import pytest
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_edit import FileStateTracker
+from gaia.security import PathValidator
 
 
 @pytest.fixture(autouse=True)
@@ -34,10 +35,16 @@ def clean_tracker():
 
 
 @pytest.fixture
-def file_tools():
-    """``(tool_name) -> callable`` for the file-I/O mixin, console attachable."""
+def file_tools(tmp_path):
+    """``(tool_name) -> callable`` for the file-I/O mixin, console attachable.
+
+    The host binds ``path_validator`` (#3316) — a write tool without one
+    reports the missing setup instead of reaching the display contract.
+    """
     module = importlib.import_module("gaia.agents.tools.file_io_tools")
     mixin = module.FileIOToolsMixin()
+    mixin.path_validator = PathValidator()
+    mixin.path_validator.allowed_paths.add(tmp_path.resolve())
 
     saved = dict(_TOOL_REGISTRY)
     try:

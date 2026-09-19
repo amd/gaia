@@ -1105,6 +1105,9 @@ def run_turn(
         agent.console = previous_console
 
 
+CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
+
+
 def dispatch_query(
     agent: Any,
     query: str,
@@ -1132,6 +1135,10 @@ def dispatch_query(
                 message = "Developer source cache is ready. Ask for engineering status to connect your coding app."
             _write({"type": "status", "message": message}, out)
             agent._engineering_reported_setup_status = setup_status
+    if query == CLEAR_CONVERSATION_QUERY:
+        agent.conversation_history.clear()
+        _write({"type": "final", "answer": "conversation_cleared"}, out)
+        return
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
         return
