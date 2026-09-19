@@ -289,15 +289,16 @@ _SKIP_TOKENS = {
     "fi",
     "done",
     "esac",
-    "in",
-    "for",
     "if",
     "while",
-    "case",
-    "function",
-    "return",
+    "until",
     "!",
 }
+
+# Words after which the next token is a loop variable, a pattern or a function
+# name — never a command. Sliding past them reports the loop variable of
+# ``for n in 3697 3698; do gh pr view $n`` as a binary called ``n``.
+_CONSTRUCT_TOKENS = {"for", "in", "case", "function", "return", "select"}
 
 # The same tool reached by different spellings. `github` is what survives
 # splitting the Windows path "/c/Program Files/GitHub CLI/gh.exe" on "/".
@@ -323,17 +324,93 @@ def _segment_head(seg: str) -> Optional[tuple]:
     for i, tok in enumerate(toks):
         if "=" in tok and not tok.startswith("-") and not tok.startswith("/"):
             continue  # VAR=value prefix
-        if tok.startswith(("-", "(", "{", "'", '"', "$")):
+        if tok.startswith("$"):
+            # A variable-expanded command path: which binary ran is unknowable,
+            # and sliding to the next token reports its first argument instead.
+            return None
+        if tok.startswith(("-", "(", "{", "'", '"')):
             continue
         name = tok.split("/")[-1].strip("\"'()").lower()
         if name.endswith(".exe"):
             name = name[:-4]
         if not name or not re.match(r"^[a-z_][a-z0-9_.+-]*$", name):
             return None
+        if name in _CONSTRUCT_TOKENS:
+            return None
         if name in _SKIP_TOKENS:
             continue
         return _BINARY_ALIASES.get(name, name), i + 1
     return None
+
+
+# An interpreter invoked with an inline script or a heredoc: everything after
+# this is source text, not a command list.  ``python3.12 -c`` and
+# ``.venv/bin/python -c`` both have to match, so the version suffix is optional.
+_INLINE_SCRIPT = re.compile(
+    r"(?:python[0-9.]*|py|node|perl|ruby|bash|sh|zsh)\s+-[a-z]*[ce]\s|<<"
+)
+
+
+def _strip_inline_script(cmd: str) -> str:
+    """Drop an inline script body, which is data rather than a command list."""
+
+    m = _INLINE_SCRIPT.search(cmd)
+    return cmd[: m.end()] if m else cmd
+
+
+def _split_segments(cmd: str) -> List[str]:
+    """Split a command on shell operators, ignoring operators inside quotes.
+
+    Splitting with a plain regex shreds quoted arguments: ``grep -n "def .*("``
+    carries ``|`` and ``)`` inside its *pattern*, so the fragments after them
+    read as fresh commands and their first words get counted as binaries. That
+    is where ``def``, ``import`` and ``assert`` came from.
+
+    ``$(`` and a backtick still separate, because a substitution really does run
+    a process — but not inside single quotes, where they are literal text.
+    """
+
+    segs: List[str] = []
+    buf: List[str] = []
+    quote = ""
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote:
+            # Only double quotes honour backslash escapes.
+            if ch == "\\" and quote == '"' and i + 1 < len(cmd):
+                buf.append(cmd[i : i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if cmd.startswith("$(", i) or cmd.startswith("&&", i):
+            segs.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if cmd.startswith("||", i):
+            segs.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch in ";|)`\n":
+            segs.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    segs.append("".join(buf))
+    return segs
 
 
 def _binaries(cmd: str) -> List[str]:
@@ -345,13 +422,7 @@ def _binaries(cmd: str) -> List[str]:
     """
 
     found = []
-    # An inline script body (`python -c "..."`, a heredoc) is data, not a
-    # command list; parsing past it invents binaries out of the source text.
-    m = re.search(r"(?:python3?|py|node|perl|ruby|bash|sh|zsh)\s+-[ce]\s|<<", cmd)
-    if m:
-        cmd = cmd[: m.end()]
-    cleaned = cmd.replace("$(", " ; ").replace("`", " ; ")
-    for seg in re.split(r"&&|\|\||[;|)]|\n", cleaned):
+    for seg in _split_segments(_strip_inline_script(cmd)):
         head = _segment_head(seg)
         if head:
             found.append(head[0])
@@ -369,15 +440,17 @@ def binary_table(traces: List[dict], top: int = 40) -> str:
     for c in cmds:
         counts.update(_binaries(c))
     total = sum(counts.values()) or 1
-    # Two thirds of "distinct binaries" are English words scraped out of
-    # heredocs and echo strings, seen exactly once. Report only what recurs.
+    # A long tail of single sightings survives even with quote-aware splitting.
+    # Report only what recurs.
     recurring = {k: v for k, v in counts.items() if v >= 10}
     out = [
         f"_{total:,} invocations in {len(cmds):,} shell commands. "
         f"{len(recurring):,} distinct binaries recur (10+ times), covering "
         f"{sum(recurring.values()):,} invocations "
-        f"({100 * sum(recurring.values()) / total:.1f}%). The single-sighting "
-        f"tail is parsing noise from inline scripts and is not a measurement._\n",
+        f"({100 * sum(recurring.values()) / total:.1f}%). Segments are split with "
+        "quoting honoured and inline script bodies dropped, so a quoted `grep` "
+        "pattern no longer reads as a command; the single-sighting tail that "
+        "remains is parsing noise and is not a measurement._\n",
         "| # | Binary | Invocations | % of invocations | Cumulative |",
         "|---:|---|---:|---:|---:|",
     ]
@@ -462,8 +535,8 @@ def flags_table(traces: List[dict], top_bins: int = 12, top_flags: int = 6) -> s
     for s in all_steps(traces):
         if s["family"] != "shell" or not s["arg_digest"]:
             continue
-        cmd = s["arg_digest"]
-        for seg in re.split(r"&&|\|\||[;|]|\n", cmd):
+        cmd = _strip_inline_script(s["arg_digest"])
+        for seg in _split_segments(cmd):
             parsed = _segment_head(seg)
             if not parsed:
                 continue
