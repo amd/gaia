@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 # Validates the NPU-native FLM embedder (embed-gemma-300m-FLM, #1744) on real
-# Ryzen AI hardware. The test (tests/test_npu_flm_embedder_hw.py) SKIPS unless
-# the live Lemonade Server advertises the FLM model, so on a runner without the
-# FLM/NPU backend this job is a clean no-op rather than a false failure.
+# Ryzen AI hardware.
+#
+# FLM models are NOT in Lemonade's built-in catalog (server_models.json): the
+# server enumerates them by shelling out to the `flm` CLI, so until the flm:npu
+# backend is installed no *-FLM name resolves and every pull 400s. Installing
+# that backend is therefore a step, not an assumption -- and GAIA_REQUIRE_FLM=1
+# makes the tests fail rather than skip once it is installed, so this job can no
+# longer report green while validating nothing.
 #
 # Runs on the AMD Ryzen Dev Lab pool, which registers a runner per job and
 # destroys it afterwards. `devlab-dispatch` is what routes it there; that pool
@@ -70,6 +75,10 @@ jobs:
         shell: powershell
         env:
           NO_PROXY: "localhost,127.0.0.1"
+          # Turn "FLM model missing from the catalog" into a failure. This
+          # runner is selected for its NPU, so an absent FLM backend is a broken
+          # runner, not a reason to pass.
+          GAIA_REQUIRE_FLM: "1"
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $env:PYTHONIOENCODING = "utf-8"
@@ -77,17 +86,24 @@ jobs:
           chcp 65001 | Out-Null
 
           # Free the port, then start Lemonade in a single session so the FLM
-          # backend child survives for the test run.
+          # backend child survives for the test run. -Backend installs flm:npu
+          # first; without it the FLM half of the catalog is empty.
           .\installer\scripts\start-lemonade.ps1 `
               -ModelName "gemma4-it-e2b-FLM" `
+              -Backend "flm:npu" `
               -Port 13305 `
               -CtxSize 32768 `
               -InitWaitTime 15
+          $setupExit = $LASTEXITCODE
 
           try {
-              # The test loads embed-gemma-300m-FLM itself and skips cleanly if
-              # the runner's Lemonade has no FLM/NPU backend. -rs prints skip
-              # reasons so a silent skip is visible in the log.
+              # The script exits non-zero on setup failure; without this check
+              # the step ran on regardless and passed on skipped tests. Inside
+              # the try so the finally still reaps a half-started server.
+              if ($setupExit -ne 0) { throw "Lemonade/FLM setup failed (exit $setupExit)" }
+
+              # -rs prints skip reasons; under GAIA_REQUIRE_FLM=1 a missing FLM
+              # model fails instead of skipping.
               python -m pytest tests/test_npu_flm_embedder_hw.py -v -rs --tb=short
               if ($LASTEXITCODE -ne 0) { throw "NPU FLM embedder tests failed" }
           }
