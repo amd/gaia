@@ -3202,7 +3202,9 @@ def _handle_eval_tasks(args):
         if failed:
             prefix = "::warning::" if in_actions else "⚠️  "
             print(
-                f"{prefix}No usable grade for {', '.join(failed)}; the gate counts them as unmeasured."
+                f"{prefix}No usable grade for {', '.join(failed)}. Until a re-run grades "
+                "them, they fail the quality and misreport checks, and an ungraded "
+                "question counts as not passed."
             )
         return card
 

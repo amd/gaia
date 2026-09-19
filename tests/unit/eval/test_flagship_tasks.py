@@ -838,3 +838,25 @@ def test_the_project_snapshot_fits_and_skips_caches(tmp_path):
     snapshot = ft.project_snapshot(workdir)
     assert "--- build_times.csv ---" in snapshot and "__pycache__" not in snapshot
     assert len(ft.project_snapshot()) <= ft.PROJECT_CAP
+
+
+def test_a_judge_failure_is_described_as_a_grading_gap_not_an_outage(
+    tmp_path, monkeypatch, capsys
+):
+    from gaia.cli import _handle_eval_tasks
+
+    monkeypatch.setattr(
+        ft,
+        "judge_batch",
+        lambda attempts, model, env: {a.key: {"error": "timeout"} for a in attempts},
+    )
+    args = argparse.Namespace(
+        tasks_action="judge",
+        run_dir=str(_run_dir(tmp_path)),
+        judge_model="m",
+        judge_attempts=1,
+    )
+    _handle_eval_tasks(args)
+    out = capsys.readouterr().out
+    assert "No usable grade for 02-bugfix, 21-qa" in out
+    assert "quality and misreport checks" in out and "unmeasured" not in out
