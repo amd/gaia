@@ -81,6 +81,16 @@ const (
 // agent-side, so it is gated by WHICH agent.
 const memoryAgentID = "gaia"
 
+// followUpContract is the contract version that introduced
+// `POST /query/{run_id}/followup` — handing a RUNNING turn something the user
+// typed after it started (#3620, schema 2.14). A peer below it 404s that path,
+// so the UI keeps the message in its local queue and says so instead of
+// reporting a delivery that never happened.
+const (
+	followUpContractMajor = 2
+	followUpContractMinor = 14
+)
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -99,6 +109,8 @@ type peerContract struct {
 	canAnswerQuestions bool
 	// supportsSession is true only when the peer is provably >= 2.12.
 	supportsSession bool
+	// supportsFollowUp is true only when the peer is provably >= 2.14.
+	supportsFollowUp bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -203,8 +215,9 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession)
+	supportsFollowUp := contractAtLeast(payload.APIVersion, followUpContractMajor, followUpContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp)
 	agentVersion := payload.Version
 	if agentVersion == "" {
 		agentVersion = payload.AgentVersion
@@ -214,6 +227,7 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		agentVersion:       agentVersion,
 		canAnswerQuestions: supports,
 		supportsSession:    supportsSession,
+		supportsFollowUp:   supportsFollowUp,
 		answered:           true,
 	}
 }
@@ -283,6 +297,23 @@ func noticeForMissingPreScan(agentID, version string) string {
 			"inbox worklist yet — that needs %d.%d or newer. "+
 			"Update it with `%s` then `%s`.",
 		agentID, have, preScanContractMajor, preScanContractMinor,
+		updateCommand("uninstall", agentID), updateCommand("install", agentID))
+}
+
+// noticeForMissingFollowUp is what the user is told when the installed sidecar
+// predates mid-run follow-ups (#3620). Same shape as its siblings: name what is
+// missing, name the floor, name the fix — and the sentence has to end with what
+// happens INSTEAD, because the message the user just typed is still in hand.
+func noticeForMissingFollowUp(agentID, version string) string {
+	have := "an older contract"
+	if version != "" {
+		have = "contract " + version
+	}
+	return fmt.Sprintf(
+		"the installed '%s' agent speaks %s, so it cannot take a message mid-turn — "+
+			"that needs %d.%d or newer. Update it with `%s` then `%s`. "+
+			"Your message is queued and will be sent when this turn ends.",
+		agentID, have, followUpContractMajor, followUpContractMinor,
 		updateCommand("uninstall", agentID), updateCommand("install", agentID))
 }
 

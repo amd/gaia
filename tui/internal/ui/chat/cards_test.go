@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/event"
@@ -34,6 +35,16 @@ func newTestChat(t *testing.T) ChatModel {
 	m.streaming = true
 	m.queryStart = time.Now()
 	return m
+}
+
+// repaint drives the tick that flushes coalesced tokens onto the screen. The
+// real loop gets one ten times a second for the whole turn (the spinner); a
+// test that wants to READ the screen has to get there the same way rather than
+// reaching past the coalescing the model does on purpose.
+func repaint(t *testing.T, m ChatModel) ChatModel {
+	t.Helper()
+	updated, _ := m.Update(spinner.TickMsg{})
+	return updated.(ChatModel)
 }
 
 // The flagship path: the email agent's pre-scan tool deliberately tells the model
