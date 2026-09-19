@@ -18,7 +18,7 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -693,7 +693,9 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
         )
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -703,6 +705,8 @@ class FileSearchToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -778,6 +782,17 @@ class FileSearchToolsMixin:
                             "then use query_specific_file or query_documents to retrieve content. "
                             "If index_document returns 'Access denied', ask the user to index the "
                             "file via the Document Library (attachment icon in the UI)."
+                        ),
+                    }
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
                         ),
                     }
 
