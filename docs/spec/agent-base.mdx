@@ -202,6 +202,7 @@ def process_query(
             "system_prompt": str,    # System prompt used for this query
             "conversation": list,    # Full step-by-step conversation trace
             "steps_taken": int,      # Number of reasoning steps taken
+            "max_steps_reached": bool,  # Hit the step limit before answering
             "duration": float,       # Total processing time in seconds
             "input_tokens": int,     # Total input tokens across all steps
             "output_tokens": int,    # Total output tokens across all steps

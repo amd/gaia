@@ -839,8 +839,11 @@ def process_query(self, user_input, max_steps=None):  # defaults to self.max_ste
             })
             return {"status": "success", "result": response, "steps_taken": step + 1}
 
-    # 9. Max steps reached
-    return {"status": "incomplete", "result": "I couldn't complete the task", "steps_taken": max_steps}
+    # 9. Max steps reached: one more call with no tools, so the agent says what
+    #    it found, what it couldn't finish and why, and what to try next
+    answer = self.llm.generate(prompt + STEP_LIMIT_INSTRUCTION, tools=None)
+    return {"status": "incomplete", "result": answer, "steps_taken": max_steps + 1,
+            "max_steps_reached": True}
 ```
 
 **Key insight:** The conversation history grows with each tool call, giving the LLM more context for its next decision.

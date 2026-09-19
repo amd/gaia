@@ -365,6 +365,13 @@ _CONTEXT_STILL_OVERFLOWING_MESSAGE = (
     "conversation and ask again."
 )
 
+# Sent once, with no tools offered, when the step limit runs out unanswered.
+_STEP_CAP_ANSWER_PROMPT = (
+    "You have used all {steps} steps and can't call more tools. Give the user "
+    "your final answer now, using only what the tool results above show: what "
+    "you found, what you couldn't finish and why, and what they can do next."
+)
+
 
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
@@ -4221,18 +4228,13 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
-        # Analyze what was done
-        tool_calls = [
-            msg
+        # Every executed call leaves one ``role: tool`` entry, whatever loop
+        # path ran it; assistant entries also hold calls that never ran.
+        tools_used = [
+            msg["name"]
             for msg in conversation
-            if msg.get("role") == "assistant" and "tool_calls" in msg
+            if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        tools_used = []
-        for msg in tool_calls:
-            for tool_call in msg.get("tool_calls", []):
-                if "function" in tool_call:
-                    tools_used.append(tool_call["function"]["name"])
 
         message = f"⚠️ Reached maximum steps limit ({steps_limit} steps)\n\n"
         message += f"Completed {steps_taken} steps using these tools:\n"
@@ -4250,6 +4252,90 @@ Do NOT wrap conversational replies in JSON.
         message += "3. Or complete remaining tasks manually\n"
 
         return message
+
+    def _answer_at_step_cap(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_limit: int,
+        step: int,
+    ) -> Optional[str]:
+        """Ask for the final answer once the step limit is spent, tools withheld.
+
+        Same model path as the loop (streaming or not), with ``tools=None``.
+        Returns the answer, or ``None`` when the user pressed Stop. Raises when
+        the call fails or the reply is not an answer; the caller says why.
+        """
+        cancel_event = getattr(self, "_cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("the request was cancelled")
+        if self._console_cancelled():
+            return None
+
+        request = messages + [
+            {
+                "role": "user",
+                "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+            }
+        ]
+        stats = None
+        if self.streaming:
+            stream = self.chat.send_messages_stream(
+                messages=request, system_prompt=self.system_prompt, tools=None
+            )
+            response = ""
+            for chunk in stream:
+                if self._console_cancelled():
+                    stream.close()
+                    return None
+                if chunk.is_complete:
+                    stats = chunk.stats
+                    response = chunk.text or response
+                else:
+                    self.console.print_streaming_text(chunk.text)
+                    response += chunk.text
+            self.console.print_streaming_text("", end_of_stream=True)
+        else:
+            self.console.start_progress(self._progress_label())
+            try:
+                reply = self.chat.send_messages(
+                    messages=request, system_prompt=self.system_prompt, tools=None
+                )
+            finally:
+                self.console.stop_progress()
+            response, stats = reply.text, reply.stats
+
+        perf_stats = stats or self.chat.get_stats()
+        if perf_stats:
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": {
+                        "type": "stats",
+                        "step": step,
+                        "performance_stats": perf_stats,
+                    },
+                }
+            )
+
+        response = re.sub(
+            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
+        ).strip()
+        if not response:
+            raise ValueError("the model returned an empty reply")
+        parsed = self._parse_llm_response(response)
+        answer = parsed.get("answer")
+        if not isinstance(answer, str):
+            answer = ""
+        if parsed.get("tool") or _unfinished_answer_kind(answer) == "tool_markup":
+            raise ValueError(
+                f"the model asked to run {parsed.get('tool') or 'another tool'} "
+                "instead of answering"
+            )
+        if not answer.strip():
+            raise ValueError("the model's reply had no answer in it")
+        conversation.append({"role": "assistant", "content": parsed})
+        return answer
 
     def _write_json_to_file(self, data: Dict[str, Any], filename: str = None) -> str:
         """
@@ -7468,6 +7554,48 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
+        # Out of steps with no answer: one more call, tools withheld, so the
+        # user hears what was found rather than only the canned note.
+        max_steps_reached = final_answer is None and not cancelled_by_console
+        if max_steps_reached:
+            tool_steps = steps_taken
+            steps_taken += 1
+            if self._turn_recorder is not None and self.chat is not None:
+                self.chat.turn_step = steps_taken
+            self.execution_state = self.STATE_COMPLETION
+            try:
+                cap_answer = self._answer_at_step_cap(
+                    messages, conversation, steps_limit, steps_taken
+                )
+            except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+                logger.warning("Could not write the step-limit summary: %s", e)
+                final_answer = (
+                    self._generate_max_steps_message(
+                        conversation, tool_steps, steps_limit
+                    ).rstrip()
+                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                )
+            else:
+                if cap_answer is None:
+                    cancelled_by_console = True
+                else:
+                    final_answer = self._with_verification_scope(
+                        self.finalize_answer(cap_answer, conversation)
+                    )
+                    verification_scope_applied = True
+                    _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
+                        conversation, self._tool_reported_usage
+                    )
+                    turn_record = self._finish_turn_record(final_answer, steps_taken)
+                    self._publish_turn_metrics(turn_record)
+                    self.console.print_final_answer(
+                        final_answer,
+                        streaming=self.streaming,
+                        total_tokens=cap_output_tokens,
+                        ttft_seconds=_query_ttft_seconds(conversation),
+                        tok_per_s=_query_tok_per_s(conversation),
+                    )
+
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
         # empty-answer classification (#2137/#2141) skips persistence. Returned
@@ -7506,8 +7634,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
-        # overflow, typed Lemonade error, parse give-up, loop-break summary —
-        # or leaves it None for the max-steps message below. Those are
+        # overflow, typed Lemonade error, parse give-up, loop-break summary,
+        # step-limit note when the closing call failed. Those are
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
@@ -7522,7 +7650,7 @@ Do NOT wrap conversational replies in JSON.
         result = {
             "status": (
                 "success"
-                if has_valid_answer and not has_errors
+                if has_valid_answer and not has_errors and not max_steps_reached
                 else ("failed" if has_errors else "incomplete")
             ),
             "result": (
@@ -7537,6 +7665,7 @@ Do NOT wrap conversational replies in JSON.
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
+            "max_steps_reached": max_steps_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
