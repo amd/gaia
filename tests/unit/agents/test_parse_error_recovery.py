@@ -1055,3 +1055,54 @@ class TestParseRecoveryPromptSurfacesStep1ImagePath:
         # image, not the first.
         assert r"C:\second\b.png" in text
         assert r"C:\first\a.png" not in text
+
+
+class _FailingToolAgent(_DummyAgent):
+    """A dummy agent with one tool that always reports an error."""
+
+    def _register_tools(self) -> None:
+        from gaia.agents.base.tools import tool
+
+        @tool
+        def run_check() -> dict:
+            """Run a check that fails."""
+            return {"status": "error", "error": "1 failed", "return_code": 1}
+
+
+class TestParseRetriesHaveTheirOwnBudget:
+    """Failed tool calls are ordinary work; they must not spend the retries a
+    malformed reply gets. A benchmark run lost its whole answer this way: three
+    refused or failing commands, then one malformed reply, and the turn ended
+    with "I had trouble formatting my tool call" on the first parse failure."""
+
+    @pytest.fixture
+    def failing_agent(self):
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            a = _FailingToolAgent(silent_mode=True, skip_lemonade=True)
+            a.streaming = False
+            return a
+
+    def test_a_malformed_reply_after_failing_tools_is_retried(self, failing_agent):
+        call = json.dumps({"tool": "run_check", "tool_args": {}})
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "test_retry hangs."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None, failing_agent, call, call, call, bad, good
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 5
+        assert "test_retry hangs." in result["result"]
+        assert "trouble formatting" not in result["result"]
+
+    def test_three_malformed_replies_still_give_up(self, failing_agent):
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None, failing_agent, bad, bad, bad, bad, bad
+        )
+
+        result = failing_agent.process_query("test", max_steps=10)
+
+        assert chat.send_messages.call_count == 3
+        assert "trouble formatting" in result["result"]

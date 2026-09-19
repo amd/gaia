@@ -5311,6 +5311,8 @@ Do NOT wrap conversational replies in JSON.
         # the turn ends with empty text instead of a completed answer (#2157).
         cancelled_by_console = False
         error_count = 0
+        # Malformed replies get their own budget: failed tool calls are ordinary work.
+        parse_failures = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         tool_call_log = (
             []
@@ -6135,6 +6137,7 @@ Do NOT wrap conversational replies in JSON.
                     }
                 )
                 error_count += 1
+                parse_failures += 1
                 # Issue #1023: pull the most recent successful image path
                 # out of step_results so both the recovery prompt and the
                 # give-up fallback can surface it.  When the SD two-step
@@ -6155,7 +6158,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
-                if error_count >= 3:
+                if parse_failures >= 3:
                     if _last_image_path:
                         final_answer = (
                             f"I generated your image at `{_last_image_path}`, "
@@ -6331,7 +6334,8 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     error_count += 1
-                    if error_count >= 3:
+                    parse_failures += 1
+                    if parse_failures >= 3:
                         final_answer = (
                             "I had trouble formatting my plan. Could you "
                             "rephrase or break the request into smaller pieces?"
