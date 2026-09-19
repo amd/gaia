@@ -248,12 +248,13 @@ class ToolLoader:
             query: The selection query (previous + current user message).
             registry: The live tool registry (source of truth for execution).
             skill_tools: The SKILL signal — exact tool names declared by the
-                host's loaded skills and by any learned procedure it recalled
+                host's active skills and by any learned procedure it recalled
                 for this goal (#1451), in priority order. Plain strings (the
                 loader never imports memory). Admitted after CORE and **ahead
                 of** the semantic candidates (precedence
                 ``CORE > SKILL > SEMANTIC``), cap-bound and with no bundle
-                pull-in. ``None`` / empty is the graceful-absence path: the
+                pull-in; a listed tool already loaded is not evicted this turn.
+                ``None`` / empty is the graceful-absence path: the
                 loaded set and the ``TOOL_LOADER`` log are byte-identical to a
                 CORE+SEMANTIC build (no ``skill`` key emitted). Names absent from
                 *registry* are dropped (mirrors bundle-absent handling), not
@@ -323,17 +324,18 @@ class ToolLoader:
         # before any semantic candidate — SKILL > SEMANTIC by admission order.
         # Cap-bound (mirrors the semantic loop): under cap admit, at cap LRU-evict
         # a non-CORE/non-this-turn tool or skip. No bundle pull-in (exact recipe).
+        # A requested tool that is already loaded is held for the turn, so an
+        # over-cap request settles instead of rotating its own tools.
         # Self-heals each turn: recall re-runs, so an idle recipe tool LRU-evicts.
         seen_skill: set[str] = set()
         for name in skill_tools or ():
-            if (
-                name in self._core
-                or name in self._loaded
-                or name not in registry
-                or name in seen_skill
-            ):
+            if name in self._core or name not in registry or name in seen_skill:
                 continue
             seen_skill.add(name)
+            if name in self._loaded:
+                # Still requested: evicting it for a later pick is per-turn churn.
+                admitted_this_turn.add(name)
+                continue
             sel.skill.append(name)
             if len(self._loaded) < self._max_tools:
                 self._admit(name, sel)

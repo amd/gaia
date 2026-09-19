@@ -1695,6 +1695,13 @@ Do NOT wrap conversational replies in JSON.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
 
+    def _active_skill_names(self) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose body renders this turn; ``None`` means all of them."""
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            return None
+        return frozenset(active_filter) | self._always_on_skill_names
+
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
 
@@ -1787,23 +1794,30 @@ Do NOT wrap conversational replies in JSON.
     _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
 
     def _loaded_skill_tools(self) -> List[str]:
-        """Tools the loaded skills need in the prompt, deduped, in load order.
+        """Tools this turn's active skills need in the prompt, deduped, in load order.
 
-        Each skill's ``tools_required``, plus the shell tool when it holds a
-        ``shell:execute:<binary>`` grant — a granted binary is useless without
-        the tool that runs it. Feeds the tool loader's SKILL signal, so a loaded
+        Each active skill's ``tools_required``, plus the shell tool when it holds
+        a ``shell:execute:<binary>`` grant — a granted binary is useless without
+        the tool that runs it. Tools a skill *provides* through its own
+        ``tools.py`` are not included; they still reach the prompt by semantic
+        match. Only skills whose body renders this turn count (see
+        :meth:`_active_skill_names`), so a loaded skill the turn is not about
+        holds no tool slots. Feeds the tool loader's SKILL signal, so an active
         skill's tools arrive without a separate ``load_tools`` round trip.
         """
         skills = getattr(self, "_loaded_skills", None)
         if not skills:
             return []
-        from gaia.skills.binaries import binary_permissions
+        active = self._active_skill_names()
+        grant_holders = self.granted_binaries.holders()
 
         tools: List[str] = []
         seen: set = set()
         for skill in skills.values():
+            if active is not None and skill.name not in active:
+                continue
             names = list(skill.gaia.tools_required)
-            if binary_permissions(skill.parsed_permissions()):
+            if skill.name in grant_holders:
                 names.append(self._SKILL_SHELL_TOOL)
             for name in names:
                 if name not in seen:
@@ -2407,7 +2421,7 @@ Do NOT wrap conversational replies in JSON.
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
-        active = set(active_filter) | self._always_on_skill_names
+        active = self._active_skill_names()
         body_sections = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
@@ -5047,14 +5061,14 @@ Do NOT wrap conversational replies in JSON.
         # skill, and before the body filter for the same reason.
         self._discover_skills_for_turn(user_input)
 
+        # Lazy skill-body activation (#2848 follow-up): re-selected every turn,
+        # so a stale skill match never survives into a turn that no longer
+        # needs it. Before the tool filter, which admits active skills' tools.
+        self._refresh_active_skill_filter(user_input)
+
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
-
-        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
-        # as the tool filter above, so a stale skill match never survives
-        # into a turn that no longer needs it.
-        self._refresh_active_skill_filter(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []

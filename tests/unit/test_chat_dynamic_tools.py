@@ -390,11 +390,28 @@ def test_loaded_skill_tools_are_cap_bound(tmp_path, registry_property):
     assert a._select_tools_for_turn("go") == ["c1", "t1"]
 
 
+def test_skill_hidden_this_turn_holds_no_tool_slots(
+    tmp_path, gh_on_path, registry_property
+):
+    """Only skills whose body renders this turn feed the SKILL signal."""
+    registry = _registry("c1", "run_shell_command")
+    a = _skill_agent(tmp_path, _real_loader(), registry, _HUB_SKILLS)
+    a.load_skill("github-triage")
+
+    a._active_skill_filter = ["some-other-skill"]
+    assert a._loaded_skill_tools() == []
+    assert "run_shell_command" not in a._select_tools_for_turn("what's the weather")
+
+    a._active_skill_filter = ["github-triage"]
+    assert a._loaded_skill_tools() == ["run_shell_command"]
+    assert "run_shell_command" in a._select_tools_for_turn("triage my inbox")
+
+
 def test_loaded_skill_tools_lead_and_recalled_tools_are_deduped():
     """Loaded-skill tools come first; recalled-procedure tools follow, once each."""
     loaded = MagicMock()
+    loaded.name = "coding"
     loaded.gaia.tools_required = ["read_file", "edit_file"]
-    loaded.parsed_permissions.return_value = []
     loader = MagicMock()
     loader.session_disabled = False
     loader.select.return_value = ["c1"]

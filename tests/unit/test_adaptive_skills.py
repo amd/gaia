@@ -726,6 +726,7 @@ class _OverlayStubAgent(LearnedOverlayStubMixin):
     loaded_skills = Agent.loaded_skills
     get_skills_system_prompt = Agent.get_skills_system_prompt
     _always_on_skill_names = Agent._always_on_skill_names
+    _active_skill_names = Agent._active_skill_names
 
     def __init__(self, store, skill):
         self._memory_store = store

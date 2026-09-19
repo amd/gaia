@@ -714,9 +714,10 @@ class ChatAgent(
         (no recall / memory disabled), so the loader runs on CORE + semantic
         exactly as in Parts 1-2.
 
-        Tools declared by skills loaded with ``load_skill`` join the same signal,
-        ahead of recalled-procedure tools: the user's skill is the stronger
-        signal, and it stops contributing the moment the skill is unloaded.
+        The ``tools_required`` of loaded skills whose body renders this turn
+        join the same signal, ahead of recalled-procedure tools: the user's
+        skill is the stronger signal. A skill stops contributing when the body
+        filter hides it or it is unloaded.
         """
         if not self._dynamic_tools_active():
             return None
