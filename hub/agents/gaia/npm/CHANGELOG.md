@@ -28,6 +28,12 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- **`sleep`, always on.** The agent can now wait before retrying, e.g. until a
+  rate limit resets, instead of giving up; before, its only way to wait was
+  `time.sleep` inside a confirmation-gated `run_python`. Up to five minutes per
+  call, no approval needed, and Stop ends the wait within a second. It joins the
+  always-on tool set (about 190 more prompt tokens per call) and the
+  `loop_control` bundle (80 tools → 81).
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it

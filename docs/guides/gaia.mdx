@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **80 tools** — the 59 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 79. Grouped by what they're for:
+The default construction registers **81 tools** — the 60 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 80. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -105,11 +105,11 @@ The default construction registers **80 tools** — the 59 of the Chat agent's `
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
+| Run control | `request_user_input`, `set_loop_state`, `sleep`, `load_tools`, `read_tool_output` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project. `sleep` waits up to five minutes per call, so the agent can wait out a rate limit before retrying; pressing Stop ends the wait within a second.
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
 
