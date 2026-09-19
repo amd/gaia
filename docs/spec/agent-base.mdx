@@ -132,7 +132,7 @@ def __init__(
         debug: Enable debug logging (default: False)
         output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
         max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited)
-        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4)
+        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
         min_context_size: Minimum context size required for this agent (default: 32768)
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
         device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected
