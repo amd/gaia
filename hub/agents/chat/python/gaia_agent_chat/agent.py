@@ -50,6 +50,10 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
+from gaia.llm.inference_location import (
+    InferenceLocation,
+    resolve_inference_location,
+)
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     is_tool_calling_model,
@@ -802,6 +806,45 @@ class ChatAgent(
         """
         return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
 
+    def _inference_location(self) -> InferenceLocation:
+        """Where this session's chat turns are actually answered (#3674).
+
+        Reads the live client when there is one. During ``__init__`` the prompt
+        can be composed before ``AgentSDK`` exists (MCP registration rebuilds
+        it), and the same backend choice is already on the agent itself by
+        then; every later rebuild — including the one every model switch runs —
+        sees the client.
+        """
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            # The live client classifies better than the id prefix can: it
+            # holds the catalog metadata, so a cloud provider discovered at
+            # runtime is recognised too.
+            lookup = getattr(
+                getattr(chat, "llm_client", None), "cloud_model_provider", None
+            )
+            return resolve_inference_location(
+                chat.effective_model,
+                use_claude=bool(chat.config.use_claude),
+                use_openai=bool(getattr(chat.config, "use_chatgpt", False)),
+                cloud_provider_lookup=lookup if callable(lookup) else None,
+            )
+        # Pre-client: read the config the client is about to be built from —
+        # it carries the same three answers, including the Claude model id,
+        # which ``model_id`` does not.
+        config = getattr(self, "config", None)
+        use_claude = bool(getattr(config, "use_claude", False))
+        model = (
+            getattr(config, "claude_model", None)
+            if use_claude
+            else getattr(config, "model_id", None)
+        )
+        return resolve_inference_location(
+            model or DEFAULT_MODEL_NAME,
+            use_claude=use_claude,
+            use_openai=bool(getattr(config, "use_chatgpt", False)),
+        )
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         profile = getattr(self.config, "prompt_profile", "full")
@@ -924,8 +967,20 @@ No documents are currently indexed.
 - CPU: `lscpu`, GPU: `lspci | grep VGA`, Memory: `free -h`
 """
 
-        base_prompt = f"""You are GAIA — a personal AI running locally on the user's machine. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
-{platform_block}
+        location = self._inference_location()
+        whereabouts = "running locally on the user's machine"
+        if location.remote:
+            whereabouts = (
+                "on the user's machine, thinking on " f"{location.display} this session"
+            )
+        inference_block = f"""
+**WHERE THIS SESSION IS PROCESSED:** {location.describe()}
+- Answer any question about your provider, model, or whether you are local or
+  cloud from THIS line. Never read config files or run commands to find out.
+"""
+
+        base_prompt = f"""You are GAIA — a personal AI {whereabouts}. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
+{platform_block}{inference_block}
 
 **WHO YOU ARE:**
 - You're GAIA. Not "an AI assistant" or "a helpful tool" — just GAIA.
