@@ -444,6 +444,14 @@ actual rows instead of asking the agent to summarize its own memory (which can
 omit or misremember what it stored). It only reads; editing, deleting, and
 adding are still Agent UI features.
 
+`/memory` works the same way regardless of how the flagship agent got onto your
+machine -- installed standalone, or hub-installed via `gaia init` and run as a
+daemon-supervised sidecar. The one thing that can still block it is an
+out-of-date sidecar: a peer built before this contract has no memory route at
+all, and `/memory` says so and names the fix rather than failing silently --
+`gaia hub uninstall gaia` then `gaia hub install gaia` picks up a build that has
+it.
+
 ---
 
 ## How Memory Improves Over Time

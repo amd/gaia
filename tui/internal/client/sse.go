@@ -85,8 +85,10 @@ type SSEClient struct {
 	transcript []Turn
 	closed     bool
 	active     *runHandle
-	// peer is what negotiation learned about the sidecar's contract version;
-	// peerProbed guards the one-shot probe. See negotiate.go.
+	// peer is what negotiation learned about the sidecar's contract version --
+	// peer.answered distinguishes a real answer from a failed probe; peerProbed
+	// guards the one-shot probe attempt itself, so a failed probe is cached as
+	// "unanswered" rather than retried every call. See negotiate.go.
 	peer       peerContract
 	peerProbed bool
 	// noticedOldPeer records that the "this agent cannot be asked anything"
@@ -972,6 +974,55 @@ func newRunID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
+// Supports implements CapabilityReporter -- NO probe, NO blocking.
+// paletteFiltered/syncPalette run per keystroke, synchronously, and cannot
+// wait on a network round-trip.
+//
+// The question this answers is "can this session EVER run the command", not
+// "would it succeed right now". Those differ for a capability the agent owns
+// but its installed build predates: the agent genuinely has the feature, so
+// hiding the command would leave the user staring at a missing one with
+// nothing on screen explaining it. Version belongs to the attempt, which
+// refuses with a message naming the floor; only a structural absence belongs
+// here.
+//
+// Callers MUST treat known == false as "do not hide the command yet", never
+// as "unsupported".
+func (s *SSEClient) Supports(c Capability) (supported, known bool) {
+	switch c {
+	case CapabilityMemory:
+		// Agent id alone, and therefore answerable without the peer: `email`
+		// has no memory store at any version, while the flagship has one at
+		// every version. Deliberately NOT gated on the contract floor — see
+		// the doc comment.
+		return s.agentID == memoryAgentID, true
+	default:
+		// Not (false, true): claiming to KNOW a capability this build has
+		// never heard of would hide it on whichever transport was not taught
+		// about it, silently — the exact failure the tri-state exists to
+		// prevent. An unrecognized capability is unknown, so callers show it
+		// and let the attempt explain itself.
+		return false, false
+	}
+}
+
+// ProbeCapabilities populates the cached peer contract Supports reads, so a
+// capability answer is available before the user ever tries the command it
+// gates. Blocking -- callers dispatch it as an async tea.Cmd at chat start
+// rather than calling it from the UI goroutine.
+//
+// Cheap in practice: for a daemon-transport session the preflight readiness
+// gate has already ensured the sidecar, so EnsureAgent here is a fast attach,
+// not a cold spawn.
+func (s *SSEClient) ProbeCapabilities(ctx context.Context) error {
+	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
+	if err != nil {
+		return err
+	}
+	s.negotiate(ctx, inst)
+	return nil
+}
+
 // Compile-time proof the daemon transport satisfies the same interface as the
 // subprocess one.
 var (
@@ -980,4 +1031,6 @@ var (
 	_ AgentConfirmer     = (*SSEClient)(nil)
 	_ AgentCanceler      = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
+	_ CapabilityReporter = (*SSEClient)(nil)
+	_ MemoryProvider     = (*SSEClient)(nil)
 )

@@ -147,3 +147,26 @@ type PermissionBypasser interface {
 	// effect on the next gated tool, including one in a turn already running.
 	SetBypassPermissions(enabled bool) error
 }
+
+// Capability names one optional thing a session can do, so the UI can offer
+// or refuse a command without hard-coding transport type switches.
+type Capability string
+
+// CapabilityMemory gates the /memory command: whether this session can fetch
+// the agent's stored memory dump.
+const CapabilityMemory Capability = "memory"
+
+// CapabilityReporter is implemented by transports that can answer, WITHOUT
+// blocking or probing, which optional commands this session supports right
+// now. Both return values matter: supported is the answer, known is whether
+// the answer is trustworthy yet.
+//
+// A daemon-relayed transport only learns the peer's contract from an async
+// probe (negotiate.go), which the UI cannot wait on from a synchronous,
+// per-keystroke call site (paletteFiltered, syncPalette). known == false
+// means "the probe hasn't resolved" -- callers must treat that as "do not
+// hide the command yet", never as "unsupported", or a command flickers away
+// on every keystroke until the probe lands.
+type CapabilityReporter interface {
+	Supports(c Capability) (supported, known bool)
+}

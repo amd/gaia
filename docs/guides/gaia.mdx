@@ -90,33 +90,35 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **71 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **80 tools** — the 59 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 79. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
 | Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `search_indexed_chunks`, `list_indexed_documents`, `summarize_document`, `dump_document`, `rag_status`, `evaluate_retrieval` |
-| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file`, `search_file_content`, `list_files`, `list_recent_files`, `file_info`, `get_file_info`, `browse_directory`, `search_directory`, `tree`, `add_watch_directory`, `execute_python_file` |
+| Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file`, `search_file_content`, `list_files`, `list_recent_files`, `file_info`, `get_file_info`, `browse_directory`, `search_directory`, `tree`, `add_watch_directory`, `execute_python_file`, `run_python` |
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
+| Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
+| Audio | `transcribe_media`, `refine_transcript` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `load_tools` |
+| Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
 
 ### Tools that need your approval
 
-Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Eight tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, all seven are refused rather than prompted.** That
+  **Over the sidecar's `/query` stream, all eight are refused rather than prompted.** That
   surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
@@ -194,7 +196,7 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
 | `POST /v1/gaia/query/{run_id}/followup` | Add to a turn already running, without interrupting it. |
 
-`/query` implements the shared canonical SSE contract (API version **2.13**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
+`/query` implements the shared canonical SSE contract (API version **2.14**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
 
 - **You mint the `run_id`**, not the server. Cancellation keys off it, so it has to exist before the request rather than arrive in the stream.
 - **Conversation context is pushed in the body**, never pulled. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
@@ -241,5 +243,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all seven [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, all eight [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
 - **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.

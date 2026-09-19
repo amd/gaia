@@ -198,6 +198,39 @@ def _safe_json_loads(value) -> object:
         return None
 
 
+def _bounded_args_json(args: dict | None) -> str | None:
+    """Tool args as JSON that always parses and fits MAX_FTS_QUERY_LENGTH.
+
+    Cutting the serialized text left every large write_file/edit_file call
+    unreadable in tool history. Long values are shortened instead, keeping
+    short ones like file_path, and ``_truncated`` marks a partial result.
+    """
+    if not args:
+        return None
+    text = json.dumps(args, default=str)
+    if len(text) <= MAX_FTS_QUERY_LENGTH:
+        return text
+    for limit in (200, 60, 0):
+        shrunk: dict = {}
+        for k, v in args.items():
+            # Nested lists/dicts are shortened as their JSON text.
+            v_text = v if isinstance(v, str) else json.dumps(v, default=str)
+            shrunk[k] = v_text[:limit] + "..." if len(v_text) > limit else v
+        shrunk["_truncated"] = True
+        text = json.dumps(shrunk, default=str)
+        if len(text) <= MAX_FTS_QUERY_LENGTH:
+            return text
+    keys: list[str] = []
+    for key in sorted(str(k) for k in args):
+        if (
+            len(json.dumps({"_truncated": True, "keys": keys + [key]}))
+            > MAX_FTS_QUERY_LENGTH
+        ):
+            break
+        keys.append(key)
+    return json.dumps({"_truncated": True, "keys": keys})
+
+
 # ============================================================================
 # Schema SQL
 # ============================================================================
@@ -2028,13 +2061,10 @@ class MemoryStore:
     ) -> None:
         """Log a tool call to tool_history."""
         now = _now_iso()
-        args_json = json.dumps(args, default=str) if args else None
-        # Truncate all text columns to MAX_FTS_QUERY_LENGTH chars.  Tool args,
+        args_json = _bounded_args_json(args)
+        # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
         # results, and error messages can all be arbitrarily large (e.g.
-        # write_file called with 100 KB content).  Storing the full payload
-        # bloats the database without adding search or observability value.
-        if args_json and len(args_json) > MAX_FTS_QUERY_LENGTH:
-            args_json = args_json[:MAX_FTS_QUERY_LENGTH]
+        # write_file called with 100 KB content).
         if result_summary and len(result_summary) > MAX_FTS_QUERY_LENGTH:
             result_summary = result_summary[:MAX_FTS_QUERY_LENGTH]
         if error and len(error) > MAX_FTS_QUERY_LENGTH:

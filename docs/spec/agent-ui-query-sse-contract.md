@@ -392,7 +392,7 @@ whose options are Approve and Deny — so receivers should implement one questio
 UI, not two. That migration is a separate change: it alters the security
 behaviour above and must be made deliberately.
 
-### 5.2 Adding to a run already in flight (schema 2.13)
+### 5.2 Adding to a run already in flight (schema 2.14)
 
 **`POST /v1/<agent>/query/{run_id}/followup`**
 
@@ -428,7 +428,7 @@ next turn. A delivered follow-up therefore has to be recorded host-side, between
 that turn's question and its answer, or it vanishes from the conversation the
 moment the next turn starts.
 
-**Send only to a peer at contract ≥ 2.13**; an older sidecar 404s the path
+**Send only to a peer at contract ≥ 2.14**; an older sidecar 404s the path
 itself, which a client must not misread as "the run ended" (see §7).
 
 ---

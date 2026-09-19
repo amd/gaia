@@ -231,6 +231,80 @@ class TestQueryTTFTSeconds:
         # happened to produce the visible answer, and not an average/sum.
         assert _query_ttft_seconds(conversation) == 8.2
 
+    # ── Cold-load attribution (#2924) ───────────────────────────────────
+    #
+    # Lemonade's /stats only measures generation (prefill+decode); it never
+    # sees model-load time. LemonadeClient.get_stats() merges in
+    # model_load_seconds, measured client-side, only when THIS request's
+    # step actually loaded the model.
+    def test_cold_step_adds_model_load_seconds_to_ttft(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "time_to_first_token": 7.6,
+                        "model_load_seconds": 36.9,
+                    },
+                },
+            },
+        ]
+        # 44.5 == the real cold-query wall time cited in #2924; prefill alone
+        # (7.6) is what shipped, indistinguishable from the warm case.
+        assert _query_ttft_seconds(conversation) == pytest.approx(44.5)
+
+    def test_warm_step_without_load_is_unaffected(self):
+        # No model_load_seconds key at all — the common warm-path shape,
+        # unchanged from before #2924's fix.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": 7.7},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) == pytest.approx(7.7)
+
+    def test_zero_model_load_seconds_does_not_alter_ttft(self):
+        # A step that ran _ensure_model_loaded but found the model already
+        # resident never sets model_load_seconds at all in practice, but a
+        # defensive zero/negative value must never subtract or no-op oddly.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "time_to_first_token": 7.7,
+                        "model_load_seconds": 0,
+                    },
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) == pytest.approx(7.7)
+
+    def test_non_finite_model_load_seconds_is_ignored(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {
+                        "time_to_first_token": 7.6,
+                        "model_load_seconds": float("nan"),
+                    },
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) == pytest.approx(7.6)
+
     def test_no_stats_entries_returns_none(self):
         assert _query_ttft_seconds([]) is None
         assert _query_ttft_seconds([{"role": "user", "content": "hi"}]) is None

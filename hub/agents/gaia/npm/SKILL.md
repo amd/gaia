@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.13**; the stream is
+package — call it with plain `fetch`. Contract version **2.14**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -322,7 +322,7 @@ Rules a client must respect:
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
 - **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
-  (contract ≥ 2.13, body `{ text }`). The run is not interrupted and no second
+  (contract ≥ 2.14, body `{ text }`). The run is not interrupted and no second
   turn starts: the agent folds the text in at its next step boundary and
   answers it alongside what it was already doing. Unknown run → **404**, an
   agent that cannot take one → **409**; both are loud, so hold the message
@@ -335,10 +335,10 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Seven of the agent's 71 tools mutate the machine and need explicit approval
-before they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Eight of the agent's tools mutate the machine and need explicit approval
+before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
 child on Windows to draw the notification — and the flagship adds two of its
 own, **`install_skill`** and **`remove_skill`**, because installing a skill
 writes third-party code under `~/.gaia/skills` and removing one deletes it.
@@ -360,7 +360,7 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those seven tools.** If your integration needs
+So: **`/query` cannot run any of those eight tools.** If your integration needs
 that, drive the agent from a surface that can prompt — its stdio transport is the
 one that can, because its control channel carries an approval back to a turn
 already in flight (SPEC §5.5) — or perform the mutation yourself from your own
@@ -502,7 +502,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The seven gated tools are unreachable **over `/query`** — the agent itself can
+  The eight gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
@@ -555,7 +555,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.14","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

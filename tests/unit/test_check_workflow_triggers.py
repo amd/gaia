@@ -72,6 +72,17 @@ class TestAccepted:
 
 
 class TestRejected:
+    @pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])
+    @pytest.mark.parametrize("key", ["branches", "branches-ignore"])
+    def test_all_pr_base_filters_are_rejected(self, workflow_dir, capsys, event, key):
+        _write(
+            workflow_dir,
+            "bad.yml",
+            f"on:\n  {event}:\n    {key}: [ main ]\njobs: {{}}\n",
+        )
+        assert check_workflow_triggers.run_check() == 1
+        assert f"on.{event}.{key}" in capsys.readouterr().err
+
     def test_inline_branches_filter(self, workflow_dir):
         _write(
             workflow_dir,

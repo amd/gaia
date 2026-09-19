@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
+from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -54,7 +55,10 @@ AGENT_ID = "gaia"
 
 #: Bumped when the wire surface changes. The TUI's ``negotiate.go`` gates
 #: optional request fields on this, so it must reflect real capability.
-API_VERSION = "2.13"
+#: 2.13 (#3978) added ``GET /memory`` — the daemon-transport counterpart of
+#: the stdio ``MEMORY_DUMP_QUERY`` sentinel. 2.14 (#3620) added
+#: ``POST /query/{run_id}/followup`` for mid-turn messages.
+API_VERSION = "2.14"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -151,7 +155,7 @@ class QueryRespondResponse(_Strict):
 
 
 class QueryFollowUpRequest(_Strict):
-    """Body of ``POST /v1/gaia/query/{run_id}/followup`` (contract >= 2.13)."""
+    """Body of ``POST /v1/gaia/query/{run_id}/followup`` (contract >= 2.14)."""
 
     text: str = Field(
         min_length=1,
@@ -176,7 +180,7 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
-        #: Mid-turn follow-ups (contract >= 2.13). The agent drains this at its
+        #: Mid-turn follow-ups (contract >= 2.14). The agent drains this at its
         #: step boundary; see Agent._drain_followups.
         self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
@@ -519,6 +523,33 @@ async def init() -> Dict[str, Any]:
     # 503 when not ready, mirroring the email sidecar so one client code path
     # handles both agents.
     return JSONResponse(body, status_code=200 if ready else 503)
+
+
+@router.get("/memory")
+async def memory() -> Dict[str, Any]:
+    """The ``/memory`` view's snapshot, for the daemon transport.
+
+    Same payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel
+    (``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just
+    without that path's JSON-in-a-final-event wrapping — this is a plain GET,
+    so the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes
+    it straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).
+    A one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``
+    regardless of which agent instance opens it.
+    """
+    agent = None
+    try:
+        # Off the event loop: constructing the agent registers every tool and
+        # loads its skills, which would stall concurrent runs' SSE heartbeats.
+        agent = await asyncio.to_thread(build_query_agent)
+        return await asyncio.to_thread(build_memory_dump, agent)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to build the memory dump: {exc}"
+        ) from exc
+    finally:
+        if agent is not None:
+            close_agent(agent)
 
 
 @router.post("/query")

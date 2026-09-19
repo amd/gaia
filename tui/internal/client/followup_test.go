@@ -40,7 +40,7 @@ func startedRun(t *testing.T, f *fakeRelay) (*SSEClient, <-chan interface{}, fun
 // run_id, without a second /query the session lock would refuse anyway.
 func TestSendFollowUpPostsToTheRunningTurn(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	c, ch, stop := startedRun(t, f)
 
 	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err != nil {
@@ -69,7 +69,7 @@ func TestSendFollowUpPostsToTheRunningTurn(t *testing.T) {
 // message the agent demonstrably saw and the conversation then forgets.
 func TestADeliveredFollowUpSurvivesIntoTheNextTurn(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	c, ch, stop := startedRun(t, f)
 
 	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err != nil {
@@ -108,7 +108,7 @@ func TestADeliveredFollowUpSurvivesIntoTheNextTurn(t *testing.T) {
 // turn pushes — that would put words in the agent's mouth it never received.
 func TestARefusedFollowUpIsNotRecorded(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	f.followUpStatus = http.StatusNotFound
 	c, ch, stop := startedRun(t, f)
 
@@ -144,11 +144,11 @@ func TestARefusedFollowUpIsNotRecorded(t *testing.T) {
 // run ended" if the client just posts and reads the status. Ask first.
 func TestAnOlderPeerIsNeverSentAFollowUp(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.12"
+	f.contractVersion = "2.13"
 	c, ch, stop := startedRun(t, f)
 
 	if c.FollowUpSupported() {
-		t.Error("a 2.12 peer was reported as taking mid-turn input")
+		t.Error("a 2.13 peer was reported as taking mid-turn input")
 	}
 	err := c.SendFollowUp(context.Background(), "only the unread ones")
 	if err == nil {
@@ -157,7 +157,7 @@ func TestAnOlderPeerIsNeverSentAFollowUp(t *testing.T) {
 	// Naming the floor and the fix is the difference between "broken" and
 	// "update the agent" — and the sentence has to end with where the message
 	// went, because the user is still holding it.
-	for _, want := range []string{"2.13", "gaia hub", "queued"} {
+	for _, want := range []string{"2.14", "gaia hub", "queued"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}
@@ -178,7 +178,7 @@ func TestAnOlderPeerIsNeverSentAFollowUp(t *testing.T) {
 // has to decode.
 func TestAFollowUpWithNoRunInFlightIsRefused(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
 		frame(w, `{"type":"final","answer":"done"}`)
 		flush()
@@ -200,7 +200,7 @@ func TestAFollowUpWithNoRunInFlightIsRefused(t *testing.T) {
 // in the model's context.
 func TestAnEmptyFollowUpIsRefusedBeforeTheNetwork(t *testing.T) {
 	f := newFakeRelay(t)
-	f.contractVersion = "2.13"
+	f.contractVersion = "2.14"
 	c, ch, stop := startedRun(t, f)
 
 	if err := c.SendFollowUp(context.Background(), "   "); err == nil {

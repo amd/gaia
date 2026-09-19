@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.13"`                  |
+| Contract version   | `API_VERSION = "2.14"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -265,15 +265,28 @@ the header.
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
+| `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
-| `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.13) |
+| `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.14) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
+`GET /v1/gaia/memory` returns the read-only snapshot behind the TUI's
+`/memory` view: `{ "available", "reason", "stats", "contexts", "shown",
+"total", "items" }`. `available: false` means the session has no live memory
+store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
+names why, so an outage never renders as "you have no memories". This is the
+daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
+paths call the same `build_memory_dump()` and return the identical shape.
+
 ### 5.2 `session_id` and agent retention
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
@@ -403,7 +416,7 @@ remotely, so a local server URL alone does not establish local inference.
 ### 5.6 Adding to a turn already running
 
 `POST /v1/gaia/query/{run_id}/followup` with `{ "text": "…" }` hands a live run
-something the user typed after it started. Contract ≥ 2.13.
+something the user typed after it started. Contract ≥ 2.14.
 
 It is not a second turn and not an interrupt. The run keeps going on its
 existing SSE stream; the agent folds the text into that turn's context at its
@@ -425,7 +438,7 @@ a delivered follow-up in the `context` you push on the **next** turn, between
 that turn's question and its answer, or the conversation loses words the agent
 demonstrably saw.
 
-Clients that predate 2.13 get a `404` on the path itself. Probe `/version`
+Clients that predate 2.14 get a `404` on the path itself. Probe `/version`
 before sending rather than reading a 404 as "the run ended".
 
 ## 6. Process ownership

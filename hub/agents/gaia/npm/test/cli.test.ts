@@ -108,8 +108,20 @@ describe("executable names", () => {
 
 describe("contract constants", () => {
   it("matches the sidecar's API_VERSION", () => {
-    // gaia_agent/server.py: API_VERSION = "2.13"
-    expect(API_VERSION).toBe("2.13");
+    // Derived from the Python source, not restated, so a bump on one side
+    // without the other fails here instead of silently drifting.
+    const serverPy = fs.readFileSync(
+      path.join(__dirname, "..", "..", "python", "gaia_agent", "server.py"),
+      "utf8",
+    );
+    const match = serverPy.match(/^API_VERSION = "([^"]+)"/m);
+    if (!match) {
+      throw new Error(
+        "could not find `API_VERSION = \"...\"` in gaia_agent/server.py — " +
+          "update this test's regex if the sidecar's declaration moved",
+      );
+    }
+    expect(API_VERSION).toBe(match[1]);
   });
 });
 

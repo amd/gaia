@@ -828,6 +828,24 @@ class TestReadFile:
         assert "1.0 KB" in result or "1024" in result  # mentions the cap
         assert "preview" in result.lower()  # suggests recovery path
 
+    def test_bounded_pages_recover_oversized_file_middle(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        path = tmp_path / "huge.txt"
+        path.write_text("x" * 4096 + "EXACT-TAIL", encoding="utf-8")
+        page = json.loads(self.read(str(path), offset=4096, limit=10))
+        assert page["content"] == "EXACT-TAIL"
+        assert page["next_offset"] is None
+
+    def test_non_utf8_page_matches_normal_read(self, tmp_path):
+        path = tmp_path / "legacy.txt"
+        text = "café résumé\n" * 103
+        path.write_bytes(text.encode("cp1252"))
+        normal = self.read(str(path), lines=2)
+        assert "café" in normal
+        page = json.loads(self.read(str(path), offset=24, limit=12))
+        assert page["content"] == text[24:36]
+        assert page["encoding"] != "utf-8"
+
     def test_read_file_preview_still_works_on_oversized(self, tmp_path, monkeypatch):
         """mode='preview' bypasses the total-size check and streams lines."""
         monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
