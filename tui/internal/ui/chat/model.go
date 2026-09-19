@@ -407,6 +407,10 @@ type ChatModel struct {
 	// memoryLoading is true from /memory until its fetch resolves (or times
 	// out) — drives the spinner and lets Esc cancel a stuck fetch.
 	memoryLoading bool
+	// memoryColdStart records that the agent was not yet running when the
+	// fetch began, so the wait can say the agent is starting rather than
+	// implying the read itself is slow.
+	memoryColdStart bool
 	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
 	memoryCancelFn context.CancelFunc
 }
@@ -784,6 +788,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize()
 		return m, nil
+
+	case conversationClearedMsg:
+		return m.handleConversationCleared(msg)
 
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
@@ -1564,15 +1571,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
 	case "/clear":
-		m.messages = nil
-		// Daemon-transport agents are stateless per turn: the host pushes the
-		// transcript back as `context`, so clearing the view must clear that
-		// too or the "cleared" history keeps being sent.
-		if r, ok := m.client.(client.TranscriptResetter); ok {
-			r.ResetTranscript()
-		}
-		m.updateViewport()
-		return m, nil
+		return m.clearConversation()
 
 	case "/memory":
 		return m.startMemoryFetch()
@@ -2155,7 +2154,11 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.memoryLoading {
-		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		note := "Loading memory…"
+		if m.memoryColdStart {
+			note = "Starting the agent, then loading memory… (first run takes a moment)"
+		}
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render(note))
 		sb.WriteString("\n")
 	}
 	if m.memoryView != nil {

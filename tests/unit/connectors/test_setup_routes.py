@@ -1,6 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Authored setup-walkthrough content (#2590) — Outlook only, this PR.
+"""Authored setup-walkthrough content (#2590, #2594) — Outlook and personal
+Gmail.
 
 Two things are worth defending:
 
@@ -24,8 +25,65 @@ def test_microsoft_route_is_registered():
 
 
 def test_unknown_provider_returns_none_not_a_crash():
-    assert sr.get_route("google") is None
     assert sr.get_route("does-not-exist") is None
+    assert sr.get_route("google_workspace") is None
+    assert sr.get_route("microsoft_work") is None
+
+
+def test_google_route_is_registered():
+    assert sr.get_route("google") is sr.GOOGLE_PERSONAL
+    assert sr.ROUTES["google"] is sr.GOOGLE_PERSONAL
+
+
+def test_google_route_has_two_credential_collecting_steps_id_and_secret():
+    """Unlike Microsoft, Google requires a client secret."""
+    credential_steps = [s for s in sr.GOOGLE_PERSONAL.steps if s.collects_credential]
+    assert [s.id for s in credential_steps] == ["client_id", "client_secret"]
+
+
+def test_only_the_google_secret_step_is_marked_sensitive():
+    for step in sr.GOOGLE_PERSONAL.steps:
+        assert step.sensitive == (step.id == "client_secret"), step.id
+    for step in sr.MS_PERSONAL.steps:
+        assert step.sensitive is False, step.id
+
+
+def test_google_route_has_no_loopback_only_steps():
+    """Google has no device-code flow for a personal client — every step
+    applies whichever sign-in mode is asked for."""
+    assert not any(s.loopback_only for s in sr.GOOGLE_PERSONAL.steps)
+    assert sr.steps_for(sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_DEVICE_CODE) == (
+        sr.steps_for(sr.GOOGLE_PERSONAL, sign_in=sr.SIGN_IN_LOOPBACK)
+    )
+
+
+def test_google_route_faq_confirms_a_secret_is_required():
+    """The inverse of Microsoft's rule — Google's route must be honest that
+    it DOES need a client secret."""
+    route_qa = next(
+        qa for qa in sr.GOOGLE_PERSONAL.faq if "secret" in qa.question_hints
+    )
+    assert "requires a client secret" in route_qa.answer.lower()
+
+
+def test_google_console_steps_render_matches_provider_error(monkeypatch):
+    """The one-source-of-truth guard for Google, mirroring the Microsoft
+    guard above — providers/google.py must derive its console_steps from
+    this same route, never a second hand-maintained copy (#2116)."""
+    monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.setattr(
+        "gaia.connectors.store.peek_provider_credentials", lambda provider: None
+    )
+    from gaia.connectors.errors import OAuthClientNotConfiguredError
+    from gaia.connectors.providers.google import GoogleOAuthProvider
+
+    try:
+        GoogleOAuthProvider(client_id="", client_secret="")
+    except OAuthClientNotConfiguredError as exc:
+        rendered = sr.render_console_steps(sr.GOOGLE_PERSONAL)
+        assert exc.console_steps == rendered
+    else:
+        raise AssertionError("expected OAuthClientNotConfiguredError")
 
 
 def test_route_has_exactly_one_credential_collecting_step():

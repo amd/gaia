@@ -856,35 +856,28 @@ func newRunID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// Supports implements CapabilityReporter by reading the cached peer contract
-// under the mutex -- NO probe, NO blocking. paletteFiltered/syncPalette run
-// per keystroke, synchronously, and cannot wait on a network round-trip.
+// Supports implements CapabilityReporter -- NO probe, NO blocking.
+// paletteFiltered/syncPalette run per keystroke, synchronously, and cannot
+// wait on a network round-trip.
 //
-// known is false until the peer has actually ANSWERED the /version probe
-// (peerContract.answered) -- not merely until one was attempted. A probe that
-// failed (relay error, timeout, 401, 503) never learned the peer's version,
-// so it stays unknown for the life of this client, same as before any probe
-// ran at all; negotiate caches the failure so this does not retry every
-// keystroke. Callers MUST treat known == false as "do not hide the command
-// yet", not as "unsupported" -- hiding a command this client simply hasn't
-// gotten a real answer about is worse than a refusal that explains itself
-// (#3978 A1).
+// The question this answers is "can this session EVER run the command", not
+// "would it succeed right now". Those differ for a capability the agent owns
+// but its installed build predates: the agent genuinely has the feature, so
+// hiding the command would leave the user staring at a missing one with
+// nothing on screen explaining it. Version belongs to the attempt, which
+// refuses with a message naming the floor; only a structural absence belongs
+// here.
+//
+// Callers MUST treat known == false as "do not hide the command yet", never
+// as "unsupported".
 func (s *SSEClient) Supports(c Capability) (supported, known bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.peer.answered {
-		return false, false
-	}
 	switch c {
 	case CapabilityMemory:
-		// Scoped to the agent that implements it, not to the contract number
-		// alone. Each sidecar versions its own contract independently, so a
-		// different agent can already be numerically past this floor while
-		// having no memory route at all — `email` is at 2.14 today. Version
-		// answers "is this build new enough", never "does this agent have the
-		// route"; both have to hold.
-		return s.agentID == memoryAgentID &&
-			contractAtLeast(s.peer.version, memoryContractMajor, memoryContractMinor), true
+		// Agent id alone, and therefore answerable without the peer: `email`
+		// has no memory store at any version, while the flagship has one at
+		// every version. Deliberately NOT gated on the contract floor — see
+		// the doc comment.
+		return s.agentID == memoryAgentID, true
 	default:
 		// Not (false, true): claiming to KNOW a capability this build has
 		// never heard of would hide it on whichever transport was not taught

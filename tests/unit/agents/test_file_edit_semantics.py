@@ -28,6 +28,7 @@ import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_edit import FileStateTracker, apply_unique_replacement
+from gaia.security import PathValidator
 
 # Valid Python (edit_python_file rejects edits that break the parse) with a
 # body line that deliberately appears twice.
@@ -85,7 +86,7 @@ def clean_tracker():
 
 
 @pytest.fixture(params=EDIT_TOOLS, ids=EDIT_TOOL_IDS)
-def edit_tool(request, mock_home):
+def edit_tool(request, tmp_path, mock_home):
     """Every edit tool, behind one ``(path, old, new) -> dict`` signature.
 
     The two ``edit_file`` implementations register under the same name and
@@ -96,6 +97,10 @@ def edit_tool(request, mock_home):
     _, module_name, class_name, registrar, tool_name = request.param
     module = importlib.import_module(module_name)
     mixin = getattr(module, class_name)()
+    # These tools require a host-bound path_validator (#3316) — without one
+    # they report the missing setup rather than the edit semantics under test.
+    mixin.path_validator = PathValidator()
+    mixin.path_validator.allowed_paths.add(tmp_path.resolve())
 
     saved = dict(_TOOL_REGISTRY)
     try:
@@ -319,6 +324,8 @@ class TestImplementationsCannotDiverge:
         for tool_id, module_name, class_name, registrar, tool_name in EDIT_TOOLS:
             module = importlib.import_module(module_name)
             mixin = getattr(module, class_name)()
+            mixin.path_validator = PathValidator()
+            mixin.path_validator.allowed_paths.add(tmp_path.resolve())
             saved = dict(_TOOL_REGISTRY)
             try:
                 getattr(mixin, registrar)()

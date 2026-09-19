@@ -1624,9 +1624,11 @@ class TestEditingLeavesTheWorkspaceClean:
             ),
         ],
     )
-    def test_without_a_validator_the_backup_still_leaves_the_repo(
+    def test_without_a_validator_the_edit_is_refused_and_leaves_nothing(
         self, repo, mock_home, name, kwargs
     ):
+        """A host that never bound path_validator is refused (#3316): no edit,
+        and no backup beside the file either."""
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         source = "x = 1\n\n\ndef f():\n    return 1\n"
@@ -1637,8 +1639,6 @@ class TestEditingLeavesTheWorkspaceClean:
 
         result = tool(file_path=str(repo / "app.py"), **kwargs)
 
-        assert result["status"] == "success", result
+        assert result["status"] == "error" and "path_validator" in result["error"]
         assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
-        backup = Path(result["backup_path"])
-        assert backup.is_relative_to(mock_home / ".gaia" / "cache" / "backups")
-        assert backup.read_text(encoding="utf-8") == source
+        assert (repo / "app.py").read_text(encoding="utf-8") == source
