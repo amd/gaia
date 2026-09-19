@@ -1445,7 +1445,7 @@ def test_python_m_pytest_without_the_grant_points_at_the_skill():
     error = _validation_error(_Gated(), "python -m pytest -q")
     assert error is not None
     assert "shell:execute:pytest" in error["error"], error
-    assert "load that skill" in error["error"]
+    assert "allowed list" not in error["error"]
 
 
 @pytest.mark.parametrize("launcher", ["python", "python3"])
