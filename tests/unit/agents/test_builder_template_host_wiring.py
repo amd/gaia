@@ -64,6 +64,20 @@ def _generate_and_exec(tmp_path, tool_name, class_name):
 # ---------------------------------------------------------------------------
 
 
+def _backend_available(tool_name: str) -> bool:
+    """False for a mixin gated on an optional extra that is not installed.
+
+    ``browser_use`` registers nothing without Playwright, on purpose: a core
+    install must not advertise a capability it cannot deliver. The contract
+    below still holds it to registering exactly nothing in that case.
+    """
+    if tool_name == "browser_use":
+        from gaia.browser.driver import installed
+
+        return installed()
+    return True
+
+
 def test_every_known_tool_generates_a_constructible_agent(tmp_path):
     from gaia.agents.registry import KNOWN_TOOLS
 
@@ -85,10 +99,15 @@ def test_every_known_tool_generates_a_constructible_agent(tmp_path):
         # any bound method and so proves nothing. What the generated agent
         # must show is that construction actually ran that registration and
         # left this mixin's tools callable.
-        assert _TOOL_REGISTRY, f"{tool_name}: construction registered no tools"
-        assert all(
-            callable(entry["function"]) for entry in _TOOL_REGISTRY.values()
-        ), tool_name
+        if _backend_available(tool_name):
+            assert _TOOL_REGISTRY, f"{tool_name}: construction registered no tools"
+            assert all(
+                callable(entry["function"]) for entry in _TOOL_REGISTRY.values()
+            ), tool_name
+        else:
+            assert (
+                not _TOOL_REGISTRY
+            ), f"{tool_name}: registered tools although its backend is absent"
         assert hasattr(agent, f"register_{tool_name}_tools"), tool_name
 
 
