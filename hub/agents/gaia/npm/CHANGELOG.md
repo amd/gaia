@@ -14,10 +14,13 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- Scratch files no longer land in the user's project. The system temp dir was
+  out of scope, so the agent wrote throwaway test runners and intermediate files
+  into the repository instead. It now gets its own scratch directory, named in its
+  prompt and deleted when the agent closes; the rest of the temp dir stays denied.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
-
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
   package script as argv[1], preserving unrelated tools in shared PATH directories.
 

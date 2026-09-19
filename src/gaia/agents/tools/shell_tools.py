@@ -1042,7 +1042,8 @@ class ShellToolsMixin:
                             return {
                                 **NOT_EXECUTED,
                                 "status": "error",
-                                "error": f"Access denied: {working_directory} is not in allowed paths",
+                                "error": f"Access denied: {working_directory} is not in allowed paths."
+                                f"{self.path_validator.scratch_hint(working_directory)}",
                                 "has_errors": True,
                             }
                     elif hasattr(self, "_is_path_allowed"):
