@@ -502,7 +502,12 @@ class ShellSession:
 
     def _ensure_temp_dir(self) -> str:
         if self._temp_dir is None or not os.path.isdir(self._temp_dir):
-            self._temp_directory = tempfile.TemporaryDirectory(prefix="gaia_shell_")
+            # ignore_cleanup_errors: _discard_temp_dir runs from run()'s finally,
+            # so a file a just-killed child still holds would otherwise replace
+            # the command's result with an exception.
+            self._temp_directory = tempfile.TemporaryDirectory(
+                prefix="gaia_shell_", ignore_cleanup_errors=True
+            )
             self._temp_dir = self._temp_directory.name
         return self._temp_dir
 
