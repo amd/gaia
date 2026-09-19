@@ -324,10 +324,10 @@ Rules a client must respect:
 
 ## 8. Over `/v1/gaia/query`, a gated tool asks — when you can answer
 
-Seven of the agent's tools mutate the machine and need explicit approval before
-they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Eight of the agent's tools mutate the machine and need explicit approval
+before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
 child on Windows to draw the notification — and the flagship adds two of its
 own, **`install_skill`** and **`remove_skill`**, because installing a skill
 writes third-party code under `~/.gaia/skills` and removing one deletes it.
@@ -376,7 +376,7 @@ data: {"type":"final","answer":"I stopped before running 'write_file' because it
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt
 nobody will ever see reads as a hang. So a one-shot integration cannot run those
-seven tools — pass a `session_id` and answer, or perform the mutation from your
+eight tools — pass a `session_id` and answer, or perform the mutation from your
 own code and let the agent do the reading and reasoning.
 
 ## 9. File-access scope
@@ -513,7 +513,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The seven gated tools are unreachable **over `/query`** — the agent itself can
+  The eight gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a

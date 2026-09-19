@@ -14,6 +14,8 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- Clearing a TUI conversation now also clears the flagship stdio agent’s prior
+  conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
 
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
@@ -35,16 +37,11 @@ the terminal UI meant building it from source.
 - **`gaia-agent --serve` works from a pip install.** The console script pointed
   past the transport dispatcher, so the documented HTTP mode exited with
   "unrecognized arguments".
-
-### Changed
-
-- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
-  the `claude` provider value. A differing major still raises
-  `VersionMismatchError`; a higher minor is accepted.
-- **Changing `model` on a live `session_id` switches in place** instead of
-  returning 409, so the conversation and any loaded skills survive it. A switch
-  that fails still returns 409 and leaves the session on its previous model.
-
+- **`run_python`, always on.** A quick calculation or data transform is now one
+  confirmation-gated call that runs from the project root and returns what it
+  printed, instead of a throwaway script left in your repository. It joins the
+  always-on tool set (about 250 more prompt tokens per call) and the `shell`
+  bundle.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
@@ -82,7 +79,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 26 of its 71 tools on any one call — a
+  profile.** The model is sent at most 28 of its 80 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.
@@ -154,6 +151,12 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently

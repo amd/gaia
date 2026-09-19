@@ -324,12 +324,17 @@ func noticeForMissingMemory(agentID, version string) string {
 	if version != "" {
 		have = "contract " + version
 	}
+	// Deliberately does NOT promise that reinstalling fixes it. `gaia hub
+	// install` fetches the PUBLISHED artifact, so when the floor is newer than
+	// the latest release the same build comes back and the advice is worse
+	// than none -- it sends the user in a circle.
 	return fmt.Sprintf(
 		"the installed '%s' agent speaks %s, so it cannot serve its memory dump "+
-			"over this connection -- that needs %d.%d or newer. "+
-			"Update it with `%s` then `%s`.",
+			"over this connection -- that needs %d.%d or newer. Check for a newer "+
+			"build with `%s`; if that is already the latest, this agent gets the "+
+			"memory view when the next one publishes.",
 		agentID, have, memoryContractMajor, memoryContractMinor,
-		updateCommand("uninstall", agentID), updateCommand("install", agentID))
+		updateCommand("install", agentID))
 }
 
 // updateCommand names the AGENT-scoped hub command, never the bare verb.
