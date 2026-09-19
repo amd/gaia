@@ -41,14 +41,20 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
+    VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
+    check_output,
     check_was_executed,
+    project_has_tests,
     strip_verification_scope,
+    unverified_change,
     verification_check_label,
     verification_check_target,
+    verify_after_change_correction,
 )
 
 # First-party imports
@@ -5192,8 +5198,33 @@ Do NOT wrap conversational replies in JSON.
                 ),
                 "failed": self._is_error_result(result),
                 "ran": check_was_executed(result),
+                "args": tool_args if isinstance(tool_args, dict) else {},
+                "output": check_output(tool_name, result),
             }
         )
+
+    def _verification_project_root(self) -> Optional[str]:
+        """The project this turn works in, from the shared project-root resolver."""
+        for hook in ("_project_map_root", "_script_project_root"):
+            if callable(getattr(self, hook, None)):
+                return getattr(self, hook)()
+        explicit = getattr(getattr(self, "config", None), "project_root", None)
+        return resolve_project_root(explicit)
+
+    def _verify_after_change_prompt(self) -> Optional[str]:
+        """Corrective message when files changed after the last check, else ``None``.
+
+        Judged from this turn's tool record, never the answer's wording. Silent
+        for read-only turns and for projects with no test suite.
+        """
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if not executions:
+            return None
+        root = self._verification_project_root()
+        changed = unverified_change(executions, root)
+        if changed is None or not project_has_tests(root):
+            return None
+        return verify_after_change_correction(changed)
 
     def verification_scope_statement(self) -> str:
         """This turn's bounded verified / partially verified / unverified line."""
@@ -5316,6 +5347,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        verify_after_change_reprompted = False
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7356,6 +7388,18 @@ Do NOT wrap conversational replies in JSON.
                             "Image generation is not available in this session — "
                             "start GAIA with the `--sd` flag to enable it."
                         )
+
+                # Changed code after the last test run: ask once for the run.
+                if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
+                    _correction = self._verify_after_change_prompt()
+                    if _correction:
+                        verify_after_change_reprompted = True
+                        logger.info(
+                            "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
+                        )
+                        messages.append({"role": "user", "content": _correction})
+                        conversation.append({"role": "user", "content": _correction})
+                        continue
 
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
