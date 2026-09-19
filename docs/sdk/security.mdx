@@ -14,19 +14,28 @@ icon: "shield-halved"
 ```python
 from gaia.security import PathValidator
 
-# Initialize validator
+# No scope supplied: the CWD, plus anything the interactive CLI persisted.
 validator = PathValidator()
 
-# Check if path is allowed
-if validator.is_path_allowed("/home/user/documents/file.txt"):
-    # Safe to access
-    process_file("/home/user/documents/file.txt")
+# An explicit scope stands alone — persisted grants are NOT unioned in.
+# Grant the files a session actually attached, not the folders holding them.
+session = PathValidator(allowed_paths=["/home/user/documents/report.pdf"])
 
-# Add allowed path
-validator.add_allowed_path("/home/user/work")
+# Reads: scope AND secrets. `.env`, id_rsa, *.pem, ~/.ssh/* are refused even
+# when they sit inside an allowed directory.
+is_allowed, reason = session.validate_read("/home/user/documents/report.pdf")
 
-# Paths are persisted in ~/.gaia/cache/
+# Writes: additionally refuses blocked directories and files that execute on
+# their own (.bashrc, PowerShell profiles, autostart entries, .git/**).
+is_allowed, reason = session.validate_write("/home/user/documents/out.md")
 ```
+
+<Warning>
+  Only a validator built **without** an `allowed_paths` argument reads or writes the
+  machine-global grants in `~/.gaia/cache/allowed_paths.json`. A host that computes a
+  per-session scope gets exactly that scope — one user's one-off `[a]lways` approval in
+  the CLI must not become standing access for every later Agent UI session.
+</Warning>
 
 ---
 

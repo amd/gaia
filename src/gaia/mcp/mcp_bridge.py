@@ -22,8 +22,13 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
+from gaia.api.local_http import (  # pylint: disable=wrong-import-position
+    is_allowed_origin,
+    origin_is_rejected,
+)
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
+from gaia.mcp.ports import MCP_BRIDGE_PORT  # pylint: disable=wrong-import-position
 
 # pylint: enable=wrong-import-position
 
@@ -43,6 +48,10 @@ AUTH_TOKEN_ENV_VAR = "GAIA_MCP_AUTH_TOKEN"
 # via do_OPTIONS: browsers never send Authorization on a preflight.)
 PUBLIC_PATHS = frozenset({"/health"})
 
+# Extra browser origins allowed to call the bridge (comma-separated). Loopback
+# origins are always allowed; everything else is refused, token or not.
+ALLOWED_ORIGINS_ENV_VAR = "GAIA_MCP_ALLOWED_ORIGINS"
+
 
 class GAIAMCPBridge:
     """HTTP-native MCP Bridge for GAIA - no WebSockets needed!"""
@@ -50,7 +59,7 @@ class GAIAMCPBridge:
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 8765,
+        port: int = MCP_BRIDGE_PORT,
         base_url: str = None,
         verbose: bool = False,
         auth_token: str = None,
@@ -238,6 +247,45 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
         return None
 
+    def _request_origin(self):
+        return self.headers.get("Origin", "") if self.headers else ""
+
+    def _send_cors_headers(self):
+        """Echo the caller's Origin only when it is allow-listed. Never ``*``."""
+        origin = self._request_origin()
+        if origin and is_allowed_origin(origin, ALLOWED_ORIGINS_ENV_VAR):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+
+    def _reject_foreign_origin(self):
+        """Send 403 for a request from an untrusted browser origin. True when rejected.
+
+        Requests with no Origin (curl, MCP clients, n8n) are not browser
+        requests and pass. A page elsewhere on the web is refused before any
+        tool runs, whether or not an auth token is configured.
+        """
+        origin = self._request_origin()
+        if not origin_is_rejected(origin, ALLOWED_ORIGINS_ENV_VAR):
+            return False
+        logger.warning(
+            "Rejected cross-origin MCP request: %s %s from origin %r",
+            self.command,
+            self.path,
+            origin,
+        )
+        self._drain_request_body()
+        self.send_json(
+            403,
+            {
+                "error": (
+                    f"Cross-origin request from {origin!r} rejected. Only "
+                    f"loopback origins may call the MCP bridge; add yours to "
+                    f"{ALLOWED_ORIGINS_ENV_VAR} (comma-separated) to allow it."
+                )
+            },
+        )
+        return True
+
     def _drain_request_body(self):
         """Consume any pending request body so the client can read our reply."""
         try:
@@ -277,6 +325,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.log_request_details("GET", self.path)
         parsed = urlparse(self.path)
 
+        if self._reject_foreign_origin():
+            return
         if self._reject_unauthenticated(parsed.path):
             return
 
@@ -337,7 +387,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         """Handle POST requests - main MCP endpoint."""
         parsed = urlparse(self.path)
 
-        # Authenticate before the body is read or any tool runs.
+        # Origin and auth are checked before the body is read or any tool runs.
+        if self._reject_foreign_origin():
+            return
         if self._reject_unauthenticated(parsed.path):
             return
 
@@ -436,8 +488,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle OPTIONS for CORS."""
         self.log_request_details("OPTIONS", self.path)
+        if self._reject_foreign_origin():
+            return
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
@@ -450,7 +504,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
@@ -495,7 +549,11 @@ def resolve_bind_host(host, authenticated=False):
 
 
 def start_server(
-    host="localhost", port=8765, base_url=None, verbose=False, auth_token=None
+    host="localhost",
+    port=MCP_BRIDGE_PORT,
+    base_url=None,
+    verbose=False,
+    auth_token=None,
 ):
     """Start the HTTP MCP server."""
     # Fix Windows Unicode
@@ -536,6 +594,23 @@ def start_server(
         print("Auth: 🔒 Bearer token required (/health stays public)")
     else:
         print("Auth: ⚠️  none - every endpoint is open to any client that can reach it")
+        print(
+            f"      Set --auth-token or ${AUTH_TOKEN_ENV_VAR} to require a Bearer token."
+        )
+        logger.warning(
+            "MCP bridge is running with NO authentication: any local process can "
+            "call its tools and share its one conversation. Pass --auth-token "
+            "or set %s.",
+            AUTH_TOKEN_ENV_VAR,
+        )
+    print(
+        "Browser origins: loopback only"
+        + (
+            f" + ${ALLOWED_ORIGINS_ENV_VAR}"
+            if os.environ.get(ALLOWED_ORIGINS_ENV_VAR)
+            else ""
+        )
+    )
     if verbose:
         print("\n🔍 Verbose Mode: ENABLED")
         print("   All requests will be logged to console and gaia.log")
@@ -565,12 +640,15 @@ def start_server(
         print("\n✅ Server stopped")
 
 
-def main():
+def build_parser():
+    """Build the ``gaia-mcp`` console-script argument parser."""
     import argparse
 
     parser = argparse.ArgumentParser(description="GAIA MCP Bridge - HTTP Native")
     parser.add_argument("--host", default="localhost", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
+    parser.add_argument(
+        "--port", type=int, default=MCP_BRIDGE_PORT, help="Port to listen on"
+    )
     parser.add_argument(
         "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
     )
@@ -584,7 +662,11 @@ def main():
             f"/health. Defaults to ${AUTH_TOKEN_ENV_VAR}."
         ),
     )
+    return parser
 
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     start_server(
         args.host, args.port, args.base_url, args.verbose, auth_token=args.auth_token

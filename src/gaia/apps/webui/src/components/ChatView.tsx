@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -333,37 +333,46 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         const t = log.chat.time();
         setLoadingMessages(true);
         let cancelled = false;
+        let loading = false;
 
-        const loadMessages = (isInitial = false) => {
-            api.getMessages(sessionId)
-                .then((data) => {
-                    if (cancelled) return;
-                    const msgs = (data.messages || []).map((m: any) => ({
-                        ...m,
-                        // Map snake_case agent_steps from API to camelCase agentSteps
-                        agentSteps: m.agentSteps || m.agent_steps || undefined,
-                        // Map inference_stats from API to stats field
-                        stats: m.stats || m.inference_stats || undefined,
-                    }));
-                    if (isInitial) {
-                        setMessages(msgs);
-                        lastMsgCountRef.current = msgs.length;
-                        log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
-                    } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
-                        // New messages from external source (MCP, API) — refresh
-                        log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
-                        setMessages(msgs);
-                        lastMsgCountRef.current = msgs.length;
-                    }
-                })
-                .catch((err) => {
-                    if (cancelled) return;
-                    if (isInitial) {
-                        log.chat.error(`Failed to load messages for session=${sessionId}`, err);
-                        setMessages([]);
-                    }
-                })
-                .finally(() => { if (!cancelled && isInitial) setLoadingMessages(false); });
+        const loadMessages = async (isInitial = false) => {
+            if (cancelled || loading) return;
+            loading = true;
+            try {
+                if (!isInitial) {
+                    if (useChatStore.getState().isStreaming) return;
+                    const total = await api.getMessageCount(sessionId);
+                    if (cancelled || total === lastMsgCountRef.current || useChatStore.getState().isStreaming) return;
+                }
+                const data = await api.getMessages(sessionId);
+                if (cancelled) return;
+                const msgs = (data.messages || []).map((m: any) => ({
+                    ...m,
+                    // Map snake_case agent_steps from API to camelCase agentSteps
+                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                    // Map inference_stats from API to stats field
+                    stats: m.stats || m.inference_stats || undefined,
+                }));
+                if (isInitial) {
+                    setMessages(msgs);
+                    lastMsgCountRef.current = msgs.length;
+                    log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
+                } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
+                    // New messages from external source (MCP, API) — refresh
+                    log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
+                    setMessages(msgs);
+                    lastMsgCountRef.current = msgs.length;
+                }
+            } catch (err) {
+                if (cancelled) return;
+                if (isInitial) {
+                    log.chat.error(`Failed to load messages for session=${sessionId}`, err);
+                    setMessages([]);
+                }
+            } finally {
+                loading = false;
+                if (!cancelled && isInitial) setLoadingMessages(false);
+            }
         };
 
         loadMessages(true);
@@ -783,51 +792,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
-                // ── Tool confirmation popup ──────────────────────────────
-                if (event.type === 'tool_confirm') {
-                    if (!event.confirm_id) {
-                        console.error('[ChatView] tool_confirm event missing confirm_id, ignoring');
-                        return;
-                    }
-                    const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
-                        // Auto-approve without showing the modal
-                        api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
-                            (err) => console.error('[ChatView] auto-confirm failed:', err)
-                        );
-                        return;
-                    }
-                    // Show the PermissionPrompt modal via notificationStore
-                    const notification: GaiaNotification = {
-                        id: event.confirm_id,
-                        type: 'permission_request',
-                        agentId: 'chat',
-                        agentName: 'GAIA',
-                        title: `Allow ${toolName}?`,
-                        message: `The agent wants to execute: ${toolName}`,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'high',
-                        tool: toolName,
-                        toolArgs: event.args as Record<string, unknown> | undefined,
-                        timeoutSeconds: event.timeout_seconds ?? 60,
-                    };
-                    addNotification(notification);
-                    return;
-                }
-
                 // Permission request — check always-allow list, then push to
                 // notification store for the PermissionPrompt overlay.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
-                    );
-                    if (alwaysAllowed.includes(toolName)) {
+                    if (useNotificationStore.getState().isAlwaysAllowed(sessionId, toolName)) {
                         api.confirmTool(sessionId, true).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
                         );
@@ -838,6 +807,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         id: event.confirm_id ?? `perm-${Date.now()}`,
                         type: 'permission_request',
                         agentId: sessionId,
+                        sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: `The agent wants to execute: ${toolName}`,
@@ -863,6 +833,28 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         data: {
                             action: typeof event.action === 'string' ? event.action : '',
                             summary: typeof event.summary === 'string' ? event.summary : '',
+                        },
+                    });
+                    return;
+                }
+
+                // ── Mid-run question (#2595) — answerable, non-terminal: the
+                // agent blocks server-side until NeedsInputCard posts an
+                // answer via POST /chat/user-input, then the run continues.
+                if (event.type === 'needs_input') {
+                    if (!event.request_id) {
+                        console.error('[ChatView] needs_input event missing request_id, ignoring');
+                        return;
+                    }
+                    appendCard({
+                        render: 'needs_input',
+                        data: {
+                            session_id: sessionId,
+                            request_id: event.request_id,
+                            question: typeof event.question === 'string' ? event.question : '',
+                            options: Array.isArray(event.options) ? event.options : [],
+                            allow_free_text: event.allow_free_text !== false,
+                            sensitive: Boolean(event.sensitive),
                         },
                     });
                     return;

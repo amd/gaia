@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -25,7 +26,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 
 class LinkResult(NamedTuple):
@@ -65,6 +66,19 @@ SKIP_DOMAINS = {
     "support.google.com",  # Locale/UA-gated help pages; 404s automated requests
     "myaccount.google.com",  # Redirects unauthenticated requests to sign-in (302)
 }
+
+# A github.com issue/PR page. Rewritten to the REST API equivalent below —
+# the HTML page is served through GitHub's anti-abuse layer, which resets
+# the connection under CI's shared/high-volume egress IPs (#2925); the API
+# is authenticated (when GITHUB_TOKEN is set) and rate-limit aware instead.
+GITHUB_ISSUE_PR_RE = re.compile(
+    r"^https?://github\.com/([^/]+)/([^/]+)/(?:issues|pull)/(\d+)(?:[/?#].*)?$"
+)
+
+# Number of extra attempts for a result classified as "warning" (transient /
+# unverifiable), so a single blip doesn't need a whole extra CI run to clear.
+EXTERNAL_LINK_RETRIES = 2
+EXTERNAL_LINK_RETRY_BACKOFF = 1.5  # seconds, multiplied by attempt number
 
 # URL patterns to skip
 SKIP_PATTERNS = [
@@ -201,37 +215,66 @@ def check_internal_link(
     return "broken", f"file not found: {clean_url}"
 
 
+def github_api_equivalent(url: str) -> Optional[str]:
+    """Map a github.com issue/PR page URL to its REST API equivalent."""
+    m = GITHUB_ISSUE_PR_RE.match(url)
+    if not m:
+        return None
+    owner, repo, number = m.groups()
+    return f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
+
+
+def _request_headers(effective_url: str) -> Dict[str, str]:
+    headers = {
+        "User-Agent": "GAIA-DocLinkChecker/1.0 (+https://github.com/amd/gaia)",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+    }
+    if effective_url.startswith("https://api.github.com/"):
+        headers["Accept"] = "application/vnd.github+json"
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
     """
     Check an external URL by sending a HEAD request (falling back to GET).
     Returns (status, detail).
     """
-    headers = {
-        "User-Agent": "GAIA-DocLinkChecker/1.0 (+https://github.com/amd/gaia)",
-        "Accept": "text/html,application/xhtml+xml,*/*",
-    }
-    req = urllib.request.Request(url, headers=headers, method="HEAD")
+    # github.com issue/PR pages go through an anti-abuse layer that can reset
+    # the connection under CI's shared egress IPs; the REST API is
+    # authenticated (when GITHUB_TOKEN is set) and rate-limit aware instead.
+    api_url = github_api_equivalent(url)
+    effective_url = api_url or url
+    headers = _request_headers(effective_url)
+    method = "GET" if api_url else "HEAD"
+    req = urllib.request.Request(effective_url, headers=headers, method=method)
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             code = resp.getcode()
             if code < 400:
-                return "ok", f"HTTP {code}"
+                return "ok", f"HTTP {code}" + (" (GitHub API)" if api_url else "")
             return "broken", f"HTTP {code}"
     except urllib.error.HTTPError as e:
         # Some servers reject HEAD, retry with GET
         if e.code == 405 or e.code == 403:
             try:
-                req_get = urllib.request.Request(url, headers=headers, method="GET")
+                req_get = urllib.request.Request(
+                    effective_url, headers=headers, method="GET"
+                )
                 with urllib.request.urlopen(req_get, timeout=timeout) as resp:
                     code = resp.getcode()
                     if code < 400:
                         return "ok", f"HTTP {code} (GET fallback)"
                     return "broken", f"HTTP {code}"
             except urllib.error.HTTPError as e2:
-                if e2.code == 403:
-                    return "warning", f"HTTP {e2.code} (may require auth)"
+                if e2.code in (403, 429) or e2.code >= 500:
+                    return "warning", f"HTTP {e2.code} (may require auth or be rate limited)"
                 return "broken", f"HTTP {e2.code}"
+            except (OSError, http.client.HTTPException) as e2:
+                return "warning", f"connection error on GET fallback: {e2}"
             except Exception as e2:
                 return "broken", str(e2)
         if e.code == 429:
@@ -255,8 +298,42 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
         return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"
+    except (OSError, http.client.HTTPException) as e:
+        # Covers e.g. http.client.RemoteDisconnected ("Remote end closed
+        # connection without response") — raised directly by
+        # HTTPConnection.getresponse() and NOT wrapped in urllib.error.URLError,
+        # so it falls through the reason-based classification above. Seen
+        # verbatim, only against github.com, in amd/gaia CI runs #31644732155
+        # and #31652531850 (2026-08-12) and #31680303088 (2026-08-13) — the
+        # anti-abuse layer resetting mid-response under a burst of concurrent
+        # unauthenticated requests from the runner's shared IP, not a dead
+        # link. Unverifiable, not broken.
+        return "warning", f"connection error: {e} (may block automated requests)"
     except Exception as e:
         return "broken", str(e)
+
+
+def check_external_link_with_retries(
+    url: str,
+    timeout: int = 15,
+    retries: int = EXTERNAL_LINK_RETRIES,
+    backoff: float = EXTERNAL_LINK_RETRY_BACKOFF,
+) -> Tuple[str, str]:
+    """Retry a "warning" (transient/unverifiable) result before giving up.
+
+    Never retries "ok" or "broken" — a genuine 404 stays broken on the first
+    attempt so the check keeps checking. Exhausting retries still reports
+    "warning", never escalates to "broken".
+    """
+    status, detail = check_external_link(url, timeout=timeout)
+    attempt = 0
+    while status == "warning" and attempt < retries:
+        time.sleep(backoff * (attempt + 1))
+        attempt += 1
+        status, detail = check_external_link(url, timeout=timeout)
+    if attempt:
+        detail = f"{detail} [after {attempt} retry(ies)]"
+    return status, detail
 
 
 def load_docs_json_pages(repo_root: str) -> Set[str]:
@@ -337,7 +414,7 @@ def check_links(
 
         def _check(url: str) -> Tuple[str, str, str]:
             time.sleep(0.1)  # Basic rate limiting
-            status, detail = check_external_link(url)
+            status, detail = check_external_link_with_retries(url)
             return url, status, detail
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:

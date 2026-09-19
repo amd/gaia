@@ -4,9 +4,12 @@
 package chat
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -25,6 +28,16 @@ var claudeChipStyle = lipgloss.NewStyle().
 // the transport so the chip is driven by what was actually passed to the
 // child, never by a second copy that could disagree with it.
 func (m ChatModel) applyLaunchClaude() ChatModel {
+	if c, ok := m.client.(interface{ ModelAtLaunch() string }); ok && c.ModelAtLaunch() != "" {
+		m.modelID = c.ModelAtLaunch()
+		m.modelDisplay = m.modelID
+		m.modelBackend = "lemonade"
+		if lemonade.IsCloudID(m.modelID) {
+			m.modelBackend = strings.SplitN(m.modelID, ".", 2)[0]
+			m.modelRemote = true
+		}
+	}
+
 	type launchClaude interface{ ClaudeAtLaunch() bool }
 	c, ok := m.client.(launchClaude)
 	if !ok || !c.ClaudeAtLaunch() {
@@ -100,6 +113,9 @@ var modelChipStyle = lipgloss.NewStyle().Foreground(theme.Text)
 func (m ChatModel) renderModelChip() string {
 	if m.modelDisplay == "" {
 		return m.renderClaudeChip()
+	}
+	if m.modelRemote && m.modelBackend != "claude" {
+		return claudeChipStyle.Render(" │ " + lemonade.Label(m.modelBackend) + " · " + strings.TrimPrefix(m.modelDisplay, m.modelBackend+".") + " (remote)")
 	}
 	if m.modelRemote {
 		return claudeChipStyle.Render(" │ " + claudeChipLabel(m.modelID))

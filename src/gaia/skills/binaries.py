@@ -61,6 +61,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
@@ -140,12 +141,13 @@ class Subcommand:
             non-flag token is a path operand (pytest's test paths), not a
             single subcommand action, and each is checked for a shape that
             could escape the project (absolute, drive-letter, or ``..``).
-        allowed_flags: For :attr:`BinaryPolicy.positional` rules only — the
-            valueless flags this grant accepts. Positional-mode flag checking
-            is an ALLOWLIST (unlike the subcommand mode's denylist above):
-            a binary that takes no subcommand executes the caller's own
-            arguments far more directly, so an unreviewed flag is refused
-            rather than passed through.
+        allowed_flags: The valueless flags this grant accepts. Setting it turns
+            flag checking into an ALLOWLIST — a flag absent from it, from
+            ``value_flags``, from ``flag_values`` and from the policy's
+            ``bare_flags`` is refused. Left empty (the default), unlisted flags
+            fall through and only ``denied_flags`` applies. Always set for a
+            :attr:`BinaryPolicy.positional` rule, whose binary executes the
+            caller's arguments far more directly.
         flag_value_prefixes: For positional rules — ``{flag: allowed lowercase
             value prefixes}``. Like ``flag_values`` but for a flag whose safe
             values share a prefix rather than an exact set (``-p no:...``).
@@ -300,6 +302,8 @@ _GH_COMMON_VALUE_FLAGS = frozenset(
         "--user",
         "--sort",
         "--order",
+        "--status",
+        "--visibility",
     }
 )
 
@@ -341,38 +345,95 @@ _GH_WRITE_VALUE_FLAGS = frozenset(
 #: classified — so they raise no prompt. Not writes in themselves; each is a
 #: different capability smuggled in on a write's back.
 _GH_WRITE_DENIED_FLAGS = frozenset(
-    {"-F", "--body-file", "-e", "--editor", "-w", "--web"}
+    {"-F", "--body-file", "-e", "--editor", "-w", "--web", "--watch"}
 )
 
-_GH_WRITE_DENIED_FLAG_REASONS = {
-    "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
-    "and an upload wearing an issue body's clothes. Pass the text with --body",
-    "--body-file": "it posts the contents of a LOCAL file to the remote — a "
-    "file-read and an upload wearing an issue body's clothes. Pass the text "
-    "with --body",
-    "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
-    "closed. Pass the text with --body",
-    "--editor": "it opens an interactive editor, which hangs an agent whose "
-    "stdin is closed. Pass the text with --body",
-    "-w": "it opens a browser on the machine instead of returning anything, so "
-    "a read gets you no output and a write you approved never happens",
-    "--web": "it opens a browser on the machine instead of returning anything, "
-    "so a read gets you no output and a write you approved never happens",
-}
+_GH_WRITE_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
+        "and an upload wearing an issue body's clothes. Pass the text with --body",
+        "--body-file": "it posts the contents of a LOCAL file to the remote — a "
+        "file-read and an upload wearing an issue body's clothes. Pass the text "
+        "with --body",
+        "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
+        "closed. Pass the text with --body",
+        "--editor": "it opens an interactive editor, which hangs an agent whose "
+        "stdin is closed. Pass the text with --body",
+        "-w": "it opens a browser on the machine instead of returning anything, so "
+        "a read gets you no output and a write you approved never happens",
+        "--web": "it opens a browser on the machine instead of returning anything, "
+        "so a read gets you no output and a write you approved never happens",
+        "--watch": "it blocks until the run finishes, which hangs an agent whose "
+        "stdin is closed. Poll with a plain read instead",
+    }
+)
 
 
-def _gh(actions: Iterable[str], confirm: Iterable[str] = ()) -> Subcommand:
+#: Refused on gh's READ subcommands. ``--web`` and ``--watch`` for the reasons
+#: above; ``-t``/``--show-token`` because on ``gh auth status`` it prints the
+#: GitHub credential itself — the escalation ``gh auth token`` is refused for,
+#: wearing a read's clothes. ``-t`` is ``--template`` everywhere else, which is
+#: why this is scoped per subcommand rather than set globally.
+_GH_READ_DENIED_FLAGS = frozenset({"-w", "--web", "--watch"})
+
+_GH_AUTH_DENIED_FLAGS = _GH_READ_DENIED_FLAGS | {"-t", "--show-token"}
+
+_GH_AUTH_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        **_GH_WRITE_DENIED_FLAG_REASONS,
+        "-t": "it prints the GitHub token to the output, which is the same "
+        "credential disclosure 'gh auth token' is refused for",
+        "--show-token": "it prints the GitHub token to the output, which is the "
+        "same credential disclosure 'gh auth token' is refused for",
+    }
+)
+
+
+#: Valueless flags a read subcommand accepts. An ALLOWLIST, like ``pytest``'s
+#: and for the same reason: a flag nobody reviewed is refused rather than
+#: passed through, so the next gh release cannot widen this grant on its own.
+_GH_READ_ALLOWED_FLAGS = frozenset(
+    {
+        "--log",
+        "--log-failed",
+        "--exit-status",
+        "--verbose",
+        "--comments",
+        "--source",
+        "--fork",
+        "--no-archived",
+        "--archived",
+        "--paginate",
+    }
+)
+
+
+def _gh(
+    actions: Iterable[str],
+    confirm: Iterable[str] = (),
+    *,
+    denied_flags: frozenset[str] = _GH_READ_DENIED_FLAGS,
+    denied_flag_reasons: Mapping[str, str] = _GH_WRITE_DENIED_FLAG_REASONS,
+) -> Subcommand:
     """One gh subcommand: reads that run unasked, plus writes the user approves.
 
-    *confirm* is empty for a purely read-only subcommand. When it is not, the
-    write-flag denylist comes with it — those flags are refused on the reads
-    too, which costs nothing (no read accepts them) and means one rule covers
-    the subcommand rather than one per action.
+    *confirm* is empty for a purely read-only subcommand; its flags are then an
+    ALLOWLIST, so an unreviewed flag is refused rather than passed through.
+    When *confirm* is not empty, the write-flag denylist comes with it — those
+    flags are refused on the reads too, which costs nothing (no read accepts
+    them) and means one rule covers the subcommand rather than one per action.
+
+    *denied_flags* / *denied_flag_reasons* override the read-side defaults for a
+    subcommand whose flags mean something different (``gh auth status -t``).
     """
     confirm_actions = frozenset(confirm)
     if not confirm_actions:
         return Subcommand(
-            actions=frozenset(actions), value_flags=_GH_COMMON_VALUE_FLAGS
+            actions=frozenset(actions),
+            value_flags=_GH_COMMON_VALUE_FLAGS,
+            allowed_flags=_GH_READ_ALLOWED_FLAGS,
+            denied_flags=denied_flags,
+            denied_flag_reasons=denied_flag_reasons,
         )
     return Subcommand(
         actions=frozenset(actions),
@@ -411,8 +472,14 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             # that carries it, which no per-call prompt makes visible.
             "label": _gh({"list"}, {"create", "edit"}),
             "search": _gh({"issues", "prs", "repos", "code", "commits"}),
-            # `status` only. `gh auth token` prints the credential.
-            "auth": _gh({"status"}),
+            # `status` only. `gh auth token` prints the credential — and so
+            # does `gh auth status -t`, which is why auth carries its own
+            # denylist instead of the shared read one.
+            "auth": _gh(
+                {"status"},
+                denied_flags=_GH_AUTH_DENIED_FLAGS,
+                denied_flag_reasons=_GH_AUTH_DENIED_FLAG_REASONS,
+            ),
             "api": _GH_API,
         },
     ),
@@ -800,6 +867,22 @@ def classify_invocation(
             return _refuse(
                 f"'{policy.binary} {subcommand} {name}' is not allowed: {reason}."
             )
+
+        # An allowlist, when the rule sets one: a flag nobody reviewed is
+        # refused rather than passed through to gh's own parser.
+        if rule.allowed_flags:
+            known = (
+                rule.allowed_flags
+                | policy.bare_flags
+                | frozenset(rule.flag_values)
+                | frozenset(rule.value_flags)
+            )
+            if name not in known:
+                return _refuse(
+                    f"'{policy.binary} {subcommand} {name}' is not allowed. This "
+                    f"grant covers a fixed set of read-only flags: "
+                    f"{', '.join(sorted(known))}."
+                )
 
         takes_value = name in rule.flag_values or name in rule.value_flags
         value = inline
