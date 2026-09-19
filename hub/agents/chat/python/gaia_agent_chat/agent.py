@@ -317,7 +317,7 @@ class ChatAgent(
                 chunk_overlap=config.chunk_overlap,  # Configurable overlap for context preservation
                 max_chunks=config.max_chunks,
                 show_stats=config.show_stats,
-                use_local_llm=not (config.use_claude or config.use_chatgpt),
+                use_local_llm=not config.use_claude,
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
