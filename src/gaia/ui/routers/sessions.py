@@ -13,13 +13,20 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from gaia.config import GaiaConfigError
+
 from .._chat_helpers import (
     _agent_type_unknown,
     evict_session_agent,
     get_agent_registry,
     resolve_device_model,
 )
-from ..database import SESSION_DEFAULT_MODEL, ChatDatabase, is_placeholder_title
+from ..database import (
+    SESSION_DEFAULT_MODEL,
+    ChatDatabase,
+    is_placeholder_title,
+    resolved_default_model,
+)
 from ..dependencies import get_db
 from ..models import (
     AttachDocumentRequest,
@@ -34,6 +41,24 @@ from ..utils import message_to_response, session_to_response
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+def _is_gaia_config_error(exc: Exception) -> bool:
+    """True if exc is a GaiaConfigError.
+
+    Checked by isinstance first; falls back to matching the exception
+    class's qualified name so this still works if gaia.config ever ends up
+    imported under two different module identities (seen once in CI, not
+    yet root-caused) — a plain isinstance/except-clause match silently
+    took the generic branch instead of this one.
+    """
+    if isinstance(exc, GaiaConfigError):
+        return True
+    exc_type = type(exc)
+    return (
+        f"{exc_type.__module__}.{exc_type.__qualname__}"
+        == "gaia.config.GaiaConfigError"
+    )
 
 
 class _SystemSseEmitter:
@@ -132,7 +157,11 @@ async def create_session(
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="Failed to create session. Check server logs for details.",
+            detail=(
+                str(e)
+                if _is_gaia_config_error(e)
+                else "Failed to create session. Check server logs for details."
+            ),
         )
 
 
@@ -202,9 +231,13 @@ async def update_session(
     # On a device switch, rewrite the session's model to that device's
     # registered model so the agent rebuilt after eviction loads the right
     # model and the model dropdown reflects reality. Only rewrite when the
-    # device model differs and the session isn't pinned to a non-default model
-    # on the default GPU device — mirrors the runtime guard in ``_chat_helpers``
-    # so an agent's own model isn't clobbered.
+    # device model differs and the session isn't pinned to a non-default
+    # model on the default GPU device. This "not pinned" test deliberately
+    # differs from _build_create_kwargs's own default check in
+    # _chat_helpers: a configured default_model counts as "not pinned" here
+    # (so it still follows a device switch) but as "session-explicit" there
+    # (so it still reaches the agent as model_id) — the two guards answer
+    # different questions about the same value on purpose.
     device_model = None
     if request.device is not None:
         existing = db.get_session(session_id)
@@ -212,7 +245,17 @@ async def update_session(
         resolved, _ = resolve_device_model(agent_type, request.device)
         if resolved:
             current_model = (existing or {}).get("model")
-            is_default_model = current_model in (None, SESSION_DEFAULT_MODEL)
+            try:
+                configured_default = resolved_default_model()
+            except Exception as e:
+                if not _is_gaia_config_error(e):
+                    raise
+                raise HTTPException(status_code=500, detail=str(e))
+            is_default_model = current_model in (
+                None,
+                SESSION_DEFAULT_MODEL,
+                configured_default,
+            )
             device_is_explicit = request.device != "gpu"
             if resolved != current_model and (is_default_model or device_is_explicit):
                 device_model = resolved

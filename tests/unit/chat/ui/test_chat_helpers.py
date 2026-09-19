@@ -579,6 +579,23 @@ class TestSessionAgentKwargsShape:
         assert kwargs["rag_documents"] == paths
 
 
+class TestBuildCreateKwargsConfiguredDefault:
+    """A session on a *configured* default_model must still reach the agent
+    as an explicit model_id, not get silently omitted."""
+
+    def test_configured_default_model_forwarded_as_model_id(self):
+        from gaia.ui._chat_helpers import _build_create_kwargs
+
+        kwargs = _build_create_kwargs(custom_model=None, model_id="agents-a1-q4-k-m")
+        assert kwargs["model_id"] == "agents-a1-q4-k-m"
+
+    def test_raw_hard_coded_default_still_omits_model_id(self):
+        from gaia.ui._chat_helpers import _build_create_kwargs
+
+        kwargs = _build_create_kwargs(custom_model=None, model_id="Gemma-4-E4B-it-GGUF")
+        assert "model_id" not in kwargs
+
+
 class TestStreamingRegisteredAgentDoesNotDoubleIndex:
     """Source-shape regression: ensure the streaming registered-agent branch
     forwards ``rag_file_paths=[]`` into ``_session_agent_kwargs``.

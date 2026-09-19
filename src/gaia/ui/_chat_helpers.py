@@ -495,6 +495,10 @@ def _build_create_kwargs(
 
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
+    A session created against a *configured* default_model (see
+    ChatDatabase.resolved_default_model) also takes branch 2, not branch 3 —
+    its stored model differs from _DB_DEFAULT_MODEL too, so the configured
+    model reaches the agent instead of being silently dropped.
 
     ``device``/``min_context_size`` flow through to the agent's config so the
     requested device is validated at runtime. Agent factories filter unknown

@@ -879,12 +879,22 @@ jobs:
           # the backend and its logs both land in the workspace.
           $outLog = Join-Path $PWD "eval-out\backend.out.log"
           $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          # The agent under test runs shell commands, so it must not inherit the
+          # judge's credentials; only `claude -p` below needs them.
+          $judgeCredentials = @{}
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+            $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
+            Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
+          }
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
             -WorkingDirectory $PWD `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru
+          foreach ($name in $judgeCredentials.Keys) {
+            if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
+          }
           if (-not $backend) {
             Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
             exit 1
@@ -946,6 +956,9 @@ jobs:
             # No --agent-type: the committed baselines were produced against the
             # backend default (their `config` records only backend_url/model/budget),
             # so passing one here would compare against a different agent.
+            #
+            # Never add web_system or vision here: they read this runner's
+            # clipboard, windows and screen into the scorecard.
             $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
             if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)." }
             foreach ($category in $categories) {
@@ -1031,18 +1044,11 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
-            # Traces are what you actually read to triage a regression - a bare
-            # scorecard tells you a score moved, not why. Best-effort though: a
-            # deep trace tree can blow MAX_PATH, and losing the triage material
-            # must not red a job whose scorecard was already collected.
-            $traces = Join-Path $runDir "traces"
-            if (Test-Path $traces) {
-              try {
-                Copy-Item $traces "eval-out\$category\traces" -Recurse
-              } catch {
-                Write-Host "::warning::${category}: could not copy traces from $traces ($($_.Exception.Message)). The scorecard was collected; only the triage detail is missing."
-              }
-            }
+            # Traces and logs are not collected: the artifact is public and GitHub
+            # masks secrets only in logs. Reproduce a regression locally with the
+            # same `gaia eval agent --category` command to get the traces.
+            $summary = Join-Path $runDir "summary.md"
+            if (Test-Path $summary) { Copy-Item $summary "eval-out\$category\summary.md" }
             Write-Host "${category}: $runDir"
           }
 
@@ -1096,7 +1102,7 @@ jobs:
           python -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. Check the backend/Lemonade logs in the artifact, then re-run."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. The backend and Lemonade logs stay on the runner (eval-out\backend.*.log); reproduce locally with the same gaia eval agent command if you cannot reach it."
             exit 1
           }
 
@@ -1187,10 +1193,40 @@ jobs:
           # category regressed. Same guard as install-lemonade/action.yml.
           $global:LASTEXITCODE = 0
 
-      - name: Upload scorecards + eval logs
+      # The artifact is public and, unlike the job log, not secret-masked.
+      - name: Refuse to upload a credential
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-ChildItem eval-out -Recurse -File -Include scorecard.json, summary.md -ErrorAction SilentlyContinue)
+          $leaked = @()
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if (-not $value) { continue }
+            foreach ($file in $files) {
+              if ((Test-Path -LiteralPath $file.FullName) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet)) {
+                $leaked += $file.FullName
+                Remove-Item -LiteralPath $file.FullName -Force
+              }
+            }
+          }
+          if ($leaked.Count -gt 0) {
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
+            exit 1
+          }
+          Write-Host "Scanned $($files.Count) file(s): no credential found."
+
+      - name: Upload scorecards
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: agent-eval-gemma-consolidation
-          path: eval-out/
+          path: |
+            eval-out/*/scorecard.json
+            eval-out/*/summary.md
           if-no-files-found: warn
+          retention-days: 14
