@@ -170,10 +170,11 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (14 tools). Deliberately a smaller share of the registry than
+# Always-on set (15 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
+# signalling), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# through a result that was cut short, ``load_skill`` for proactive
 # skill discovery, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
 # documents say" without a round trip, ``run_python`` so a number is computed

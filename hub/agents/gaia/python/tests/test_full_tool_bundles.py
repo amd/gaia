@@ -36,7 +36,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=27 minus 14 CORE leaves 13).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=28 minus 15 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 

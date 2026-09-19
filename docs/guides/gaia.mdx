@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **71 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Grouped by what they're for:
+The default construction registers **80 tools** — the 59 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 79. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -99,11 +99,13 @@ The default construction registers **71 tools** — the 55 of the Chat agent's `
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
+| Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
+| Audio | `transcribe_media`, `refine_transcript` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `load_tools` |
+| Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
