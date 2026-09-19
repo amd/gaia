@@ -372,3 +372,284 @@ def split_verification_scope(text: str) -> Tuple[str, str]:
 def strip_verification_scope(text: str) -> str:
     """Remove every verification-scope line, wherever it sits in *text*."""
     return split_verification_scope(text)[0]
+
+
+# ── answer-seam check: verify after the last change ──────────────────────
+
+#: Prefix on the corrective message, so a transcript shows the check fired.
+VERIFY_AFTER_CHANGE_TAG = "[check:verify-after-change]"
+
+#: File-changing tools matched by exact name.
+_MUTATING_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "append_to_file",
+        "apply_patch",
+        "edit_file",
+        "edit_python_file",
+        "insert_lines",
+        "multi_edit",
+        "patch_file",
+        "replace_function",
+        "replace_in_file",
+        "search_replace",
+        "str_replace",
+        "write_file",
+        "write_python_file",
+    }
+)
+
+#: Name prefixes of file-changing tools. These also match tools that change no
+#: file (``create_event``, ``update_memory``), so a prefix-only match must name
+#: a path in its arguments to count as a change.
+_MUTATING_PREFIXES: Tuple[str, ...] = (
+    "write_",
+    "edit_",
+    "create_",
+    "delete_",
+    "update_",
+)
+
+_PATH_ARG_KEYS: Tuple[str, ...] = (
+    "file_path",
+    "path",
+    "filepath",
+    "filename",
+    "file",
+    "target_path",
+    "output_path",
+    "dest",
+    "destination",
+)
+
+#: Writing a report, a data file, or an image cannot break a test suite.
+_NON_CODE_SUFFIXES: FrozenSet[str] = frozenset(
+    {
+        ".csv",
+        ".docx",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".log",
+        ".markdown",
+        ".md",
+        ".pdf",
+        ".png",
+        ".rst",
+        ".svg",
+        ".tsv",
+        ".txt",
+        ".xlsx",
+    }
+)
+
+#: Tools whose *output* can show a test run, whatever the command looked like.
+_TEST_OUTPUT_TOOLS: FrozenSet[str] = frozenset(
+    {"execute_python_file", "run_python", "run_shell_command"}
+)
+
+_PYTEST_OUTCOME = (
+    r"\d+ (?:passed|failed|errors?|skipped|deselected|xfailed|xpassed"
+    r"|warnings?|rerun)"
+)
+# A line made only of pytest outcome counts, optionally timed and ruled —
+# ``3 passed``, ``1 failed, 2 passed in 0.12s``, ``=== 2 passed in 1s ===``.
+# Machine-produced, so a script printing "3 failed attempts" does not match.
+_TEST_SUMMARY_RE = re.compile(
+    r"(?im)^[ \t=]*(?:"
+    rf"(?:{_PYTEST_OUTCOME}(?:,[ \t]*|[ \t]+))*{_PYTEST_OUTCOME}"
+    r"|no tests ran)"
+    r"(?:[ \t]+in[ \t]+\d+(?:\.\d+)?m?s(?:[ \t]*\([^)\n]*\))?)?[ \t=]*$"
+    r"|^Ran \d+ tests? in \d+(?:\.\d+)?s[ \t]*$"
+)
+
+#: Directory names never searched for test files.
+_SKIP_DIRS: FrozenSet[str] = frozenset(
+    {"node_modules", "site-packages", "__pycache__", "venv", "env", "build", "dist"}
+)
+_TEST_FILE_SCAN_LIMIT = 5000
+
+
+def observed_text(value: Any) -> str:
+    """Every string, number, and key inside *value*, one per line.
+
+    Flattened rather than ``json.dumps``-ed: JSON escapes newlines and quotes,
+    so a value read from a file would no longer match itself.
+    """
+    parts: List[str] = []
+
+    def walk(item: Any) -> None:
+        if item is None:
+            return
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            for key, sub in item.items():
+                parts.append(str(key))
+                walk(sub)
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            for sub in item:
+                walk(sub)
+        else:
+            parts.append(str(item))
+
+    walk(value)
+    return "\n".join(parts)
+
+
+#: A runner's summary line comes last; keep only the tail of long outputs.
+_CHECK_OUTPUT_TAIL = 20_000
+
+
+def check_output(tool_name: str, result: Any) -> str:
+    """The part of *result* a test-summary check reads; empty for other tools."""
+    if tool_name not in _TEST_OUTPUT_TOOLS:
+        return ""
+    return observed_text(result)[-_CHECK_OUTPUT_TAIL:]
+
+
+def has_test_run_summary(output: str) -> bool:
+    """True when *output* carries a pytest or unittest summary line."""
+    return bool(output) and bool(_TEST_SUMMARY_RE.search(output))
+
+
+def is_mutating_tool(tool_name: str) -> bool:
+    """True when *tool_name* is a file write/edit tool, judged by name."""
+    name = (tool_name or "").strip()
+    return name in _MUTATING_TOOLS or name.startswith(_MUTATING_PREFIXES)
+
+
+def _changed_paths(execution: Dict[str, Any]) -> Optional[List[str]]:
+    """Paths an execution changed; ``None`` when it changed no project file."""
+    name = (execution.get("tool") or "").strip()
+    if not is_mutating_tool(name):
+        return None
+    if not execution.get("ran", True) or execution.get("failed"):
+        return None
+    args = execution.get("args")
+    args = args if isinstance(args, dict) else {}
+    paths = [
+        value
+        for key in _PATH_ARG_KEYS
+        if isinstance((value := args.get(key)), str) and value.strip()
+    ]
+    if not paths:
+        return [] if name in _MUTATING_TOOLS else None
+    return paths
+
+
+def _is_project_change(execution: Dict[str, Any], project_root: str) -> bool:
+    import os
+
+    paths = _changed_paths(execution)
+    if paths is None:
+        return False
+    if not paths:
+        return True
+    root = os.path.realpath(project_root)
+    for path in paths:
+        if os.path.splitext(path)[1].lower() in _NON_CODE_SUFFIXES:
+            continue
+        if os.path.isabs(path):
+            real = os.path.realpath(path)
+            if real != root and not real.startswith(root.rstrip(os.sep) + os.sep):
+                continue
+        return True
+    return False
+
+
+def is_check_execution(execution: Dict[str, Any]) -> bool:
+    """True when *execution* ran a test / lint / build check.
+
+    A labelled check counts, and so does a Python or shell run whose output
+    holds a test-runner summary — the model can start pytest many ways, but
+    the summary line is written by the runner, not the model.
+    """
+    if not execution.get("ran", True):
+        return False
+    if execution.get("check_label"):
+        return True
+    return execution.get("tool") in _TEST_OUTPUT_TOOLS and has_test_run_summary(
+        execution.get("output") or ""
+    )
+
+
+def unverified_change(
+    executions: List[Dict[str, Any]], project_root: Optional[str]
+) -> Optional[str]:
+    """Name of the last project change no check ran after, else ``None``.
+
+    ``None`` too when there is no project root: with no project there is no
+    suite to run.
+    """
+    if not project_root:
+        return None
+    executions = list(executions or [])
+    last = None
+    for index, execution in enumerate(executions):
+        if _is_project_change(execution, project_root):
+            last = index
+    if last is None:
+        return None
+    if any(is_check_execution(e) for e in executions[last + 1 :]):
+        return None
+    changed = executions[last]
+    paths = _changed_paths(changed) or []
+    return paths[0] if paths else changed.get("tool") or "a file"
+
+
+def project_has_tests(project_root: Optional[str]) -> bool:
+    """True when *project_root* has a test suite pytest could run.
+
+    Any of: a ``tests/`` or ``test/`` directory, a pytest config
+    (``pytest.ini``, ``[tool.pytest…]`` in ``pyproject.toml``, ``[tool:pytest]``
+    in ``setup.cfg``, ``[pytest]`` in ``tox.ini``), or a ``test_*.py`` /
+    ``*_test.py`` file within the first few thousand entries of the tree.
+    """
+    import os
+
+    from gaia.logger import get_logger
+
+    if not project_root or not os.path.isdir(project_root):
+        return False
+    if any(os.path.isdir(os.path.join(project_root, d)) for d in ("tests", "test")):
+        return True
+    if os.path.isfile(os.path.join(project_root, "pytest.ini")):
+        return True
+    for name, marker in (
+        ("pyproject.toml", "[tool.pytest"),
+        ("setup.cfg", "[tool:pytest]"),
+        ("tox.ini", "[pytest]"),
+    ):
+        config = os.path.join(project_root, name)
+        if not os.path.isfile(config):
+            continue
+        try:
+            with open(config, encoding="utf-8", errors="replace") as fh:
+                if marker in fh.read():
+                    return True
+        except OSError as e:
+            get_logger(__name__).debug("could not read %s: %s", config, e)
+    seen = 0
+    for _dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [
+            d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS
+        ]
+        for filename in filenames:
+            if filename.endswith(".py") and (
+                filename.startswith("test_") or filename.endswith("_test.py")
+            ):
+                return True
+        seen += len(filenames) + len(dirnames)
+        if seen > _TEST_FILE_SCAN_LIMIT:
+            return False
+    return False
+
+
+def verify_after_change_correction(changed: str) -> str:
+    """The corrective message for an unverified change to *changed*."""
+    return (
+        f"{VERIFY_AFTER_CHANGE_TAG} You changed files ({changed}) after the last "
+        "test run, so the change is untested. Run the project's tests now "
+        "(pytest, or run_python) and report what they printed. If they can't be "
+        "run, say plainly that the change is unverified."
+    )
