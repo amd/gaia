@@ -799,8 +799,14 @@ class ChatAgent(
         general-purpose agent it front-loads the prompt with an identity that
         is wrong for every other turn. The procedure lives in the ``image-gen``
         skill instead, which renders only when a turn calls for it.
+
+        Filtered by the method that produced it, not by its text: matching
+        "Stable Diffusion" also dropped any fragment that merely mentions it,
+        such as the skill catalogue listing ``image-gen`` (#3764).
         """
-        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
+        prompts = super()._get_mixin_prompts()
+        origins = getattr(self, "_mixin_prompt_origins", {})
+        return [p for p in prompts if origins.get(p) != "get_sd_system_prompt"]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""

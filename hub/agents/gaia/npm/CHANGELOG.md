@@ -137,6 +137,15 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent sees every installed skill and loads the one that fits.**
+  Previously a per-turn matcher scored the request against skill descriptions
+  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
+  learned `gh` was available. The system prompt now lists each installed skill
+  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
+  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
+  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
+  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
+  argument. See the Agent Skills spec, "Skill catalogue".
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently
