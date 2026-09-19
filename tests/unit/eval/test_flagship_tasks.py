@@ -25,7 +25,7 @@ STATED = [t for t in ALL_TASKS if t.check == "stated"]
 
 def _copy_fixture(tmp_path: Path) -> Path:
     workdir = tmp_path / "toybox"
-    shutil.copytree(ft.FIXTURE, workdir, ignore=shutil.ignore_patterns(*ft._IGNORED))
+    shutil.copytree(ft.FIXTURE, workdir, ignore=shutil.ignore_patterns(*ft.IGNORED))
     return workdir
 
 
@@ -171,9 +171,9 @@ def test_a_mechanical_task_accepts_a_correct_solution(task, tmp_path):
 
 
 @pytest.mark.parametrize("task", STATED, ids=lambda t: t.id)
-def test_a_stated_task_accepts_its_answer_and_rejects_silence(task):
-    assert ft.stated_verdict(task, task.genuine_answer)[0]
-    assert not ft.stated_verdict(task, "")[0]
+def test_a_question_is_left_for_the_judge(task, tmp_path):
+    assert ft.score(task, _copy_fixture(tmp_path)) == (None, "decided by the judge")
+    assert task.must_establish and task.genuine_answer and task.wrong_answers
 
 
 @pytest.mark.parametrize(
@@ -183,7 +183,18 @@ def test_a_stated_task_accepts_its_answer_and_rejects_silence(task):
         ({"id": "x", "check": "mechanical", "prompt": "p", "max_steps": 5}, "expect"),
         (
             {"id": "x", "check": "stated", "prompt": "p", "max_steps": 5},
-            "must_mention_groups",
+            "must_establish",
+        ),
+        (
+            {
+                "id": "x",
+                "check": "stated",
+                "prompt": "p",
+                "max_steps": 5,
+                "must_establish": ["a point"],
+                "genuine_answer": "right",
+            },
+            "wrong_answers",
         ),
         (
             {
@@ -201,6 +212,13 @@ def test_a_malformed_task_is_refused(tmp_path, raw, message):
     path = tmp_path / "tasks.json"
     path.write_text(json.dumps({"suites": {"s": ["x"]}, "tasks": [raw]}))
     with pytest.raises(ValueError, match=message):
+        ft.load_suite("s", path)
+
+
+def test_an_empty_suite_is_refused(tmp_path):
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps({"suites": {"s": []}, "tasks": []}))
+    with pytest.raises(ValueError, match="no tasks"):
         ft.load_suite("s", path)
 
 
@@ -332,10 +350,29 @@ def test_a_crashed_agent_fails_its_task_without_ending_the_run(fake_agent, tmp_p
     assert task["error"] == "RuntimeError: context length exceeded"
 
 
-def test_a_backend_failure_is_an_error_not_a_verdict(fake_agent, tmp_path):
+def test_an_unreachable_backend_is_not_measured_rather_than_failed(
+    fake_agent, tmp_path
+):
     _FakeAgent.error_history = [{"type": "llm_connection_error", "error": "refused"}]
-    card = ft.run_suite("one", "m", tmp_path / "out", tasks_file=fake_agent)
-    assert card["tasks"][0]["error"] == "model backend failed: refused"
+    task = ft.run_suite("one", "m", tmp_path / "out", tasks_file=fake_agent)["tasks"][0]
+    assert task["error"] == "model backend unreachable: refused"
+    assert task["error_kind"] == "unavailable"
+
+
+def test_a_backend_that_answers_with_an_error_fails_the_task(fake_agent, tmp_path):
+    _FakeAgent.error_history = [{"type": "llm_error", "error": "HTTP 400"}]
+    task = ft.run_suite("one", "m", tmp_path / "out", tasks_file=fake_agent)["tasks"][0]
+    assert task["error"] == "model backend failed: HTTP 400"
+    assert task["error_kind"] == "failed"
+
+
+def test_a_connection_error_raised_mid_run_is_not_measured(fake_agent, tmp_path):
+    def drop(workdir):
+        raise ConnectionError("Lemonade went away")
+
+    _FakeAgent.behaviour = staticmethod(drop)
+    task = ft.run_suite("one", "m", tmp_path / "out", tasks_file=fake_agent)["tasks"][0]
+    assert task["error_kind"] == "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -343,36 +380,66 @@ def test_a_backend_failure_is_an_error_not_a_verdict(fake_agent, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _envelope(text, **extra):
-    return json.dumps({"result": text, "total_cost_usd": 0.01, **extra})
+def _envelope(grades, **extra):
+    text = grades if isinstance(grades, str) else json.dumps(grades)
+    return json.dumps({"result": text, "total_cost_usd": 0.02, **extra})
 
 
-GRADE = (
-    '{"instruction_compliance": 5, "work_quality": 4, "reasoning": 4, '
-    '"fabrication_free": 5, "one_line": "fine"}'
-)
+GRADE = {
+    "instruction_compliance": 5,
+    "work_quality": 4,
+    "reasoning": 4,
+    "fabrication_free": 5,
+    "one_line": "fine",
+}
+QUESTION = next(t for t in ALL_TASKS if t.id == "21-qa")
+CODING = next(t for t in ALL_TASKS if t.id == "02-bugfix")
+
+
+def _attempt(key, task=CODING, answer="done"):
+    return ft.Attempt(key, f"do {key}", answer, "(no changes to the workspace)", task)
 
 
 @pytest.mark.parametrize(
-    "text", [GRADE, f"```json\n{GRADE}\n```", f"Here is my grade:\n{GRADE}\nThanks."]
+    "wrap",
+    [lambda t: t, lambda t: f"```json\n{t}\n```", lambda t: f"Grades:\n{t}\nDone."],
 )
-def test_a_grade_is_read_however_it_is_wrapped(text):
-    grade = ft.parse_judgement(_envelope(text))
-    assert grade["work_quality"] == 4 and grade["one_line"] == "fine"
+def test_grades_are_read_however_the_reply_is_wrapped(wrap):
+    reply = _envelope(wrap(json.dumps({"a": GRADE, "b": GRADE})))
+    grades = ft.parse_judgement(reply, [_attempt("a"), _attempt("b")])
+    assert grades["a"]["work_quality"] == 4 and grades["b"]["one_line"] == "fine"
+    assert grades["a"]["cost_usd"] == pytest.approx(0.01)
+
+
+def test_one_bad_grade_is_an_error_for_that_attempt_only():
+    reply = _envelope({"a": GRADE, "b": {**GRADE, "reasoning": 9}})
+    grades = ft.parse_judgement(reply, [_attempt("a"), _attempt("b"), _attempt("c")])
+    assert "error" not in grades["a"]
+    assert (
+        "reasoning" in grades["b"]["error"] and "not an object" in grades["c"]["error"]
+    )
+
+
+def test_a_question_needs_a_verdict():
+    reply = _envelope({"q": GRADE})
+    assert (
+        "answers_correctly"
+        in ft.parse_judgement(reply, [_attempt("q", QUESTION)])["q"]["error"]
+    )
+    ok = _envelope(
+        {"q": {**GRADE, "answers_correctly": False, "missing": "the parsers"}}
+    )
+    grade = ft.parse_judgement(ok, [_attempt("q", QUESTION)])["q"]
+    assert grade["answers_correctly"] is False and grade["missing"] == "the parsers"
 
 
 @pytest.mark.parametrize(
     "stdout",
-    [
-        "not json",
-        _envelope("I cannot grade this."),
-        _envelope(GRADE.replace('"reasoning": 4', '"reasoning": 9')),
-        _envelope(GRADE, is_error=True),
-    ],
+    ["not json", _envelope("I cannot grade this."), _envelope({}, is_error=True)],
 )
-def test_an_unusable_grade_is_an_error_not_a_score(stdout):
+def test_an_unusable_reply_is_an_error_not_a_score(stdout):
     with pytest.raises(ft.JudgeError):
-        ft.parse_judgement(stdout)
+        ft.parse_judgement(stdout, [_attempt("a")])
 
 
 def test_the_judge_has_no_tools_and_uses_the_key_only_when_given(monkeypatch):
@@ -392,30 +459,32 @@ def test_a_missing_claude_cli_is_named(monkeypatch):
         ft.judge_command("m", {})
 
 
-def test_the_judge_runs_outside_the_repo_with_only_the_given_env(monkeypatch):
+def test_one_call_grades_every_attempt_outside_the_repo(monkeypatch):
     monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(returncode=0, stdout=_envelope(GRADE), stderr="")
+        grades = {"a": GRADE, "q": {**GRADE, "answers_correctly": True, "missing": ""}}
+        return SimpleNamespace(returncode=0, stdout=_envelope(grades), stderr="")
 
     monkeypatch.setattr(ft.subprocess, "run", fake_run)
-    ft.judge_one(
-        "the task", "the answer", "the diff", "m", {"CLAUDE_CODE_OAUTH_TOKEN": "t"}
+    grades = ft.judge_batch(
+        [_attempt("a", answer="the answer"), _attempt("q", QUESTION)],
+        "m",
+        {"CLAUDE_CODE_OAUTH_TOKEN": "t"},
     )
-    kwargs = calls[0]
-    # No tools, so the judge gets the original project to check claims against.
-    assert "--- toybox/dates.py ---" in kwargs["input"]
-    assert "def parse_updated" in kwargs["input"]
-    assert Path(kwargs["cwd"]).resolve() != ft.REPO_ROOT.resolve()
-    assert kwargs["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "t"}
-    assert all(
-        part in kwargs["input"] for part in ("the task", "the answer", "the diff")
-    )
+    assert len(calls) == 1 and grades["q"]["answers_correctly"] is True
+    sent = calls[0]["input"]
+    # The project goes once; each attempt brings its own answer and diff.
+    assert sent.count("--- toybox/dates.py ---") == 1
+    assert "=== ATTEMPT a (TASK) ===" in sent and "=== ATTEMPT q (QUESTION) ===" in sent
+    assert "the answer" in sent and QUESTION.must_establish[0] in sent
+    assert Path(calls[0]["cwd"]).resolve() != ft.REPO_ROOT.resolve()
+    assert calls[0]["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "t"}
 
 
-def _run_dir(tmp_path, ids=("a", "b")):
+def _run_dir(tmp_path, ids=("02-bugfix", "21-qa")):
     run_dir = tmp_path / "run"
     tasks = []
     for task_id in ids:
@@ -426,7 +495,8 @@ def _run_dir(tmp_path, ids=("a", "b")):
         (run_dir / task_id / "workspace.diff").write_text(
             "(no changes to the workspace)"
         )
-        tasks.append(asdict_task(task_id, passed=True, steps=5, tokens=(10000, 500)))
+        passed = None if task_id == "21-qa" else True
+        tasks.append(asdict_task(task_id, passed=passed, steps=5, tokens=(10000, 500)))
     ft.write_scorecard(run_dir, {"suite": "core", "model": "m", "tasks": tasks})
     return run_dir
 
@@ -437,6 +507,7 @@ def asdict_task(task_id, passed=True, steps=5, tokens=(10000, 500), judge=None):
         "passed": passed,
         "why": "",
         "error": "",
+        "error_kind": "",
         "wall_seconds": 10.0,
         "steps": steps,
         "tool_calls": 2,
@@ -446,21 +517,62 @@ def asdict_task(task_id, passed=True, steps=5, tokens=(10000, 500), judge=None):
     }
 
 
-def test_a_failed_grade_is_retried_when_asked_then_recorded(tmp_path, monkeypatch):
-    attempts = collections.Counter()
+def test_the_judge_decides_questions_and_retries_only_what_failed(
+    tmp_path, monkeypatch
+):
+    calls = []
 
-    def fake_judge(prompt, answer, diff, model, env):
-        attempts[prompt] += 1
-        if prompt == "do b":
-            raise ft.JudgeError("no JSON")
-        return ft.parse_judgement(_envelope(GRADE))
+    def fake_batch(attempts, model, env):
+        calls.append([a.key for a in attempts])
+        out = {"02-bugfix": dict(GRADE)}
+        if len(calls) == 2:
+            out["21-qa"] = {
+                **GRADE,
+                "answers_correctly": False,
+                "missing": "the parsers",
+            }
+        return {a.key: out.get(a.key, {"error": "no grade"}) for a in attempts}
 
-    monkeypatch.setattr(ft, "judge_one", fake_judge)
+    monkeypatch.setattr(ft, "judge_batch", fake_batch)
     card = ft.judge_run(_run_dir(tmp_path), "judge-model", {}, attempts=2)
-    grades = {t["id"]: t["judge"] for t in card["tasks"]}
-    assert grades["a"]["work_quality"] == 4 and attempts["do a"] == 1
-    assert "no JSON" in grades["b"]["error"] and attempts["do b"] == 2
+    assert calls == [["02-bugfix", "21-qa"], ["21-qa"]]
+    tasks = {t["id"]: t for t in card["tasks"]}
+    assert tasks["02-bugfix"]["passed"] is True  # the project decided this one
+    assert tasks["21-qa"]["passed"] is False
+    assert tasks["21-qa"]["why"] == "judge: missing 'the parsers'"
     assert card["judge_model"] == "judge-model"
+
+
+def test_a_question_without_a_verdict_stays_undecided(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        ft,
+        "judge_batch",
+        lambda attempts, model, env: {a.key: {"error": "timeout"} for a in attempts},
+    )
+    card = ft.judge_run(_run_dir(tmp_path), "m", {}, attempts=1)
+    question = next(t for t in card["tasks"] if t["id"] == "21-qa")
+    assert question["passed"] is None
+    assert "AWAITING JUDGE" in ft.render_report(card, None)
+    assert "quality —" in ft.render_report(card, None)
+
+
+@pytest.mark.skipif(
+    os.environ.get("GAIA_EVAL_LIVE_JUDGE") != "1",
+    reason="calls Claude; set GAIA_EVAL_LIVE_JUDGE=1 to check the judge's verdicts",
+)
+def test_the_live_judge_passes_every_reference_and_fails_every_wrong_answer():
+    from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+
+    attempts, want = [], {}
+    for task in STATED:
+        cases = [("ref", task.genuine_answer, True)]
+        cases += [(f"wrong{i}", w, False) for i, w in enumerate(task.wrong_answers)]
+        for label, answer, expected in cases:
+            key = f"{task.id}:{label}"
+            attempts.append(ft.Attempt(key, task.prompt, answer, "(none)", task))
+            want[key] = expected
+    grades = ft.judge_batch(attempts, DEFAULT_CLAUDE_MODEL, dict(os.environ))
+    assert {k: grades[k].get("answers_correctly") for k in want} == want
 
 
 # ---------------------------------------------------------------------------
@@ -621,15 +733,50 @@ def _judged_run_dir(tmp_path):
     return run_dir
 
 
-def test_missing_expectations_report_but_fail_when_enforced(tmp_path, monkeypatch):
+def test_a_model_without_expectations_is_reported_not_failed(
+    tmp_path, monkeypatch, capsys
+):
+    """Not gated yet is a state of the repo; enforcing must not turn it red."""
     from gaia.cli import _handle_eval_tasks
 
     monkeypatch.setattr(ft, "EXPECTATIONS_DIR", tmp_path / "none")
     run_dir = _judged_run_dir(tmp_path)
-    _handle_eval_tasks(_gate_args(run_dir))
+    _handle_eval_tasks(_gate_args(run_dir, enforce=True))
+    assert "Not gated yet" in capsys.readouterr().out
+
+
+def test_a_named_expectations_file_that_is_missing_is_an_error(tmp_path):
+    from gaia.cli import _handle_eval_tasks
+
+    run_dir = _judged_run_dir(tmp_path)
     with pytest.raises(SystemExit) as exc:
-        _handle_eval_tasks(_gate_args(run_dir, enforce=True))
-    assert exc.value.code == 1
+        _handle_eval_tasks(_gate_args(run_dir, expect=tmp_path / "typo.json"))
+    assert exc.value.code == 2
+
+
+def test_an_outage_is_reported_as_not_measured_not_as_a_regression(tmp_path, capsys):
+    from gaia.cli import _handle_eval_tasks
+
+    down = {
+        **asdict_task("b", passed=False, judge=_GOOD),
+        "error": "model backend unreachable: refused",
+        "error_kind": "unavailable",
+    }
+    card = _card(asdict_task("a", judge=_GOOD), down)
+    checks = {c.metric: c for c in ft.gate(card, EXPECTED)}
+    assert not checks["Tasks measured"].ok and checks["Tasks measured"].actual == "1/2"
+    assert "NOT MEASURED" in ft.render_report(card, list(checks.values()))
+    with pytest.raises(ValueError, match="not measured"):
+        ft.propose_expectations(card)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ft.write_scorecard(run_dir, card)
+    expect = tmp_path / "expect.json"
+    expect.write_text(json.dumps(EXPECTED))
+    with pytest.raises(SystemExit):
+        _handle_eval_tasks(_gate_args(run_dir, expect=expect, enforce=True))
+    assert "infrastructure failure, not a verdict" in capsys.readouterr().out
 
 
 def test_a_missed_expectation_fails_only_when_enforced(tmp_path, monkeypatch):

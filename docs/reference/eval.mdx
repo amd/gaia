@@ -1436,7 +1436,7 @@ measurements remain visible as warnings and the comparison judges measured resul
 
 ## Flagship Agent Tasks
 
-`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and can fail the build when passes, quality, honesty, tokens, steps or runtime fall outside the committed expectations.
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and fails the build when passes, quality, honesty, tokens, steps or runtime fall outside the committed expectations.
 
 ```bash
 gaia eval tasks run --suite core     # run each task, then judge quality
@@ -1449,8 +1449,9 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 
 - Every task starts from a fresh copy of `eval/tasks/toybox`, a small Python project with deliberate defects. The agent may read and write that copy and nothing else.
 - A **coding task** passes when the project's own tests pass *and* a probe run inside the finished project confirms the behavior. For example, the bug fix must accept lowercase `z`, and the weekly report must match an independent recomputation row for row.
-- A **question task** passes when the answer names every fact it must.
-- A **judge** (Claude, with no tools, and not told whether the task passed) reads the original project, the agent's answer and a diff of its changes. It grades four things from 1 to 5: following the instructions, quality of the work, reasoning, and whether the answer claims anything the agent never did.
+- A **question task** is decided by the judge: it passes only if the answer establishes every one of the task's required points (`must_establish`), in any wording. Keyword matching was tried first and dropped: correct answers phrase the same finding in too many ways.
+- The **judge** (Claude, with no tools) reads the original project once, then each task's answer and a diff of its changes, and grades every task in a single call. It scores four things from 1 to 5: following the instructions, quality of the work, reasoning, and whether the answer claims anything the agent never did. It is never told whether a coding task passed.
+- If the model backend cannot be reached, the task is **not measured**. That is reported as an infrastructure failure, never as the agent getting worse.
 
 ### Suites
 
@@ -1459,7 +1460,10 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 | `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable | Every CI run |
 | `full` | `core` plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
 
-Tasks and suites live in `eval/tasks/tasks.json`. Every coding task has a reference solution in `tests/unit/eval/test_flagship_tasks.py`. The tests prove each task fails on the untouched project and passes a correct solution.
+Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both directions:
+
+- Each coding task has a reference solution in `tests/unit/eval/test_flagship_tasks.py`. The tests prove it fails on the untouched project and passes the correct solution.
+- Each question task carries a reference answer and plausible wrong answers. `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_flagship_tasks.py -k live_judge` asks the judge about all of them in one call (about $0.15) and requires it to pass every reference and fail every wrong answer.
 
 ### Commands
 
@@ -1467,7 +1471,7 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every coding task has a refere
 |---|---|
 | `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs the flagship on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`. Judges afterwards unless `--no-judge`. |
 | `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. |
-| `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss. |
+| `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss or on a task that was not measured. CI always enforces. |
 
 ### The gate
 
@@ -1498,6 +1502,7 @@ An abridged, illustrative file:
 ```
 
 - A task the judge could not grade fails the quality checks instead of being skipped.
+- A model and suite with no committed expectations are **not gated yet**: the report is printed and the job stays green, even when enforcing. Naming a missing file with `--expect` is an error.
 - `--propose FILE` writes this file from a run, with headroom for one noisy run: one task may flip, quality may drop 0.5, tokens and steps may grow 35%, and runtime may grow 50%. Runtime includes the model load, so it swings more than tokens do.
 - CI uploads a proposal with every scorecard. To set or move the bar, commit a proposal from a run of `main` on the CI runner. The limits change only through a reviewed commit, never automatically.
 

@@ -269,11 +269,14 @@ jobs:
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
   # with separate environments: the agent runs with no credentials (it runs
-  # shell commands), Claude judges quality with no tools, and the gate compares
-  # passes, quality, honesty, tokens, steps and runtime with main's committed
-  # results in eval/tasks/expectations/<model>.<suite>.json, under the same
-  # `enforce` policy as the categories below. Memory is off here, as for the
-  # whole workflow.
+  # shell commands), Claude judges quality (and decides the question tasks) in
+  # one call with no tools, and the gate compares passes, quality, honesty,
+  # tokens, steps and runtime with main's committed results in
+  # eval/tasks/expectations/<model>.<suite>.json. The gate always enforces: a
+  # missed expectation fails this job. A model with no committed expectations
+  # is reported, not failed, and a task the backend could not serve is "not
+  # measured", never a regression. Memory is off here, as for the whole workflow.
+  # agent-eval waits for this job, so the one runner does them in a fixed order.
   flagship-tasks:
     name: Flagship agent tasks vs expectations
     if: >-
@@ -287,7 +290,7 @@ jobs:
         # Windows PowerShell 5.1 and pure-ASCII run bodies, for the reasons
         # spelled out on the agent-eval job below.
         shell: powershell
-    timeout-minutes: 150
+    timeout-minutes: 90
     env:
       TASK_SUITE: ${{ github.event.inputs.task_suite || 'core' }}
       TASK_JUDGE_MODEL: claude-opus-5
@@ -330,7 +333,7 @@ jobs:
 
       # No credentials in this step's environment: the agent runs shell commands.
       - name: Run the flagship on the task suite
-        timeout-minutes: 90
+        timeout-minutes: 60
         run: |
           $ErrorActionPreference = "Continue"
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -350,15 +353,13 @@ jobs:
           gaia eval tasks judge $env:TASKS_OUT --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
           if ($LASTEXITCODE -ne 0) { throw "gaia eval tasks judge failed (exit $LASTEXITCODE)." }
 
-      # Report mode exits 0 on a miss and says so; enforce fails the job. With no
-      # committed expectations yet, the proposal in the artifact is the one to commit.
+      # Always enforced. With no committed expectations for the model yet it only
+      # reports; the proposal in the artifact is the file to commit from main.
       - name: Gate on the committed expectations
         if: ${{ !cancelled() }}
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $gateArgs = @($env:TASKS_OUT, "--propose", "$env:TASKS_OUT\proposed-expectations.json")
-          if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
-          gaia eval tasks gate @gateArgs
+          gaia eval tasks gate $env:TASKS_OUT --enforce --propose "$env:TASKS_OUT\proposed-expectations.json"
           exit $LASTEXITCODE
 
       - name: Stop the embedded Lemonade
@@ -405,6 +406,9 @@ jobs:
 
   agent-eval:
     name: rag_quality + context_retention + tool_selection vs Gemma baselines
+    # After flagship-tasks whatever its result (`!cancelled()` below): the two
+    # jobs share one runner, so the order is fixed rather than incidental.
+    needs: flagship-tasks
     # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
     # untrusted code onto a self-hosted runner and could not pass anyway
     # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
@@ -417,10 +421,11 @@ jobs:
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
-      github.event_name != 'pull_request' ||
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))) &&
+      !cancelled()
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not

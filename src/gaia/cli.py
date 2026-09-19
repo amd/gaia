@@ -2349,7 +2349,8 @@ Examples:
   gaia eval tasks gate eval/results/eval-tasks-ci --enforce
 
 `run` gives the flagship a fresh copy of eval/tasks/toybox per task and scores
-what the project does afterwards. `judge` grades quality with Claude (no tools).
+what the project does afterwards. `judge` grades every task in one Claude call
+(no tools) and decides the question tasks.
 `gate` compares the run with eval/tasks/expectations/<model>.<suite>.json.
 """,
     )
@@ -3249,6 +3250,11 @@ def _handle_eval_tasks(args):
             )
             print(f"[PROPOSED] {args.propose}: {json.dumps(proposal)}")
     expect_path = Path(args.expect) if args.expect else ft.expectations_path(card)
+    if args.expect and not expect_path.is_file():
+        print(
+            f"{'::error::' if in_actions else '❌ '}No expectations file at {expect_path}."
+        )
+        sys.exit(2)
     checks, expected = None, None
     if expect_path.is_file():
         try:
@@ -3265,13 +3271,24 @@ def _handle_eval_tasks(args):
         with open(step_summary, "a", encoding="utf-8") as fh:
             fh.write(report + "\n")
     if checks is None:
-        problem = (
-            f"No expectations at {expect_path}. Measure a run on this model and "
-            f"commit the result of `gaia eval tasks gate <run_dir> --propose {expect_path}`."
+        # Not gated yet is a state of the repo, not a miss: it never fails.
+        print(
+            f"{'::warning::' if in_actions else '⚠️  '}Not gated yet: no expectations "
+            f"committed at {expect_path}. Commit the result of `gaia eval tasks gate "
+            f"<run_dir> --propose {expect_path}` from a run of main to gate this model."
         )
+        return
+    unmeasured = ft.summarize(card)["unmeasured"]
+    missed = [c.metric for c in checks if not c.ok]
+    if unmeasured:
+        problem = (
+            f"{unmeasured} task(s) not measured: the model backend was unreachable. "
+            "That is an infrastructure failure, not a verdict on the agent; re-run."
+        )
+    elif missed:
+        problem = f"Missed expectations: {', '.join(missed)}."
     else:
-        missed = [c.metric for c in checks if not c.ok]
-        problem = f"Missed expectations: {', '.join(missed)}." if missed else ""
+        problem = ""
     if not problem:
         print("✅ Every expectation met.")
     elif args.enforce:
