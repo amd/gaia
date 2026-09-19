@@ -1364,17 +1364,24 @@ def _run_capturing_subprocess(host, command):
 
     seen = {}
     real_run = shell_module.subprocess.run
+    real_pipeline = shell_module._run_pipeline
 
     def fake_run(args, **kwargs):
         seen["args"] = args
         seen["shell"] = kwargs.get("shell", False)
         return subprocess_module.CompletedProcess(args, 0, "", "")
 
+    def fake_pipeline(segments, cwd, timeout):
+        seen["pipeline"] = segments
+        return subprocess_module.CompletedProcess(segments, 0, "", "")
+
     shell_module.subprocess.run = fake_run
+    shell_module._run_pipeline = fake_pipeline
     try:
         _captured_shell_tool(host)(command=command)
     finally:
         shell_module.subprocess.run = real_run
+        shell_module._run_pipeline = real_pipeline
     return seen
 
 
@@ -1408,7 +1415,11 @@ def test_a_pipeline_is_not_run_as_argv():
     """`cmd_parts` has dropped the `|`, so an argv run of a pipeline would
     silently concatenate two commands into one. Only a lone segment qualifies."""
     call = _run_capturing_subprocess(_Gated("gh"), "gh issue list | head -5")
-    assert call["shell"] is (os.name == "nt")
+    if os.name == "nt":
+        assert call["shell"] is True
+    else:
+        assert "args" not in call, f"ran as one argv: {call.get('args')}"
+        assert call["pipeline"] == [["gh", "issue", "list"], ["head", "-5"]]
 
 
 def test_pytest_has_no_write_tier():
