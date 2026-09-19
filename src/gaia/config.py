@@ -46,9 +46,11 @@ class GaiaConfig:
             GPU is the default — it's the most broadly available accelerated
             path on AMD hardware.
         default_model: Persistent default model ID for model-bearing commands
-            (``gaia chat`` / ``gaia llm`` / ``gaia prompt``). ``None`` means
-            "fall back to each command's built-in default". An explicit
-            ``--model`` flag always wins over this value.
+            (``gaia chat`` / ``gaia llm`` / ``gaia prompt``) and for new
+            Agent UI sessions (``ChatDatabase.create_session``). ``None``
+            means "fall back to each caller's built-in default". An
+            explicit ``--model`` flag, or an explicit model picked in the
+            UI, always wins over this value.
         full_access: Start every session with confirmation prompts off, so the
             agent runs gated tools without asking. Opt-in and OFF by default.
 

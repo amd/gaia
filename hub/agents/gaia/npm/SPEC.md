@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.12"`                  |
+| Contract version   | `API_VERSION = "2.13"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -265,12 +265,21 @@ the header.
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
+| `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
+
+`GET /v1/gaia/memory` returns the read-only snapshot behind the TUI's
+`/memory` view: `{ "available", "reason", "stats", "contexts", "shown",
+"total", "items" }`. `available: false` means the session has no live memory
+store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
+names why, so an outage never renders as "you have no memories". This is the
+daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
+paths call the same `build_memory_dump()` and return the identical shape.
 
 ### 5.2 `session_id` and agent retention
 

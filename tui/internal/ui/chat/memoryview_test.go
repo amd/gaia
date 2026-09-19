@@ -119,6 +119,7 @@ func TestMemoryDumpResultIsShownNotSentToChat(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
 
+	m.memoryLoading = true // a dump only ever lands on a fetch in flight
 	updated, _ := m.update(memoryDumpMsg{dump: sampleMemoryDump()})
 	m = updated.(ChatModel)
 
@@ -137,6 +138,7 @@ func TestMemoryFetchFailureIsReportedNotSilent(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
 
+	m.memoryLoading = true // a dump only ever lands on a fetch in flight
 	updated, _ := m.update(memoryDumpMsg{err: errors.New("agent closed the connection")})
 	m = updated.(ChatModel)
 
@@ -144,8 +146,41 @@ func TestMemoryFetchFailureIsReportedNotSilent(t *testing.T) {
 		t.Error("a failed fetch still populated memoryView")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "agent closed the connection") {
+	if last.Role != RoleError || !strings.Contains(last.Content, "agent closed the connection") {
 		t.Errorf("failure was not reported: %+v", last)
+	}
+}
+
+// A too-old sidecar's own error already names the contract floor and the fix
+// (gaia hub uninstall/install) -- it must survive verbatim, not get
+// flattened into the generic "could not load memory" line above.
+func TestMemoryContractTooOldSurfacesItsOwnMessage(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	tooOld := &client.ErrMemoryContractTooOld{AgentID: "gaia", Version: "2.10"}
+	m.memoryLoading = true // a dump only ever lands on a fetch in flight
+	updated, _ := m.update(memoryDumpMsg{err: tooOld})
+	m = updated.(ChatModel)
+
+	last := m.messages[len(m.messages)-1]
+	if last.Role != RoleError || last.Content != tooOld.Error() {
+		t.Errorf("expected the contract error's own message verbatim, got: %+v", last)
+	}
+	// The type-equality check above passes even if Error() itself went blank —
+	// assert the words a user actually needs: the agent it is about, the
+	// version it is on, the floor it is below, and where a newer build comes
+	// from.
+	for _, want := range []string{"gaia", "2.10", "2.13", "gaia hub install gaia"} {
+		if !strings.Contains(last.Content, want) {
+			t.Errorf("contract-too-old message missing %q: %q", want, last.Content)
+		}
+	}
+	// It must NOT promise that reinstalling fixes it: `gaia hub install` fetches
+	// the published artifact, so while the floor is newer than the latest
+	// release the same build comes back.
+	if strings.Contains(last.Content, "gaia hub uninstall gaia") {
+		t.Errorf("message still sends the user round a reinstall loop that changes nothing: %q", last.Content)
 	}
 }
 
@@ -159,8 +194,9 @@ func TestMemoryUnsupportedClientReportsPlainly(t *testing.T) {
 		t.Error("an unsupported client should not start a fetch")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "/memory") {
-		t.Errorf("no plain explanation for an unsupported client: %+v", last)
+	if last.Role != RoleError || !strings.Contains(last.Content, "/memory") ||
+		!strings.Contains(last.Content, "gaia tui status") {
+		t.Errorf("no actionable explanation for an unsupported client: %+v", last)
 	}
 }
 
@@ -282,5 +318,26 @@ func TestOrdinaryIdleEscStillDoesNotQuitAfterMemoryChanges(t *testing.T) {
 
 	if quits(cmd) {
 		t.Fatal("idle Esc quit the app")
+	}
+}
+
+// Esc cancels the fetch, and its result lands afterwards carrying a
+// cancellation error. Reporting that back would answer a question the user
+// withdrew — and before the timeout/EOF split it read as "the agent closed the
+// connection", blaming the agent for the user's own keypress.
+func TestDismissedMemoryFetchReportsNothingWhenItLandsLate(t *testing.T) {
+	m := gaiaTestModel(t)
+	m.memoryLoading = true
+	before := len(m.messages)
+
+	dismissed := m.dismissMemoryView().(ChatModel)
+	if dismissed.memoryLoading {
+		t.Fatal("test setup: Esc should have cleared memoryLoading")
+	}
+
+	late, _ := dismissed.handleMemoryDump(memoryDumpMsg{err: context.Canceled})
+	if got := len(late.(ChatModel).messages); got != before {
+		t.Errorf("a dismissed fetch posted %d message(s) after Esc: %+v",
+			got-before, late.(ChatModel).messages[before:])
 	}
 }

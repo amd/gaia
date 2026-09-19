@@ -199,9 +199,63 @@ class TestPublicSurface:
         assert "refresh_token" not in google_row
         assert google_row["account_email"] == "alice@example.com"
 
+    @respx.mock
     def test_revoke_connection_via_public_api(self, seeded):
-        revoke_connection("google")
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        result = revoke_connection("google")
         assert list_connections() == []
+        # #2591: the public API must actually call Google's revoke endpoint,
+        # not just clear the local keyring entry.
+        assert revoke_route.called
+        assert result == {
+            "revoke_supported": True,
+            "revoked_remotely": True,
+            "revoke_error": None,
+        }
+
+    @respx.mock
+    def test_revoke_connection_reports_remote_failure_honestly(self, seeded):
+        # #2591: a failed provider-side revoke must never be reported as a
+        # full success — the connection is still cleared locally, but the
+        # caller must be told the remote grant may still be live.
+        respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        result = revoke_connection("google")
+        assert list_connections() == []
+        assert result["revoke_supported"] is True
+        assert result["revoked_remotely"] is False
+        assert result["revoke_error"]
+
+    @respx.mock
+    def test_revoke_connection_skips_remote_revoke_for_forwarded(self, google_provider):
+        # #2591 review's critical finding: a connection forwarded by a host
+        # app (import_forwarded_connection) shares that app's OAuth grant.
+        # revoke_connection must clear GAIA's local copy but MUST NOT call
+        # Google's revoke endpoint — doing so would sign the host app
+        # itself out of the user's account, recoverable only by the user
+        # re-consenting through that other app.
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            client_id_hash=google_provider.client_id_hash,
+            forwarded=True,
+        )
+        result = revoke_connection("google")
+        # Local state is still cleared — disconnect intent is honored.
+        assert list_connections() == []
+        # But the provider was never called.
+        assert not revoke_route.called
+        assert result["revoke_supported"] is False
+        assert result["revoked_remotely"] is False
+        assert "forwarded" in result["revoke_error"]
 
     def test_microsoft_connection_visible_to_generic_api(self, monkeypatch, tmp_path):
         # Root-cause fix (#1603): a stored Microsoft connection with no google

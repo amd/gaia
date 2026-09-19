@@ -65,6 +65,7 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		return err
 	}
 	m := root.NewFlagshipModel(*agent, dev).
+		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
 		WithClaude(useClaude, claudeModel).
@@ -304,6 +305,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// none, and email in particular went straight to chat and reported a
 	// missing daemon as a failed first message.
 	m := root.NewFlagshipModel(*agent, dev).
+		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
 		WithModel(model).
