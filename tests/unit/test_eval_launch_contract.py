@@ -61,6 +61,8 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
     assert command[:2] == ["/test/claude", "-p"]
     assert ("--bare" in command) == bool(api_key)
     assert "--strict-mcp-config" in command
+    # The driver holds the judge's credentials: no shell, file or web tools.
+    assert command[command.index("--tools") + 1] == ""
     # The subprocess gets the *resolved* copy, never the tracked template.
     mcp_config = Path(command[command.index("--mcp-config") + 1])
     assert mcp_config != runner.MCP_CONFIG

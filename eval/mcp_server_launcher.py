@@ -11,7 +11,7 @@ output (#3375) does not reach it either.
 
 Three runs of the eval gate were spent inferring a cause from timings that one
 line of this log would have stated outright. So: exec the real server in-process
-with stderr tee'd to a file the workflow uploads.
+with stderr tee'd to a file that stays on the runner for triage.
 
 stdout is untouched and unbuffered. It carries the MCP protocol, and a single
 stray byte on it desynchronises the client — which is why the diagnostics go to
@@ -27,7 +27,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-#: Where to tee stderr. The workflow uploads this directory as an artifact.
+#: Where to tee stderr. Kept on the runner; the workflow uploads only scorecards.
 _LOG_DIR = Path(os.environ.get("GAIA_MCP_LOG_DIR", "eval-out"))
 _LOG_PATH = _LOG_DIR / "mcp-server.err.log"
 
