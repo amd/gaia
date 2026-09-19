@@ -49,6 +49,7 @@ DOC_CORE_TOOLS = frozenset(
         "request_user_input",
         # escape hatch (#1450) — always-on explicit tool loader for native models
         "load_tools",
+        "read_tool_output",
     }
 )
 
@@ -201,6 +202,7 @@ FULL_CORE_TOOLS = frozenset(
         "request_user_input",
         # escape hatch (#1450)
         "load_tools",
+        "read_tool_output",
         # the skill catalogue (#3764) tells the model to call this even when
         # the skills bundle was not selected.
         "load_skill",

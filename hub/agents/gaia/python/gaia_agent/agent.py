@@ -43,6 +43,7 @@ unchanged.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
@@ -76,7 +77,16 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
 #: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-_HUB_SKILLS_DIR = Path(__file__).resolve().parents[4] / "skills"
+#:
+#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
+#: (Linux's is shallow enough that parents[4] raises IndexError at import
+#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
+#: correct there since the freeze already bundles the pack as --add-data.
+_HUB_SKILLS_DIR = (
+    _SKILLS_DIR
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[4] / "skills"
+)
 
 
 def _bundled_skill_roots() -> List[str]:
