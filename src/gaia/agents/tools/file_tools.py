@@ -92,7 +92,11 @@ def _parse_date_value(value: str):
     for pattern, two_digit_year in _QUARTER_PATTERNS:
         m = pattern.match(v)
         if m:
-            year = int(m.group("year")) + (2000 if two_digit_year else 0)
+            if two_digit_year:
+                # Python's %y pivot: '69-'99 are 1900s, '00-'68 are 2000s.
+                year = datetime.strptime(m.group("year"), "%y").year
+            else:
+                year = int(m.group("year"))
             start, end = _QUARTER_MONTHS[int(m.group("q"))]
             return f"{year:04d}-{start:02d}", f"{year:04d}-{end:02d}"
     m = _ORDINAL_QUARTER_RE.match(v)
