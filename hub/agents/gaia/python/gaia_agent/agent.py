@@ -181,14 +181,14 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 13 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
+    # 15 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
-    # of loading it. Swept offline against nine representative queries: 22 cut
-    # the web bundle in half on a research question, 26 lands every matched
-    # bundle whole, and 30 buys nothing further. Costs ~4.2K tiktoken tokens of
-    # tools= against 10.5K for the whole registry.
-    dynamic_tools_max: int = 26
+    # of loading it. Swept offline against nine representative queries with 13
+    # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
+    # bundle in half on a research question, and 17 buys nothing further. Grows
+    # with CORE so the dynamic share stays 13.
+    dynamic_tools_max: int = 28
 
     # Proactive skill discovery: match each turn against skills that are
     # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
