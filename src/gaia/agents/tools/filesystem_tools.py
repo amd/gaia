@@ -16,6 +16,9 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
+from typing import Any, Optional
+
+from gaia.agents.tools.search_scope import search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,47 @@ def _format_date(timestamp: float) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+#: Scopes that deliberately impose no ceiling: ``smart`` is documented to reach
+#: indexed directories outside the home folders, ``everywhere`` is the whole
+#: drive. Every other scope names one place the results must sit under.
+_UNBOUNDED_SCOPES = frozenset({"smart", "everywhere"})
+
+#: The index applies its LIMIT before the scope filter can run, so a narrowed
+#: search asks for more rows than it needs to still fill a page after filtering.
+_INDEX_SCOPE_OVERFETCH = 10
+
+
+def _scope_roots(scope: str, host: Any = None) -> list:
+    """Directories an index hit must sit under; empty when the scope is open.
+
+    ``host`` supplies the workspace for ``cwd``. Resolving that scope to
+    ``Path.cwd()`` filtered index hits against the directory the sidecar was
+    spawned in, which is not where the user's work is — the same mistake the
+    walk path makes without it, and the two must agree or a hit the walk found
+    gets filtered out again (#3576).
+    """
+    if scope in _UNBOUNDED_SCOPES:
+        return []
+    if scope == "cwd":
+        return [Path(root).expanduser().resolve() for root in search_roots(host)]
+    if scope == "home":
+        raw = Path.home()
+    else:
+        raw = Path(scope)
+    return [raw.expanduser().resolve()]
+
+
+def _path_in_roots(path: str, roots: list) -> bool:
+    """True when ``path`` is one of ``roots`` or lives beneath one."""
+    if not roots:
+        return True
+    try:
+        candidate = Path(path).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+    return any(candidate == root or root in candidate.parents for root in roots)
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -64,11 +108,15 @@ class FileSystemToolsMixin:
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
         resolved = Path(path).expanduser().resolve()
-        if self._path_validator and not self._path_validator.is_path_allowed(
-            str(resolved)
-        ):
-            raise ValueError(f"Access denied: {resolved}")
+        if self._path_validator:
+            allowed, reason = self._path_validator.validate_read(str(resolved))
+            if not allowed:
+                raise ValueError(f"Access denied: {reason}")
         return resolved
+
+    def workspace_roots(self) -> list:
+        """The agent's allowed paths — see ``search_scope`` (#3576)."""
+        return [str(root) for root in search_roots(self)]
 
     def _get_default_excludes(self) -> set:
         """Get platform-specific default directory exclusion patterns."""
@@ -675,6 +723,9 @@ class FileSystemToolsMixin:
                     "auto",
                     "metadata",
                 ):
+                    # The index spans every indexed directory, so the caller's
+                    # scope has to be applied to its rows too.
+                    scope_roots = _scope_roots(scope, self)
                     try:
                         index_results = mixin._fs_index.query_files(
                             name=query if effective_type != "metadata" else None,
@@ -687,8 +738,18 @@ class FileSystemToolsMixin:
                             max_size=max_size,
                             modified_after=min_date,
                             modified_before=max_date,
-                            limit=max_results,
+                            limit=(
+                                max_results * _INDEX_SCOPE_OVERFETCH
+                                if scope_roots
+                                else max_results
+                            ),
                         )
+                        if scope_roots:
+                            index_results = [
+                                r
+                                for r in index_results
+                                if _path_in_roots(r.get("path", ""), scope_roots)
+                            ][:max_results]
                         if index_results:
                             lines = [
                                 f"Found {len(index_results)} result(s) from index:\n"
@@ -791,6 +852,8 @@ class FileSystemToolsMixin:
             lines: int = 100,
             encoding: str = "auto",
             mode: str = "full",
+            offset: int = 0,
+            limit: Optional[int] = None,
         ) -> str:
             """Read and display a file's contents with intelligent type-based analysis.
 
@@ -805,6 +868,8 @@ class FileSystemToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for paging.
+                limit: Text page size, 1..8000 characters.
                 lines: Number of lines to show, 0 for all (default: 100)
                 encoding: File encoding, 'auto' for auto-detect (default: auto)
                 mode: Reading mode - full, preview, or metadata (default: full)
@@ -825,6 +890,36 @@ class FileSystemToolsMixin:
                 if mode == "metadata":
                     return file_info(str(resolved))
 
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    page_encoding = encoding
+                    if page_encoding == "auto":
+                        page_encoding = "utf-8"
+                        try:
+                            from charset_normalizer import from_bytes
+                        except ImportError:
+                            logger.debug(
+                                "charset_normalizer unavailable; text paging requires UTF-8 or explicit encoding"
+                            )
+                        else:
+                            with resolved.open("rb") as sample_file:
+                                match = from_bytes(sample_file.read(65536)).best()
+                            if match is not None:
+                                page_encoding = match.encoding
+                    return json.dumps(
+                        {
+                            **read_text_page(
+                                resolved,
+                                offset,
+                                8000 if limit is None else limit,
+                                page_encoding,
+                            ),
+                            "encoding": page_encoding,
+                        },
+                        ensure_ascii=False,
+                    )
+
                 # Size guard: refuse to load files bigger than MAX_READ_BYTES
                 # (50 MB) entirely. ``mode="preview"`` / ``mode="metadata"`` use
                 # streaming / metadata-only paths so they remain available for
@@ -836,7 +931,7 @@ class FileSystemToolsMixin:
                         f"Error: File too large to read in full ({_format_size(file_size)}). "
                         f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
                         f"Use mode='preview' for the first 20 lines, "
-                        f"or mode='metadata' for file info without reading content."
+                        f"or read_file(offset=0, limit=8000) for bounded text pages."
                     )
 
                 # Handle specific file types
@@ -963,7 +1058,9 @@ class FileSystemToolsMixin:
 
                 if truncated:
                     output_lines.append(
-                        f"\n  ... ({total_lines - len(display_lines)} more lines)"
+                        f"\n  ... (more lines/content available; call read_file with offset="
+                        f"{sum(len(line) for line in display_lines)}, limit=8000, "
+                        f"encoding='{detected_encoding}' to continue)"
                     )
 
                 return "\n".join(output_lines)
@@ -1136,10 +1233,10 @@ class FileSystemToolsMixin:
         def _get_search_roots(scope: str) -> list:
             """Get search root directories based on scope."""
             home = str(Path.home())
-            cwd = str(Path.cwd())
+            workspace = self.workspace_roots()
 
             if scope == "cwd":
-                return [cwd]
+                return workspace
             elif scope == "home":
                 return [home]
             elif scope == "everywhere":
@@ -1153,7 +1250,7 @@ class FileSystemToolsMixin:
                     ]
                 return ["/"]
             elif scope == "smart":
-                roots = [cwd]
+                roots = list(workspace)
                 common = [
                     "Documents",
                     "Downloads",
@@ -1164,7 +1261,7 @@ class FileSystemToolsMixin:
                 ]
                 for folder in common:
                     p = Path(home) / folder
-                    if p.exists() and str(p) != cwd:
+                    if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots
             else:
@@ -1341,6 +1438,13 @@ class FileSystemToolsMixin:
                                     continue
 
                                 try:
+                                    mixin._validate_path(entry.path)
+                                except ValueError as exc:
+                                    logger.debug(
+                                        "Skipping unreadable search result: %s", exc
+                                    )
+                                    continue
+                                try:
                                     with open(
                                         entry.path,
                                         "r",
@@ -1363,8 +1467,10 @@ class FileSystemToolsMixin:
                                                     }
                                                 )
                                                 break  # One match per file
-                                except (OSError, UnicodeDecodeError):
-                                    pass  # Skip unreadable files during content search
+                                except (OSError, UnicodeDecodeError) as exc:
+                                    logger.debug(
+                                        "Cannot search %s: %s", entry.path, exc
+                                    )
                         except (PermissionError, OSError):
                             continue
                 except (PermissionError, OSError):

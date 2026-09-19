@@ -159,6 +159,24 @@ class TestForwardDelete:
         # Now gone.
         assert ui_api_client.get("/v1/connections/google").status_code == 404
 
+    @respx.mock
+    def test_revoke_never_calls_the_providers_revoke_endpoint(self, ui_api_client):
+        """#2591 review, critical: the stored token was minted under the HOST
+        APP's OAuth client, and Google's revoke endpoint takes no client auth —
+        it kills the grant for whoever owns the token. Calling it here would
+        sign the host app out of the user's Google account, recoverable only by
+        re-consenting through that app. Disconnect must stay local."""
+        route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        ui_api_client.post(
+            "/v1/connections/google", json=_forward_body(), headers=UI_HEADER
+        )
+        resp = ui_api_client.delete("/v1/connections/google", headers=UI_HEADER)
+        assert resp.status_code == 204
+        assert not route.called, "the host app's OAuth grant was revoked"
+        assert ui_api_client.get("/v1/connections/google").status_code == 404
+
     def test_delete_requires_csrf(self, ui_api_client):
         ui_api_client.post(
             "/v1/connections/google", json=_forward_body(), headers=UI_HEADER
@@ -344,12 +362,20 @@ class TestRouterDrivenScopeResolution:
         )
         assert resp.status_code == 201, resp.text
 
-    def test_no_registry_no_grant_agents_accepts_any_scopes(self, ui_api_client):
-        """When app.state has no agent_registry AND grant_agents is empty,
-        required_scopes=[] is passed to api.py.  An explicit [] means
-        "require nothing at import time" — the forward succeeds regardless
-        of what scopes were provided.  Use-time gates (get_access_token)
-        still enforce coverage when an agent actually requests a token."""
+    def test_no_agents_requested_skips_scope_resolution(self, ui_api_client):
+        """No ``grant_agents`` at all (not: an agent with an undeclared
+        connector — see ``test_agent_with_no_declared_scopes_is_rejected``
+        below) means there is nothing to resolve, so ``_resolve_grant_scopes``
+        short-circuits before touching ``app.state.agent_registry`` at all —
+        an absent registry is fine here. required_scopes=[] reaches
+        ``import_forwarded_connection`` and it honours the explicit empty
+        list. Use-time gates (``get_access_token``) still enforce coverage
+        when an agent actually requests a token later.
+
+        This used to be named ...``_accepts_any_scopes``, which read as if
+        the router forgives an *undeclared agent* — it does not (#2606): this
+        pins the "zero agents named" case only.
+        """
         # Ensure no registry on app.state.
         if hasattr(ui_api_client.app.state, "agent_registry"):
             del ui_api_client.app.state.agent_registry
@@ -364,6 +390,38 @@ class TestRouterDrivenScopeResolution:
         )
         # required_scopes=[] → api.py honours empty list → 201.
         assert resp.status_code == 201, resp.text
+
+    def test_agent_with_no_declared_scopes_is_rejected(self, ui_api_client):
+        """A registered agent that declares no REQUIRED_CONNECTORS entry for
+        ``provider`` must be rejected (#2606) — it must NOT silently resolve
+        to "zero required scopes" and let the forward through. Before #2606,
+        ``forward_connection`` had its own inline resolution loop that did
+        exactly that (a scope requirement for a *different* connector,
+        ``microsoft``, made no match, so ``required`` stayed empty and the
+        forward would have succeeded); now it goes through the same
+        ``_resolve_grant_scopes`` every other grant-resolving route uses,
+        which raises ``NoDeclaredScopesError`` for this case."""
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            connector_id="microsoft",  # declares for a DIFFERENT connector
+            scopes=["https://graph.microsoft.com/Mail.Read"],
+            nsid="installed:email",
+        )
+
+        resp = ui_api_client.post(
+            "/v1/connections/google",
+            json=_forward_body(
+                scopes=["openid"],
+                grant_agents=["installed:email"],
+            ),
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "agent_declares_no_scopes"
+        assert detail["agent_id"] == "installed:email"
+        assert detail["connector_id"] == "google"
+        assert ui_api_client.get("/v1/connections/google").status_code == 404
 
     def test_unknown_grant_agent_is_rejected(self, ui_api_client):
         """A requested grant must resolve to a registered agent before import.

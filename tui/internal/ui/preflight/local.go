@@ -3,7 +3,6 @@ package preflight
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -74,6 +74,7 @@ type LocalOptions struct {
 	// asked with --skip-chat-model and a down Lemonade must not refuse the
 	// launch — see checkLemonade.
 	ClaudeMode bool
+	Model      string
 }
 
 // NewLocalRunner builds the runner for an agent the TUI spawns itself.
@@ -90,9 +91,13 @@ func (l localRunner) Rows(cfg Config) []Row {
 	if l.opts.ClaudeMode {
 		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
 	}
+	modelLabel := modelRowLabel
+	if l.skipChatModel() {
+		modelLabel = "Embeddings"
+	}
 	rows = append(rows,
 		Row{Key: KeyLemonade, Label: lemonadeRowLabel},
-		Row{Key: KeyModel, Label: modelRowLabel},
+		Row{Key: KeyModel, Label: modelLabel},
 	)
 	for i := range rows {
 		rows[i].State = StatePending
@@ -332,8 +337,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
 	row.Line = "not running"
-	row.Detail = "GAIA needs a local model server. It runs on your machine; no message " +
-		"text ever leaves it."
+	row.Detail = "GAIA needs Lemonade to run local models or route chat to your chosen provider."
 	row.Remedy = lemonadeStartRemedy()
 	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
 	// the same one-key setup the model row does. It cannot run twice: Check
@@ -366,10 +370,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 // smallest call that proves it is actually serving rather than merely bound.
 // embeddedLemonade is what `gaia lemonade embedded` records about the private
 // server it runs: a port chosen at start time, and a generated API key.
-type embeddedLemonade struct {
-	Port   int    `json:"port"`
-	APIKey string `json:"api_key"`
-}
+type embeddedLemonade = lemonade.EmbeddedState
 
 // readEmbeddedLemonade loads that state file, or returns nil.
 //
@@ -380,20 +381,7 @@ type embeddedLemonade struct {
 // this screen report "Lemonade not running" for GAIA's own model server, then
 // offer to install a second one.
 func readEmbeddedLemonade() *embeddedLemonade {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	raw, err := os.ReadFile(filepath.Join(home, ".gaia", "lemonade", "state.json"))
-	if err != nil {
-		return nil
-	}
-	var state embeddedLemonade
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil
-	}
-	state.APIKey = strings.TrimSpace(state.APIKey)
-	return &state
+	return lemonade.ReadEmbedded()
 }
 
 // lemonadeAPIKey resolves the credential a local Lemonade may demand.
@@ -401,13 +389,7 @@ func readEmbeddedLemonade() *embeddedLemonade {
 // LEMONADE_API_KEY wins when set, so an explicitly configured credential is
 // never overridden by whatever a local state file happens to hold.
 func lemonadeAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
-		return key
-	}
-	if state := readEmbeddedLemonade(); state != nil {
-		return state.APIKey
-	}
-	return ""
+	return lemonade.APIKeyFor(lemonade.ResolveBaseURL(""))
 }
 
 // It returns the base URL it settled on, whether it answered, and a trace for
@@ -428,18 +410,21 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 	if override := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)); override != "" {
 		// The agent will use exactly this, so it is the only thing worth
 		// probing — a local server on 13305 proves nothing about it.
-		bases = []string{strings.TrimRight(override, "/")}
+		bases = []string{lemonade.ResolveBaseURL(override)}
+	} else if readEmbeddedLemonade() != nil {
+		// The agent resolves this recorded endpoint too. A different server
+		// answering on a standard port cannot make that connection ready.
+		bases = []string{lemonade.ResolveBaseURL("")}
 	} else {
-		// GAIA's own embedded server first: its port is chosen at start time,
-		// so it is never one of the fixed ones below.
-		if state := readEmbeddedLemonade(); state != nil && state.Port > 0 {
-			bases = append(bases, fmt.Sprintf("http://localhost:%d/api/v1", state.Port))
-		}
 		for _, port := range lemonadePorts {
 			bases = append(bases, "http://localhost:"+port+"/api/v1")
 		}
 	}
 
+	// Authentication belongs to the endpoint being probed, not any redirect
+	// target (even a different port on the same hostname).
+	probeClient := *http.DefaultClient
+	probeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var traces []string
 	for _, b := range bases {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, b+"/models", nil)
@@ -447,10 +432,10 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
-		if key := lemonadeAPIKey(); key != "" {
+		if key := lemonade.APIKeyFor(b); key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := probeClient.Do(req)
 		if err != nil {
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
@@ -471,10 +456,14 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 
 // --- 3. the models -----------------------------------------------------------
 
+func (l localRunner) skipChatModel() bool {
+	return l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model)
+}
+
 func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 	row := Row{Key: KeyModel}
 
-	ready, err := gaiainit.Check(ctx, l.opts.ClaudeMode)
+	ready, err := gaiainit.Check(ctx, l.skipChatModel())
 	switch {
 	case errors.Is(err, gaiainit.ErrUnanswered):
 		// The question was never answered — an installed gaia older than
@@ -487,7 +476,7 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 		row.Detail = err.Error()
 		row.Remedy = Remedy{
 			Action:  "Run setup yourself if anything below behaves oddly.",
-			Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
 		row.Raw = err.Error()
@@ -506,6 +495,9 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 	case ready:
 		row.State = StateOK
 		row.Line = "downloaded"
+		if lemonade.IsCloudID(l.opts.Model) {
+			row.Line = "embedder downloaded — chat uses " + l.opts.Model
+		}
 		if l.opts.ClaudeMode {
 			row.Line = "embedder downloaded — chat runs on Claude"
 		}
@@ -517,10 +509,14 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 	row.Line = "not downloaded yet"
 	row.Detail = "Several GB on a first run. Once downloaded they are reused by every " +
 		"GAIA session."
+	if l.skipChatModel() {
+		row.Line = "embedding models not downloaded"
+		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
+	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
 		Action:  "Setup downloads what is missing and starts the local server.",
-		Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+		Command: gaiainit.RunCommand(l.skipChatModel()),
 		Where:   "https://amd-gaia.ai/docs/guides/install",
 	}
 	return row
@@ -533,12 +529,12 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine fun
 		return FixResult{Err: errNoFix}
 	}
 
-	ch, cancel, err := gaiainit.Start(l.opts.ClaudeMode)
+	ch, cancel, err := gaiainit.Start(l.skipChatModel())
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),
 			Remedy:  "Run setup in a terminal instead, then press r to re-check.",
-			Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}}
 	}
@@ -552,7 +548,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine fun
 			return FixResult{Err: ctx.Err(), Final: last, Diagnosis: Diagnosis{
 				Cause:   "Setup was cancelled, or ran past the time limit.",
 				Remedy:  "Run it in a terminal instead, then press r to re-check.",
-				Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+				Command: gaiainit.RunCommand(l.skipChatModel()),
 				Where:   "https://amd-gaia.ai/docs/guides/install",
 			}}
 		case evt, ok := <-ch:
@@ -560,7 +556,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine fun
 				return FixResult{Err: errFixFailed, Final: last, Diagnosis: Diagnosis{
 					Cause:   "Setup ended without saying whether it worked.",
 					Remedy:  "Press r to re-check whether the models landed, then retry.",
-					Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+					Command: gaiainit.RunCommand(l.skipChatModel()),
 					Where:   "https://amd-gaia.ai/docs/guides/install",
 				}}
 			}
@@ -575,7 +571,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine fun
 				return FixResult{Err: evt.Err, Final: last, Diagnosis: Diagnosis{
 					Cause:   "Setup failed: " + evt.Err.Error(),
 					Remedy:  "Run it in a terminal to see the full log, then press r.",
-					Command: gaiainit.RunCommand(l.opts.ClaudeMode),
+					Command: gaiainit.RunCommand(l.skipChatModel()),
 					Where:   "https://amd-gaia.ai/docs/guides/install",
 				}}
 			}

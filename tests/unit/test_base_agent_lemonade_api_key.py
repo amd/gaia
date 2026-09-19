@@ -116,3 +116,66 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
     mock_httpx_get.return_value = mock_resp
 
     assert agent._is_loaded_ctx_too_small() is expected_too_small
+
+
+@pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.gemma-4-31b-it"])
+def test_cloud_context_error_never_probes_local_model(
+    monkeypatch, _minimal_agent, model
+):
+    probe = MagicMock()
+    monkeypatch.setattr("httpx.get", probe)
+    _minimal_agent.model_id = model
+
+    assert _minimal_agent._is_loaded_ctx_too_small() is False
+    probe.assert_not_called()
+
+
+@pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.gemma-4-31b-it"])
+def test_cloud_startup_checks_server_without_loading_local_chat(monkeypatch, model):
+    from gaia.agents.base.agent import Agent
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    health = MagicMock(return_value={"status": "ok"})
+    local_init = MagicMock()
+    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient.health_check", health)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+
+    agent = CloudAgent(model_id=model, silent_mode=True)
+
+    assert agent.model_id == model
+    health.assert_called_once()
+    local_init.assert_not_called()
+
+
+def test_cloud_agent_without_url_uses_isolated_embedded_endpoint(monkeypatch, tmp_path):
+    import json
+
+    from gaia.agents.base.agent import Agent
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+    (tmp_path / "lemonade").mkdir()
+    (tmp_path / "lemonade" / "state.json").write_text(
+        json.dumps({"port": 63209, "api_key": "isolated-key"})
+    )
+    checked = []
+
+    def health(client):
+        checked.append((client.base_url, client.api_key))
+        return {"status": "ok"}
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient.health_check", health)
+    agent = CloudAgent(model_id="fireworks.gemma-4-31b-it", silent_mode=True)
+
+    assert checked == [("http://localhost:63209/api/v1", "isolated-key")]
+    assert agent.chat.config.base_url == "http://localhost:63209/api/v1"

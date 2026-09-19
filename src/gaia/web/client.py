@@ -41,14 +41,24 @@ ALLOWED_SCHEMES = {"http", "https"}
 BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 
 
+#: Carrier-grade NAT (RFC 6598). ``ipaddress`` does not call it private, but
+#: Tailscale addresses every machine on the user's mesh from it.
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     """Return True if ``ip`` points at a private/internal range we must not fetch."""
+    # ::ffff:10.0.0.1 reaches 10.0.0.1 -- judge the IPv4 address it carries.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
     return (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
+        or (ip.version == 4 and ip in CGNAT_NETWORK)
     )
 
 
@@ -532,11 +542,12 @@ class WebClient:
         except Exception:
             return BeautifulSoup(html, "html.parser")
 
-    def extract_text(self, soup: "BeautifulSoup", max_length: int = 5000) -> str:
+    def extract_text(self, soup: "BeautifulSoup", max_length: int | None = 5000) -> str:
         """Extract readable text from parsed HTML.
 
         Removes script/style/nav/footer tags, preserves heading hierarchy,
         paragraph breaks, and list structure. Collapses whitespace.
+        Set max_length=None when the caller archives the complete extraction.
         """
         # Remove unwanted tags
         for tag_name in REMOVE_TAGS:
@@ -590,7 +601,7 @@ class WebClient:
         result = re.sub(r"\n{3,}", "\n\n", result)
 
         # Truncate at word boundary
-        if len(result) > max_length:
+        if max_length is not None and len(result) > max_length:
             truncated = result[:max_length]
             last_space = truncated.rfind(" ")
             if last_space > max_length * 0.8:

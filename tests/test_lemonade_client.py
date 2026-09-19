@@ -957,6 +957,78 @@ class TestLemonadeClientMock(unittest.TestCase):
         result = self.client.get_stats()
         self.assertEqual(result, stats_response)
 
+    def test_get_stats_merges_model_load_seconds_when_a_load_happened(self):
+        """#2924: get_stats() must surface the client-measured load time
+        alongside Lemonade's own (load-blind) generation stats."""
+        stats_response = {"time_to_first_token": 7.6, "tokens_per_second": 20.0}
+        self.client._last_model_load_seconds = 36.9
+        with patch.object(self.client, "_send_request", return_value=stats_response):
+            result = self.client.get_stats()
+        self.assertEqual(result["model_load_seconds"], 36.9)
+        self.assertEqual(result["time_to_first_token"], 7.6)
+        # The original dict must not be mutated in place.
+        self.assertNotIn("model_load_seconds", stats_response)
+
+    def test_get_stats_omits_model_load_seconds_when_no_load_happened(self):
+        """The common warm-path shape is unchanged from before #2924."""
+        stats_response = {"time_to_first_token": 7.7}
+        self.client._last_model_load_seconds = None
+        with patch.object(self.client, "_send_request", return_value=stats_response):
+            result = self.client.get_stats()
+        self.assertEqual(result, stats_response)
+        self.assertNotIn("model_load_seconds", result)
+
+    def test_ensure_model_loaded_locked_times_an_actual_load(self):
+        """A cold load (model not resident) must set _last_model_load_seconds
+        to the wall-clock time load_model() actually took."""
+        monotonic_values = iter([100.0, 136.9])
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(self.client, "list_models", return_value={"data": []}),
+            patch.object(self.client, "load_model", return_value={"status": "success"}),
+            patch(
+                "gaia.llm.lemonade_client.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertAlmostEqual(self.client._last_model_load_seconds, 36.9)
+
+    def test_ensure_model_loaded_locked_leaves_none_when_already_resident(self):
+        """A warm call (model already loaded at sufficient ctx) is a fast
+        no-op — it must never report a load duration."""
+        self.client._last_model_load_seconds = 99.0  # stale, from an earlier cold call
+        loaded_entry = {
+            "id": TEST_MODEL,
+            "recipe_options": {"ctx_size": 65536},
+        }
+        with (
+            patch.object(
+                self.client,
+                "get_status",
+                return_value={"loaded_models": [loaded_entry]},
+            ),
+            patch.object(self.client, "_find_loaded_entry", return_value=loaded_entry),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertIsNone(self.client._last_model_load_seconds)
+
+    def test_ensure_model_loaded_locked_never_records_a_failed_load(self):
+        """A load that raises must not leave a stale/partial duration behind
+        — never misattribute latency to a request that never got a response."""
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(self.client, "list_models", return_value={"data": []}),
+            patch.object(
+                self.client,
+                "load_model",
+                side_effect=LemonadeClientError("boom"),
+            ),
+        ):
+            with self.assertRaises(LemonadeClientError):
+                self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertIsNone(self.client._last_model_load_seconds)
+
     @responses.activate
     def test_pull_model(self):
         """Test pulling/installing a model."""
