@@ -240,15 +240,29 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             updateSessionInList(sessionId, { agent_type: newAgentId } as Partial<Session>);
             try {
                 await api.updateSession(sessionId, { agent_type: newAgentId });
-            } catch {
-                // Roll back optimistic update on failure
+            } catch (err) {
+                // Roll back optimistic update on failure and surface the backend reason
                 updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
                 setActiveAgentId(previousAgentId);
+                const detail = err instanceof Error ? err.message : 'Could not switch agent.';
+                addNotification({
+                    id: `agent-switch-${Date.now()}`,
+                    type: 'error',
+                    agentId: sessionId,
+                    agentName: 'GAIA',
+                    title: 'Agent switch failed',
+                    message: detail,
+                    timestamp: Date.now(),
+                    read: false,
+                    dismissed: false,
+                    priority: 'high',
+                    sessionId,
+                });
             }
         } else {
             onAgentChange?.(newAgentId);
         }
-    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange]);
+    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange, addNotification]);
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
