@@ -584,3 +584,95 @@ class TestToolUsageRollup:
         or survive without the per-turn reset that _process_query_impl does."""
         agent = _make_agent()
         assert agent._tool_reported_usage == []
+
+
+class TestCachedTokensAreRecorded:
+    """A cached prefix is most of a step's input, and the price of a cached
+    token is a fraction of a fresh one. Dropping the count made every cost
+    figure an upper bound with no way to tell how far off it was."""
+
+    @staticmethod
+    def _usage(response):
+        from gaia.llm.providers.lemonade import LemonadeProvider
+
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._last_usage = None
+        LemonadeProvider._capture_usage(provider, response)
+        return provider._last_usage
+
+    def test_openai_shape_cached_tokens_are_kept(self):
+        usage = self._usage(
+            {
+                "usage": {
+                    "prompt_tokens": 10465,
+                    "completion_tokens": 120,
+                    "total_tokens": 10585,
+                    "prompt_tokens_details": {"cached_tokens": 10086},
+                }
+            }
+        )
+        assert usage["prompt_tokens"] == 10465
+        assert usage["cached_tokens"] == 10086
+
+    def test_a_flat_cached_tokens_field_is_kept_too(self):
+        usage = self._usage(
+            {"usage": {"prompt_tokens": 10, "completion_tokens": 1, "cached_tokens": 4}}
+        )
+        assert usage["cached_tokens"] == 4
+
+    def test_a_response_without_caching_reports_zero(self):
+        usage = self._usage({"usage": {"prompt_tokens": 10, "completion_tokens": 1}})
+        assert usage["cached_tokens"] == 0
+
+    def test_a_non_numeric_count_does_not_raise(self):
+        usage = self._usage(
+            {
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": None},
+                }
+            }
+        )
+        assert usage["cached_tokens"] == 0
+
+
+class TestSumCachedTokens:
+    def test_sums_the_cached_part_of_each_step(self):
+        from gaia.agents.base.agent import _sum_cached_tokens
+
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"prompt_tokens": 100, "cached_tokens": 60},
+                },
+            },
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"prompt_tokens": 200, "cached_tokens": 180},
+                },
+            },
+        ]
+        assert _sum_cached_tokens(conversation) == 240
+
+    def test_steps_without_the_count_are_zero(self):
+        from gaia.agents.base.agent import _sum_cached_tokens
+
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"prompt_tokens": 100},
+                },
+            },
+            {"role": "user", "content": "hello"},
+        ]
+        assert _sum_cached_tokens(conversation) == 0
