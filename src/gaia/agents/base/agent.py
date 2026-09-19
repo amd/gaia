@@ -5724,6 +5724,9 @@ Do NOT wrap conversational replies in JSON.
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
         # the turn ends with empty text instead of a completed answer (#2157).
         cancelled_by_console = False
+        # Set when the person at the prompt declines more steps. Distinct from
+        # cancelled_by_console, which only the Agent UI Stop button sets.
+        user_stopped = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         # Repeated calls already sent one correction; the next repeat ends the turn.
@@ -7968,9 +7971,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                         else:
                             self.console.print_info("Stopping at user request.")
+                            user_stopped = True
                             break
                     except (EOFError, KeyboardInterrupt):
                         self.console.print_info("\nStopping at user request.")
+                        user_stopped = True
                         break
                 else:
                     # Silent mode - just stop
@@ -7978,7 +7983,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Out of steps with no answer: one more call, tools withheld, so the
         # user hears what was found rather than only the canned note.
-        max_steps_reached = final_answer is None and not cancelled_by_console
+        max_steps_reached = (
+            final_answer is None and not cancelled_by_console and not user_stopped
+        )
         if max_steps_reached:
             tool_steps = steps_taken
             steps_taken += 1
