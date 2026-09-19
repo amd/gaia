@@ -265,7 +265,10 @@ class FileIOToolsMixin:
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
-            "Do not re-read a file whose content you already hold — edit it directly."
+            "Read a file with read_file before you change it. The edit tools "
+            "refuse a file you have not read this way — content you already "
+            "hold from a search hit or a shell command does not count, and the "
+            "file may have changed since."
         )
 
     def register_file_io_tools(self) -> None:
