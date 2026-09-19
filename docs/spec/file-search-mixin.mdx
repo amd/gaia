@@ -273,6 +273,7 @@ class FileSearchToolsMixin:
                 "diff": str,       # unified diff
                 "backup_path": str # only when a backup was created; under
                                    # ~/.gaia/cache/backups/, never beside the file
+                                   # (owner-only; newest five per file kept)
             }
 
             On rejection:

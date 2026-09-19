@@ -543,15 +543,14 @@ class FileIOToolsMixin:
                         "would_change": current_content != modified_content,
                     }
 
-                # Create backup via path_validator if available, else manual
                 backup_path = None
                 if backup:
                     if path_validator is not None:
                         backup_path = path_validator.create_backup(str(file_path))
                     else:
-                        backup_path = f"{file_path}.bak"
-                        with open(backup_path, "w", encoding="utf-8") as f:
-                            f.write(current_content)
+                        from gaia.security import backup_file
+
+                        backup_path = backup_file(str(file_path))
 
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -578,7 +577,7 @@ class FileIOToolsMixin:
                     "status": "success",
                     "file_path": file_path,
                     "diff": diff,
-                    "backup_created": backup,
+                    "backup_created": backup_path is not None,
                     "backup_path": backup_path,
                 }
             except Exception as e:
@@ -1250,15 +1249,14 @@ class FileIOToolsMixin:
                 lines = content.splitlines(keepends=True)
                 start_line, end_line = _function_span(function_node, lines)
 
-                # Create backup via path_validator if available, else manual
                 backup_path = None
                 if backup:
                     if path_validator is not None:
                         backup_path = path_validator.create_backup(str(file_path))
                     else:
-                        backup_path = f"{file_path}.bak"
-                        with open(backup_path, "w", encoding="utf-8") as f:
-                            f.write(content)
+                        from gaia.security import backup_file
+
+                        backup_path = backup_file(str(file_path))
 
                 # Replace the function
                 new_lines = (

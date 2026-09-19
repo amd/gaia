@@ -20,12 +20,15 @@ All tests are designed to run without LLM or external services.
 import ast
 import os
 import platform
+import stat
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.security import (
+    BACKUP_GENERATIONS,
     BLOCKED_DIRECTORIES,
     MAX_WRITE_SIZE_BYTES,
     SENSITIVE_EXTENSIONS,
@@ -587,8 +590,13 @@ class TestCreateBackup:
         backup_path = Path(validator.create_backup(str(original)))
 
         real = original.resolve()
+        # A Windows drive becomes its own folder: C:\x -> backups\C\x.
+        drive = real.drive.rstrip(":")
         expected_dir = (
-            validator.cache_dir / "backups" / real.parent.relative_to(real.anchor)
+            validator.cache_dir
+            / "backups"
+            / drive
+            / real.parent.relative_to(real.anchor)
         )
         assert backup_path.parent == expected_dir
         assert backup_path.name.startswith("notes.md.")
@@ -616,6 +624,45 @@ class TestCreateBackup:
         # Backups created within the same second could collide, but the path
         # object resolves uniquely in practice. We just ensure the first works.
         assert os.path.exists(backup1)
+
+    def test_only_the_newest_backups_of_a_file_are_kept(self, validator, tmp_path):
+        original = tmp_path / "notes.md"
+        original.write_text("# Notes")
+        mirror = Path(validator.create_backup(str(original))).parent
+        old = [f"notes.md.20200101_00000{i}.bak" for i in range(BACKUP_GENERATIONS + 1)]
+        # Backups of other files, one sharing the name as a prefix.
+        others = ["notes.md.orig.20200101_000000.bak", "todo.md.20200101_000000.bak"]
+        for name in old + others:
+            (mirror / name).write_text("old")
+
+        newest = Path(validator.create_backup(str(original)))
+
+        kept = sorted(
+            p.name
+            for p in mirror.iterdir()
+            if p.name.startswith("notes.md.") and p.name not in others
+        )
+        assert len(kept) == BACKUP_GENERATIONS
+        assert newest.name in kept
+        assert old[0] not in kept and old[1] not in kept
+        assert all((mirror / name).exists() for name in others)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    def test_backups_directory_is_owner_only(self, validator, tmp_path):
+        root = validator.cache_dir / "backups"
+        root.mkdir(mode=0o755)
+        root.chmod(0o755)
+        original = tmp_path / "repo" / "src" / "app.py"
+        original.parent.mkdir(parents=True)
+        original.write_text("x = 1\n")
+
+        backup = Path(validator.create_backup(str(original)))
+
+        directory = backup.parent
+        while directory != root:
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o700, directory
+            directory = directory.parent
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
 
 
 # ============================================================================
@@ -750,7 +797,7 @@ class TestChatAgentWriteFileGuardrails:
     """
 
     @pytest.fixture
-    def mock_agent(self, tmp_path):
+    def mock_agent(self, tmp_path, mock_home):
         """Create a mock agent with path_validator set to the tmp_path allowlist."""
         agent = MagicMock()
         agent.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
@@ -851,7 +898,7 @@ class TestChatAgentEditFileGuardrails:
     """Test that ChatAgent's edit_file tool enforces PathValidator guardrails."""
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileSearchToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_tools import FileSearchToolsMixin
@@ -1082,7 +1129,7 @@ class TestFileIOToolsMixinWriteFileGuardrails:
     """
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -1177,7 +1224,7 @@ class TestFileIOToolsMixinEditFileGuardrails:
     """Test that FileIOToolsMixin's edit_file tool enforces PathValidator guardrails."""
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -1514,11 +1561,13 @@ class TestEditingLeavesTheWorkspaceClean:
         return repo
 
     @staticmethod
-    def _tool(mixin_cls, register, name, repo):
+    def _tool(mixin_cls, register, name, repo, validated=True):
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         mixin = mixin_cls()
-        mixin.path_validator = PathValidator(allowed_paths=[str(repo)])
+        mixin.path_validator = (
+            PathValidator(allowed_paths=[str(repo)]) if validated else None
+        )
         mixin._path_validator = None
         mixin.console = None
         saved = dict(_TOOL_REGISTRY)
@@ -1564,3 +1613,32 @@ class TestEditingLeavesTheWorkspaceClean:
         backup = Path(result["backup_path"])
         assert backup.is_relative_to(validator.cache_dir / "backups")
         assert backup.read_text(encoding="utf-8") == "x = 1\n"
+
+    @pytest.mark.parametrize(
+        "name, kwargs",
+        [
+            ("edit_python_file", {"old_content": "x = 1", "new_content": "x = 2"}),
+            (
+                "replace_function",
+                {"function_name": "f", "new_implementation": "def f():\n    return 2"},
+            ),
+        ],
+    )
+    def test_without_a_validator_the_backup_still_leaves_the_repo(
+        self, repo, mock_home, name, kwargs
+    ):
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
+        source = "x = 1\n\n\ndef f():\n    return 1\n"
+        (repo / "app.py").write_text(source, encoding="utf-8")
+        tool, _ = self._tool(
+            FileIOToolsMixin, "register_file_io_tools", name, repo, validated=False
+        )
+
+        result = tool(file_path=str(repo / "app.py"), **kwargs)
+
+        assert result["status"] == "success", result
+        assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
+        backup = Path(result["backup_path"])
+        assert backup.is_relative_to(mock_home / ".gaia" / "cache" / "backups")
+        assert backup.read_text(encoding="utf-8") == source

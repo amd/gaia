@@ -16,6 +16,8 @@ reported success for every one of them.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -49,7 +51,7 @@ def run():
 
 
 @pytest.fixture
-def replace():
+def replace(mock_home):
     """The registered ``replace_function`` tool, with no PathValidator attached."""
     mixin = FileIOToolsMixin()
     mixin.console = None
@@ -233,13 +235,18 @@ def test_a_missing_function_is_still_reported_as_not_found(replace, module):
     assert module.read_text(encoding="utf-8") == MODULE
 
 
-def test_the_backup_holds_the_original_without_a_path_validator(replace, module):
-    """The manual ``.bak`` path is the one every un-validated agent takes."""
+def test_the_backup_holds_the_original_without_a_path_validator(
+    replace, module, mock_home
+):
+    """An un-validated agent's backup also goes to GAIA's cache, not the repo."""
     result = replace(str(module), "foo", "def foo():\n    return 99", backup=True)
 
-    backup = module.parent / f"{module.name}.bak"
-    assert result["backup_path"] == str(backup)
+    backup = Path(result["backup_path"])
+    assert backup.is_relative_to(mock_home / ".gaia" / "cache" / "backups")
     assert backup.read_text(encoding="utf-8") == MODULE
+    assert [p.name for p in module.parent.iterdir() if p.name != ".gaia"] == [
+        module.name
+    ]
 
 
 def test_replacing_the_last_function_keeps_everything_above_it(replace, module):
