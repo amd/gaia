@@ -14,6 +14,8 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- Clearing a TUI conversation now also clears the flagship stdio agent’s prior
+  conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
 
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
@@ -21,6 +23,11 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **`run_python`, always on.** A quick calculation or data transform is now one
+  confirmation-gated call that runs from the project root and returns what it
+  printed, instead of a throwaway script left in your repository. It joins the
+  always-on tool set (about 250 more prompt tokens per call) and the `shell`
+  bundle.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
@@ -58,7 +65,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 26 of its 71 tools on any one call — a
+  profile.** The model is sent at most 28 of its 80 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.
@@ -242,5 +249,8 @@ the terminal UI meant building it from source.
   This package mints no token, so a sidecar it spawns comes up in dev mode (token
   check skipped, loudly warned, Host/Origin still enforced) — pass your own
   through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
-- Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
+- Tracks sidecar contract `apiVersion` **2.13**; a differing major raises
   `VersionMismatchError`.
+- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
+  stdio transport's `/memory` sentinel produces, so a daemon-supervised
+  install of the flagship exposes `/memory` too, not just a subprocess one.

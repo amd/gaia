@@ -24,6 +24,7 @@ import pytest
 
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
+from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -3932,7 +3933,7 @@ class TestProceduresFaissIndex:
     def test_rebuild_builds_independently_of_knowledge_index(self, mixin_host):
         """Rebuilding the procedures index indexes procedures only, leaving the
         knowledge index object untouched."""
-        pytest.importorskip("faiss")
+        require_faiss()
         pid = mixin_host.memory_store.put_skill(
             name="proc-one",
             when_to_use="trigger one",
@@ -3951,7 +3952,7 @@ class TestProceduresFaissIndex:
 
     def test_disabled_procedure_excluded_from_index(self, mixin_host):
         """A disabled procedure is not indexed, so it can never be recalled."""
-        pytest.importorskip("faiss")
+        require_faiss()
         enabled_id = mixin_host.memory_store.put_skill(
             name="enabled-proc",
             when_to_use="recall me",
@@ -3973,14 +3974,14 @@ class TestProceduresFaissIndex:
 
     def test_empty_when_no_procedures(self, mixin_host):
         """With zero procedures the index builds empty (a no-op cost)."""
-        pytest.importorskip("faiss")
+        require_faiss()
         mixin_host._rebuild_proc_faiss_index()
         assert mixin_host._proc_faiss_index.ntotal == 0
         assert mixin_host._proc_faiss_id_map == []
 
     def test_proc_faiss_add_is_idempotent(self, mixin_host):
         """_proc_faiss_add() appends once and skips a duplicate id."""
-        pytest.importorskip("faiss")
+        require_faiss()
         from gaia.agents.base.memory import EMBEDDING_DIM
 
         mixin_host._rebuild_proc_faiss_index()  # start from an empty index
@@ -3998,7 +3999,7 @@ class TestProceduresFaissIndex:
         Proves Step 4b ran in the real init path (with a live store) — the
         index is an empty FAISS object, not the uninitialized None state.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         assert mixin_host._proc_faiss_index is not None
         assert mixin_host._proc_faiss_index.ntotal == 0
         assert mixin_host._proc_faiss_id_map == []
@@ -4051,7 +4052,7 @@ class TestSynthesizeSkills:
 
     def test_creates_procedure_with_provenance_and_indexes_it(self, mixin_host):
         """3 qualifying sessions → one procedures row with correct provenance."""
-        pytest.importorskip("faiss")
+        require_faiss()
         store = mixin_host._memory_store
         sids = ["sess_a1", "sess_b2", "sess_c3"]
         for sid in sids:
@@ -4147,7 +4148,7 @@ class TestSynthesizeSkills:
 
     def test_rerun_is_noop_and_never_deletes(self, mixin_host):
         """Reconcile issues NOOP on a re-run — the row is kept, never duplicated."""
-        pytest.importorskip("faiss")
+        require_faiss()
         store = mixin_host._memory_store
         for sid in ["s1", "s2", "s3"]:
             _seed_qualifying_session(store, sid, "triage a ticket")
@@ -4170,7 +4171,7 @@ class TestSynthesizeSkills:
         the two candidates differ only by name — the exact regression the fix
         targets.  Under the old exact-name match this produced 2 enabled rows.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         store = mixin_host._memory_store
         goal = "Summarize my unread emails"
 
@@ -4272,7 +4273,7 @@ class TestRecallSkill:
 
     def test_recall_returns_matching_procedure_full_body(self, mixin_host):
         """A goal matching a stored procedure recalls it with the FULL body."""
-        pytest.importorskip("faiss")
+        require_faiss()
         body = "# Triage\n1. pull docs\n2. read log\n## Edge cases\n- escalate"
         _seed_procedure(mixin_host, name="triage-support-ticket", body=body)
 
@@ -4289,7 +4290,7 @@ class TestRecallSkill:
 
     def test_recall_stamps_last_used_at(self, mixin_host):
         """Recalling a procedure records last_used_at (status 'Last recalled')."""
-        pytest.importorskip("faiss")
+        require_faiss()
         pid = _seed_procedure(mixin_host, name="touched-proc")
         store = mixin_host._memory_store
         assert store.search_skills(skill_id=pid)[0]["last_used_at"] is None
@@ -4305,13 +4306,13 @@ class TestRecallSkill:
 
     def test_empty_index_returns_empty(self, mixin_host):
         """With zero procedures the index is empty → recall returns []."""
-        pytest.importorskip("faiss")
+        require_faiss()
         assert mixin_host._proc_faiss_index.ntotal == 0
         assert mixin_host.recall_skill("any goal") == []
 
     def test_disabled_procedure_not_recalled(self, mixin_host):
         """A disabled procedure is excluded from the index → never recalled."""
-        pytest.importorskip("faiss")
+        require_faiss()
         _seed_procedure(mixin_host, name="enabled-proc")
         _seed_procedure(mixin_host, name="disabled-proc", enabled=False)
 
@@ -4326,7 +4327,7 @@ class TestRecallSkill:
         disabled after the index was built is excluded at read time — before any
         rebuild.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         pid = _seed_procedure(mixin_host, name="proc-x")
         assert [s.name for s in mixin_host.recall_skill("goal")] == ["proc-x"]
 
@@ -4343,7 +4344,7 @@ class TestRecallSkill:
 
     def test_superseded_procedure_not_recalled(self, mixin_host):
         """A superseded procedure is excluded at fetch time (include_superseded=False)."""
-        pytest.importorskip("faiss")
+        require_faiss()
         old_id = _seed_procedure(mixin_host, name="proc-y")
         # Mark it superseded by a (notional) newer id, without rebuilding.
         mixin_host._memory_store.supersede_skill(old_id, "proc_newer")
@@ -4352,7 +4353,7 @@ class TestRecallSkill:
 
     def test_below_tau_match_is_dropped(self, mixin_host):
         """A nearest neighbour below SIMILARITY_TAU is not injected (unrelated goal)."""
-        pytest.importorskip("faiss")
+        require_faiss()
         from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
 
         e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
@@ -4373,7 +4374,7 @@ class TestRecallSkill:
 
     def test_at_tau_match_is_kept(self, mixin_host):
         """A match at/above SIMILARITY_TAU IS recalled (positive control for tau)."""
-        pytest.importorskip("faiss")
+        require_faiss()
         from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
 
         e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
@@ -4398,7 +4399,7 @@ class TestRecallSkill:
         Recall is an enhancement on the hot path: a transient embedder hiccup
         must degrade to the pre-synthesis behavior, never crash the user's turn.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         _seed_procedure(mixin_host)  # index non-empty so recall reaches the embed step
 
         with patch.object(
@@ -4416,7 +4417,7 @@ class TestRecallSkill:
 
     def test_top_k_caps_results(self, mixin_host):
         """recall_skill returns at most top_k procedures."""
-        pytest.importorskip("faiss")
+        require_faiss()
         for i in range(4):
             _seed_procedure(mixin_host, name=f"proc-{i}", rebuild=False)
         mixin_host._rebuild_proc_faiss_index()
@@ -4430,7 +4431,7 @@ class TestRecallSkill:
         1.0 drops it and a tau of 0.0 keeps it — proving the injection path's
         pre-resolved threshold is honored.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         _seed_procedure(mixin_host, name="proc-tau")
 
         assert mixin_host.recall_skill("goal", similarity_tau=1.5) == []
@@ -4508,7 +4509,7 @@ class TestRecallOnceProcedureCache:
 
     def test_refresh_caches_recalled_skills_for_the_loader(self, mixin_host):
         """The matched DistilledProcedure objects are cached, and their tools flatten+dedupe."""
-        pytest.importorskip("faiss")
+        require_faiss()
         _seed_procedure(
             mixin_host,
             name="triage-proc",
@@ -4523,7 +4524,7 @@ class TestRecallOnceProcedureCache:
 
     def test_recall_runs_once_for_both_consumers(self, mixin_host):
         """recall_skill fires exactly once per turn; both consumers read the cache."""
-        pytest.importorskip("faiss")
+        require_faiss()
         _seed_procedure(mixin_host, name="proc-x", tools_required=["read_file"])
 
         with patch.object(
@@ -4539,7 +4540,7 @@ class TestRecallOnceProcedureCache:
 
     def test_off_state_caches_empty_and_skips_settings_read(self, mixin_host):
         """Empty index → no settings read, empty caches (the zero-cost off-state)."""
-        pytest.importorskip("faiss")
+        require_faiss()
         assert mixin_host._proc_faiss_index.ntotal == 0
 
         with patch("gaia.agents.base.memory._load_memory_settings") as mock_settings:
@@ -4636,7 +4637,7 @@ class TestRecalledSkillInjection:
 
     def test_matching_goal_injects_procedure_into_system_prompt(self, composing_host):
         """A matching goal makes process_query inject the recipe into the prompt."""
-        pytest.importorskip("faiss")
+        require_faiss()
         composing_host._memory_post_init_pending = False  # isolate from synthesis
         _seed_procedure(
             composing_host,
@@ -4658,7 +4659,7 @@ class TestRecalledSkillInjection:
         procedures, the composed system prompt is byte-identical to a build
         without procedural memory.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         composing_host._memory_post_init_pending = False
 
         before = composing_host.system_prompt
@@ -4675,7 +4676,7 @@ class TestRecalledSkillInjection:
         Mirrors _refresh_active_tool_filter — the cached prompt is recomposed
         when the recalled set changes, in either direction.
         """
-        pytest.importorskip("faiss")
+        require_faiss()
         composing_host._memory_post_init_pending = False
         pid = _seed_procedure(
             composing_host,
@@ -4739,7 +4740,7 @@ class TestRecallEndToEndReachesThePrompt:
     """
 
     def test_put_skill_is_recalled_into_the_composed_prompt(self, composing_host):
-        pytest.importorskip("faiss")
+        require_faiss()
         from gaia.agents.base.memory import _embedding_to_blob
 
         composing_host._memory_post_init_pending = False  # isolate from synthesis
@@ -4785,7 +4786,7 @@ class TestRecallSkillObservability:
     """
 
     def test_below_tau_miss_logs_the_score_and_tau(self, mixin_host, caplog):
-        pytest.importorskip("faiss")
+        require_faiss()
         from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
 
         e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
@@ -4813,7 +4814,7 @@ class TestRecallSkillObservability:
         assert "tau=" in caplog.text.lower()
 
     def test_hit_logs_the_matched_procedure_name(self, mixin_host, caplog):
-        pytest.importorskip("faiss")
+        require_faiss()
         pid = _seed_procedure(mixin_host, name="triage-support-ticket")
 
         with caplog.at_level(logging.INFO, logger="gaia.agents.base.procedural_memory"):
@@ -4827,7 +4828,7 @@ class TestRecallSkillObservability:
     def test_empty_index_logs_distinctly_from_a_below_tau_miss(
         self, mixin_host, caplog
     ):
-        pytest.importorskip("faiss")
+        require_faiss()
         assert mixin_host._proc_faiss_index.ntotal == 0
 
         with caplog.at_level(logging.INFO, logger="gaia.agents.base.procedural_memory"):
@@ -4882,7 +4883,7 @@ class TestRecallReducesToolSteps:
     """
 
     def test_recalled_recipe_cuts_tool_steps_vs_baseline(self, composing_host):
-        pytest.importorskip("faiss")
+        require_faiss()
         composing_host._memory_post_init_pending = False  # isolate from synthesis
 
         needed = ["query_documents", "read_file", "remember"]

@@ -441,7 +441,7 @@ def build_scenario_prompt(
     adversarial_root = str(CORPUS_DIR / "adversarial").replace("\\", "/")
     real_world_root = str(REAL_WORLD_CORPUS_DIR).replace("\\", "/")
     # Inline all three prompt files so the full rubric is always available — the claude
-    # subprocess has no file-read tool and cannot access these paths from disk.
+    # subprocess runs with ``--tools ""`` and cannot read these paths from disk.
     # JSON examples below use {{ and }} as f-string escaped literal braces.
     # If you switch to .replace()-style templating, change all {{ → { and }} → }.
     simulator_content = _load_simulator_content()
@@ -970,6 +970,10 @@ def run_scenario_subprocess(
             "--mcp-config",
             str(MCP_CONFIG),
             "--strict-mcp-config",
+            # No built-in tools: the driver works only through the agent UI's
+            # MCP tools, and holds the judge's credentials.
+            "--tools",
+            "",
             "--model",
             model,
             "--dangerously-skip-permissions",
