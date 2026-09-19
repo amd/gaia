@@ -261,15 +261,28 @@ class SkillManager:
     def load(self, name: str) -> Skill:
         """Fully parse the winning skill, body included (level 2).
 
+        A skill from the user root is checked against ``skill-lock.json`` here —
+        the single chokepoint every consumer (``Agent.load_skill``, ``gaia skill
+        info``) passes through — so a signature-backed install whose files
+        changed cannot be handed to a model under a tier it no longer earns.
+
         Raises:
             SkillNotFoundError: no root contains a skill of that name.
             SkillValidationError: the skill exists but fails validation.
+            SkillDriftError: the skill was installed at ``community`` /
+                ``verified`` and no longer matches what the lock recorded.
         """
         metadata = self.get(name)
         assert metadata.path is not None  # discovery always sets it
         skill = parse_skill_file(
             metadata.path, root=metadata.root, read_only=metadata.read_only
         )
+        if metadata.root == ROOT_USER:
+            # Deferred: keeps the marketplace modules off the import path of
+            # every agent that merely composes a bundled skill.
+            from gaia.skills.drift import assert_no_fatal_drift
+
+            assert_no_fatal_drift(self.user_root, skill)
         log.debug(
             "Loaded skill '%s' from root '%s' (%s, tier=%s, %d tool(s))",
             skill.name,

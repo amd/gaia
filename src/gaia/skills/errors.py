@@ -38,6 +38,16 @@ class SkillSetError(SkillError):
     """
 
 
+class SkillDriftError(SkillError):
+    """An installed skill no longer matches what ``skill-lock.json`` recorded.
+
+    Raised only for a signature-backed install (``community`` / ``verified``):
+    those bytes were attested at install time, so serving different ones under
+    the same tier badge would make the signature meaningless. Unattested skills
+    warn instead — see :mod:`gaia.skills.drift`.
+    """
+
+
 class SkillPermissionError(SkillError):
     """The skill declares a permission this phase cannot honor.
 
