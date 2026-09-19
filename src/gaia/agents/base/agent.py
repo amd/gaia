@@ -4260,11 +4260,12 @@ Do NOT wrap conversational replies in JSON.
         steps_limit: int,
         step: int,
     ) -> Optional[str]:
-        """Ask for the final answer once the step limit is spent, tools withheld.
+        """Ask for the final answer once the step limit is spent, no tool calls.
 
-        Same model path as the loop (streaming or not), with ``tools=None``.
-        Returns the answer, or ``None`` when the user pressed Stop. Raises when
-        the call fails or the reply is not an answer; the caller says why.
+        Same model path and tools as the loop (streaming or not), plus
+        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
+        pressed Stop. Raises when the call fails or the reply is not an answer;
+        the caller says why.
         """
         cancel_event = getattr(self, "_cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
@@ -4278,10 +4279,16 @@ Do NOT wrap conversational replies in JSON.
                 "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
             }
         ]
+        # Tool history needs the tools on some providers; the model may not call one.
+        tools = self._openai_tools
+        no_calls = {"tool_choice": "none"} if tools else {}
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
-                messages=request, system_prompt=self.system_prompt, tools=None
+                messages=request,
+                system_prompt=self.system_prompt,
+                tools=tools,
+                **no_calls,
             )
             response = ""
             for chunk in stream:
@@ -4299,7 +4306,10 @@ Do NOT wrap conversational replies in JSON.
             self.console.start_progress(self._progress_label())
             try:
                 reply = self.chat.send_messages(
-                    messages=request, system_prompt=self.system_prompt, tools=None
+                    messages=request,
+                    system_prompt=self.system_prompt,
+                    tools=tools,
+                    **no_calls,
                 )
             finally:
                 self.console.stop_progress()
@@ -4327,9 +4337,12 @@ Do NOT wrap conversational replies in JSON.
         answer = parsed.get("answer")
         if not isinstance(answer, str):
             answer = ""
-        if parsed.get("tool") or _unfinished_answer_kind(answer) == "tool_markup":
+        requested = [c["name"] for c in parsed.get("tool_calls") or []]
+        if not requested and parsed.get("tool"):
+            requested = [parsed["tool"]]
+        if requested or _unfinished_answer_kind(answer) == "tool_markup":
             raise ValueError(
-                f"the model asked to run {parsed.get('tool') or 'another tool'} "
+                f"the model asked to run {', '.join(requested) or 'another tool'} "
                 "instead of answering"
             )
         if not answer.strip():

@@ -356,6 +356,7 @@ class LemonadeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[Union[str, dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
         # Reset from any previous call — usage is per-call, not cumulative,
@@ -406,6 +407,16 @@ class LemonadeProvider(LLMClient):
         # because it always sends a tools array.
         effective_stream = stream
         effective_tools = tools if tool_capable else None
+        if tool_choice is not None:
+            if not tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            # Governs the tools, so it is withheld along with them.
+            if effective_tools:
+                kwargs["tool_choice"] = tool_choice
 
         response = self._backend.chat_completions(
             model=effective_model,

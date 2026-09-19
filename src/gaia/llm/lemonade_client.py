@@ -1937,6 +1937,7 @@ class LemonadeClient:
         logprobs: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         auto_download: bool = True,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], Generator[Dict[str, Any], None, None]]:
         """
@@ -1957,6 +1958,8 @@ class LemonadeClient:
             logprobs: Whether to include log probabilities
             tools: List of tools the model may call
             auto_download: Automatically download model if not available (default: True)
+            tool_choice: OpenAI ``tool_choice`` ("none", "auto", "required", or
+                a named function), sent unchanged. Requires ``tools``.
             **kwargs: Additional parameters to pass to the API
 
         Returns:
@@ -1983,6 +1986,16 @@ class LemonadeClient:
             # These local llama.cpp defaults are inserted by LemonadeProvider.
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
+
+        if tool_choice is not None:
+            if not tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools. "
+                    "OpenAI-compatible servers reject tool_choice on a request "
+                    "that offers no tools; pass tools= as well, or drop "
+                    "tool_choice."
+                )
+            kwargs["tool_choice"] = tool_choice
 
         # Handle max_tokens vs max_completion_tokens
         if max_completion_tokens is None and max_tokens is None:
@@ -2194,6 +2207,7 @@ class LemonadeClient:
             "user",
             "response_format",
             "logit_bias",
+            "tool_choice",
         }
         extra_body = {}
         standard_kwargs = {}
