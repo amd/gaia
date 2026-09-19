@@ -11,18 +11,40 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
-    record_read,
-    record_write,
+    file_read_record,
+    read_first_preflight,
+    stamp_of,
 )
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
+    """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
+    path = Path(file_path)
+    if project_dir and not path.is_absolute():
+        path = Path(project_dir).resolve() / path
+    return path.resolve()
+
+
+def _project_target(args: Dict[str, Any]) -> Path:
+    return _resolve_target(args["file_path"], args.get("project_dir"))
+
+
+def _file_path_target(args: Dict[str, Any]) -> str:
+    return args["file_path"]
+
+
+def _gaia_md_target(args: Dict[str, Any]) -> str:
+    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -280,16 +302,17 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                reads = file_read_record(self)
+                seen = stamp_of(file_path)
+
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
 
-                    return {
-                        "status": "success",
-                        "file_path": file_path,
-                        **read_text_page(
-                            file_path, offset, 8000 if limit is None else limit
-                        ),
-                    }
+                    page = read_text_page(
+                        file_path, offset, 8000 if limit is None else limit
+                    )
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
 
                 # Read file content
                 try:
@@ -299,6 +322,8 @@ class FileIOToolsMixin:
                     # Binary file
                     with open(file_path, "rb") as f:
                         content_bytes = f.read()
+                    # Recorded too: this is all a read can show of it.
+                    reads.note(file_path, seen)
                     return {
                         "status": "success",
                         "file_path": file_path,
@@ -308,8 +333,7 @@ class FileIOToolsMixin:
                         "size_bytes": len(content_bytes),
                     }
 
-                # Anchor later edits to what the agent actually saw.
-                record_read(file_path, content)
+                reads.note(file_path, seen)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -395,7 +419,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_python_file(
             file_path: str,
             content: str,
@@ -403,6 +427,8 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
         ) -> Dict[str, Any]:
             """Write Python code to a file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -448,6 +474,11 @@ class FileIOToolsMixin:
                     )
                     return {"status": "error", "error": reason}
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
+                    return refusal
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -460,7 +491,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
                 detail = f"backup={backup_path}" if backup_path else ""
@@ -483,7 +514,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def edit_python_file(
             file_path: str,
             old_content: str,
@@ -492,6 +523,8 @@ class FileIOToolsMixin:
             dry_run: bool = False,
         ) -> Dict[str, Any]:
             """Edit a Python file by replacing content.
+
+            The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -555,6 +588,11 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    return refusal
+
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
 
@@ -607,7 +645,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
-                record_write(str(file_path), modified_content)
+                reads.note(file_path)
 
                 # Audit successful edit
                 detail = (
@@ -706,7 +744,8 @@ class FileIOToolsMixin:
 
                                 if len(results) >= max_results:
                                     break
-                        except Exception:
+                        except (OSError, UnicodeDecodeError) as e:
+                            logger.warning("search_code skipped %s: %s", file_path, e)
                             continue
 
                     if len(results) >= max_results:
@@ -785,11 +824,13 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_markdown_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """Write content to a markdown file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -820,6 +861,11 @@ class FileIOToolsMixin:
                     )
                     return {"status": "error", "error": reason}
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
+                    return refusal
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -834,7 +880,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
                 detail = f"backup={backup_path}" if backup_path else ""
@@ -857,7 +903,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target, "overwriting"))
         def write_file(
             file_path: str,
             content: str,
@@ -872,6 +918,7 @@ class FileIOToolsMixin:
             Prefer edit_file when changing PART of a file that already exists —
             this replaces the whole thing. Use write_python_file instead only
             when you want the write REFUSED if the content is not valid Python.
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory
             enforcement, sensitive file protection, size limits, backup
@@ -887,14 +934,7 @@ class FileIOToolsMixin:
                 dict: Status and file information
             """
             try:
-                from pathlib import Path
-
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
+                path = _resolve_target(file_path, project_dir)
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access.
@@ -912,6 +952,11 @@ class FileIOToolsMixin:
                     )
                     return {"status": "error", "error": reason}
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(path, "overwriting")
+                if refusal is not None:
+                    return refusal
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if path.exists():
@@ -923,7 +968,7 @@ class FileIOToolsMixin:
 
                 # Write content to file
                 path.write_text(content, encoding="utf-8")
-                record_write(str(path), content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if content.strip():
@@ -966,7 +1011,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target))
         def edit_file(
             file_path: str,
             old_content: str,
@@ -978,7 +1023,8 @@ class FileIOToolsMixin:
             The default way to edit anything: documentation (.md, .mdx, .rst),
             source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
             .toml), plain text. Prefer it over rewriting a file with write_file,
-            and over shelling out to sed or a here-doc.
+            and over shelling out to sed or a here-doc. The file must have been
+            read with read_file first.
 
             Use edit_python_file instead only when you want the edit REFUSED if
             it would break Python syntax.
@@ -1002,14 +1048,7 @@ class FileIOToolsMixin:
                 dict: Status and edit information
             """
             try:
-                from pathlib import Path
-
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
+                path = _resolve_target(file_path, project_dir)
 
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1051,6 +1090,11 @@ class FileIOToolsMixin:
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(path)
+                if refusal is not None:
+                    return refusal
+
                 # Read current content
                 current_content = path.read_text(encoding="utf-8")
 
@@ -1080,7 +1124,7 @@ class FileIOToolsMixin:
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
-                record_write(str(path), updated_content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1129,7 +1173,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1138,6 +1182,8 @@ class FileIOToolsMixin:
             instructions: str = None,
         ) -> Dict[str, Any]:
             """Create or update GAIA.md file for project context.
+
+            Updating an existing GAIA.md requires reading it with read_file first.
 
             Args:
                 project_root: Root directory of the project
@@ -1161,6 +1207,11 @@ class FileIOToolsMixin:
                         "status": "error",
                         "error": f"Access denied: {gaia_path} is not in allowed paths",
                     }
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(gaia_path, "overwriting")
+                if refusal is not None:
+                    return refusal
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -1212,6 +1263,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                reads.note(gaia_path)
 
                 return {
                     "status": "success",
@@ -1222,7 +1274,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def replace_function(
             file_path: str,
             function_name: str,
@@ -1232,7 +1284,7 @@ class FileIOToolsMixin:
             """Replace one function definition in a Python file.
 
             Replaces the definition and its decorators, leaving the code around
-            it untouched.
+            it untouched. The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -1290,6 +1342,11 @@ class FileIOToolsMixin:
                     return {"status": "error", "error": f"File not found: {file_path}"}
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    return refusal
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -1350,6 +1407,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                reads.note(file_path)
 
                 # Generate diff
                 diff = "\n".join(

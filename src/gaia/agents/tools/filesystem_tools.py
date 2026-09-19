@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from gaia.agents.tools.file_edit import file_read_record, stamp_of
 from gaia.agents.tools.search_scope import search_roots
 
 logger = logging.getLogger(__name__)
@@ -890,6 +891,11 @@ class FileSystemToolsMixin:
                 if mode == "metadata":
                     return file_info(str(resolved))
 
+                # Views that show the file's text unlock it for the edit tools;
+                # PDF, image and binary summaries don't.
+                reads = file_read_record(mixin)
+                seen = stamp_of(resolved)
+
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
 
@@ -907,17 +913,15 @@ class FileSystemToolsMixin:
                                 match = from_bytes(sample_file.read(65536)).best()
                             if match is not None:
                                 page_encoding = match.encoding
+                    page = read_text_page(
+                        resolved,
+                        offset,
+                        8000 if limit is None else limit,
+                        page_encoding,
+                    )
+                    reads.note(resolved, seen)
                     return json.dumps(
-                        {
-                            **read_text_page(
-                                resolved,
-                                offset,
-                                8000 if limit is None else limit,
-                                page_encoding,
-                            ),
-                            "encoding": page_encoding,
-                        },
-                        ensure_ascii=False,
+                        {**page, "encoding": page_encoding}, ensure_ascii=False
                     )
 
                 # Size guard: refuse to load files bigger than MAX_READ_BYTES
@@ -938,11 +942,15 @@ class FileSystemToolsMixin:
 
                 # CSV/TSV
                 if ext in (".csv", ".tsv"):
-                    return _read_tabular(resolved, ext, lines, mode)
+                    shown = _read_tabular(resolved, ext, lines, mode)
+                    reads.note(resolved, seen)
+                    return shown
 
                 # JSON
                 if ext == ".json":
-                    return _read_json(resolved, lines, mode)
+                    shown = _read_json(resolved, lines, mode)
+                    reads.note(resolved, seen)
+                    return shown
 
                 # PDF
                 if ext == ".pdf":
@@ -980,8 +988,13 @@ class FileSystemToolsMixin:
                                 f"MIME: {mime or 'unknown'}\n"
                                 f"Hex preview: {hex_preview}..."
                             )
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        logger.warning(
+                            "Could not sample %s for binary content (%s); "
+                            "reading it as text",
+                            resolved,
+                            e,
+                        )
 
                 # Text file reading
                 detected_encoding = encoding
@@ -1063,6 +1076,7 @@ class FileSystemToolsMixin:
                         f"encoding='{detected_encoding}' to continue)"
                     )
 
+                reads.note(resolved, seen)
                 return "\n".join(output_lines)
 
             except ValueError as e:

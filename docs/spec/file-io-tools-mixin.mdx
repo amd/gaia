@@ -72,7 +72,9 @@ skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
 
 ### 1. read_file
 
-Read any file and intelligently analyze based on file type.
+Read any file and intelligently analyze based on file type. A successful read,
+a paged one included, is what lets the write and edit tools change the file —
+see [Read before edit](#read-before-edit).
 
 **Parameters:**
 - `file_path` (str, required): Path to the file to read
@@ -241,11 +243,46 @@ Edit any file by replacing content without validation.
 }
 ```
 
+### Read before edit
+
+Every tool here that changes an existing file — `edit_file`, `edit_python_file`,
+`replace_function`, and `write_file`, `write_python_file`, `write_markdown_file`
+and `update_gaia_md` when the target already exists — refuses the file unless
+the agent has read it. An edit made from a grep snippet or a guess is made
+blind; this makes the agent look at what it is about to change.
+
+- **What counts as a read:** `read_file` returning the file, a paged
+  (`offset`/`limit`) read included. So does the agent creating the file, or
+  editing it successfully. A shell `cat` does not.
+- **Changed on disk since the read** — a different mtime or size, a bare
+  `touch` included — is refused too, until the agent reads the file again.
+- **Creating a file needs no read.**
+- **The record belongs to one agent instance** and lasts as long as it does.
+  Another agent's reads unlock nothing.
+
+The refusal happens before anything is written, and before the confirmation
+prompt, so nobody is asked to approve an edit that is already going to be
+refused. It applies with confirmations bypassed too, because it is about the
+edit being correct, not permitted. A path outside the allowed paths gets the
+usual scope refusal instead, so the check never reveals whether a file exists
+there.
+
+**Refusal shape:**
+```python
+{
+    "status": "error",
+    "error": str,           # names the file and says to read it
+    "error_type": "not_read" | "changed_since_read",
+    "file_path": str,
+    "executed": False       # stopped before it ran
+}
+```
+
 ### Edit semantics
 
 `edit_file` and `edit_python_file` share one match-and-replace implementation,
 [`gaia.agents.tools.file_edit`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_edit.py),
-so the two cannot drift apart. Three rules:
+so the two cannot drift apart. Two rules:
 
 **`old_content` must match exactly one location.** Matching several is an
 error, not a first-match replacement — picking one edits a region the caller
@@ -255,11 +292,6 @@ Extend `old_content` with surrounding lines until it is unique.
 **A rejection carries the file's current content**, so the retry does not need
 a separate read.
 
-**An edit against a file that changed since it was read is rejected.** Reads and
-writes record a content hash; a mismatch means the file moved under the agent.
-The rejection hands back the current content and re-anchors, so the corrected
-retry proceeds. A file with no recorded read is not blocked.
-
 **Rejection shape:**
 ```python
 {
@@ -268,7 +300,6 @@ retry proceeds. A file with no recorded read is not blocked.
     "match_count": int,     # 0 = not found, >1 = ambiguous
     "match_lines": [int],   # ambiguous only
     "matches": [dict],      # ambiguous only: line + surrounding context
-    "stale": bool,          # changed-on-disk only
     "current_content": str, # excerpt around the target region
     "current_content_start_line": int,
     "current_content_end_line": int,
@@ -276,8 +307,8 @@ retry proceeds. A file with no recorded read is not blocked.
 }
 ```
 
-The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows the same three
-rules, so an agent behaves identically on either tree.
+The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows both rules and
+rejects a stale write, but still lets an agent edit a file it never read.
 
 ### 8. replace_function
 

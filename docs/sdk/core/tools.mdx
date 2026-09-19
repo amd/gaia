@@ -80,6 +80,7 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "atomic": False,
     "display_label": None,  # optional user-facing label for UI progress strips
     "timeout": None,        # optional per-tool timeout (seconds); None = global default
+    "preflight": None,      # optional check run before the confirmation prompt
 }
 ```
 
@@ -887,7 +888,7 @@ import inspect
 _TOOL_REGISTRY = {}
 
 def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
-         timeout: float | None = None):
+         timeout: float | None = None, preflight=None):
     """Decorator that registers a function in the global tool registry."""
 
     def decorator(f):
@@ -914,6 +915,7 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "preflight": preflight,
         }
         return f
 
@@ -937,6 +939,11 @@ Notable implementation details:
 - `@tool(display_label=...)` sets a user-facing label for UI progress strips, and
   `@tool(timeout=...)` overrides the global per-tool execution limit (seconds).
   Both default to `None` and are stored on the registry entry.
+- `@tool(preflight=...)` takes a function of the call's arguments that returns
+  the refusal the call has already earned, or `None`. The agent runs it before
+  the confirmation prompt, so nobody is asked to approve a call that is going to
+  be refused. The tool body must enforce the same rule itself; the file-editing
+  tools use this for their read-before-edit check.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
 

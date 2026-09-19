@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
-_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
+_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout", "preflight")
 
 
 # Annotation -> registry type name. Anything absent stays "unknown", which
@@ -148,6 +148,7 @@ def tool(
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
+    preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -165,6 +166,10 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
+        preflight: Called with the call's arguments before the confirmation
+            prompt; returns the refusal the call has already earned, or
+            ``None``. The tool body must enforce the same rule itself, since
+            state can change while a prompt waits.
 
     Returns:
         The original function or decorator, unchanged
@@ -208,6 +213,7 @@ def tool(
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "preflight": preflight,
         }
 
         # Return the function unchanged

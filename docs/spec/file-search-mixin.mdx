@@ -142,6 +142,9 @@ class FileSearchToolsMixin:
         - Binary: Detection with size reporting
         - Text: Raw content with line count
 
+        A successful read, a paged one included, is what lets write_file and
+        edit_file change the file afterwards.
+
         Args:
             file_path: Path to file
 
@@ -221,6 +224,10 @@ class FileSearchToolsMixin:
         """
         Write content to file.
 
+        Creating a file needs no read. Overwriting an existing one is refused
+        unless this agent has read it with read_file, and it hasn't changed on
+        disk since — the same rule as edit_file.
+
         Args:
             file_path: Target path
             content: File content
@@ -250,12 +257,17 @@ class FileSearchToolsMixin:
         (PathValidator allowlist, blocked-dir and sensitive-file checks, backup
         creation, audit logging). The target file must already exist.
 
+        The agent must have read the file with read_file first (a paged read
+        counts), and the file must not have changed on disk since — a
+        different mtime or size. Otherwise the edit is refused before anything
+        is written, and before any confirmation prompt; read the file again
+        to proceed. A file this agent created or already edited needs no read.
+
         old_content must match exactly one location. Matching several is an
         error, not a first-match replacement: picking one would edit a region
-        the caller never named while reporting success. Matching nothing, and
-        editing a file that changed since it was read, are errors too. Every
-        rejection carries the file's current content so the retry needs no
-        separate read. The semantics live in `gaia.agents.tools.file_edit`,
+        the caller never named while reporting success. Matching nothing is an
+        error too, and carries the file's current content so the retry needs
+        no separate read. The semantics live in `gaia.agents.tools.file_edit`,
         shared by every edit tool.
 
         Args:
@@ -276,17 +288,26 @@ class FileSearchToolsMixin:
                                    # (owner-only; newest five per file kept)
             }
 
-            On rejection:
+            On a match rejection:
             {
                 "status": "error",
                 "error": str,           # names the cause and the fix
                 "match_count": int,     # 0 = not found, >1 = ambiguous
                 "match_lines": [int],   # ambiguous only
-                "stale": bool,          # changed-on-disk only
                 "current_content": str, # excerpt around the target region
                 "current_content_start_line": int,
                 "current_content_end_line": int,
                 "current_content_total_lines": int
+            }
+
+            On a read-first refusal:
+            {
+                "status": "error",
+                "error": str,           # names the file and says to read it
+                "error_type": "not_read" | "changed_since_read",
+                "file_path": str,
+                "executed": False,
+                "operation": "edit_file"
             }
         """
         pass

@@ -137,6 +137,13 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently

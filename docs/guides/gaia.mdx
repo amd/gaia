@@ -124,6 +124,10 @@ Eight tools mutate your machine and are gated behind an explicit confirmation: *
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
 </Warning>
 
+### The agent reads a file before it changes it
+
+`edit_file`, and `write_file` on a file that already exists, refuse a file the agent hasn't read with `read_file` in this session, or one that changed on disk since it did. That stops edits patched together from a search snippet or a guess. The check runs before any approval prompt, so you aren't asked to approve an edit that is going to be refused, and it still applies with confirmations bypassed. A partial read counts, and creating a new file needs no read. See [Read before edit](/spec/file-io-tools-mixin#read-before-edit) for the exact rule.
+
 ## File access scope
 
 The agent's file, document, and data tools are confined to a set of allowed paths. **By default that set is your home directory.**
