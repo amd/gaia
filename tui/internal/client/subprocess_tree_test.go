@@ -264,7 +264,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 			t.Fatal("a cooperative cancel killed the agent")
 		}
 
-		if a := answerOf(runTurn(t, c, "report bypass")); !strings.HasPrefix(a, "bypass=false ") {
+		if a := answerOf(runTurn(t, c, "report full access")); !strings.HasPrefix(a, "full_access=false ") {
 			t.Fatalf("follow-up turn answered %q", a)
 		}
 		if again := readPid(t, pidfile, 0); again != child {
@@ -275,22 +275,22 @@ func TestSubprocessProcessTree(t *testing.T) {
 		}
 	})
 
-	t.Run("a respawn keeps /bypass off and says what was lost", func(t *testing.T) {
+	t.Run("a respawn keeps /full-access off and says what was lost", func(t *testing.T) {
 		pidfile, _ := env(t, 10000)
-		c := NewSubprocessClient(bin, []string{BypassPermissionsFlag}, false)
+		c := NewSubprocessClient(bin, []string{FullAccessFlag}, false)
 		defer c.Close()
 
-		if a := answerOf(runTurn(t, c, "report bypass")); !strings.HasPrefix(a, "bypass=true ") {
+		if a := answerOf(runTurn(t, c, "report full access")); !strings.HasPrefix(a, "full_access=true ") {
 			t.Fatalf("launched with the flag, agent reports %q", a)
 		}
-		if argv := childArgv(c); !slices.Contains(argv, BypassPermissionsFlag) {
-			t.Fatalf("the first agent was not launched with %s: %v", BypassPermissionsFlag, argv)
+		if argv := childArgv(c); !slices.Contains(argv, FullAccessFlag) {
+			t.Fatalf("the first agent was not launched with %s: %v", FullAccessFlag, argv)
 		}
-		if err := c.SetBypassPermissions(false); err != nil {
-			t.Fatalf("SetBypassPermissions(false): %v", err)
+		if err := c.SetFullAccess(false); err != nil {
+			t.Fatalf("SetFullAccess(false): %v", err)
 		}
-		if a := answerOf(runTurn(t, c, "report bypass")); !strings.HasPrefix(a, "bypass=false ") {
-			t.Fatalf("after /bypass off, agent reports %q", a)
+		if a := answerOf(runTurn(t, c, "report full access")); !strings.HasPrefix(a, "full_access=false ") {
+			t.Fatalf("after /full-access off, agent reports %q", a)
 		}
 		first := readPid(t, pidfile, 0)
 
@@ -301,15 +301,15 @@ func TestSubprocessProcessTree(t *testing.T) {
 		}
 		waitFor(t, "the client to drop the killed agent", 5*time.Second, func() bool { return !isStarted(c) })
 
-		evts := runTurn(t, c, "report bypass")
+		evts := runTurn(t, c, "report full access")
 		if second := readPid(t, pidfile, first); second == first {
 			t.Fatal("expected a new agent process after the hard stop")
 		}
-		if argv := childArgv(c); slices.Contains(argv, BypassPermissionsFlag) {
-			t.Fatalf("the respawned agent was launched with %s after /bypass off: %v", BypassPermissionsFlag, argv)
+		if argv := childArgv(c); slices.Contains(argv, FullAccessFlag) {
+			t.Fatalf("the respawned agent was launched with %s after /full-access off: %v", FullAccessFlag, argv)
 		}
-		if a := answerOf(evts); !strings.HasPrefix(a, "bypass=false ") {
-			t.Fatalf("the respawned agent reports %q — /bypass off was reverted by the restart", a)
+		if a := answerOf(evts); !strings.HasPrefix(a, "full_access=false ") {
+			t.Fatalf("the respawned agent reports %q — /full-access off was reverted by the restart", a)
 		}
 		notice, ok := evts[0].(event.CanonicalNoticeEvent)
 		if !ok {
@@ -323,8 +323,8 @@ func TestSubprocessProcessTree(t *testing.T) {
 		if strings.Contains(notice.Text, "failed") {
 			t.Errorf("a clean restart reported a failed stop: %q", notice.Text)
 		}
-		if !c.BypassAtLaunch() {
-			t.Error("BypassAtLaunch must keep describing the launch, not the current mode")
+		if !c.FullAccessAtLaunch() {
+			t.Error("FullAccessAtLaunch must keep describing the launch, not the current mode")
 		}
 	})
 
@@ -333,19 +333,19 @@ func TestSubprocessProcessTree(t *testing.T) {
 		c := NewSubprocessClient(bin, nil, false)
 		defer c.Close()
 
-		runTurn(t, c, "report bypass")
+		runTurn(t, c, "report full access")
 		ctx, cancel := context.WithCancel(context.Background())
 		ch := startSlowTool(t, c, ctx)
 		cancel()
 		// No drain and no wait: the TUI drops its read on a hard stop, and the
 		// user can type the next message before the teardown has finished.
-		evts := runTurn(t, c, "report bypass")
+		evts := runTurn(t, c, "report full access")
 		for range ch {
 		}
 		if _, ok := evts[0].(event.CanonicalNoticeEvent); !ok {
 			t.Fatalf("first event = %T, want the restart notice", evts[0])
 		}
-		if a := answerOf(evts); !strings.HasPrefix(a, "bypass=false ") {
+		if a := answerOf(evts); !strings.HasPrefix(a, "full_access=false ") {
 			t.Fatalf("the replacement answered %q", a)
 		}
 	})
@@ -367,41 +367,41 @@ func TestSubprocessProcessTree(t *testing.T) {
 		}
 	})
 
-	t.Run("/bypass with no agent running applies to the next one", func(t *testing.T) {
+	t.Run("/full-access with no agent running applies to the next one", func(t *testing.T) {
 		env(t, 10000)
-		c := NewSubprocessClient(bin, []string{BypassPermissionsFlag}, false)
+		c := NewSubprocessClient(bin, []string{FullAccessFlag}, false)
 		defer c.Close()
 
-		if err := c.SetBypassPermissions(false); err != nil {
-			t.Fatalf("SetBypassPermissions before any turn: %v", err)
+		if err := c.SetFullAccess(false); err != nil {
+			t.Fatalf("SetFullAccess before any turn: %v", err)
 		}
-		if a := answerOf(runTurn(t, c, "report bypass")); !strings.HasPrefix(a, "bypass=false ") {
+		if a := answerOf(runTurn(t, c, "report full access")); !strings.HasPrefix(a, "full_access=false ") {
 			t.Fatalf("agent reports %q", a)
 		}
 	})
 }
 
 func TestSpawnArgsFollowTheSessionMode(t *testing.T) {
-	launch := []string{"--dev", BypassPermissionsFlag, UseClaudeFlag}
+	launch := []string{"--dev", FullAccessFlag, UseClaudeFlag}
 	c := NewSubprocessClient("agent", launch, false)
 
 	if got, want := c.spawnArgs(false), []string{"--dev", UseClaudeFlag}; !reflect.DeepEqual(got, want) {
 		t.Errorf("spawnArgs(false) = %v, want %v", got, want)
 	}
-	if got, want := c.spawnArgs(true), []string{"--dev", UseClaudeFlag, BypassPermissionsFlag}; !reflect.DeepEqual(got, want) {
+	if got, want := c.spawnArgs(true), []string{"--dev", UseClaudeFlag, FullAccessFlag}; !reflect.DeepEqual(got, want) {
 		t.Errorf("spawnArgs(true) = %v, want %v", got, want)
 	}
-	if !reflect.DeepEqual(c.args, []string{"--dev", BypassPermissionsFlag, UseClaudeFlag}) {
+	if !reflect.DeepEqual(c.args, []string{"--dev", FullAccessFlag, UseClaudeFlag}) {
 		t.Errorf("spawnArgs mutated the launch argv: %v", c.args)
 	}
 }
 
-func TestFailedBypassWriteKeepsRespawnInSafeMode(t *testing.T) {
+func TestFailedFullAccessWriteKeepsRespawnInSafeMode(t *testing.T) {
 	for _, enable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {
 			args := []string{}
 			if !enable {
-				args = append(args, BypassPermissionsFlag)
+				args = append(args, FullAccessFlag)
 			}
 			c := NewSubprocessClient("agent", args, false)
 			reader, writer, err := os.Pipe()
@@ -413,11 +413,11 @@ func TestFailedBypassWriteKeepsRespawnInSafeMode(t *testing.T) {
 			c.started = true
 			c.stdin = writer
 
-			if err := c.SetBypassPermissions(enable); err == nil {
+			if err := c.SetFullAccess(enable); err == nil {
 				t.Fatal("closed stdin must report an undelivered control message")
 			}
-			if got := c.spawnArgs(c.bypass); slices.Contains(got, BypassPermissionsFlag) {
-				t.Fatalf("respawn would enable bypass after a failed control write: %v", got)
+			if got := c.spawnArgs(c.fullAccess); slices.Contains(got, FullAccessFlag) {
+				t.Fatalf("respawn would enable full access after a failed control write: %v", got)
 			}
 		})
 	}

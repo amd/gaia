@@ -23,6 +23,7 @@ from gaia.agents.base.project_map import (
     PROJECT_MAP_TOKEN_BUDGET,
     PROJECT_ROOT_ENV,
     PlatformQuirks,
+    ProjectMap,
     ProjectMapMixin,
     build_project_map,
     clear_project_map_cache,
@@ -179,18 +180,34 @@ def test_map_names_absent_commands_so_the_agent_does_not_try_them(repo, monkeypa
 
 
 def test_shell_allowlist_is_not_conflated_with_what_is_installed(repo):
-    """Claiming run_shell_command accepts ``uv`` causes the very refusal
-    this map exists to prevent."""
+    """Listing ``uv`` as read-only would promise it runs in an unattended
+    session, where anything off that list is refused."""
     from gaia.agents.tools.shell_tools import ALLOWED_COMMANDS
 
     pm = build_project_map(repo)
     assert set(pm.shell_commands) <= ALLOWED_COMMANDS
-    off_limits = set(pm.tools_present) - ALLOWED_COMMANDS
-    accepts = next(
-        (ln for ln in render_project_map(pm).splitlines() if "accepts:" in ln), ""
+    needs_approval = set(pm.tools_present) - ALLOWED_COMMANDS
+    read_only = next(
+        (ln for ln in render_project_map(pm).splitlines() if "Read-only" in ln), ""
     )
-    named = set(re.findall(r"[\w.-]+", accepts.partition(":")[2]))
-    assert not (named & off_limits)
+    named = set(re.findall(r"[\w.-]+", read_only.partition(":")[2]))
+    assert not (named & needs_approval)
+
+
+def test_the_map_never_says_the_shell_refuses_an_installed_tool():
+    """It asks, and a map saying "refuses" teaches the model to decline work
+    the user was there to approve."""
+    pm = ProjectMap(
+        root="/r",
+        is_repository=True,
+        vcs=None,
+        tools_present=["npm", "uv"],
+        shell_commands=["cat", "ls"],
+    )
+    rendered = render_project_map(pm)
+    assert "refuses" not in rendered
+    assert "Read-only commands for run_shell_command: cat, ls" in rendered
+    assert "runs them once the user approves: npm, uv" in rendered
 
 
 # ── the budget, on the 32K profile ────────────────────────────────────────

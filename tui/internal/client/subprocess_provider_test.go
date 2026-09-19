@@ -19,19 +19,19 @@ import (
 
 func TestSetModelBeforeStartReplacesOnlyInferenceFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"--json-events", "--dev", "--use-claude", "--claude-model", "claude-sonnet-5", "--bypass-permissions", "--model", "old-model"},
-		{"--json-events", "--dev", "--use-claude=true", "--claude-model=claude-sonnet-5", "--bypass-permissions", "--model=old-model"},
+		{"--json-events", "--dev", "--use-claude", "--claude-model", "claude-sonnet-5", "--full-access", "--model", "old-model"},
+		{"--json-events", "--dev", "--use-claude=true", "--claude-model=claude-sonnet-5", "--full-access", "--model=old-model"},
 	} {
 		original := append([]string(nil), args...)
 		c := NewCanonicalSubprocessClient("unused", args, true)
 		if !c.SetModelBeforeStart("fireworks.gemma-4-31b-it") {
 			t.Fatal("catalog selection was refused before startup")
 		}
-		want := []string{"--json-events", "--dev", "--bypass-permissions", "--model", "fireworks.gemma-4-31b-it"}
+		want := []string{"--json-events", "--dev", "--full-access", "--model", "fireworks.gemma-4-31b-it"}
 		if !reflect.DeepEqual(c.args, want) || !reflect.DeepEqual(args, original) {
 			t.Fatalf("inference flags or caller's arguments were changed incorrectly: %v", c.args)
 		}
-		if c.ClaudeAtLaunch() || c.ClaudeModelAtLaunch() != "" || !c.BypassAtLaunch() || c.ModelAtLaunch() != "fireworks.gemma-4-31b-it" {
+		if c.ClaudeAtLaunch() || c.ClaudeModelAtLaunch() != "" || !c.FullAccessAtLaunch() || c.ModelAtLaunch() != "fireworks.gemma-4-31b-it" {
 			t.Fatal("launch getters disagree with the selected provider")
 		}
 		if !c.SetModelBeforeStart("amd.gpt-4.1") || c.ModelAtLaunch() != "amd.gpt-4.1" {
@@ -60,7 +60,7 @@ func TestSetModelBeforeStartRefusesRunningLegacyAndEmptySelections(t *testing.T)
 }
 
 func TestLaunchModelSettersAndGettersAreSafeTogether(t *testing.T) {
-	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--bypass-permissions"}, false)
+	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--full-access"}, false)
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
@@ -71,7 +71,7 @@ func TestLaunchModelSettersAndGettersAreSafeTogether(t *testing.T) {
 				c.ModelAtLaunch()
 				c.ClaudeAtLaunch()
 				c.ClaudeModelAtLaunch()
-				c.BypassAtLaunch()
+				c.FullAccessAtLaunch()
 			}
 		}()
 	}

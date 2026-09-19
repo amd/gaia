@@ -20,8 +20,19 @@ from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
 
-# Security: WHITELIST approach - only allow explicitly safe commands
-# This is much safer than a blacklist which always misses dangerous commands
+# The no-prompt list: what a blanket pre-approval may run — not the set of
+# commands that exist.
+#
+# ``run_shell_command`` is confirmation-gated, so interactively every call is
+# shown to the user. A command that is not on this list is not refused; it is
+# shown the same way and runs if approved (``TIER_CONFIRM``). Membership buys
+# one thing: running under ``GAIA_AUTO_APPROVE_TOOLS`` or
+# ``auto_approve_gated_tools``, which refuse everything else. An allowlist used
+# as a refusal list makes the agent unable to do ordinary work its user is
+# sitting right there to approve.
+#
+# So the bar for adding an entry is "safe to run unattended, every time, with
+# arguments nobody reviewed", which in practice still means read-only.
 ALLOWED_COMMANDS = {
     # File listing and navigation (READ-ONLY)
     "ls",
@@ -109,6 +120,32 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+# How a blocked command is blocked. Mirrors the three tiers in
+# ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
+# module keeps its light import.
+#
+# REFUSE is for escalations a single yes/no prompt cannot honestly describe:
+# base64-encoded PowerShell, a git option that runs a script behind a
+# ``status``-looking subcommand, a granted CLI's credential-printing action.
+# Asking about those trains a user to click yes on something the prompt text
+# misrepresents.
+#
+# CONFIRM is everything else that is not a read: `git commit`, `npm test`,
+# `rm file`. The user is shown the exact command and answers y / n / always.
+# These MUST NOT be refused here — refusing a command that would run on
+# approval is the dead end this tier exists to remove.
+#
+# Only an explicit TIER_CONFIRM reaches the prompt. A block with no tier is
+# refused, so a guard that forgets to say which tier it is fails closed.
+TIER_CONFIRM = "confirm"
+TIER_REFUSE = "refuse"
+
+
+def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
+    """True when *error* is a block the user may approve at the prompt."""
+    return error is not None and error.get("tier") == TIER_CONFIRM
+
+
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
     "status",
@@ -123,6 +160,92 @@ SAFE_GIT_COMMANDS = {
     "rev-parse",
     "help",
 }
+
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+}
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _resolve_git_subcommand(cmd_parts: list) -> tuple:
+    """Step over git's global options to find the real subcommand.
+
+    ``git -C <path> branch`` is a branch listing, not a ``-C`` command; reading
+    ``cmd_parts[1]`` blindly refuses every invocation that carries a global flag.
+
+    Returns:
+        ``(subcommand, error_message)`` — exactly one is non-None. A terminal
+        flag like ``--version`` comes back as the subcommand, since nothing
+        follows it.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            return token.lower(), None
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            return name, None
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, (
+            f"Git global option '{name}' is not recognized, so the subcommand "
+            "behind it cannot be identified."
+        )
+
+    return None, "No git subcommand was given."
+
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
@@ -347,6 +470,26 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
+#: Another name for a program the rules below already cover.
+_PROGRAM_ALIASES = {"pwsh": "powershell"}
+
+
+def _program_behind(token: str) -> Optional[str]:
+    """The bare program *token* names when it spells one another way, else None.
+
+    ``/usr/bin/git``, ``git.exe`` and ``pwsh`` run the programs the rules below
+    call ``git`` and ``powershell``, so they earn the same refusals. They never
+    earn the no-prompt pass: that list names bare programs only.
+    """
+    if token in ALLOWED_COMMANDS:
+        return None
+    name = re.split(r"[\\/]", token)[-1]
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    name = _PROGRAM_ALIASES.get(name, name)
+    return name if name and name != token else None
+
+
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
     """True when *token* names a CLI this agent's skills granted."""
     if not granted:
@@ -462,6 +605,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
                     "has_errors": True,
                     "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
@@ -475,6 +619,7 @@ class ShellToolsMixin:
             return (
                 {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": f"Invalid command syntax: {exc}",
                     "has_errors": True,
                 },
@@ -484,7 +629,12 @@ class ShellToolsMixin:
         segments = _split_pipeline(cmd_parts)
         if not segments:
             return (
-                {"status": "error", "error": "Empty command", "has_errors": True},
+                {
+                    "status": "error",
+                    "tier": TIER_REFUSE,
+                    "error": "Empty command",
+                    "has_errors": True,
+                },
                 [],
             )
 
@@ -506,18 +656,18 @@ class ShellToolsMixin:
     ) -> Optional[Dict[str, Any]]:
         """The refusal this call has already earned, before anyone is asked.
 
-        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
-        must never raise a confirmation prompt: asking someone to approve
-        ``gh auth token`` when the answer is already no trains them to click
-        through, and frames a blocked action as merely risky. Refuse it first
-        and say why.
+        Read by ``Agent._policy_refusal``, which runs *before* the confirmation
+        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
+        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
+        behind ``status``), or a shape the runner cannot execute at all.
 
-        The mirror of that rule is what makes writes work: a command that WOULD
-        run on approval must not be refused here. ``_validate_shell_command``
-        returns None for a granted binary's confirmable write, so it falls
-        through to the prompt instead of dying in front of it.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
+        through to the prompt: refusing a command that would run on approval is
+        the dead end this tier removes. The exception is a run where only a
+        blanket pre-approval would answer the prompt; see
+        :meth:`_approval_is_blanket_only`.
 
-        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL:
@@ -526,13 +676,51 @@ class ShellToolsMixin:
         if not isinstance(command, str):
             return None
         error, _ = self._validate_shell_command(command)
-        if error is not None:
-            logger.info(
-                "Refusing %r before the confirmation prompt: %s",
-                command,
-                error.get("error"),
-            )
+        if error is None:
+            return None
+        if _reaches_the_prompt(error):
+            if not self._approval_is_blanket_only():
+                return None
+            error = self._blanket_approval_refusal(error)
+        logger.info(
+            "Refusing %r before the confirmation prompt: %s",
+            command,
+            error.get("error"),
+        )
         return error
+
+    def _approval_is_blanket_only(self) -> bool:
+        """True when only a blanket pre-approval would answer a prompt.
+
+        ``GAIA_AUTO_APPROVE_TOOLS`` and ``auto_approve_gated_tools=True`` both
+        pre-approve for unattended runs. They were granted when commands outside
+        the no-prompt list could not be approved at all, so neither widens what
+        such a run executes. Only the console's ``full_access`` (the TUI's
+        ``/full-access``, on screen for the whole session) runs them unasked.
+        """
+        console = getattr(self, "console", None)
+        if getattr(console, "full_access", False) is True:
+            return False
+        if getattr(console, "auto_approve_gated_tools", False):
+            return True
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return console_mod.auto_approve_env_enabled()
+
+    @staticmethod
+    def _blanket_approval_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unattended run."""
+        return {
+            **error,
+            "tier": TIER_REFUSE,
+            "hint": (
+                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
+                "or auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list. Run it interactively to approve it, "
+                "or turn on full access in the TUI."
+            ),
+        }
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -693,7 +881,7 @@ class ShellToolsMixin:
         end this tier removes.
         """
         # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # ALLOWED_COMMANDS; anything ungranted still needs confirmation.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -702,25 +890,28 @@ class ShellToolsMixin:
             normalize_binary,
         )
 
+        program = _program_behind(cmd_base)
+        if program is not None:
+            # A refusal follows the program, not its spelling; what it would
+            # merely ask about still asks, as the unlisted spelling below.
+            behind = ShellToolsMixin._validate_command(
+                program, [program, *cmd_parts[1:]], command
+            )
+            if behind is not None and not _reaches_the_prompt(behind):
+                return behind
+
         binary = normalize_binary(cmd_base)
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
-            if binary not in granted_binaries:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
-                    "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
-                }
+            # Classify BEFORE the grant check. A REFUSE-tier invocation
+            # (`gh auth token`) is refused on what it does, not on who may run
+            # it — gating first would let an ungranted one out to the
+            # confirmation prompt, which is weaker than the grant path.
             decision = classify_invocation(policy, cmd_parts)
             if decision.outcome == REFUSE:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": decision.message,
                     "has_errors": True,
                     "hint": (
@@ -730,18 +921,43 @@ class ShellToolsMixin:
                         "have run and why it is blocked."
                     ),
                 }
+            if binary not in granted_binaries:
+                return {
+                    "status": "error",
+                    "tier": TIER_CONFIRM,
+                    "error": (
+                        f"Command '{binary}' is not available to this agent. It is "
+                        "granted only to a skill that declares "
+                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
+                        "first."
+                    ),
+                    "has_errors": True,
+                    "hint": f"{policy.summary} {policy.install_hint}",
+                }
             return None
 
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+                git_subcmd, resolve_error = _resolve_git_subcommand(cmd_parts)
+                if resolve_error is not None:
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
+                        "error": resolve_error,
+                        "has_errors": True,
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
+                    }
+                if (
+                    git_subcmd not in SAFE_GIT_COMMANDS
+                    and git_subcmd not in GIT_TERMINAL_FLAGS
+                ):
+                    return {
+                        "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
                     }
             # A read-only subcommand still writes a caller-chosen path when it
             # is handed an output flag, and the subcommand check never sees it.
@@ -755,6 +971,7 @@ class ShellToolsMixin:
                 if _is_file_write_flag(part):
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": (
                             f"git '{part}' writes to a file, which is not allowed "
                             "under the read-only command policy."
@@ -768,6 +985,7 @@ class ShellToolsMixin:
                 if _is_file_write_flag(part):
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": (
                             f"wmic '{part}' writes to a file, which is not allowed "
                             "under the read-only command policy."
@@ -781,6 +999,7 @@ class ShellToolsMixin:
             if cmd_words & dangerous_wmic_ops:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
                     "has_errors": True,
                     "hint": "Use 'wmic <alias> get <properties>' for safe queries",
@@ -791,6 +1010,7 @@ class ShellToolsMixin:
             if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
@@ -808,6 +1028,7 @@ class ShellToolsMixin:
                 if name not in _SAFE_PS_LEADING_SWITCHES:
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
                         "has_errors": True,
                         "hint": "Use -Command with plain read-only cmdlets.",
@@ -817,6 +1038,7 @@ class ShellToolsMixin:
             if not ps_cmd:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell requires an explicit read-only command.",
                     "has_errors": True,
                 }
@@ -825,6 +1047,7 @@ class ShellToolsMixin:
             if escape is not None:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": (
                         f"PowerShell {escape} is not allowed: it runs code the "
                         "read-only cmdlet allowlist cannot inspect."
@@ -843,6 +1066,7 @@ class ShellToolsMixin:
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
                     "has_errors": True,
                     "hint": "Use Get-* cmdlets for safe queries",
@@ -858,6 +1082,8 @@ class ShellToolsMixin:
                 if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
                     return {
                         "status": "error",
+                        # A segment that is not a cmdlet at all runs a file.
+                        "tier": TIER_CONFIRM if head else TIER_REFUSE,
                         "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
                         "has_errors": True,
                     }
@@ -868,6 +1094,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
@@ -880,6 +1107,7 @@ class ShellToolsMixin:
                 if part.lower() in DANGEROUS_FIND_ACTIONS:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": (
                             f"find action '{part}' is not allowed: it can run "
                             "arbitrary commands, delete, or write files, "
@@ -912,6 +1140,7 @@ class ShellToolsMixin:
                 if is_output:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
@@ -944,6 +1173,7 @@ class ShellToolsMixin:
             if len(operands) >= 2:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
@@ -975,9 +1205,13 @@ class ShellToolsMixin:
                 }
             return {
                 "status": "error",
+                "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
+                "hint": (
+                    "Commands outside the no-prompt list run once the user "
+                    "approves them; they are not refused."
+                ),
                 "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
@@ -1058,12 +1292,20 @@ class ShellToolsMixin:
                 else:
                     cwd = str(Path.cwd())
 
-                # Operators, syntax, and the per-command whitelist. Shared with
-                # the pre-flight that runs before the confirmation prompt, so a
-                # command refused there is refused here for the same reason.
+                # Operators, syntax, and the per-command whitelist. Shares one
+                # implementation with the pre-flight that runs before the
+                # confirmation prompt, so the two can never disagree.
+                #
+                # A CONFIRM-tier command has already been through
+                # ``Agent._execute_tool``'s gate (the same single funnel that has
+                # always gated ``write_file``), so it runs here unless the only
+                # approval was a blanket pre-approval.
+                blanket_only = self._approval_is_blanket_only()
                 error, segments = self._validate_shell_command(command)
-                if error:
+                if error and not _reaches_the_prompt(error):
                     return error
+                if error and blanket_only:
+                    return self._blanket_approval_refusal(error)
 
                 granted = skill_granted_binaries(self)
                 cmd_parts = [part for segment in segments for part in segment]
@@ -1141,7 +1383,7 @@ class ShellToolsMixin:
                         command if len(segments) == 1 else " ".join(seg),
                         granted_binaries=granted,
                     )
-                    if error:
+                    if error and (not _reaches_the_prompt(error) or blanket_only):
                         return error
 
                 # Log command execution (debug mode)
