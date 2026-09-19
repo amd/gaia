@@ -420,7 +420,10 @@ arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it. `rm` is excluded
 from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete.
+file, but a tripwire against an accidental recursive delete. Redirection has one
+exception: a command that is nothing but a skill-granted CLI runs argv-only
+rather than through a shell, so a `>` there is refused with an explanation
+instead of reaching the binary as a literal argument.
 
 Every shell command run under bypass is recorded with its full arguments and its
 per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt

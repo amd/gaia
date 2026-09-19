@@ -58,7 +58,9 @@ the terminal UI meant building it from source.
   limit is dropped. Off by default and byte-identical to before when off. `rm`
   stays excluded. Every command run this way is audit-logged with its full
   arguments. Stdio only — the HTTP transport cannot be put in bypass, and the
-  request body cannot ask for it. See SPEC §5.5.
+  request body cannot ask for it. Redirection has one exception: a command that
+  is nothing but a skill-granted CLI runs argv-only, so `>` there is refused
+  with an explanation instead of reaching the binary as text. See SPEC §5.5.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a

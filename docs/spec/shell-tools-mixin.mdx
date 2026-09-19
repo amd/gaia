@@ -268,6 +268,12 @@ the shell running the string treats a line break as a command separator, so the
 walk has to as well, or a second command rides in unvalidated and unaudited. A
 newline inside quotes stays ordinary data.
 
+A command that is *only* a skill-granted CLI runs argv-only, never through a
+shell, so a redirect on that one path is refused rather than passed to the
+binary as a literal argument. `_is_lone_granted_segment` is what both the
+pre-flight refusal and the executor's `use_shell` read, so they cannot disagree
+about which commands take it.
+
 This permits arbitrary code execution, and is reachable on the stdio transport
 only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
 and why the HTTP transport is excluded.

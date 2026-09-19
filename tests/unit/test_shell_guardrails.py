@@ -46,6 +46,7 @@ from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     DEVELOPER_COMMANDS,
     ShellToolsMixin,
+    _is_lone_granted_segment,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,24 @@ class _Shell(ShellToolsMixin):
 
     def __init__(self, bypass: bool):
         self.console = _Console(bypass)
+
+
+class _Grants:
+    """Stand-in for BinaryGrants — the one method the shell gates call."""
+
+    def __init__(self, *binaries: str):
+        self._binaries = frozenset(binaries)
+
+    def binaries(self) -> frozenset:
+        return self._binaries
+
+
+class _GrantedShell(_Shell):
+    """A host whose loaded skills granted ``shell:execute:<binary>``."""
+
+    def __init__(self, bypass: bool, *binaries: str):
+        super().__init__(bypass)
+        self._granted_binaries = _Grants(*binaries)
 
 
 def check(command: str, *, bypass: bool):
@@ -880,8 +899,10 @@ class _ExecHost(ShellToolsMixin):
 def shell_tool(monkeypatch):
     """Return a factory for the real ``run_shell_command`` closure."""
 
-    def build(bypass: bool):
+    def build(bypass: bool, granted: tuple = ()):
         host = _ExecHost(bypass)
+        if granted:
+            host._granted_binaries = _Grants(*granted)
         captured = {}
 
         def fake_tool(**kwargs):
@@ -979,3 +1000,87 @@ class TestExecutorUnderBypass:
 
         assert result["status"] == "error"
         assert records == [], "a refused command must not reach the audit trail"
+
+
+# ---------------------------------------------------------------------------
+# Redirection on the skill-granted path
+#
+# A lone granted CLI is handed argv, never a shell. A `>` would arrive as one
+# more literal argument, so the command would appear to succeed while writing
+# nothing. That is the one outcome worse than a refusal.
+# ---------------------------------------------------------------------------
+
+
+def check_granted(command: str, *, bypass: bool = True, binaries=("gh",)):
+    error, _segments = _GrantedShell(bypass, *binaries)._validate_shell_command(command)
+    return error
+
+
+class TestRedirectionOnTheGrantedPath:
+    def test_a_redirect_is_refused_rather_than_passed_as_text(self):
+        error = check_granted("gh issue list > out.txt")
+        assert error is not None
+        assert "Redirection" in error["error"]
+        assert "gh" in error["error"]
+
+    def test_the_refusal_names_a_way_to_get_the_file_written(self):
+        assert "file tools" in check_granted("gh issue list > out.txt")["hint"]
+
+    def test_append_and_input_redirection_are_refused_too(self):
+        assert check_granted("gh issue list >> out.txt") is not None
+        assert check_granted("gh api graphql < query.txt") is not None
+
+    def test_the_same_command_without_a_redirect_still_runs(self):
+        assert check_granted("gh issue list --state open") is None
+
+    def test_a_quoted_angle_bracket_is_data_not_a_redirect(self):
+        # Tokenisation drops the quotes, so only a quote-aware scan of the raw
+        # text can tell a search operand from a redirect.
+        assert check_granted('gh issue list --search "updated:>2026-01-01"') is None
+
+    def test_a_chained_command_keeps_its_shell_and_so_its_redirect(self):
+        # More than one segment is not the argv-only path: a real shell performs
+        # the redirect, so there is nothing to refuse.
+        assert check_granted("gh issue list > out.txt && echo done") is None
+
+    def test_the_refusal_is_scoped_to_granted_binaries(self):
+        # Same text, no grant: the ordinary bypass path, where a shell redirects.
+        assert check("gh issue list > out.txt", bypass=True) is None
+        assert check("make build > out.txt", bypass=True) is None
+
+    def test_without_bypass_the_operator_blocklist_gets_there_first(self):
+        # The refusal only has to exist under bypass; by default `>` never
+        # reaches tokenisation at all.
+        error = check_granted("gh issue list > out.txt", bypass=False)
+        assert error is not None
+        assert "Shell operators" in error["error"]
+
+    def test_the_pre_flight_and_the_executor_share_one_answer(self):
+        # Extracted precisely so the refusal above and the executor's `use_shell`
+        # cannot disagree about which commands run argv-only.
+        granted = frozenset({"gh"})
+        assert _is_lone_granted_segment([["gh", "issue", "list"]], granted)
+        assert not _is_lone_granted_segment(
+            [["gh", "issue", "list"], ["echo", "done"]], granted
+        )
+        assert not _is_lone_granted_segment([["make", "build"]], granted)
+        assert not _is_lone_granted_segment([["gh", "issue", "list"]], frozenset())
+
+
+class TestGrantedRedirectNeverReachesAProcess:
+    def test_the_tool_refuses_and_audits_nothing(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        records = []
+        monkeypatch.setattr(
+            "gaia.security.audit_shell_command",
+            lambda **kw: records.append(kw),
+        )
+        run = shell_tool(bypass=True, granted=("gh",))
+
+        result = run("gh issue list > out.txt", working_directory=str(tmp_path))
+
+        assert result["status"] == "error"
+        assert "Redirection" in result["error"]
+        assert records == [], "a refused command must not reach the audit trail"
+        assert not (tmp_path / "out.txt").exists()

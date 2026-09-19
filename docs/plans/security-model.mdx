@@ -242,6 +242,13 @@ was no interpreter, test runner or package manager in the allowlist.
 
 Pipes were never blocked and are unaffected.
 
+Redirection has one exception. A command that is *only* a skill-granted CLI —
+`gh issue list > out.txt` with `shell:execute:gh` loaded — is handed its
+arguments directly instead of to a shell, so the `>` would arrive as one more
+word for `gh` to read and the file would never be written. That case is refused
+with an explanation rather than run. Chain it with anything else and the shell
+performs the redirect as usual.
+
 **Blast radius: arbitrary code execution.** The developer set adds `node`,
 `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`,
 `export`, `cp` and `mv`. It also names `python`, `python3`, `pytest` and `gh`,

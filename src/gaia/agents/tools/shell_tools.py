@@ -494,6 +494,29 @@ def _is_segment_separator(token: str) -> bool:
     )
 
 
+def _is_lone_granted_segment(segments: list, granted: frozenset) -> bool:
+    """Whether the whole command is a single invocation of a skill-granted CLI.
+
+    That is the one path that runs argv-only instead of through a shell, so the
+    pre-flight and the executor have to decide it the same way or one of them
+    refuses a command the other would have run differently.
+    """
+    return (
+        len(segments) == 1
+        and bool(granted)
+        and _is_granted_binary(segments[0][0], granted)
+    )
+
+
+def _redirects(command: str) -> bool:
+    """Whether *command* redirects, reading ``<``/``>`` the way a shell would.
+
+    Quoting decides it: tokenisation has already dropped the quotes, so by then
+    a redirect and a literal ``">"`` operand look identical.
+    """
+    return any(char in _outside_double_quotes(command) for char in "<>")
+
+
 def _split_pipeline(cmd_parts: list) -> list:
     """Split tokenised *cmd_parts* on shell separators into non-empty segments.
 
@@ -597,6 +620,28 @@ class ShellToolsMixin:
             )
 
         granted = skill_granted_binaries(self)
+
+        # A granted CLI is handed argv, never a shell, so a redirect would reach
+        # it as a literal argument. Refuse instead of answering wrongly.
+        if _is_lone_granted_segment(segments, granted) and _redirects(command):
+            return (
+                {
+                    "status": "error",
+                    "error": (
+                        f"Redirection is not supported for '{segments[0][0]}': a "
+                        "skill-granted CLI receives its arguments directly rather "
+                        "than through a shell, so '>' would be passed to it as text."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Re-run the command without the redirect and use the output "
+                        "it returns, or write that output to a file with the file "
+                        "tools."
+                    ),
+                },
+                segments,
+            )
+
         for segment in segments:
             error = self._validate_command(
                 segment[0].lower(),
@@ -617,8 +662,8 @@ class ShellToolsMixin:
         ``bypass_permissions``, set only by the sidecar's ``PermissionState``
         from ``--bypass-permissions`` or the TUI's ``/bypass``. Every gate reads
         this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
-        tool description, the executor — so they cannot hold different opinions
-        about whether a command is legal.
+        executor — so they cannot hold different opinions about whether a
+        command is legal.
 
         Read live rather than resolved once because bypass is toggleable
         mid-session over the control channel; caching it would leave `/bypass
@@ -1373,11 +1418,7 @@ class ShellToolsMixin:
                 # operators it unblocks ARE the shell. argv-only execution would
                 # drop the separators `_split_pipeline` stripped and silently
                 # concatenate `a && b` into one bogus command line.
-                lone_granted_segment = (
-                    len(segments) == 1
-                    and bool(granted)
-                    and _is_granted_binary(segments[0][0], granted)
-                )
+                lone_granted_segment = _is_lone_granted_segment(segments, granted)
                 use_shell = (os.name == "nt" or bypass) and not lone_granted_segment
 
                 # Build the command string for execution
