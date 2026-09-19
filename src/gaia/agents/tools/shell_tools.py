@@ -10,7 +10,9 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -410,6 +412,88 @@ def _split_pipeline(cmd_parts: list) -> list:
     if current:
         segments.append(current)
     return segments
+
+
+def _run_pipeline(
+    segments: list, cwd: str, timeout: float
+) -> subprocess.CompletedProcess:
+    """Run validated ``a | b | c`` segments as chained processes, no shell.
+
+    ``returncode`` is the rightmost failing stage (pipefail), so ``pytest |
+    tail`` cannot turn a failing suite into a passing check. An upstream stage
+    killed by SIGPIPE is not a failure: that is how ``| head`` ends a pipeline.
+    """
+    deadline = time.monotonic() + timeout
+    procs: list = []
+    errs: list = []
+    upstream = None
+    try:
+        for argv in segments:
+            errs.append(tempfile.TemporaryFile())  # pylint: disable=consider-using-with
+            procs.append(
+                subprocess.Popen(  # pylint: disable=consider-using-with
+                    argv,
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL if upstream is None else upstream,
+                    stdout=subprocess.PIPE,
+                    stderr=errs[-1],
+                    env=os.environ.copy(),
+                )
+            )
+            if upstream is not None:
+                # Only the child may hold the read end, or an early-exiting
+                # reader never delivers SIGPIPE to the writer.
+                upstream.close()
+            upstream = procs[-1].stdout
+        try:
+            out, _ = procs[-1].communicate(timeout=max(deadline - time.monotonic(), 0))
+            for proc in procs[:-1]:
+                proc.wait(timeout=max(deadline - time.monotonic(), 0))
+        except subprocess.TimeoutExpired as exc:
+            for proc in procs:
+                proc.kill()
+            for proc in procs:
+                proc.wait()
+            raise subprocess.TimeoutExpired(
+                exc.cmd, timeout, output=exc.output, stderr=_read_all(errs)
+            ) from exc
+    except BaseException:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if proc.stdout and not proc.stdout.closed:
+                proc.stdout.close()
+        raise
+    finally:
+        stderr = _read_all(errs)
+        for err in errs:
+            err.close()
+
+    sigpipe = -getattr(signal, "SIGPIPE", 0)
+    codes = [proc.returncode for proc in procs]
+    failed = [
+        code
+        for i, code in enumerate(codes)
+        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
+    ]
+    return subprocess.CompletedProcess(
+        args=segments,
+        returncode=failed[-1] if failed else 0,
+        stdout=(out or b"").decode("utf-8", errors="replace"),
+        stderr=stderr,
+    )
+
+
+def _read_all(files: list) -> str:
+    """Every stage's captured stderr, in pipeline order."""
+    chunks = []
+    for handle in files:
+        if handle.closed:
+            continue
+        handle.seek(0)
+        chunks.append(handle.read())
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 class ShellToolsMixin:
@@ -1164,9 +1248,9 @@ class ShellToolsMixin:
                 # every check above and two commands to cmd.exe, and `%VAR%`
                 # expands into a value the approval prompt never showed. argv
                 # goes to the process verbatim, so neither is possible.
-                # One segment only: a pipeline needs a shell to be a pipeline,
-                # and `cmd_parts` has already dropped the `|` tokens, so an argv
-                # run of one would silently concatenate the two commands.
+                # One segment only: `cmd_parts` has already dropped the `|`
+                # tokens, so an argv run of a pipeline would concatenate its
+                # commands. Off Windows, _run_pipeline chains the segments.
                 lone_granted_segment = (
                     len(segments) == 1
                     and bool(granted)
@@ -1222,38 +1306,41 @@ class ShellToolsMixin:
                 # costing the whole output.
                 start_time = time.monotonic()
                 try:
-                    result = subprocess.run(
-                        exec_cmd,
-                        cwd=cwd,
-                        capture_output=True,
-                        # stdin is DEVNULL, never inherited. capture_output
-                        # redirects stdout/stderr but leaves stdin alone, and
-                        # this process's stdin is the agent transport's pipe —
-                        # held open by the TUI and never written to. A child
-                        # that reads it (directly, or by probing whether it is
-                        # interactive) blocks forever on input that cannot
-                        # arrive, because there is no human on that pipe.
-                        #
-                        # The hang was not theoretical: `gh` spawned from the
-                        # agent never exited, while the identical command took
-                        # 0.07s from a shell. Worse, subprocess.run's own
-                        # timeout does not save it — on expiry it kills the
-                        # cmd.exe it launched, then calls communicate() again
-                        # with NO timeout, which waits on pipes the surviving
-                        # grandchild still holds. That is the 180s tool timeout
-                        # and the orphaned gh.exe left behind by every attempt.
-                        #
-                        # DEVNULL gives an immediate EOF, which is the honest
-                        # answer here: an agent's shell command is
-                        # non-interactive by construction.
-                        stdin=subprocess.DEVNULL,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=timeout,
-                        check=False,
-                        env=os.environ.copy(),
-                        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
-                    )
+                    if len(segments) > 1 and not use_shell:
+                        result = _run_pipeline(segments, cwd, timeout)
+                    else:
+                        result = subprocess.run(
+                            exec_cmd,
+                            cwd=cwd,
+                            capture_output=True,
+                            # stdin is DEVNULL, never inherited. capture_output
+                            # redirects stdout/stderr but leaves stdin alone, and
+                            # this process's stdin is the agent transport's pipe —
+                            # held open by the TUI and never written to. A child
+                            # that reads it (directly, or by probing whether it is
+                            # interactive) blocks forever on input that cannot
+                            # arrive, because there is no human on that pipe.
+                            #
+                            # The hang was not theoretical: `gh` spawned from the
+                            # agent never exited, while the identical command took
+                            # 0.07s from a shell. Worse, subprocess.run's own
+                            # timeout does not save it — on expiry it kills the
+                            # cmd.exe it launched, then calls communicate() again
+                            # with NO timeout, which waits on pipes the surviving
+                            # grandchild still holds. That is the 180s tool timeout
+                            # and the orphaned gh.exe left behind by every attempt.
+                            #
+                            # DEVNULL gives an immediate EOF, which is the honest
+                            # answer here: an agent's shell command is
+                            # non-interactive by construction.
+                            stdin=subprocess.DEVNULL,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=timeout,
+                            check=False,
+                            env=os.environ.copy(),
+                            shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
+                        )
                     duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
