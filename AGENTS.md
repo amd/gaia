@@ -151,7 +151,7 @@ Before any release ships, run the consumer journey end-to-end (see issue A4 / co
 ## Where to find things
 
 - **Project conventions:** `CLAUDE.md`
-- **Roadmap:** [`docs/roadmap.mdx`](docs/roadmap.mdx)
+- **Current documentation:** [`docs/index.mdx`](docs/index.mdx); proposed work lives in GitHub issues and milestones
 - **Agent definitions:** `.claude/agents/*.md`
 - **Orchestration playbook:** not written yet (tracked by issue #A1). The nearest existing
   reference is [`docs/spec/orchestrator.mdx`](docs/spec/orchestrator.mdx) — the GAIA

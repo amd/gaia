@@ -1,680 +1,88 @@
 ---
-title: "Quickstart"
-description: "Run AI agents locally in minutes, or build your first custom agent"
+title: "Python Agent Quickstart"
+description: "Create a Python agent, register a word-counting tool, and run your first query."
 icon: "rocket"
 ---
 
-<Info>
-  **Not a developer?** Start with the [Desktop Installer](/guides/install) — one download, one double-click, and you're chatting with a GAIA agent in under 10 minutes. No terminal required.
-</Info>
+Build a Python agent whose tool counts words, then run one model-driven query.
+If you want to chat with the flagship instead, follow the [Terminal UI guide](/guides/terminal-hub).
 
-Run AI agents **100% locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud.
+## 1. Prepare Python and the model
 
-## Recommended: Desktop Installer
-
-The **GAIA Agent UI** desktop app is the primary install path for end users. It ships as a native installer for Windows, macOS, and Linux, handles the Python backend setup automatically on first launch, and auto-updates.
-
-<CardGroup cols={3}>
-  <Card title="Windows" icon="windows" href="https://github.com/amd/gaia/releases/latest">
-    Download the `.exe` NSIS installer
-  </Card>
-  <Card title="macOS" icon="apple" href="https://github.com/amd/gaia/releases/latest">
-    Download the `.dmg` (Apple Silicon)
-  </Card>
-  <Card title="Linux" icon="linux" href="https://github.com/amd/gaia/releases/latest">
-    Download the `.deb` or `.AppImage`
-  </Card>
-</CardGroup>
-
-<Note>
-**See the full [Installation guide](/guides/install)** for step-by-step instructions per platform, first-launch setup details, update and uninstall instructions, and privacy information. If something goes wrong, the [installation troubleshooting guide](/reference/install-troubleshooting) covers every common failure mode.
-</Note>
-
-After installing the desktop app, launch it and start chatting with agents right away — no terminal required. To **write your own** custom Python agent (the [Build Your First Agent](#build-your-first-agent) tutorial below), first complete one of the **developer install paths** in the next section: they create the Python environment and project directory that the tutorial saves your agent file into. The desktop app on its own doesn't provide a place to run a Python script.
-
----
-
-## For developers
-
-The rest of this page covers the **developer install paths** (npm CLI, pip, clone-and-install) for people who want to build agents, extend GAIA, or run it from source. End users should use the [desktop installer](/guides/install) above.
-
-### Agent UI (npm)
-
-For developers who prefer npm and Node.js tooling. Ships the same Electron app as the desktop installer but driven from the command line.
+Install Python 3.10+ and [uv](https://docs.astral.sh/uv/), then create an environment. On Linux/WSL, append
+`--extra-index-url https://download.pytorch.org/whl/cpu` to the
+`uv pip install amd-gaia` command below to avoid downloading CUDA packages:
 
 ```bash
-npm install -g @amd-gaia/agent-ui
+mkdir gaia-count-agent
+cd gaia-count-agent
+uv venv
+uv pip install amd-gaia
+uv run gaia init
 ```
 
-Then run:
-```bash
-gaia-ui
-```
+`gaia init` sets up the local Lemonade backend and models. It can download several
+GB. The Python package and `gaia-tui` are separate installations.
 
-On first run, GAIA automatically installs the Python backend and all dependencies.
+## 2. Create an agent with one tool
 
-<Note>
-  Requires [Node.js 20+](https://nodejs.org). If you don't have it:
-
-  - **Windows:** `winget install OpenJS.NodeJS.LTS`
-  - **macOS:** `brew install node@20`
-  - **Linux:** `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`
-</Note>
-
-See the [Agent UI guide](/guides/agent-ui) for more details.
-
-#### Update
-
-```bash
-npm install -g @amd-gaia/agent-ui@latest
-```
-
-On next run, GAIA automatically updates the Python backend to match.
-
-To install a specific version (current release is **v0.20.1**):
-
-```bash
-npm install -g @amd-gaia/agent-ui@0.20.1
-```
-
-#### Uninstall
-
-```bash
-npm uninstall -g @amd-gaia/agent-ui
-rm -rf ~/.gaia
-```
-
-On Windows (PowerShell):
-
-```powershell
-npm uninstall -g @amd-gaia/agent-ui
-Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
-```
-
----
-
-### CLI Install
-
-<Info>
-  **First time here?** Complete the [Setup](/setup) guide first to install uv (Python package manager).
-</Info>
-
-**Recommended for users** wanting to try the GAIA CLI.
-
-Install GAIA globally with a single command:
-
-<Tabs>
-  <Tab title="Windows">
-    Open **PowerShell** and run:
-
-    ```powershell
-    irm https://amd-gaia.ai/install.ps1 | iex
-    ```
-
-    This will:
-    - ✅ Install `uv` (if not already installed)
-    - ✅ Download Python 3.12 (if needed)
-    - ✅ Create `%USERPROFILE%\.gaia\venv` virtual environment
-    - ✅ Install GAIA CLI (accessible globally via PATH)
-    - ✅ Add GAIA to your PATH
-
-    <Tip>
-      After installation, close and reopen your terminal, then run:
-      ```powershell
-      gaia init --profile minimal
-      ```
-    </Tip>
-  </Tab>
-
-  <Tab title="Linux">
-    Open a **terminal** and run:
-
-    ```bash
-    curl -fsSL https://amd-gaia.ai/install.sh | sh
-    ```
-
-    This will:
-    - ✅ Install `uv` (if not already installed)
-    - ✅ Download Python 3.12 (if needed)
-    - ✅ Create `~/.gaia/venv` virtual environment
-    - ✅ Install GAIA CLI (accessible globally via PATH)
-    - ✅ Add GAIA to your PATH
-
-    <Tip>
-      After installation, reload your shell config, then run:
-      ```bash
-      source ~/.bashrc  # or ~/.zshrc
-      gaia init --profile minimal
-      ```
-    </Tip>
-  </Tab>
-</Tabs>
-
----
-
-### Manual Install
-
-**Recommended for developers** integrating GAIA into their projects.
-
-Choose your platform and installation type:
-
-<Tabs>
-  <Tab title="Windows (PyPI)">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI in a project-specific virtual environment.
-
-    ### Step 1: Create Project Directory
-
-    Open **PowerShell** and run:
-    ```powershell
-    mkdir my-gaia-project
-    ```
-    ```powershell
-    cd my-gaia-project
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```powershell
-    uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    Windows users: run:
-    ```powershell
-    .\.venv\Scripts\Activate.ps1
-    ```
-
-    Linux users: `source .venv/bin/activate`
-
-    <Warning>
-      If you see a script execution error, run this once:
-      ```powershell
-      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-      ```
-      Then retry the activation command.
-    </Warning>
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install GAIA
-
-    ```powershell
-    uv pip install amd-gaia
-    ```
-
-    <Tip>
-      **Optional extras:** `uv pip install "amd-gaia[talk,rag]"` for voice and document Q&A features.
-    </Tip>
-
-    ### Step 5: Verify Installation
-
-    ```powershell
-    gaia -v
-    ```
-
-    ### Step 6: Initialize GAIA
-
-    Install Lemonade Server and download models with a single command:
-
-    ```powershell
-    gaia init --profile minimal
-    ```
-
-    <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
-      See [CLI Reference](/reference/cli#init-command) for all profiles.
-    </Note>
-  </Tab>
-
-  <Tab title="Linux (PyPI)">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI in a project-specific virtual environment.
-
-    ### Step 1: Create Project Directory
-
-    Open a **terminal** and run:
-    ```bash
-    mkdir my-gaia-project
-    ```
-    ```bash
-    cd my-gaia-project
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```bash
-    uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    ```bash
-    source .venv/bin/activate
-    ```
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install GAIA
-
-    <Warning>
-      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
-    </Warning>
-
-    ```bash
-    uv pip install amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu
-    ```
-
-    <Tip>
-      **Optional extras:** Add `[talk,rag]` for voice and document Q&A features:
-      ```bash
-      uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
-      ```
-    </Tip>
-
-    ### Step 5: Verify Installation
-
-    ```bash
-    gaia -v
-    ```
-
-    ### Step 6: Initialize GAIA
-
-    Install Lemonade Server and download models with a single command:
-
-    ```bash
-    gaia init --profile minimal
-    ```
-
-    <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
-      See [CLI Reference](/reference/cli#init-command) for all profiles.
-    </Note>
-  </Tab>
-
-  <Tab title="Windows (Clone)">
-    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
-
-    <Note>
-      **Requires:** [Git for Windows](https://git-scm.com/download/win) must be installed.
-    </Note>
-
-    ### Step 1: Clone the Repository
-
-    Open **PowerShell** and run:
-    ```powershell
-    git clone https://github.com/amd/gaia.git
-    ```
-    ```powershell
-    cd gaia
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```powershell
-    uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    Windows users: run:
-    ```powershell
-    .\.venv\Scripts\Activate.ps1
-    ```
-
-    Linux users: `source .venv/bin/activate`
-
-    <Warning>
-      If you see a script execution error, run this once:
-      ```powershell
-      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-      ```
-      Then retry the activation command.
-    </Warning>
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install in Editable Mode
-
-    ```powershell
-    uv pip install -e ".[dev]"
-    ```
-
-    <Tip>
-      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
-    </Tip>
-
-    ### Step 5: Verify Installation
-
-    ```powershell
-    gaia -v
-    ```
-
-    <Note>
-      Changes to GAIA source code will take effect immediately without reinstalling.
-    </Note>
-
-    ### Step 6: Initialize GAIA
-
-    Install Lemonade Server and download models with a single command:
-
-    ```powershell
-    gaia init --profile minimal
-    ```
-
-    <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
-      See [CLI Reference](/reference/cli#init-command) for all profiles.
-    </Note>
-  </Tab>
-
-  <Tab title="Linux (Clone)">
-    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
-
-    <Note>
-      **Requires:** Git must be installed (`sudo apt install git`).
-    </Note>
-
-    ### Step 1: Clone the Repository
-
-    Open a **terminal** and run:
-    ```bash
-    git clone https://github.com/amd/gaia.git
-    ```
-    ```bash
-    cd gaia
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```bash
-    uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    ```bash
-    source .venv/bin/activate
-    ```
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install in Editable Mode
-
-    <Warning>
-      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
-    </Warning>
-
-    ```bash
-    uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
-    ```
-
-    <Tip>
-      **With all extras:** Add `[talk,rag]` for voice and document Q&A features:
-      ```bash
-      uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
-      ```
-    </Tip>
-
-    ### Step 5: Verify Installation
-
-    ```bash
-    gaia -v
-    ```
-
-    <Note>
-      Changes to GAIA source code will take effect immediately without reinstalling.
-    </Note>
-
-    ### Step 6: Initialize GAIA
-
-    Install Lemonade Server and download models with a single command:
-
-    ```bash
-    gaia init --profile minimal
-    ```
-
-    <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
-      See [CLI Reference](/reference/cli#init-command) for all profiles.
-    </Note>
-  </Tab>
-</Tabs>
-
-<Tip>
-  **Having issues?** Check the [Troubleshooting](/reference/troubleshooting) guide, [create an issue](https://github.com/amd/gaia/issues) on GitHub, or contact us at gaia@amd.com.
-</Tip>
-
----
-
-## Build Your First Agent
-
-<Warning>
-  Make sure your virtual environment is still activated (you should see `(.venv)` in your prompt). If commands aren't working as expected, try prefixing them with [`uv run`](https://docs.astral.sh/uv/reference/cli/#uv-run).
-</Warning>
-
-Using your text editor, create a file named `my_agent.py` in the project directory you created during install — `my-gaia-project` for the PyPI paths, or the cloned `gaia` folder for the clone paths. This is the same folder where you ran `uv venv` and activated `(.venv)`.
+Save this as `count_agent.py` in the directory you just created. The subclass
+registers a word-counting function and tells the model when to call it.
+`_register_tools()` is required; `_get_system_prompt()` supplies the instructions.
 
 ```python
-import platform
-from datetime import datetime
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
 
-class MyAgent(Agent):
-    """A simple agent that can report system information."""
 
+class CountAgent(Agent):
     def _get_system_prompt(self) -> str:
-        return """You are a system monitoring assistant.
-When users ask about time or system details, use the get_system_info tool."""
+        return (
+            "Use count_words to count words in the user's text. "
+            "Report its result."
+        )
 
     def _register_tools(self):
         @tool
-        def get_system_info() -> dict:
-            """Get current time, date, platform, and Python version."""
-            return {
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "platform": platform.system(),
-                "python": platform.python_version()
-            }
+        def count_words(text: str) -> dict:
+            """Count whitespace-separated words in text."""
+            return {"count": len(text.split())}
 
-# Use the agent. model_id pins the ~4B model that `gaia init` already
-# downloaded; omit it and the agent base defaults to a much larger model
-# that won't fit on most machines.
-agent = MyAgent(model_id="Gemma-4-E4B-it-GGUF")
-result = agent.process_query("What time is it and what system am I on?")
-print(result.get("result"))
+
+agent = CountAgent()
+result = agent.process_query(
+    "Count the words in: GAIA runs on my computer"
+)
+print(result["result"])
 ```
 
-<Note>
-  **Why `model_id`?** Without it, the `Agent` base class defaults to a large
-  ~20GB model that `gaia init --profile minimal` never downloaded — on a typical
-  16–32GB machine it fails to load with `failed to fit params to free device
-  memory`. `Gemma-4-E4B-it-GGUF` is the tool-calling model every `gaia init`
-  profile installs, so it's already on disk and runs comfortably.
-</Note>
+## 3. Run a query
 
-<sub>
-  **View full source:** [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) · [`tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py)
-</sub>
+Run it with the local backend available:
 
-**Run it** (in your terminal/PowerShell):
-```
-python my_agent.py
+```bash
+uv run python count_agent.py
 ```
 
-<Note>
-  First run may take a moment while GAIA starts Lemonade Server and loads the LLM.
-</Note>
+The answer should report **5 words**; its phrasing can vary by model. You may also
+see progress and the console-rendered answer before the final `print`.
 
-You'll see the agent thinking, creating a plan, and executing the tool:
+The tool computes the count; the model chooses the tool call and writes the answer.
+If startup fails, resolve the prerequisite reported by `gaia init` in the same
+environment. If the turn fails, inspect `result["status"]` and
+`result["error_history"]` instead of treating any returned text as success.
+See the [agent harness](/sdk/core/agent-system) for the result contract, lifecycle,
+limits, and error handling, and [tools](/sdk/core/tools) for registration and permissions.
 
-```
-🤖 Processing: 'What time is it and what system am I on?'
-...
-🔧 Executing operation
-  Tool: get_system_info
+## Next: customize the agent
 
-✅ Tool execution complete
-{
-  "time": "15:03:26",
-  "date": "2025-12-17",
-  "platform": "Windows",
-  "python": "3.12.12"
-}
-...
-✨ Processing complete!
-```
+Follow [Build a Python Agent](/sdk/core/custom-agents) for constructor options,
+validated tools, output control, and a check that runs without inference.
 
-Final output (will vary based on your system):
-```
-The current time is 15:03:26 and you are on a Windows system running Python 3.12.12.
-```
+## Work on the repository
 
-<Success>
-  **It works!** The agent called the `get_system_info` tool and returned real data from your system.
-</Success>
-
-<Info>
-  **Tip:** The tool's docstring is how the LLM knows what the tool does. Be descriptive!
-  `"""Get current time, date, platform, and Python version."""` tells the LLM this tool can answer time-related questions.
-</Info>
-
----
-
-## How It Works
-
-### The Agent Base Class
-
-The `Agent` class handles the core loop: receiving queries, calling the LLM, executing tools, and returning responses. You extend it by defining:
-
-- **`_get_system_prompt()`** — Instructions that shape the agent's behavior
-- **`_register_tools()`** — Functions the agent can call to take actions
-
-### System Prompt
-
-The system prompt tells your agent who it is and how to make decisions. You define it by returning a string:
-
-```python
-def _get_system_prompt(self) -> str:
-    return """You are a system monitoring assistant.
-When users ask about time or system details, use the get_system_info tool."""
-```
-
-For agents, a good prompt includes:
-- **Role**: What the agent specializes in — *"You are a code review assistant..."*
-- **Tool guidance**: When to use tools vs. respond directly — *"Use the search tool for questions about files..."*
-- **Style**: Tone and boundaries — *"Be concise. Only answer questions about this codebase."*
-
-The system prompt and tools work together: the prompt shapes *how* the agent reasons, while tools define *what* it can do.
-
-### Tools
-
-Tools are just Python functions with the `@tool` decorator:
-
-```python
-@tool
-def get_system_info() -> dict:
-    """Get current time, date, platform, and Python version."""
-    return {"time": "14:32:05", "platform": "Windows", ...}
-```
-
-The LLM automatically sees all registered tools and their docstrings. When you ask a question, it decides which tools (if any) to call based on their descriptions. **That's it** — no configuration, no routing logic. Just write functions and the agent knows what it can do.
-
-### The Agent Loop
-
-When you call `agent.process_query("What time is it?")`, GAIA runs an iterative loop:
-
-<Steps>
-  <Step title="Think">
-    The LLM receives your query plus the system prompt and available tools. It decides what to do next.
-  </Step>
-
-  <Step title="Act">
-    If the LLM decides to use a tool, GAIA executes it and captures the result.
-  </Step>
-
-  <Step title="Observe">
-    The tool result is sent back to the LLM, which can then decide to call another tool or respond.
-  </Step>
-
-  <Step title="Respond">
-    When the LLM has enough information, it generates a natural language response for the user.
-  </Step>
-</Steps>
-
-This loop continues until the LLM decides it has a complete answer. Complex tasks may involve multiple tool calls before responding.
-
----
-
-## What's Next?
-
-You've built a simple agent. Now let's build something practical: an agent that analyzes your system hardware and recommends which LLMs you can run locally.
-
-<Card title="Hardware Advisor Playbook" icon="microchip" href="/playbooks/hardware-advisor/index">
-  Build an agent that detects your hardware and recommends which LLMs you can run locally.
-</Card>
-
-### More Playbooks
-
-<CardGroup cols={2}>
-  <Card title="Chat Agent" icon="message" href="/playbooks/chat-agent/part-1-getting-started">
-    Build a document Q&A agent with RAG capabilities
-  </Card>
-
-  <Card title="All Playbooks" icon="books" href="/playbooks">
-    Step-by-step tutorials for building real-world agents
-  </Card>
-</CardGroup>
-
-### Guides & Reference
-
-<CardGroup cols={2}>
-  <Card title="All User Guides" icon="book" href="/guides">
-    Pre-built agents for chat, voice, code, Jira, Docker, and more
-  </Card>
-
-  <Card title="Connect to External Tools" icon="plug" href="/sdk/sdks/mcp">
-    Use MCP to connect your agent to GitHub, databases, filesystems, and hundreds more
-  </Card>
-
-  <Card title="SDK Reference" icon="cube" href="/sdk">
-    Complete API documentation for all components
-  </Card>
-
-  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
-    Command-line tools for chat, voice, RAG, and more
-  </Card>
-
-  <Card title="Glossary" icon="book-open" href="/glossary">
-    Learn GAIA terminology: agents, tools, RAG, NPU, and more
-  </Card>
-
-  <Card title="Developer Guide" icon="code" href="/reference/dev">
-    Testing, linting, and contributing to GAIA
-  </Card>
-</CardGroup>
-
-<Tip>
-  **Stuck?** Join our [Discord](https://discord.com/channels/1392562559122407535/1402013282495102997) or [create an issue](https://github.com/amd/gaia/issues) on GitHub.
-</Tip>
-
----
-
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+Use the [development setup](/reference/dev) for an editable Python install and
+[TUI development](/reference/tui#build-and-test) for the Go terminal client.
+Extend existing functionality with [skills](/guides/composing-skills) or
+[tool mixins](/sdk/mixins/tool-mixins); use [Hub publishing](/guides/hub-publishing)
+when packaging a separate agent.

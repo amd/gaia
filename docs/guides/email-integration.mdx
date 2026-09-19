@@ -73,7 +73,7 @@ Three tiers, all on the user's machine — no cloud inference, no separate mailb
 
 ## Standing up the API surface
 
-You need a **running Lemonade Server** (`lemonade-server serve`) and the model pulled
+You need a **running Lemonade Server** (`gaia init`) and the model pulled
 (`gaia init` installs Lemonade and downloads the default `Gemma-4-E4B-it-GGUF`). Then
 pick one of the entry points below.
 
@@ -223,7 +223,7 @@ you (`--python <path>` to pick a venv, `--port <n>` to rebind).
 <Note>
   - The server starts (and `connectSidecar` succeeds) **before** Lemonade is up —
     `/health` is liveness-only. Live `triage` returns **502** until a local
-    Lemonade Server is running with the model pulled (`lemonade-server serve`;
+    Lemonade Server is running with the model pulled (`gaia init`;
     `gaia init` to provision). You can still iterate on non-LLM code paths first.
   - You own the `serve` process — there's no `child` on the returned handle and
     nothing to `shutdown()`; Ctrl+C the terminal running `serve`.

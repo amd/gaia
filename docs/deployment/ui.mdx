@@ -18,7 +18,7 @@ The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/packa
   <Card title="Agent UI SDK" icon="code" href="/sdk/sdks/agent-ui">
     Python backend API: FastAPI server, SQLite database, Pydantic models, and SSE streaming.
   </Card>
-  <Card title="Custom Installer" icon="box-archive" href="/playbooks/custom-installer/index">
+  <Card title="Custom Installer" icon="box-archive" href="/deployment/shareable-build">
     Ship a branded GAIA build with your agent pre-loaded.
   </Card>
 </CardGroup>
@@ -155,7 +155,7 @@ these options:
 - Use the browser-based UI by running the backend manually:
 
 ```bash
-lemonade-server serve
+gaia init
 python -m gaia.ui.server
 # Open http://127.0.0.1:4200
 ```
@@ -207,7 +207,7 @@ Gaia Agent UI
 
 ```bash
 # 1. Start Lemonade Server
-lemonade-server serve
+gaia init
 
 # 2. Start Agent UI backend
 python -m gaia.ui.server

@@ -6,7 +6,7 @@ icon: "terminal"
 
 <Info>
   **Prerequisites:** the GAIA TUI binary, started with the control API on:
-  `gaia tui --control`.
+  `gaia-tui --control`.
 </Info>
 
 ## Overview
@@ -32,7 +32,7 @@ That makes two things possible that were not before:
                                             │ (discovered via ~/.gaia/tui/control.json)
                                             ▼
                                   ┌───────────────────┐
-                                  │ gaia tui --control│  ← the terminal you are watching
+                                  │ gaia-tui --control│  ← the terminal you are watching
                                   │ (Go / Bubble Tea) │
                                   └───────────────────┘
 ```
@@ -76,8 +76,9 @@ one of:
 <Warning>
   There is no `tui_launch_agent`, `tui_install_agent` or `tui_uninstall_agent`.
   They drove the hub browser, which no longer exists. Launching **is** running
-  `gaia tui`; switching agents inside a live session is chat's `/agents`, driven
-  through `tui_send_text`/`tui_send_keys` like any other command; and installing
+  `gaia-tui`; a different agent at launch is `gaia-tui chat --agent <id>`;
+  switching agents inside a live session is chat's `/agents`, driven through
+  `tui_send_text`/`tui_send_keys` like any other command; and installing
   a hub agent is `gaia hub install <id>` in the Python CLI.
 </Warning>
 
@@ -110,7 +111,7 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
 <Steps>
   <Step title="Start the TUI with the control API">
     ```bash
-    gaia tui --control
+    gaia-tui --control
     ```
 
     The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
@@ -118,7 +119,7 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
     printed. Add `--dev` to log input counts, state transitions, and
     wait resolution to stderr.
 
-    For a fixed port: `gaia tui --control-port 8770`.
+    For a fixed port: `gaia-tui --control-port 8770`.
   </Step>
 
   <Step title="Add the MCP server to Claude Code">
@@ -227,13 +228,13 @@ Environment:
 
 <AccordionGroup>
   <Accordion title="'No GAIA TUI is running'">
-    The control file does not exist. Start the TUI with `gaia tui --control`
-    (plain `gaia tui` does not expose the API).
+    The control file does not exist. Start the TUI with `gaia-tui --control`
+    (plain `gaia-tui` does not expose the API).
   </Accordion>
 
   <Accordion title="'stale control file' / pid is not running">
     A previous TUI crashed without cleaning up. Start a fresh one with
-    `gaia tui --control` — it overwrites the registration.
+    `gaia-tui --control` — it overwrites the registration.
   </Accordion>
 
   <Accordion title="Keys seem to do nothing">
@@ -246,7 +247,7 @@ Environment:
   <Accordion title="tui_wait_for keeps timing out">
     The timeout reports the screen it actually saw. Compare it with what you
     were matching on — styling is stripped in plain mode, so match on the text,
-    not on box-drawing characters. `gaia tui --control --dev` records input counts, state changes,
+    not on box-drawing characters. `gaia-tui --control --dev` records input counts, state changes,
     and waits in the TUI log. Input contents are never logged.
   </Accordion>
 </AccordionGroup>

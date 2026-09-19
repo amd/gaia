@@ -349,100 +349,25 @@ what it's building.
 
 ---
 
-## Usage Examples
+## Agent integration
 
-### Example 1: Read and Analyze Python File
+Call `register_file_io_tools()` from your host's `_register_tools()` hook.
+These are registered harness tools, not instance methods such as
+`agent.read_file()`. Use the normal agent query/dispatch path; see
+[Testing agents](/sdk/testing).
 
-```python
-from gaia.agents.base.agent import Agent
-from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+The mixin is not self-contained. Its host must supply a `path_validator`.
+Python operations use the standard-library AST parser when optional host helpers
+`_validate_python_syntax` and `_parse_python_code` are absent. The packaged
+[ChatAgent](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py)
+provides a working host composition. Consult the
+[implementation](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_io_tools.py)
+before composing it onto a bare `Agent`; do not call the abstract
+`Agent._register_tools()` via `super()`.
 
-class MyAgent(Agent, FileIOToolsMixin):
-    def _register_tools(self):
-        super()._register_tools()
-        self.register_file_io_tools()
-
-agent = MyAgent()
-
-result = agent.read_file("calculator.py")
-
-if result["file_type"] == "python":
-    print(f"Valid Python: {result['is_valid']}")
-    print(f"Symbols found:")
-    for symbol in result["symbols"]:
-        print(f"  {symbol['type']} {symbol['name']} at line {symbol['line']}")
-```
-
-### Example 2: Write Validated Python Code
-
-```python
-code = '''
-def calculate_sum(a: int, b: int) -> int:
-    """Calculate the sum of two integers."""
-    return a + b
-'''
-
-result = agent.write_python_file(
-    file_path="src/calculator.py",
-    content=code,
-    validate=True,
-    create_dirs=True
-)
-
-if result["status"] == "success":
-    print(f"Wrote {result['bytes_written']} bytes to {result['file_path']}")
-```
-
-### Example 3: Edit File with Diff
-
-```python
-result = agent.edit_python_file(
-    file_path="src/calculator.py",
-    old_content="return a + b",
-    new_content="return int(a) + int(b)  # Ensure integers",
-    backup=True
-)
-
-print("Changes:")
-print(result["diff"])
-```
-
-### Example 4: Search Codebase
-
-```python
-result = agent.search_code(
-    directory="src",
-    pattern="TODO",
-    file_extension=".py",
-    max_results=50
-)
-
-print(f"Found {result['files_with_matches']} files with TODOs:")
-for file_result in result["results"]:
-    print(f"\n{file_result['file']}:")
-    for match in file_result["matches"]:
-        print(f"  Line {match['line']}: {match['content']}")
-```
-
-### Example 5: TypeScript/Generic File Operations
-
-```python
-# Write TypeScript without validation
-result = agent.write_file(
-    file_path="src/components/Button.tsx",
-    content=tsx_code,
-    create_dirs=True
-)
-
-# Edit TypeScript file
-result = agent.edit_file(
-    file_path="src/components/Button.tsx",
-    old_content="export default Button",
-    new_content="export { Button }"
-)
-```
-
----
+For a complete first custom agent, follow [Build a Python Agent](/sdk/core/custom-agents).
+[#3316](https://github.com/amd/gaia/issues/3316) tracks enforcing mixin host
+requirements during registration.
 
 ## Security Model
 
@@ -511,7 +436,7 @@ computed at import time in `gaia.security`; they are not a constructor argument.
 
 - Header extraction (# patterns)
 - Code block extraction with language tags
-- Link extraction ([text](url) patterns)
+- Link extraction (`[text](url)` patterns)
 
 ### Binary Files
 

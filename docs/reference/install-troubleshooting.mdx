@@ -6,7 +6,9 @@ icon: 'wrench'
 
 This guide covers common problems people encounter when installing GAIA. If your issue isn't listed here, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and attach `~/.gaia/electron-install.log`.
 
-## Windows: SmartScreen blocks the installer {#smartscreen}
+<a id="smartscreen" />
+
+## Windows: SmartScreen blocks the installer
 
 **Symptom**: Running the `.exe` installer shows "Windows protected your PC".
 
@@ -14,7 +16,9 @@ This guide covers common problems people encounter when installing GAIA. If your
 
 **Fix**: Click **More info** → **Run anyway**. The installer is safe — you can verify by checking the SHA-256 hash against the [GitHub Release page](https://github.com/amd/gaia/releases/latest).
 
-## macOS: Gatekeeper blocks the app {#gatekeeper}
+<a id="gatekeeper" />
+
+## macOS: Gatekeeper blocks the app
 
 **Symptom**: A dialog appears saying **"gaia-desktop" Not Opened** — "Apple could not verify gaia-desktop is free of malware…" with only **Move to Trash** and **Done** buttons. Or on older macOS: "GAIA cannot be opened because the developer cannot be verified."
 
@@ -42,7 +46,9 @@ xattr -cr /Applications/GAIA.app
 
 Then double-click the app — it will open without the Gatekeeper dialog.
 
-## Antivirus flags a GAIA file as an infostealer {#av-false-positive}
+<a id="av-false-positive" />
+
+## Antivirus flags a GAIA file as an infostealer
 
 **Symptom**: Your antivirus quarantines a file under `.gaia/venv/…/gaia/skills/audit/`
 with a generic Python-malware name. The reported case is Bitdefender flagging

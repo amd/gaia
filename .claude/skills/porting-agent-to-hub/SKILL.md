@@ -32,7 +32,7 @@ Phases run in order. Do not jump to the parity kit because it looks mechanical.
 **PORT / MERGE INTO `<target>` / DISCARD (keep as in-repo example) / DEFER**.
 
 Check for a more general agent that already covers the use case — in
-`docs/plans/agent-hub-22-agents-spec.md`, in the other hub agents, and in
+the current Hub catalog, the other hub agents, and
 ChatAgent's profiles. Duplicating a capability into the catalog is worse than
 not shipping.
 
@@ -183,4 +183,4 @@ evidence underneath. Name any gate you skipped — an unstated skip reads as a p
 - Manifest parsing: `src/gaia/hub/manifest.py`
 - Catalog readers: `workers/agent-hub/src/storage.ts`
 - Scorecard format: `docs/reference/eval-scorecard.mdx`
-- v2 contract + manifest schema: `docs/plans/agent-ui-agent-capabilities-plan.md` §0.1, §0.2, §0.28
+- v2 contract + manifest schema: `docs/spec/agent-ui-query-sse-contract.md` and `src/gaia/hub/manifest.py`

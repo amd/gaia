@@ -23,7 +23,7 @@ A new `EmailTriageAgent` (PR [#965](https://github.com/amd/gaia/pull/965)) lands
 
 Three layers of prompt-injection defense ship together: I1 system-prompt hardening with untrusted-input delimiters, I3 per-turn batch thresholds (>5 ops or >3 senders), and I4 attack-scenario fixtures. Seven destructive tools are confirmation-gated via `TOOLS_REQUIRING_CONFIRMATION`. Privacy is enforced architecturally — `EmailAgentConfig` has no cloud-LLM field, and `base_url` must be local or a LEMONADE host, so every email body is processed on Lemonade.
 
-For the eval suite, `GmailBackend` and `CalendarBackend` Protocols let the eval harness inject `FakeGmailBackend(mbox_path)` without touching OAuth, returning Gmail API v1 JSON shape (not stdlib `email.Message`). Gmail integration is the first connector to ship on the new OAuth path; Outlook/Exchange via Power Automate is planned for v0.17.7 (see [`docs/plans/`](https://github.com/amd/gaia/blob/main/docs/plans/) for the enterprise-bypass spec landed in PR [#954](https://github.com/amd/gaia/pull/954)).
+For the eval suite, `GmailBackend` and `CalendarBackend` Protocols let the eval harness inject `FakeGmailBackend(mbox_path)` without touching OAuth, returning Gmail API v1 JSON shape (not stdlib `email.Message`). Gmail integration is the first connector to ship on the new OAuth path; Outlook/Exchange via Power Automate is planned for v0.17.7 (see [`docs/plans/`](https://github.com/amd/gaia/blob/8eb53c6b/docs/plans/) for the enterprise-bypass spec landed in PR [#954](https://github.com/amd/gaia/pull/954)).
 
 ---
 
