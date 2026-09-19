@@ -460,19 +460,22 @@ class FileSearchToolsMixin:
                         home / "Dropbox",
                     ]
 
+                    # By path, not string prefix: a root ~/Doc must not cover ~/Documents.
+                    resolved_roots = [Path(root).resolve() for root in roots]
                     for location in common_locations:
                         if len(matching_files) >= 20:
                             break
                         # Skip anything already covered by a searched root
                         try:
                             resolved = location.resolve()
-                            if any(
-                                resolved == root or str(resolved).startswith(str(root))
-                                for root in roots
-                            ):
+                            if any(resolved.is_relative_to(r) for r in resolved_roots):
                                 continue
-                        except (OSError, ValueError):
-                            pass
+                        except (OSError, ValueError) as e:
+                            logger.debug(
+                                "Could not resolve %s, searching it anyway: %s",
+                                location,
+                                e,
+                            )
                         search_location(location, max_depth=5)
 
                 # Deduplicate results (CWD and common locations may overlap)

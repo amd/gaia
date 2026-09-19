@@ -681,3 +681,21 @@ class TestTruncationNamesTheBudgetThatTripped:
 
         assert "files and folders" not in result["hint"], result["hint"]
         assert " s \u2014" in result["hint"]
+
+
+class TestCommonFoldersAreMatchedByPathNotPrefix:
+    def test_a_root_whose_name_prefixes_a_common_folder_does_not_hide_it(
+        self, tmp_path, monkeypatch, registry
+    ):
+        home = (tmp_path / "home").resolve()
+        (home / "Doc").mkdir(parents=True)
+        (home / "Documents").mkdir()
+        (home / "Documents" / "quarterly_report.txt").write_text("x\n")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.chdir(tmp_path)
+        search_file = _register_search_file(_Sandbox(home / "Doc"))
+
+        result = search_file("quarterly_report")
+
+        assert [Path(f).name for f in result["files"]] == ["quarterly_report.txt"]
