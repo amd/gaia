@@ -3249,15 +3249,16 @@ def _handle_eval_tasks(args):
             )
             print(f"[PROPOSED] {args.propose}: {json.dumps(proposal)}")
     expect_path = Path(args.expect) if args.expect else ft.expectations_path(card)
-    checks = None
+    checks, expected = None, None
     if expect_path.is_file():
         try:
-            checks = ft.gate(card, json.loads(expect_path.read_text(encoding="utf-8")))
+            expected = json.loads(expect_path.read_text(encoding="utf-8"))
+            checks = ft.gate(card, expected)
         except (ValueError, KeyError) as exc:
             # Misconfigured, not a verdict: fails in report mode too.
             print(f"{'::error::' if in_actions else '❌ '}{expect_path}: {exc}")
             sys.exit(2)
-    report = ft.render_report(card, checks)
+    report = ft.render_report(card, checks, expected)
     print(report)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:

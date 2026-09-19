@@ -270,9 +270,10 @@ jobs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
   # with separate environments: the agent runs with no credentials (it runs
   # shell commands), Claude judges quality with no tools, and the gate compares
-  # passes, quality, honesty, tokens and steps with
-  # eval/tasks/expectations/<model>.<suite>.json under the same `enforce` policy
-  # as the categories below. Memory is off here as for the whole workflow.
+  # passes, quality, honesty, tokens, steps and runtime with main's committed
+  # results in eval/tasks/expectations/<model>.<suite>.json, under the same
+  # `enforce` policy as the categories below. Memory is off here, as for the
+  # whole workflow.
   flagship-tasks:
     name: Flagship agent tasks vs expectations
     if: >-

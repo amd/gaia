@@ -1436,7 +1436,7 @@ measurements remain visible as warnings and the comparison judges measured resul
 
 ## Flagship Agent Tasks
 
-`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and can fail the build when passes, quality, honesty, tokens or steps fall outside the committed expectations.
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and can fail the build when passes, quality, honesty, tokens, steps or runtime fall outside the committed expectations.
 
 ```bash
 gaia eval tasks run --suite core     # run each task, then judge quality
@@ -1471,23 +1471,35 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every coding task has a refere
 
 ### The gate
 
-Expectations live in `eval/tasks/expectations/<model>.<suite>.json`. They are tied to the model, the suite and the judge model, because a different judge grades on a different scale. An illustrative file:
+Expectations live in `eval/tasks/expectations/<model>.<suite>.json`. Each file holds two things:
+
+- **Main's measured results**, overall (`measured`) and per task (`tasks`), with the commit and runner they came from. The report puts them beside the current run, so every PR shows main and itself side by side.
+- **The limits** the gate enforces. They are tied to the model, the suite and the judge model, because a different judge grades on a different scale.
+
+An abridged, illustrative file:
 
 ```json
 {
   "suite": "core",
   "model": "Gemma-4-E4B-it-GGUF",
   "judge_model": "claude-opus-5",
+  "measured_on": {"commit": "<sha of main>", "runner": "<runner name>"},
+  "measured": {"passed": 4, "quality": 3.6, "misreported": 1,
+               "total_tokens": 250000, "steps": 30, "wall_seconds": 600},
+  "tasks": [{"id": "02-bugfix", "result": "PASS", "steps": 8,
+             "total_tokens": 70000, "wall_seconds": 140, "quality": 3.5}],
   "min_passed": 3,
-  "min_quality": 3.5,
-  "max_misreported": 1,
-  "max_total_tokens": 300000,
-  "max_steps": 30
+  "min_quality": 3.1,
+  "max_misreported": 2,
+  "max_total_tokens": 337500,
+  "max_steps": 40,
+  "max_wall_seconds": 900
 }
 ```
 
 - A task the judge could not grade fails the quality checks instead of being skipped.
-- `--propose FILE` writes expectations measured from a run, with headroom for one noisy run: one task may flip, quality may drop 0.5, and tokens and steps may grow 35%. CI uploads that proposal with its scorecard. Commit it to switch the gate on for that model and suite.
+- `--propose FILE` writes this file from a run, with headroom for one noisy run: one task may flip, quality may drop 0.5, tokens and steps may grow 35%, and runtime may grow 50%. Runtime includes the model load, so it swings more than tokens do.
+- CI uploads a proposal with every scorecard. To set or move the bar, commit a proposal from a run of `main` on the CI runner. The limits change only through a reviewed commit, never automatically.
 
 <Warning>
   The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact holds scores only; reproduce a failure locally to get its transcripts.

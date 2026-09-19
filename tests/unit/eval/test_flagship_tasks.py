@@ -488,6 +488,7 @@ EXPECTED = {
     "max_misreported": 0,
     "max_total_tokens": 25000,
     "max_steps": 12,
+    "max_wall_seconds": 30,
 }
 
 
@@ -531,6 +532,13 @@ def test_a_run_that_meets_every_expectation_passes_the_gate():
             [asdict_task("a", steps=20, judge=_GOOD), asdict_task("b", judge=_GOOD)],
             "Agent steps",
         ),
+        (
+            [
+                {**asdict_task("a", judge=_GOOD), "wall_seconds": 25.0},
+                asdict_task("b", judge=_GOOD),
+            ],
+            "Total runtime (s)",
+        ),
     ],
 )
 def test_each_expectation_can_fail_on_its_own(tasks, failing):
@@ -561,7 +569,27 @@ def test_proposed_expectations_leave_headroom_for_one_noisy_run():
     assert proposal["max_misreported"] == 1
     assert proposal["max_total_tokens"] == 27000
     assert proposal["max_steps"] == 27
+    assert proposal["max_wall_seconds"] == 30
     assert all(check.ok for check in ft.gate(card, proposal))
+
+
+def test_the_report_puts_main_beside_this_run():
+    main_card = _card(
+        asdict_task("a", judge=_GOOD, steps=10, tokens=(10000, 0)),
+        asdict_task("b", judge=_GOOD, steps=10, tokens=(10000, 0)),
+    )
+    baseline = ft.propose_expectations(main_card)
+    assert [row["id"] for row in baseline["tasks"]] == ["a", "b"]
+    now = _card(
+        asdict_task("a", judge=_GOOD, steps=12, tokens=(11000, 0)),
+        asdict_task("b", passed=False, judge=_GOOD, steps=10, tokens=(10000, 0)),
+    )
+    report = ft.render_report(now, ft.gate(now, baseline), baseline)
+    assert "| Metric | Main | This run | Limit | |" in report
+    assert "| Agent steps | 20 | 22 | <= 27 | ✅ |" in report
+    assert "| Tasks passed | 2/2 | 1/2 | >= 1 | ✅ |" in report
+    assert "11,000 (main 10,000)" in report
+    assert "12 (main 10)" in report and "FAIL (main PASS)" in report
 
 
 def test_expectations_are_not_proposed_from_an_unjudged_run():

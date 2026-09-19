@@ -61,6 +61,8 @@ PASS_SLACK = 1
 QUALITY_SLACK = 0.5
 MISREPORT_SLACK = 1
 USAGE_SLACK = 0.35
+#: Runtime moves with model loads and runner load, more than tokens do.
+RUNTIME_SLACK = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +586,7 @@ class GateCheck:
     actual: Any
     expected: str
     ok: bool
+    main: Any = None  # what main measured, from the committed baseline
 
 
 def expectations_path(card: Mapping[str, Any]) -> Path:
@@ -600,6 +603,7 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
                 f"run used {card.get(key)!r}."
             )
     s = summarize(card)
+    main = expected.get("measured") or {}
     fully_judged = s["judged"] == s["tasks"]
     unjudged = f"{s['tasks'] - s['judged']} task(s) not judged"
     return [
@@ -608,32 +612,58 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
             f"{s['passed']}/{s['tasks']}",
             f">= {expected['min_passed']}",
             s["passed"] >= expected["min_passed"],
+            None if main.get("passed") is None else f"{main['passed']}/{s['tasks']}",
         ),
         GateCheck(
             "Quality (1-5)",
             s["quality"] if fully_judged else unjudged,
             f">= {expected['min_quality']}",
             fully_judged and s["quality"] >= expected["min_quality"],
+            main.get("quality"),
         ),
         GateCheck(
             "Tasks it misreported",
             s["misreported"] if fully_judged else unjudged,
             f"<= {expected['max_misreported']}",
             fully_judged and s["misreported"] <= expected["max_misreported"],
+            main.get("misreported"),
         ),
         GateCheck(
             "Total tokens",
             s["total_tokens"],
             f"<= {expected['max_total_tokens']}",
             s["total_tokens"] <= expected["max_total_tokens"],
+            main.get("total_tokens"),
         ),
         GateCheck(
             "Agent steps",
             s["steps"],
             f"<= {expected['max_steps']}",
             s["steps"] <= expected["max_steps"],
+            main.get("steps"),
+        ),
+        GateCheck(
+            "Total runtime (s)",
+            s["wall_seconds"],
+            f"<= {expected['max_wall_seconds']}",
+            s["wall_seconds"] <= expected["max_wall_seconds"],
+            main.get("wall_seconds"),
         ),
     ]
+
+
+def _task_row(t: Mapping[str, Any]) -> Dict[str, Any]:
+    grade = t.get("judge") or {}
+    return {
+        "id": t["id"],
+        "result": "ERROR" if t.get("error") else ("PASS" if t["passed"] else "FAIL"),
+        "steps": t["steps"],
+        "total_tokens": t["input_tokens"] + t["output_tokens"],
+        "wall_seconds": t["wall_seconds"],
+        "quality": (
+            round(statistics.mean(grade[a] for a in AXES), 2) if _judged(t) else None
+        ),
+    }
 
 
 def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
@@ -648,21 +678,52 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
         "suite": card["suite"],
         "model": card["model"],
         "judge_model": card.get("judge_model"),
+        # Where the baseline came from; set only inside GitHub Actions.
+        "measured_on": {
+            "commit": os.environ.get("GITHUB_SHA"),
+            "runner": os.environ.get("RUNNER_NAME"),
+        },
         "measured": {
             k: s[k]
-            for k in ("passed", "quality", "misreported", "total_tokens", "steps")
+            for k in (
+                "passed",
+                "quality",
+                "misreported",
+                "total_tokens",
+                "steps",
+                "wall_seconds",
+            )
         },
+        "tasks": [_task_row(t) for t in card["tasks"]],
         "min_passed": max(0, s["passed"] - PASS_SLACK),
         "min_quality": round(max(1.0, s["quality"] - QUALITY_SLACK), 2),
         "max_misreported": s["misreported"] + MISREPORT_SLACK,
         "max_total_tokens": int(s["total_tokens"] * (1 + USAGE_SLACK)),
         "max_steps": int(s["steps"] * (1 + USAGE_SLACK)),
+        "max_wall_seconds": int(s["wall_seconds"] * (1 + RUNTIME_SLACK)),
     }
 
 
-def render_report(card: Mapping[str, Any], checks: Optional[List[GateCheck]]) -> str:
-    """Markdown: the gate verdict, then one row per task."""
+def _fmt(value: Any) -> str:
+    return (
+        f"{value:,}"
+        if isinstance(value, int) and not isinstance(value, bool)
+        else f"{value}"
+    )
+
+
+def _vs(now: Any, main: Any) -> str:
+    return _fmt(now) if main is None else f"{_fmt(now)} (main {_fmt(main)})"
+
+
+def render_report(
+    card: Mapping[str, Any],
+    checks: Optional[List[GateCheck]],
+    expected: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Markdown: main vs this run per metric, then per task."""
     s = summarize(card)
+    main_tasks = {row["id"]: row for row in (expected or {}).get("tasks", [])}
     lines = [
         f"## Flagship tasks — `{card['suite']}` on `{card['model']}`",
         "",
@@ -672,9 +733,10 @@ def render_report(card: Mapping[str, Any], checks: Optional[List[GateCheck]]) ->
         "",
     ]
     if checks is not None:
-        lines += ["| Metric | This run | Expected | |", "|---|---|---|---|"]
+        lines += ["| Metric | Main | This run | Limit | |", "|---|---|---|---|---|"]
         lines += [
-            f"| {c.metric} | {c.actual} | {c.expected} | {'✅' if c.ok else '❌'} |"
+            f"| {c.metric} | {'—' if c.main is None else _fmt(c.main)} | "
+            f"{_fmt(c.actual)} | {c.expected} | {'✅' if c.ok else '❌'} |"
             for c in checks
         ]
         lines.append("")
@@ -683,16 +745,18 @@ def render_report(card: Mapping[str, Any], checks: Optional[List[GateCheck]]) ->
         "|---|---|---|---|---|---|---|",
     ]
     for t in card["tasks"]:
-        grade = t.get("judge") or {}
-        quality = (
-            f"{statistics.mean(grade[a] for a in AXES):.2f}"
-            if _judged(t)
-            else ("judge failed" if grade.get("error") else "—")
-        )
-        result = "ERROR" if t.get("error") else ("PASS" if t["passed"] else "FAIL")
+        row, main = _task_row(t), main_tasks.get(t["id"], {})
+        quality = row["quality"]
+        if quality is None:
+            quality = "judge failed" if (t.get("judge") or {}).get("error") else "—"
+        cells = [
+            _vs(row["result"], main.get("result")),
+            _vs(row["steps"], main.get("steps")),
+            _vs(row["total_tokens"], main.get("total_tokens")),
+            _vs(row["wall_seconds"], main.get("wall_seconds")),
+            _vs(quality, main.get("quality")),
+        ]
         lines.append(
-            f"| `{t['id']}` | {result} | {t['steps']} | "
-            f"{t['input_tokens'] + t['output_tokens']:,} | {t['wall_seconds']} | "
-            f"{quality} | {str(t['why'])[:120]} |"
+            f"| `{t['id']}` | " + " | ".join(cells) + f" | {str(t['why'])[:120]} |"
         )
     return "\n".join(lines) + "\n"
