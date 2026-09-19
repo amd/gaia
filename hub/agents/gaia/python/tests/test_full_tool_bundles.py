@@ -151,7 +151,10 @@ def test_optional_tools_are_present_on_a_full_install(flagship_registry):
 
 def test_core_is_subset_of_bundle_union():
     """Every CORE tool is in a bundle too, except the CORE-only load_tools."""
-    assert set(FULL_CORE_TOOLS) - _bundle_members() == {"load_tools"}
+    assert set(FULL_CORE_TOOLS) - _bundle_members() == {
+        "load_tools",
+        "read_tool_output",
+    }
 
 
 def test_bundles_have_unique_names():

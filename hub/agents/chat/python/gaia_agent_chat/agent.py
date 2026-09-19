@@ -905,7 +905,7 @@ No documents are currently indexed.
 - Common folders: Desktop, Documents, Downloads (under {home_dir})
 - Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
 - Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
-- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"` (WS is bytes; divide in your answer). Avoid `tasklist /V`.
 - CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
 - GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
 - Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.
@@ -1489,10 +1489,12 @@ No documents are currently indexed.
                         timeout=timeout,
                         check=False,
                     )
+                    from gaia.agents.base.artifacts import retain_excerpt
+
                     return {
                         "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
+                        "stdout": retain_excerpt(self, r.stdout, 8000),
+                        "stderr": retain_excerpt(self, r.stderr, 2000),
                         "return_code": r.returncode,
                         "has_errors": r.returncode != 0,
                         "duration_seconds": round(time.monotonic() - start, 2),
@@ -2121,6 +2123,7 @@ No documents are currently indexed.
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._register_output_reader()
         self._snapshot_tools()
         if spec.generic_file_ops:
             _chat_exclude = {
