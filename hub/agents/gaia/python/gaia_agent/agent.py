@@ -248,8 +248,8 @@ class GaiaAgentConfig(ChatAgentConfig):
 # never run. The tool mixins keep their usual place at the back, where none
 # overrides anything and a future method cannot silently win over ChatAgent's.
 class GaiaAgent(
-    EngineeringToolsMixin,
     ProjectMapMixin,
+    EngineeringToolsMixin,
     ChatAgent,
     SkillLibraryToolsMixin,
     SkillLearningToolsMixin,

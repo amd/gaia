@@ -1,23 +1,27 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Exercise the installed CLI from a clean profile, including explicit refusal."""
+"""Exercise the CLI from a clean profile, including explicit refusal."""
 
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import gaia
 from gaia.engineering.store import JobStore
+
+# The child must import this checkout, not whichever worktree was pip-installed.
+_SRC = str(Path(gaia.__file__).resolve().parents[1])
 
 
 def cli(*args, text=""):
     return subprocess.run(
-        [str(Path(sys.executable).parent / "gaia"), "engineering", *args],
+        [sys.executable, "-m", "gaia.cli", "engineering", *args],
         input=text,
         text=True,
         capture_output=True,
         timeout=25,
-        env={**os.environ, "GAIA_DEVELOPER_MODE": "1"},
+        env={**os.environ, "GAIA_DEVELOPER_MODE": "1", "PYTHONPATH": _SRC},
     )
 
 
