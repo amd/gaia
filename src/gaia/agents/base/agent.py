@@ -330,6 +330,7 @@ TOOLS_REQUIRING_CONFIRMATION = {
 # ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
 TOOLS_WITHOUT_EXTERNAL_CONTENT = {
     "remember_skill_lesson",
+    "sleep",
 }
 
 
@@ -2419,8 +2420,8 @@ Do NOT wrap conversational replies in JSON.
         only thing that has arrived. Any tool returning anything — a web page,
         an email, an issue body, a command's output, a skill listing, an MCP
         call — flips this to ``"tool_content"`` for the rest of the turn, and
-        it resets on the next user message. The allowlist holds exactly one
-        name, the learning tool's own receipt, so a tool nobody classified
+        it resets on the next user message. The allowlist holds only receipts
+        (the learning tool's, and ``sleep``'s), so a tool nobody classified
         taints by default rather than by omission.
 
         This exists because a learned skill change persists across sessions: a

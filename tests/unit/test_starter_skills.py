@@ -161,6 +161,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.wait_tools import WaitToolsMixin
     from gaia.sd.mixin import SDToolsMixin
 
     class _Stub:
@@ -188,6 +189,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
+        (WaitToolsMixin, "register_wait_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)

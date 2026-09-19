@@ -1422,7 +1422,7 @@ def test_even_a_skill_listing_taints_the_turn():
     """
     from gaia.agents.base.agent import TOOLS_WITHOUT_EXTERNAL_CONTENT
 
-    assert TOOLS_WITHOUT_EXTERNAL_CONTENT == {"remember_skill_lesson"}
+    assert TOOLS_WITHOUT_EXTERNAL_CONTENT == {"remember_skill_lesson", "sleep"}
 
     agent = _TaintProbeAgent()
     agent._turn_saw_external_content = False
