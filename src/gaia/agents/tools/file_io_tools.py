@@ -17,6 +17,7 @@ from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
+    check_file_state,
     record_read,
     record_write,
 )
@@ -448,6 +449,10 @@ class FileIOToolsMixin:
                     )
                     return {"status": "error", "error": reason}
 
+                stale_error = check_file_state(str(file_path))
+                if stale_error is not None:
+                    return stale_error
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -820,6 +825,10 @@ class FileIOToolsMixin:
                     )
                     return {"status": "error", "error": reason}
 
+                stale_error = check_file_state(str(file_path))
+                if stale_error is not None:
+                    return stale_error
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -911,6 +920,10 @@ class FileIOToolsMixin:
                         "write", str(path), content_size, "denied", reason
                     )
                     return {"status": "error", "error": reason}
+
+                stale_error = check_file_state(str(path))
+                if stale_error is not None:
+                    return stale_error
 
                 # Backup existing file before overwrite
                 backup_path = None
@@ -1209,9 +1222,13 @@ class FileIOToolsMixin:
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
+                stale_error = check_file_state(gaia_path)
+                if stale_error is not None:
+                    return stale_error
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(gaia_path, content)
 
                 return {
                     "status": "success",
@@ -1294,6 +1311,9 @@ class FileIOToolsMixin:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
+                stale_error = check_file_state(str(file_path), content)
+                if stale_error is not None:
+                    return stale_error
                 # Parse the file to find the function
                 try:
                     tree = ast.parse(content)
@@ -1350,6 +1370,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                record_write(str(file_path), modified_content)
 
                 # Generate diff
                 diff = "\n".join(
