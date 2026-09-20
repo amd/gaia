@@ -22,8 +22,10 @@ Everything here was learned by running it. The traps section is the part that sa
 | Mechanical results | `results.<batch>.<tag>.jsonl` |
 | Judge output | `judge2.<tag>.jsonl` |
 
-`. ./env.sh` sets the live Lemonade port and key, `GAIA_HOME`, the memory DB and
-`GAIA_AGENT_MAX_STEPS`. It also puts the project toolchain on the agent's PATH —
+`env.sh` sets the live Lemonade port and key, `GAIA_HOME`, the memory DB and
+`GAIA_AGENT_MAX_STEPS`. **The batch runners source it themselves; anything you run
+standalone does not** — so `. ./env.sh` first before `judge2.py`, `cc_trace.py`, or
+anything touching `$LEMONADE_BASE_URL`. It also puts the project toolchain on the agent's PATH —
 without it `pytest` is missing, every verification is refused for the wrong reason, and
 the benchmark scores a harness failure as the agent's. `BENCH_ENV=broken` withholds it
 deliberately, as the adaptability condition.
@@ -36,6 +38,11 @@ destroy each other's workdirs.** Before starting anything:
 ```bash
 pgrep -fl "run_task.py|run_full_branch.sh|cc_trace.py|judge2.py" | wc -l   # must be 0
 ```
+
+If something is in flight, **queue rather than wait at the keyboard**: copy the wait loop
+at the top of `run_slate.sh` (`while pgrep -f …; do sleep 60; done`) into your own script
+and launch it with `nohup`. Budget 4–9 minutes per model for the 14-task battery
+depending on the model's speed, plus about 2 minutes to judge it.
 
 The same applies to `gaia eval agent`, for a different reason (CLAUDE.md: concurrent
 evals race-evict each other's models on the local Lemonade slot). Never `pkill` a run
@@ -162,7 +169,8 @@ request an OpenAI-style server would reject.
 
 ## What good looks like
 
-On the 14-task battery, with the reference being Claude Code (Sonnet 5) at quality 4.91,
+Numbers below are a snapshot from September 2026 — treat them as the shape to expect, and
+re-measure rather than quoting them. On the 14-task battery, with the reference being Claude Code (Sonnet 5) at quality 4.91,
 82 steps, 302 s, $1.26: GLM-5.3 Flash reached 14/14 at quality 4.96 for $0.083, and
 DeepSeek V4.1 Flash 4.88 for $0.105. A model that costs more than the Claude Code
 reference and scores below it (Qwen3.8 Max, 105%, 4.57) is not a candidate, however good
