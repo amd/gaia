@@ -754,7 +754,9 @@ def _refusal(host, command: str):
         # Ungranted and unknown commands are equally pre-decided.
         ("kubectl get pods", "not in the allowed list"),
         ("git push", "not allowed"),
-        ("gh issue list && rm -rf /", "Shell operators"),
+        # Chaining is allowed; the command it chains to is still refused, and
+        # the refusal still lands before anyone is asked to approve the line.
+        ("gh issue list && rm -rf /", "not in the allowed list"),
         ("gh issue list 'unterminated", "Invalid command syntax"),
     ],
 )

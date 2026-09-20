@@ -19,6 +19,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 **Key Features:**
 - Whitelist-based command security (only safe, read-only commands)
+- Compound lines — `&&`, `||`, `;` and `|` — so exploring and verifying is one call
 - Dual-tier rate limiting (burst + sustained)
 - Path traversal prevention with argument validation
 - Git read-only operations support
@@ -26,9 +27,38 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 **Security Model:**
 - WHITELIST approach (explicitly allow safe commands only)
+- Every command on a line validated before any of it runs
 - Path validation for all file-like arguments
 - Git subcommand filtering (read-only only)
 - Rate limits prevent DOS attacks
+
+### Command Composition
+
+One call may chain several commands, which is what keeps a read-then-verify
+step from costing several agent turns:
+
+| Form | Behaviour |
+|------|-----------|
+| `a && b` | `b` runs only if `a` exited 0 |
+| `a \|\| b` | `b` runs only if `a` failed |
+| `a; b` | both run, whatever `a` returned |
+| `a \| b` | `a`'s output is piped into `b` |
+| `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
+
+Every segment of every pipeline goes through the whole allowlist first: one
+refused command anywhere refuses the line before any of it runs, and one
+confirmation covers the line. The result carries the combined output, the exit
+code of the last command that ran, and a `steps` list giving each command and
+its own exit code.
+
+Still refused anywhere on a line: redirection (`>`, `>>`, `<`), command
+substitution (backticks, `$()`), a background `&`, an inline `VAR=value`
+assignment, and newlines — each changes what a command *is*, rather than which
+commands run. Use `write_file` / `edit_file` to write a file.
+
+On POSIX no line ever reaches a shell: segments run as argv, pipelines as
+chained processes. On Windows each pipeline goes to `cmd.exe` on its own — a
+compound line is never handed over as one string.
 
 ---
 
@@ -142,26 +172,28 @@ class ShellToolsMixin:
         Execute a shell command and return output.
 
         Security Layers:
-        1. Rate limit check (burst + sustained)
+        1. Rate limit check (burst + sustained) — one line costs one slot
         2. Working directory validation
-        3. Command parsing (shlex for safety)
-        4. Command whitelist check
+        3. Command parsing (connectors, pipes, shlex for safety)
+        4. Command whitelist check, for every segment of the line
         5. Git subcommand filtering
-        6. Argument path validation
+        6. Argument path validation, against each segment's own directory
 
         Args:
-            command: Shell command to execute (e.g., 'ls -la')
+            command: Shell command to execute (e.g., 'ls -la', 'cd src && ls')
             working_directory: Optional directory to run in
-            timeout: Max execution time in seconds (default: 30)
+            timeout: Max execution time in seconds for the whole line
+                (default: 30)
 
         Returns:
             {
                 "status": "success" | "error",
                 "command": str,
-                "stdout": str,
+                "stdout": str,   # every command's output, in order
                 "stderr": str,
-                "return_code": int,
+                "return_code": int,   # the last command that ran
                 "has_errors": bool,
+                "steps": list,   # [{"command": str, "return_code": int}, ...]
                 "duration_seconds": float,
                 "timeout": int,
                 "cwd": str,
