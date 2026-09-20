@@ -58,8 +58,13 @@ MIN_SUCCESS_RATE: float = 0.80
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
 
-#: Caps LLM distillation calls per synthesis pass — bounds cost.
+#: Caps how many clusters one pass considers — bounds the candidate set.
 MAX_CLUSTERS_PER_PASS: int = 10
+
+#: Caps the distillation LLM calls one pass may actually spend.  Each call
+#: occupies the single local model slot the user's own turn needs, so a pass
+#: takes a small bite and leaves the rest for the next one.
+MAX_DISTILL_CALLS_PER_PASS: int = 2
 
 #: Per-body cap on the recall-time injection (Phase 2 consumer; defined here so
 #: the threshold lives with its siblings).  Full body always stays in the row.
@@ -102,6 +107,7 @@ class SynthesisConfig:
     min_success_rate: float = MIN_SUCCESS_RATE
     similarity_tau: float = SIMILARITY_TAU
     max_clusters_per_pass: int = MAX_CLUSTERS_PER_PASS
+    max_distill_calls_per_pass: int = MAX_DISTILL_CALLS_PER_PASS
     max_recall_body_chars: int = MAX_RECALL_BODY_CHARS
 
 
@@ -147,6 +153,9 @@ def load_synthesis_config(settings: Optional[Dict] = None) -> SynthesisConfig:
         min_success_rate=_num("min_success_rate", MIN_SUCCESS_RATE, float),
         similarity_tau=_num("similarity_tau", SIMILARITY_TAU, float),
         max_clusters_per_pass=_num("max_clusters_per_pass", MAX_CLUSTERS_PER_PASS, int),
+        max_distill_calls_per_pass=_num(
+            "max_distill_calls_per_pass", MAX_DISTILL_CALLS_PER_PASS, int
+        ),
         max_recall_body_chars=_num("max_recall_body_chars", MAX_RECALL_BODY_CHARS, int),
     )
 

@@ -1712,7 +1712,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
         Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
-        _synthesize_skills (procedural memory, #887), then prune() — pruning is
+        start_skill_synthesis (procedural memory, #887 — runs in the background
+        so it is not in front of the first answer), then prune() — pruning is
         last so old turns are distilled before anything is deleted.
         """
         # Step 6: reconcile_memory() (max 20 pairs)
@@ -1731,17 +1732,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
 
-        # Step 8: _synthesize_skills() — procedural memory (#887).  Boundary
-        # translation only: _synthesize_skills is fail-loud internally (embedder
-        # failure re-raises, no smaller-model fallback); this wrapper keeps a
-        # background synthesis error from crashing the user's first query, the
-        # same posture as the reconcile / consolidate steps above.
+        # Step 8: skill synthesis (procedural memory, #887) — started on a
+        # background thread, so distillation never sits in front of the user's
+        # first answer.  The pass logs its own start, outcome and failures;
+        # this wrapper only keeps a failure to *start* it off the first query.
         try:
-            synth = self._synthesize_skills()
-            if synth.get("stored", 0) > 0:
-                logger.info("[MemoryMixin] post-init skill synthesis: %s", synth)
+            self.start_skill_synthesis()
         except Exception as e:
-            logger.warning("[MemoryMixin] post-init skill synthesis failed: %s", e)
+            logger.warning(
+                "[MemoryMixin] post-init skill synthesis failed to start: %s", e
+            )
 
         # Step 9: prune() last, so old turns are distilled before anything is deleted.
         try:

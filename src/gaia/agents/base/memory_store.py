@@ -383,6 +383,21 @@ CREATE INDEX IF NOT EXISTS idx_delta_active ON skill_deltas(status)
     WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_delta_superseded ON skill_deltas(superseded_by)
     WHERE superseded_by IS NOT NULL;
+
+-- Synthesis marks (v5 — procedural memory, #887).
+-- One row per session a synthesis pass already handed to the distiller, with
+-- the outcome. The `meta` watermark alone cannot express this: it is a single
+-- timestamp, so a handled session that sits ABOVE an unhandled older one would
+-- re-enter the window and be distilled again every pass.
+CREATE TABLE IF NOT EXISTS synthesis_marks (
+    session_id  TEXT PRIMARY KEY,
+    outcome     TEXT NOT NULL,   -- distilled | unusable
+    goal        TEXT,
+    detail      TEXT,            -- why, for the unusable case
+    marked_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_synthesis_marks_outcome
+    ON synthesis_marks(outcome);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -541,9 +556,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v4 schema.  Existing databases at v1–v3 are
-        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 and
-        v3→v4 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v5 schema.  Existing databases at v1–v4 are
+        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3, v3→v4
+        and v4→v5 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -560,12 +575,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v4)
+            # Initialize schema_version if empty (fresh install → v5)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (4, _now_iso()),
+                    (5, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -583,10 +598,10 @@ class MemoryStore:
         """Run schema migrations if needed. Must hold self._lock.
 
         Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and new
-        CREATE TABLEs (v2->v3, v3->v4), both of which SQLite applies without
-        rewriting existing rows.  Each step is guarded so a partial prior
-        migration re-runs cleanly, and the steps chain (a v1 database is taken
-        to v4).
+        CREATE TABLEs (v2->v3, v3->v4, v4->v5), both of which SQLite applies
+        without rewriting existing rows.  Each step is guarded so a partial
+        prior migration re-runs cleanly, and the steps chain (a v1 database is
+        taken to v5).
         """
         cursor = self._conn.execute(
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
@@ -652,6 +667,22 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v4 complete")
             current_version = 4
+
+        if current_version < 5:
+            logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
+
+            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
+            # NOT EXISTS already ran in _init_schema(), so this only advances the
+            # marker.  A store written before this build has no marks and no
+            # watermark: synthesis reads that as "nothing consumed yet" and
+            # distils its history once, then records both.
+            self._conn.execute(
+                "UPDATE schema_version SET version = 5, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v5 complete")
+            current_version = 5
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -3428,6 +3459,189 @@ class MemoryStore:
             for sid in order
             if sessions[sid]["success_count"] >= min_steps
         ]
+
+    # ------------------------------------------------------------------
+    # Synthesis progress — what the distiller has already consumed (#887)
+    # ------------------------------------------------------------------
+
+    #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.
+    _SYNTHESIS_WATERMARK_META_KEY = "skill_synthesis_watermark"
+
+    #: The outcomes ``mark_sessions_synthesized`` accepts.
+    SYNTHESIS_OUTCOMES = ("distilled", "unusable")
+
+    #: SQLite caps bound parameters per statement; chunk id lists below it.
+    _MARK_QUERY_CHUNK = 400
+
+    def get_synthesis_watermark(self) -> Optional[str]:
+        """Return the newest tool-history timestamp skill synthesis consumed.
+
+        ``None`` on a store that has never completed a pass — including one
+        written by a build without this column, which reads as "nothing
+        consumed yet" and gets its history distilled once.  Callers pass the
+        value straight to :meth:`iter_sessions` as ``since``.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (self._SYNTHESIS_WATERMARK_META_KEY,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_synthesis_watermark(self, watermark: str) -> None:
+        """Record the newest tool-history timestamp skill synthesis consumed.
+
+        Args:
+            watermark: ISO 8601 timestamp of the last fully consumed session.
+
+        Raises:
+            ValueError: ``watermark`` is empty — an empty marker would silently
+                re-distil the whole history on the next pass.
+        """
+        if not watermark or not str(watermark).strip():
+            raise ValueError(
+                "MemoryStore.set_synthesis_watermark(): watermark is empty. "
+                "Pass the ISO timestamp of the last consumed session, or leave "
+                "the existing watermark in place."
+            )
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._SYNTHESIS_WATERMARK_META_KEY, str(watermark)),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def mark_sessions_synthesized(
+        self,
+        session_ids: List[str],
+        outcome: str,
+        goal: str | None = None,
+        detail: str | None = None,
+    ) -> int:
+        """Record that synthesis already handed these sessions to the distiller.
+
+        Marked sessions are excluded from the next pass's DETECT window, so a
+        cluster is distilled once — including a cluster the distiller could not
+        turn into a procedure, which would otherwise be retried on every
+        session start forever.  ``reset_synthesis_progress`` clears the marks
+        for a deliberate retry.
+
+        Args:
+            session_ids: Sessions the pass consumed.
+            outcome: ``"distilled"`` (a procedure was produced) or
+                ``"unusable"`` (SKIP / unparseable / truncated output).
+            goal: The cluster goal, kept for the log trail.
+            detail: Why, for the ``unusable`` case.
+
+        Returns:
+            Number of sessions marked.
+
+        Raises:
+            ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
+                an unknown outcome would make the skip trail unreadable.
+        """
+        if outcome not in self.SYNTHESIS_OUTCOMES:
+            raise ValueError(
+                f"MemoryStore.mark_sessions_synthesized(): outcome={outcome!r} "
+                f"is not one of {list(self.SYNTHESIS_OUTCOMES)}."
+            )
+        ids = [sid for sid in (session_ids or []) if sid]
+        if not ids:
+            return 0
+        now = _now_iso()
+        rows = [(sid, outcome, goal, detail, now) for sid in ids]
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    "INSERT INTO synthesis_marks "
+                    "(session_id, outcome, goal, detail, marked_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "outcome = excluded.outcome, goal = excluded.goal, "
+                    "detail = excluded.detail, marked_at = excluded.marked_at",
+                    rows,
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return len(ids)
+
+    def get_synthesis_marks(
+        self, session_ids: List[str] | None = None
+    ) -> Dict[str, Dict]:
+        """Return the synthesis marks, keyed by session id.
+
+        Args:
+            session_ids: Restrict to these sessions; None returns every mark.
+
+        Returns:
+            ``{session_id: {outcome, goal, detail, marked_at}}``.
+        """
+        marks: Dict[str, Dict] = {}
+
+        def _collect(sql: str, params: tuple) -> None:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+            for session_id, outcome, goal, detail, marked_at in rows:
+                marks[session_id] = {
+                    "outcome": outcome,
+                    "goal": goal,
+                    "detail": detail,
+                    "marked_at": marked_at,
+                }
+
+        cols = "session_id, outcome, goal, detail, marked_at"
+        if session_ids is None:
+            _collect(f"SELECT {cols} FROM synthesis_marks", ())
+            return marks
+
+        ids = [sid for sid in session_ids if sid]
+        for start in range(0, len(ids), self._MARK_QUERY_CHUNK):
+            chunk = ids[start : start + self._MARK_QUERY_CHUNK]
+            placeholders = ",".join("?" for _ in chunk)
+            _collect(
+                f"SELECT {cols} FROM synthesis_marks "
+                f"WHERE session_id IN ({placeholders})",
+                tuple(chunk),
+            )
+        return marks
+
+    def reset_synthesis_progress(self) -> Dict:
+        """Forget what synthesis has consumed, so the next pass re-reads it all.
+
+        The deliberate-retry lever behind ``_synthesize_skills(force=True)``:
+        drops every mark and the watermark, which is what a user wants after
+        fixing the model or the thresholds that made a cluster undistillable.
+
+        Returns:
+            ``{"marks_cleared": int, "watermark_cleared": bool}``.
+        """
+        with self._lock:
+            try:
+                cursor = self._conn.execute("DELETE FROM synthesis_marks")
+                marks_cleared = cursor.rowcount or 0
+                cursor = self._conn.execute(
+                    "DELETE FROM meta WHERE key = ?",
+                    (self._SYNTHESIS_WATERMARK_META_KEY,),
+                )
+                watermark_cleared = bool(cursor.rowcount)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] synthesis progress reset: %d mark(s) cleared, "
+            "watermark cleared=%s",
+            marks_cleared,
+            watermark_cleared,
+        )
+        return {"marks_cleared": marks_cleared, "watermark_cleared": watermark_cleared}
 
     def apply_confidence_decay(
         self, days_threshold: int = 30, decay_factor: float = 0.9

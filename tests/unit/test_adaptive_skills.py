@@ -686,7 +686,11 @@ def _from_row(row: dict) -> SkillDelta:
 
 
 def test_schema_migrates_to_v4_and_keeps_existing_tables(tmp_path):
-    """Additive migration: a v3 database gains skill_deltas, loses nothing."""
+    """Additive migration: a v3 database gains skill_deltas, loses nothing.
+
+    The version marker moves on with every later additive step; what this test
+    owns is that ``skill_deltas`` arrives and nothing else is dropped.
+    """
     db = tmp_path / "memory.db"
     store = MemoryStore(db_path=db)
     with store._lock:  # noqa: SLF001 - asserting the migration, not a public API
@@ -699,7 +703,7 @@ def test_schema_migrates_to_v4_and_keeps_existing_tables(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert version == 4
+    assert version >= 4
     assert "skill_deltas" in tables
     for pre_existing in ("knowledge", "procedures", "conversations", "tool_history"):
         assert pre_existing in tables

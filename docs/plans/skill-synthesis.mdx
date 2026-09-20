@@ -128,8 +128,13 @@ which calls `reconcile_memory(max_pairs=20)`
 and `consolidate_old_sessions(max_sessions=5)`
 ([`memory.py:1233`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
 Synthesis is added as **one more additive step in that pass** — a proposed
-`_synthesize_skills()` after consolidation. It is off the hot path and bounded by
-`max_clusters_per_pass`.
+`_synthesize_skills()` after consolidation, started through
+`start_skill_synthesis()` on a background thread so a distillation call never
+precedes the user's first answer. Each pass reads only history no earlier pass
+consumed — the `skill_synthesis_watermark` in `meta` is the DETECT `since`, and
+`synthesis_marks` records the episodes a pass handed to the distiller — and it
+spends at most `max_distill_calls_per_pass` model calls, leaving the watermark at
+the last fully consumed episode so the remainder is picked up next session.
 
 <Note>
 The maintainer's pseudocode names this hook `on_consolidation_pass()` calling
@@ -231,7 +236,8 @@ The five thresholds are the maintainer's chosen constants, surfaced as config (s
 | `MIN_OCCURRENCES` | `3` | Need ≥3 similar successful runs before a cluster qualifies. |
 | `MIN_SUCCESS_RATE` | `0.80` | A cluster must be ≥80% successful. |
 | `SIMILARITY_TAU` | `0.82` | Cosine threshold on goal embeddings, for clustering **and** recall match. |
-| `max_clusters_per_pass` | `10` | Caps LLM calls per synthesis pass — bounds cost. |
+| `max_clusters_per_pass` | `10` | Caps how many clusters one pass considers. |
+| `max_distill_calls_per_pass` | `2` | Caps the LLM calls one pass actually spends. Each one holds the single local model slot the user's own turn needs, so a pass takes a small bite and leaves the rest for the next session. |
 
 ---
 
@@ -399,7 +405,7 @@ surface.
 | **Synthesis disabled** (`enabled = false`) | Deliberate user setting | The maintenance pass **skips** `_synthesize_skills`, logged at INFO. Already-stored procedures remain recallable. |
 | **A specific procedure disabled** (`enabled = 0` on the row) | User (via the #606 dashboard track) | `recall_skill` **excludes** it — satisfies the AC *"disabling a skill prevents it from being recalled."* The row is kept, not deleted. |
 | **Lemonade down** during the distillation call | Failure | **Skip the whole synthesis pass**, log loudly. **No** silent downgrade to a smaller model. |
-| **Malformed `agentskills.io` output** from the LLM | Failure | Skip **that cluster**, log; no truncation, no auto-fix. |
+| **Malformed `agentskills.io` output** from the LLM | Failure | Skip **that cluster**, log, and mark its episodes `unusable` so the same call is not repeated on every session start. A response truncated at the model's output cap lands here too. `_synthesize_skills(force=True)` / `MemoryStore.reset_synthesis_progress()` re-opens them. |
 | **Embedder fails** | Failure | **Re-raise** — synthesis cannot proceed without embeddings (matches memory v2's embed-failure posture). |
 | **No matching procedure at recall** | Normal | `recall_skill` returns `[]`; the planner prompt is unchanged; the loader falls through to CORE + semantic. |
 

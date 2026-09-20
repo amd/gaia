@@ -96,11 +96,13 @@ def init_memory(
 5. `apply_confidence_decay()` — 30-day decay
 6. `reconcile_memory()` — Hindsight-inspired, max 20 pairs
 7. `consolidate_old_sessions()` — max 5 sessions, windowed (see [Consolidation](#consolidation))
-8. `_synthesize_skills()` — distill repeated workflows into procedural memory
+8. `start_skill_synthesis()` — distill repeated workflows into procedural memory, on a background thread
 9. `prune()` — 90-day hard delete. Runs after consolidation; queued sessions are held only until their turns reach 180 days
 9. Generate session UUID
 
 Reconciliation, consolidation, and skill synthesis need the LLM, so they run on the first query rather than inside `init_memory()`. Pruning follows them there so eligible conversations get a chance to be distilled before deletion.
+
+Skill synthesis is the one step that does **not** run inline: `start_skill_synthesis()` hands it to a background thread, because a distillation call is seconds of model time and would otherwise land in front of the user's first answer. Each pass reads only the history no earlier pass consumed (a watermark in the `meta` table plus per-episode marks in `synthesis_marks`), and spends at most `max_distill_calls_per_pass` model calls — 2 by default — leaving the rest for the next session. `wait_for_skill_synthesis(timeout)` joins the pass; `_synthesize_skills(force=True)` or `MemoryStore.reset_synthesis_progress()` re-opens history it already consumed.
 
 <Warning>
   Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.

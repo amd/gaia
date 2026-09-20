@@ -234,11 +234,29 @@ CREATE INDEX IF NOT EXISTS idx_proc_superseded ON procedures(superseded_by)
 
 
 -- Table 5: meta
--- Internal key/value bookkeeping (consolidation cursors, etc.)
+-- Internal key/value bookkeeping (consolidation cursors, the embedder id,
+-- and `skill_synthesis_watermark` -- the newest tool_history timestamp a
+-- synthesis pass consumed, used as the next pass's DETECT `since`)
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+
+-- Table 6: synthesis_marks
+-- One row per session a synthesis pass already handed to the distiller (#887).
+-- The watermark is a single timestamp, so it cannot express a handled session
+-- sitting above an unhandled older one; without these marks that session is
+-- re-distilled on every start -- including one the model could not distil.
+CREATE TABLE IF NOT EXISTS synthesis_marks (
+    session_id  TEXT PRIMARY KEY,
+    outcome     TEXT NOT NULL,   -- distilled | unusable
+    goal        TEXT,
+    detail      TEXT,            -- why, for the unusable case
+    marked_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_synthesis_marks_outcome
+    ON synthesis_marks(outcome);
 ```
 
 ### Schema Migrations
@@ -264,6 +282,14 @@ UPDATE schema_version SET version = 2, migrated_at = <now>;
 -- IF NOT EXISTS above (which runs for fresh and migrating databases alike),
 -- so this step only advances the version marker. No existing row is touched.
 UPDATE schema_version SET version = 3, migrated_at = <now>;
+
+-- Migrations: schema_version 3 -> 4 (skill_deltas, #2674) and 4 -> 5
+-- (synthesis_marks, #887). Same additive shape as 2 -> 3: the CREATE TABLE
+-- IF NOT EXISTS above covers fresh and migrating databases, so each step only
+-- advances the marker. A store written before v5 has no marks and no
+-- watermark, which synthesis reads as "nothing consumed yet".
+UPDATE schema_version SET version = 4, migrated_at = <now>;
+UPDATE schema_version SET version = 5, migrated_at = <now>;
 ```
 
 ---
@@ -805,7 +831,8 @@ init_memory()
 First query: _run_memory_post_init() [deferred until the LLM is available]
   7. reconcile_memory()                                [max 20 pairs]
   8. consolidate_old_sessions()                        [max 5 calls, 10s between calls]
-  9. _synthesize_skills()
+  9. start_skill_synthesis()                           [background thread; max 2 distill calls,
+                                                        only history past the watermark]
  10. prune()                                           [90 days; queued turns at most 180 days]
 ```
 
@@ -2075,7 +2102,7 @@ class MemoryMixin:
 
     def init_memory(self, db_path: Path = None, context: str = "global") -> None
         """Initialize memory store with an active context scope.
-        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay. Reconciliation, bounded consolidation, skill synthesis, and pruning are deferred to the first query (in that order)."""
+        Validates Lemonade connectivity, backfills embeddings, rebuilds FAISS index, runs confidence decay. Reconciliation, bounded consolidation, skill synthesis, and pruning are deferred to the first query (in that order); synthesis is started on a background thread rather than run inline, so no distillation call precedes the first answer."""
     @property
     def memory_store(self) -> MemoryStore
     @property

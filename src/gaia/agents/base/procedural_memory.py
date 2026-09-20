@@ -15,12 +15,15 @@ resolves on a ``MemoryMixin`` host via the MRO.
 Spec: docs/plans/skill-synthesis.mdx
 """
 
-from typing import Dict, List, Optional, Tuple
+import threading
+import time
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
     DistilledProcedure,
+    GoalCluster,
     SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
@@ -31,6 +34,11 @@ from gaia.agents.base.skill_synthesis import (
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: Serializes every touch of a procedures FAISS index. Synthesis now writes to
+#: it from a background thread while the live turn searches it, and the native
+#: index is not safe for a concurrent add + search.
+_PROC_INDEX_LOCK = threading.RLock()
 
 
 class ProceduralMemoryMixin:
@@ -109,8 +117,9 @@ class ProceduralMemoryMixin:
                     e,
                 )
 
-        self._proc_faiss_index = index
-        self._proc_faiss_id_map = id_map
+        with _PROC_INDEX_LOCK:
+            self._proc_faiss_index = index
+            self._proc_faiss_id_map = id_map
         logger.info(
             "[MemoryMixin] procedures FAISS index rebuilt: %d vectors", index.ntotal
         )
@@ -120,18 +129,20 @@ class ProceduralMemoryMixin:
 
         Incremental update after a procedure is stored.  Skips if
         ``procedure_id`` is already indexed (idempotent on re-store), mirroring
-        ``_faiss_add``.
+        ``_faiss_add``.  Called from the background synthesis thread, so the
+        index touch is serialized against a concurrent recall search.
         """
         if self._proc_faiss_index is None:
             return
         try:
-            if procedure_id in self._proc_faiss_id_map:
-                return
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
-            self._proc_faiss_index.add(vec.reshape(1, -1))
-            self._proc_faiss_id_map.append(procedure_id)
+            with _PROC_INDEX_LOCK:
+                if procedure_id in self._proc_faiss_id_map:
+                    return
+                self._proc_faiss_index.add(vec.reshape(1, -1))
+                self._proc_faiss_id_map.append(procedure_id)
         except Exception as e:
             # The procedure is already persisted; surface the index miss loudly
             # (WARNING, not debug) so a recall gap is visible without --debug.
@@ -178,11 +189,12 @@ class ProceduralMemoryMixin:
             raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
         assert_faiss_omp_safe("Procedure recall search")
 
-        scores, indices = index.search(query, k)
         results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if 0 <= idx < len(self._proc_faiss_id_map):
-                results.append((self._proc_faiss_id_map[idx], float(score)))
+        with _PROC_INDEX_LOCK:
+            scores, indices = index.search(query, k)
+            for score, idx in zip(scores[0], indices[0]):
+                if 0 <= idx < len(self._proc_faiss_id_map):
+                    results.append((self._proc_faiss_id_map[idx], float(score)))
         return results
 
     # ==================================================================
@@ -488,16 +500,127 @@ class ProceduralMemoryMixin:
     # Skill Synthesis (procedural memory, #887)
     # ==================================================================
 
-    def _synthesize_skills(self, since: Optional[str] = None) -> Dict:
+    def start_skill_synthesis(
+        self, *, force: bool = False
+    ) -> Optional[threading.Thread]:
+        """Run one synthesis pass on a background thread.
+
+        Distillation is several seconds of model time per cluster, and the
+        maintenance pass that starts it sits on the user's first query — so the
+        pass runs off that turn instead of in front of it.  A pass already in
+        flight is left alone (its thread is returned); a host without a store
+        starts nothing.
+
+        The thread is a daemon: an unfinished pass never holds the process open,
+        and whatever it did not consume is picked up next session.  Errors do
+        not vanish — ``_run_skill_synthesis_pass`` logs them at ERROR with a
+        traceback and keeps the exception on ``_skill_synthesis_error``.  Use
+        ``wait_for_skill_synthesis`` to join it.
+
+        Args:
+            force: Re-read history synthesis already consumed (ignores the
+                watermark and the per-episode marks).
+
+        Returns:
+            The running thread, or None when there is no store to read.
+        """
+        running = getattr(self, "_skill_synthesis_thread", None)
+        if running is not None and running.is_alive():
+            logger.debug(
+                "[MemoryMixin] skill synthesis already running; "
+                "not starting a second pass"
+            )
+            return running
+
+        if getattr(self, "_memory_store", None) is None:
+            return None  # memory disabled (GAIA_MEMORY_DISABLED) — no store.
+
+        self._skill_synthesis_error = None
+        thread = threading.Thread(
+            target=self._run_skill_synthesis_pass,
+            kwargs={"force": force},
+            name="gaia-skill-synthesis",
+            daemon=True,
+        )
+        self._skill_synthesis_thread = thread
+        logger.info(
+            "[MemoryMixin] skill synthesis started (background, force=%s)", force
+        )
+        thread.start()
+        return thread
+
+    def wait_for_skill_synthesis(self, timeout: Optional[float] = None) -> bool:
+        """Block until the background synthesis pass finishes.
+
+        The seam a caller or a test uses to observe a pass that would otherwise
+        be invisible.  Returns True when no pass is running or it finished
+        within ``timeout``; False when it is still going.  A pass that failed
+        counts as finished — read ``_skill_synthesis_error`` for the cause.
+        """
+        thread = getattr(self, "_skill_synthesis_thread", None)
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
+
+    def _run_skill_synthesis_pass(self, force: bool = False) -> None:
+        """Run one pass and log its outcome — the background thread's body.
+
+        Thread-boundary translation only: an exception cannot propagate out of
+        a thread, so it is logged at ERROR with the traceback and kept on
+        ``_skill_synthesis_error`` instead of disappearing.  The pass itself
+        stays fail-loud (``_synthesize_skills`` re-raises on an embedder
+        failure).
+        """
+        started = time.monotonic()
+        try:
+            result = self._synthesize_skills(force=force)
+        except Exception as e:
+            self._skill_synthesis_error = e
+            logger.error(
+                "[MemoryMixin] background skill synthesis failed after %.1fs: %s",
+                time.monotonic() - started,
+                e,
+                exc_info=True,
+            )
+            return
+
+        self._skill_synthesis_result = result
+        logger.info(
+            "[MemoryMixin] background skill synthesis finished in %.1fs: "
+            "%d episode(s) consumed, %d procedure(s) written, "
+            "%d cluster(s) not usable%s",
+            time.monotonic() - started,
+            result["consumed"],
+            result["stored"],
+            result["skipped"],
+            " (stopped at the call cap)" if result["capped"] else "",
+        )
+
+    def _synthesize_skills(
+        self, since: Optional[str] = None, force: bool = False
+    ) -> Dict:
         """Synthesize reusable procedures from clusters of successful runs.
 
-        The Step-8 driver of the procedural-memory loop, run once per process
-        inside ``_run_memory_post_init`` (off the request hot path).  It wires the
-        pure ``skill_synthesis`` pipeline to the live seams: DETECT via
+        The Step-8 driver of the procedural-memory loop, started once per
+        process by ``_run_memory_post_init`` through ``start_skill_synthesis``
+        (background, off the request path).  It wires the pure
+        ``skill_synthesis`` pipeline to the live seams: DETECT via
         ``MemoryStore.iter_sessions``, CLUSTER via the 768-dim embedder
         (``_embed_text``), DISTILL via ``self.chat.send_messages``, and
         RECONCILE/STORE into the ``procedures`` table, adding each new row's
         ``when_to_use`` vector to the separate procedures FAISS index.
+
+        Each pass distils only what the previous ones did not:
+
+        * the stored **watermark** is the DETECT ``since``, so history already
+          consumed is not re-read;
+        * episodes an earlier pass handed to the distiller carry a **mark** and
+          are dropped from the window — including ones it could not turn into a
+          procedure, which would otherwise be retried on every session start;
+        * at most ``max_distill_calls_per_pass`` distillation calls are spent,
+          and the watermark is then left at the last fully consumed episode so
+          the remainder is picked up next pass rather than skipped.
 
         Off-states (``docs/plans/skill-synthesis.mdx``): no store
         (``GAIA_MEMORY_DISABLED``) -> no-op; synthesis disabled in
@@ -505,22 +628,34 @@ class ProceduralMemoryMixin:
 
         Fail-loud: an embedder failure re-raises (synthesis cannot proceed
         without embeddings); a distillation LLM call that raises (Lemonade
-        unreachable) aborts the whole pass + logs; a malformed distill output
-        skips only that cluster.  No smaller-model fallback in any path.
+        unreachable) aborts the whole pass + logs, and those episodes stay
+        unmarked so the next pass retries them.  No smaller-model fallback in
+        any path.
 
         Args:
-            since: ISO 8601 watermark; only ``tool_history`` newer than this is
-                considered.  None scans all history.
+            since: ISO 8601 watermark override; only ``tool_history`` newer than
+                this is considered.  None reads the stored watermark.
+            force: Ignore the stored watermark and the per-episode marks and
+                re-read the whole history — the deliberate retry after a model
+                or threshold change made a cluster distillable again.
 
         Returns:
-            A summary dict ``{clusters, stored, skipped}``.
+            ``{clusters, stored, skipped, consumed, capped}`` — ``consumed`` is
+            the episodes this pass handed to the distiller, ``capped`` whether
+            it stopped at the call cap.
         """
         from gaia.agents.base.memory import (  # deferred (cycle break)
             _embedding_to_blob,
             _load_memory_settings,
         )
 
-        result = {"clusters": 0, "stored": 0, "skipped": 0}
+        result = {
+            "clusters": 0,
+            "stored": 0,
+            "skipped": 0,
+            "consumed": 0,
+            "capped": False,
+        }
 
         store = self._memory_store
         if store is None:
@@ -538,26 +673,52 @@ class ProceduralMemoryMixin:
             logger.info("[MemoryMixin] no chat SDK available; skipping skill synthesis")
             return result
 
-        # DETECT — cheap SQL; no LLM, no embedder.
-        sequences = extract_sequences(store, since=since, min_steps=config.min_steps)
-        if not sequences:
+        # DETECT — cheap SQL; no LLM, no embedder.  The watermark bounds it to
+        # what no previous pass has consumed.
+        watermark = since
+        if watermark is None and not force:
+            watermark = store.get_synthesis_watermark()
+        window = extract_sequences(store, since=watermark, min_steps=config.min_steps)
+        # The live session keeps producing tool calls; consuming it now would
+        # mark it done and hide everything it does for the rest of the session.
+        current_session = getattr(self, "_memory_session_id", None)
+        window = [s for s in window if s["session_id"] != current_session]
+        if not window:
             return result
+
+        pending, already_consumed = self._drop_consumed_episodes(store, window, force)
+        consumed_now: Set[str] = set()
 
         # CLUSTER — embedder failure RE-RAISES here (fail-loud).
-        clusters = cluster_by_goal(
-            sequences,
-            self._embed_text,
-            similarity_tau=config.similarity_tau,
-            min_occurrences=config.min_occurrences,
-            min_success_rate=config.min_success_rate,
+        clusters = (
+            cluster_by_goal(
+                pending,
+                self._embed_text,
+                similarity_tau=config.similarity_tau,
+                min_occurrences=config.min_occurrences,
+                min_success_rate=config.min_success_rate,
+            )
+            if pending
+            else []
         )
         result["clusters"] = len(clusters)
-        if not clusters:
-            return result
 
+        calls = 0
         for cluster in clusters[: config.max_clusters_per_pass]:
+            if calls >= config.max_distill_calls_per_pass:
+                result["capped"] = True
+                logger.info(
+                    "[MemoryMixin] skill synthesis stopped at its %d-call cap; "
+                    "%d cluster(s) left for the next pass",
+                    config.max_distill_calls_per_pass,
+                    len(clusters) - calls,
+                )
+                break
+            calls += 1
+
             # DISTILL — a raised error means Lemonade is down: skip the whole
             # pass loudly (no smaller-model fallback), per the off-state table.
+            # The cluster stays unmarked, so the next pass retries it.
             try:
                 candidate = distill_cluster(cluster, self.chat.send_messages)
             except Exception as e:
@@ -569,7 +730,29 @@ class ProceduralMemoryMixin:
                 break
 
             if candidate is None:
-                result["skipped"] += 1  # SKIP sentinel or malformed — skip cluster.
+                # SKIP sentinel, malformed, or truncated at the model's output
+                # cap. Marked, so it is not re-attempted every session start.
+                result["skipped"] += 1
+                consumed_now.update(
+                    self._mark_cluster_consumed(
+                        store,
+                        cluster,
+                        "unusable",
+                        detail=(
+                            "distiller returned SKIP or a document that did not "
+                            "parse (a response truncated at the output cap lands "
+                            "here too)"
+                        ),
+                    )
+                )
+                logger.info(
+                    "[MemoryMixin] skill synthesis: %d episode(s) for goal=%r "
+                    "marked undistillable and will not be retried — "
+                    "_synthesize_skills(force=True) or "
+                    "MemoryStore.reset_synthesis_progress() re-opens them",
+                    cluster.occurrences,
+                    cluster.goal[:80],
+                )
                 continue
 
             # Embed when_to_use (its own corpus).  Embedder failure RE-RAISES.
@@ -581,8 +764,110 @@ class ProceduralMemoryMixin:
                 embedding=_embedding_to_blob(vec),
                 similarity_tau=config.similarity_tau,
             )
+            consumed_now.update(
+                self._mark_cluster_consumed(store, cluster, "distilled")
+            )
             if res.action in ("add", "update") and res.skill_id:
                 self._proc_faiss_add(res.skill_id, vec)
                 result["stored"] += 1
 
+        result["consumed"] = len(consumed_now)
+        self._advance_synthesis_watermark(
+            store, window, already_consumed | consumed_now
+        )
         return result
+
+    @staticmethod
+    def _drop_consumed_episodes(
+        store, window: List[Dict], force: bool
+    ) -> Tuple[List[Dict], Set[str]]:
+        """Split ``window`` into episodes still to distil and ones already done.
+
+        An episode is done once a pass handed it to the distiller, whatever the
+        outcome — that is what stops a cluster the model could not distil from
+        being re-attempted on every session start.  ``force`` ignores the marks
+        so the whole window is re-read.
+
+        Returns:
+            ``(pending, already_consumed_ids)``.
+        """
+        if force:
+            return list(window), set()
+
+        marks = store.get_synthesis_marks([s["session_id"] for s in window])
+        if not marks:
+            return list(window), set()
+
+        unusable = [
+            mark for mark in marks.values() if mark.get("outcome") == "unusable"
+        ]
+        if unusable:
+            logger.info(
+                "[MemoryMixin] skill synthesis: %d episode(s) still skipped — an "
+                "earlier pass could not distil them (e.g. goal=%r: %s). "
+                "_synthesize_skills(force=True) or "
+                "MemoryStore.reset_synthesis_progress() retries them",
+                len(unusable),
+                str(unusable[0].get("goal"))[:80],
+                unusable[0].get("detail"),
+            )
+        return [s for s in window if s["session_id"] not in marks], set(marks)
+
+    @staticmethod
+    def _mark_cluster_consumed(
+        store, cluster: GoalCluster, outcome: str, detail: Optional[str] = None
+    ) -> List[str]:
+        """Record a cluster's episodes as consumed; return their session ids."""
+        session_ids = cluster.from_sessions
+        store.mark_sessions_synthesized(
+            session_ids, outcome, goal=cluster.goal, detail=detail
+        )
+        return session_ids
+
+    @staticmethod
+    def _advance_synthesis_watermark(
+        store, window: List[Dict], consumed_ids: Set[str]
+    ) -> Optional[str]:
+        """Move the watermark to the last *fully consumed* episode in ``window``.
+
+        The watermark is a single timestamp, so it may only pass a contiguous
+        run of consumed episodes: it stops just below the oldest episode this
+        pass left behind (one the call cap cut off, or one still short of
+        ``min_occurrences``).  Anything above it stays in the next pass's window
+        instead of being silently skipped.  It never moves backwards, so an
+        explicit older ``since`` cannot re-open consumed history.
+
+        Returns:
+            The watermark now stored, or None when it did not move.
+        """
+        unconsumed = [s for s in window if s["session_id"] not in consumed_ids]
+        if unconsumed:
+            starts = [s["started_at"] for s in unconsumed if s.get("started_at")]
+            if not starts:
+                return None  # no floor to stop below — do not risk skipping work
+            floor = min(starts)
+            stamps = [
+                s["last_at"]
+                for s in window
+                if s["session_id"] in consumed_ids
+                and s.get("last_at")
+                and s["last_at"] < floor
+            ]
+        else:
+            stamps = [s["last_at"] for s in window if s.get("last_at")]
+        if not stamps:
+            return None
+
+        candidate = max(stamps)
+        stored = store.get_synthesis_watermark()
+        if stored is not None and candidate <= stored:
+            return None
+        store.set_synthesis_watermark(candidate)
+        logger.debug(
+            "[MemoryMixin] skill synthesis watermark advanced to %s "
+            "(%d episode(s) consumed, %d left for the next pass)",
+            candidate,
+            len(consumed_ids),
+            len(unconsumed),
+        )
+        return candidate
