@@ -132,7 +132,11 @@ def __init__(
         debug: Enable debug logging (default: False)
         output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
         max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited)
-        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
+        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
+            The first time the limit is hit the model gets one correction and the call is not run;
+            a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
+            more model call with no tool calls allowed and answers from those results; repeats that
+            errored or were refused report the failure instead.
         min_context_size: Minimum context size required for this agent (default: 32768)
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
         device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected

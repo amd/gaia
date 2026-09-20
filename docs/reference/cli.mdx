@@ -102,6 +102,8 @@ Agents stop after a maximum number of reasoning/tool steps. The default is **50*
 
 An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
 
+The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**) — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused still report the failure.
+
 - **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
 
