@@ -23,6 +23,34 @@ from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
 
+#: Shell control flow. Commands run directly rather than through a shell, so
+#: these are not binaries that could be allowed — they cannot run at all, and
+#: exec reports them as a missing file, which sends the agent looking for a path
+#: problem that does not exist.
+SHELL_KEYWORDS = frozenset(
+    {
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "fi",
+        "case",
+        "esac",
+        "select",
+        "function",
+        "coproc",
+        "{",
+        "}",
+        "[[",
+    }
+)
+
+
 # Security: WHITELIST approach - only allow explicitly safe commands
 # This is much safer than a blacklist which always misses dangerous commands
 ALLOWED_COMMANDS = {
@@ -1723,6 +1751,19 @@ class ShellToolsMixin:
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
                 }
+        elif cmd_base in SHELL_KEYWORDS:
+            return {
+                "status": "error",
+                "error": (
+                    f"'{cmd_base}' is shell control flow, and commands run "
+                    "directly rather than through a shell, so it cannot run."
+                ),
+                "has_errors": True,
+                "hint": (
+                    "Use run_python for a loop or a condition, or issue the "
+                    "commands one per call and decide between them yourself."
+                ),
+            }
         elif cmd_base not in ALLOWED_COMMANDS:
             # Refusing a file rewrite with "only read-only commands are allowed"
             # is a dead end: the agent wanted to change a file and the message
