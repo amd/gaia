@@ -300,6 +300,25 @@ def test_failed_repeats_keep_their_message(agent, tool_result, expected):
     assert result["steps_taken"] == _CALLS
 
 
+@pytest.mark.usefixtures("clean_registry")
+def test_failed_repeats_on_the_legacy_path_keep_their_message():
+    """The results must come from ``previous_outputs``, not ``step_results``.
+
+    Error recovery clears ``step_results`` before every retry, so reading it
+    here makes a loop of failures look like a clean run — and spends a closing
+    call telling the user what went well.
+    """
+    agent = _make_agent(streaming=False, model_id=None)
+    agent.tool_result = {"status": "error", "error": "boom"}
+    chat = _stub_chat(agent, *([_json_call()] * _CALLS))
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    assert "kept failing: boom" in result["result"]
+    assert _CANNED not in result["result"]
+    assert chat.send_messages.call_count == _CALLS
+
+
 # ---------------------------------------------------------------------------
 # The closing call fails: today's message, plus a line saying why
 # ---------------------------------------------------------------------------
