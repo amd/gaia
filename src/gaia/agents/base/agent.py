@@ -725,7 +725,8 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
         tool for tool in wanted if tool in agent._tools_registry and tool not in current
     ]
     if missing:
-        agent._apply_tool_filter(sorted({*current, *missing}))
+        # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
+        agent._apply_tool_filter([*current, *missing])
 
 
 class Agent(abc.ABC):

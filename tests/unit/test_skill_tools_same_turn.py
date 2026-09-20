@@ -59,7 +59,8 @@ def test_a_skill_loaded_mid_turn_offers_its_required_tools_now(agent, manager):
 
     assert "run_shell_command" in agent._active_tool_filter
     assert "run_shell_command" in _offered(agent)
-    assert {"load_skill", "read_file"} <= set(agent._active_tool_filter)
+    # Appended after what was already offered, so the cached prefix survives.
+    assert agent._active_tool_filter[:2] == ["load_skill", "read_file"]
 
 
 def test_reloading_a_skill_brings_back_tools_that_fell_out(agent, manager):
