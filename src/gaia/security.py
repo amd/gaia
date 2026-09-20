@@ -7,11 +7,13 @@ blocked path enforcement, write guardrails, and audit logging.
 """
 
 import datetime
+import hashlib
 import json
 import logging
 import os
 import platform
 import shutil
+import stat
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -338,6 +340,42 @@ def _normalize_macos_symlinks(path_str: str) -> str:
     if path_str.startswith("/private/"):
         return path_str[len("/private") :]
     return path_str
+
+
+def stable_scratch_dir(anchor: str) -> Path:
+    """The agent's scratch directory for *anchor* (a project), the same every session.
+
+    A random name per process put a different path into every session's system
+    prompt, so a backend's cached prompt prefix never matched across sessions.
+    The name is derived from the user and the project instead. A predictable name
+    under a shared temp dir must not be an invitation: the directory is created
+    private, and one that already exists but is not a directory this user owns is
+    refused, loudly, in favour of a fresh private one.
+    """
+    owner = (
+        str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
+    )
+    digest = hashlib.sha1(
+        f"{owner}:{Path(anchor).resolve()}".encode("utf-8")
+    ).hexdigest()[:12]
+    path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise OSError("not a directory")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise OSError("owned by another user")
+    except OSError as exc:
+        fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+        logger.warning(
+            "Scratch directory %s is unusable (%s); using %s for this session",
+            path,
+            exc,
+            fallback,
+        )
+        return fallback
+    return path
 
 
 class PathValidator:

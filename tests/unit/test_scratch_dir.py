@@ -169,3 +169,52 @@ class TestToolDenialsNameTheScratchDir:
             )
         assert result["status"] == "error"
         assert str(scratch) in result["error"]
+
+
+class TestScratchDirIsTheSameEverySession:
+    """A random name per process put a different path into every session's
+    system prompt, so a backend's cached prompt prefix never matched across
+    sessions (or across TUI restarts on a local model)."""
+
+    def test_same_project_same_path(self, tmp_path):
+        from gaia.security import stable_scratch_dir
+
+        a = stable_scratch_dir(str(tmp_path / "proj"))
+        b = stable_scratch_dir(str(tmp_path / "proj"))
+        assert a == b
+        assert a.is_dir()
+        assert a.name.startswith("gaia-scratch-")
+
+    def test_different_projects_different_paths(self, tmp_path):
+        from gaia.security import stable_scratch_dir
+
+        assert stable_scratch_dir(str(tmp_path / "a")) != stable_scratch_dir(
+            str(tmp_path / "b")
+        )
+
+    def test_the_directory_is_private_to_the_user(self, tmp_path):
+        import os
+        import stat
+
+        from gaia.security import stable_scratch_dir
+
+        path = stable_scratch_dir(str(tmp_path / "proj"))
+        if os.name != "nt":
+            assert stat.S_IMODE(path.stat().st_mode) == 0o700
+
+    def test_a_hijacked_path_is_not_used(self, tmp_path, monkeypatch, caplog):
+        """Someone else planted a symlink at the predictable name."""
+        import logging
+
+        from gaia import security
+        from gaia.security import stable_scratch_dir
+
+        monkeypatch.setattr(security.tempfile, "gettempdir", lambda: str(tmp_path))
+        expected = stable_scratch_dir(str(tmp_path / "proj"))
+        shutil.rmtree(expected)
+        expected.symlink_to(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            path = stable_scratch_dir(str(tmp_path / "proj"))
+        assert path != expected and path.is_dir() and not path.is_symlink()
+        assert "unusable" in caplog.text
+        shutil.rmtree(path)

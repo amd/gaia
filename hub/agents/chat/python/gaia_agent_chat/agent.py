@@ -9,7 +9,6 @@ import platform
 import re
 import shutil
 import sqlite3
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
@@ -66,7 +65,7 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator
+from gaia.security import PathValidator, stable_scratch_dir
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -482,10 +481,15 @@ class ChatAgent(
             ),
         )
 
-        # Without this, throwaway scripts land in the user's project.
+        # Without this, throwaway scripts land in the user's project. One path
+        # per project, so the prompt line naming it is stable across sessions.
         if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
             self.path_validator.set_scratch_dir(
-                tempfile.mkdtemp(prefix="gaia-scratch-")
+                str(
+                    stable_scratch_dir(
+                        getattr(config, "project_root", None) or os.getcwd()
+                    )
+                )
             )
             self.scratch_dir = self.path_validator.scratch_dir
             # A prompt cached during init predates the scratch line.
