@@ -432,17 +432,28 @@ def test_load_bundle_skips_members_absent_from_registry():
     assert "a1" in loaded and "ghost" not in loaded
 
 
-def test_load_bundle_is_cap_aware_and_protects_just_loaded():
-    """At cap, load_bundle evicts an LRU non-CORE tool, never CORE or just-loaded."""
+def test_load_bundle_overshoots_the_cap_then_the_next_turn_trims():
+    """Mid-turn load_bundle is add-only; the cap is restored at the turn boundary.
+
+    Evicting mid-turn would drop a tool from the middle of the offered list and
+    re-prefill everything after it, so the overshoot rides until the next
+    ``select``, which trims LRU-first.
+    """
     tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0}})
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
     bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A")]
     loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=3)
     reg = _registry(tools)
     assert loader.select("q", reg) == ["c1", "d1"]  # CORE + matched d1 (2 of 3)
-    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free → evict
-    assert set(loaded) == {"c1", "a1", "a2"}  # cap held; d1 evicted
-    assert "d1" not in loaded
+    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free
+    assert loaded == ["c1", "d1", "a1", "a2"]  # add-only: d1 keeps its slot
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
 
 
 def test_load_bundle_emits_same_turn_loaded_superset_line():

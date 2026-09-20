@@ -65,10 +65,12 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 28 of its 80 tools on any one call — a
+  profile.** The model is sent about 28 of its 80 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
-  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  hatch the model calls mid-turn to pull in a bundle the selector missed; that
+  bundle is appended for the rest of the turn (briefly above the cap, which the
+  next turn restores) so the prompt already sent stays cached.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`

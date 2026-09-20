@@ -755,10 +755,10 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
-    # Dynamic tool loader (#1449): the sorted subset of tool names to surface
-    # this turn, or ``None`` to render the full registry (legacy, byte-identical).
-    # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
-    # both render paths and the ``_openai_tools`` property.
+    # Dynamic tool loader (#1449): the subset of tool names to surface this
+    # turn, in admission order, or ``None`` to render the full registry (legacy,
+    # byte-identical). Set by ``_select_tools_for_turn`` at the top of each
+    # query; consulted by both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
     # Re-entrancy guard for tool timing. A tool body may call another tool
@@ -1559,7 +1559,7 @@ Do NOT wrap conversational replies in JSON.
         Args:
             filter_to: When ``None`` (default), render every registered tool in
                 registry order — byte-identical to the legacy path. When a list,
-                render only those names, in the given (pre-sorted) order,
+                render only those names, in the given (admission) order,
                 skipping any not present in the registry.
         """
         tool_descriptions = []
@@ -1603,10 +1603,11 @@ Do NOT wrap conversational replies in JSON.
     def _select_tools_for_turn(  # pylint: disable=unused-argument
         self, user_input: str
     ) -> Optional[List[str]]:
-        """Return the sorted tool-name subset to surface this turn, or ``None``.
+        """Return the tool-name subset to surface this turn, or ``None``.
 
         Default: ``None`` — render the full registry (legacy behavior). Agents
-        with a dynamic tool loader override this to return a selection.
+        with a dynamic tool loader override this to return a selection, in
+        admission order (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
         """
         return None
 
@@ -1634,11 +1635,12 @@ Do NOT wrap conversational replies in JSON.
 
         Calls ``_select_tools_for_turn`` and, **only when the selection
         changes**, swaps ``_active_tool_filter`` and recomputes the cached
-        system prompt. Both filters are sorted lists (or ``None``), so ``!=`` is
-        a correct change test; a stable selection leaves the cached prompt — and
-        thus the backend's KV-cache prefix — untouched. ``None`` is the legacy
-        full-registry path. ``_openai_tools`` is a property, so all native
-        ``tools=`` call sites pick up the new filter automatically.
+        system prompt. The comparison is ordered — a re-ordered list of the same
+        tools renders different bytes, so it is a real change — and the loader
+        keeps admission order precisely so an unchanged set compares equal.
+        ``None`` is the legacy full-registry path. ``_openai_tools`` is a
+        property, so all native ``tools=`` call sites pick up the new filter
+        automatically.
         """
         # The base hook returns None, but ChatAgent overrides it to return
         # Optional[List[str]] — pylint's None-inference is wrong here.
@@ -3131,7 +3133,7 @@ Do NOT wrap conversational replies in JSON.
             filter_to: When ``None`` (default), build a schema for every
                 registered tool in registry order — byte-identical to the legacy
                 path. When a list, build only those names, in the given
-                (pre-sorted) order, skipping any not present in the registry.
+                (admission) order, skipping any not present in the registry.
         """
 
         def _python_to_json_type(py_type: str) -> str:

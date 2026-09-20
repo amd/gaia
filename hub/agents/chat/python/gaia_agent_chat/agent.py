@@ -701,7 +701,7 @@ class ChatAgent(
         )
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's sorted tool subset, or ``None`` for the full registry.
+        """Return this turn's tool subset in admission order, or ``None``.
 
         The SKILL signal (#1451) and the semantic query use deliberately
         different inputs: ``skill_tools`` derives from the **clean current goal**

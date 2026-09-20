@@ -12,9 +12,11 @@ Selection model (binding — see the design sketch in #688)
 Per turn the loader computes ``CORE ∪ SKILL ∪ SEMANTIC(query)`` then pulls in
 whole bundles for any semantically-matched member, and accumulates the result
 into a session-scoped *loaded set* that only grows ("expand-on-new-match").
-Because the loaded set is monotonic and the output is sorted, non-expansion
-turns serialize byte-identically, so the model backend's KV prefix cache stays
-warm.
+The set is returned in **admission order** — CORE in registry order, then every
+later admission appended where it happened — and never re-sorted, so a new tool
+only ever adds bytes at the end. Combined with the monotonic set, that keeps a
+non-expansion turn byte-identical AND keeps an expansion turn's prefix intact,
+so the model backend's KV prefix cache stays warm through both.
 
 * **CORE** — a small always-on set, admitted unconditionally and exempt from
   the cap and from eviction.
@@ -34,7 +36,11 @@ warm.
   monotonic; at the cap a non-CORE tool is LRU-evicted (oldest last-call,
   falling back to load-time for never-called tools). CORE and any tool admitted
   this turn are eviction-exempt. Evicted tools may be re-admitted later — the
-  one and only monotonicity exception.
+  one and only monotonicity exception. Eviction happens **only at a turn
+  boundary** (inside :meth:`select`): mid-turn the set is add-only, because
+  dropping a tool from the middle of the list re-prefills every tool after it.
+  A mid-turn :meth:`load_bundle` may therefore overshoot the cap until the next
+  turn trims it back.
 
 The loader never imports ``MemoryMixin``; the embedding function(s) are injected
 by the host agent. Any embedding failure session-disables the loader with a
@@ -134,9 +140,9 @@ class ToolLoader:
     """Selects which registered tools appear in the LLM prompt each turn.
 
     The loader does **not** modify ``_TOOL_REGISTRY`` or gate execution; it
-    returns the sorted name list the agent renders into its prompt. ``None``
-    from :meth:`select` means "session-disabled — fall back to the full
-    registry" (the loud, fail-safe path on embedder failure).
+    returns the name list, in admission order, that the agent renders into its
+    prompt. ``None`` from :meth:`select` means "session-disabled — fall back to
+    the full registry" (the loud, fail-safe path on embedder failure).
     """
 
     def __init__(
@@ -239,10 +245,14 @@ class ToolLoader:
         *,
         skill_tools: Optional[Sequence[str]] = None,
     ) -> Optional[List[str]]:
-        """Return the sorted loaded set for this turn, or ``None`` if disabled.
+        """Return the loaded set for this turn in admission order, or ``None``.
 
         ``None`` is the fail-safe signal: the session is disabled (embedder
         down) and the caller must render the full registry / legacy prompt.
+
+        This is the one place tools leave the loaded set: any overshoot a
+        mid-turn :meth:`load_bundle` left behind is trimmed here, LRU first,
+        before this turn's admissions.
 
         Args:
             query: The selection query (previous + current user message).
@@ -309,12 +319,16 @@ class ToolLoader:
                     candidate_scores.get(member, 0.0), new_score
                 )
 
-        # Step 5: admission. CORE first (unconditional, cap-exempt). Then SKILL
-        # (the recalled recipe, cap-bound, ahead of semantic), then new
-        # candidates by (descending score, ascending name).
+        # Step 5: admission. Trim first — a turn boundary is the only point
+        # where dropping a tool is affordable. Then CORE (unconditional,
+        # cap-exempt, in registry order), then SKILL (the recalled recipe,
+        # cap-bound, ahead of semantic), then new candidates by (descending
+        # score, ascending name). Each tier appends, so a tool keeps the slot it
+        # was first offered in for as long as it stays loaded.
         admitted_this_turn: set[str] = set()
-        for name in sorted(self._core):
-            if name in registry and name not in self._loaded:
+        self._trim_to_cap(sel)
+        for name in registry:
+            if name in self._core and name not in self._loaded:
                 self._admit(name, sel)
                 admitted_this_turn.add(name)
 
@@ -369,9 +383,9 @@ class ToolLoader:
             self._admit(name, sel)
             admitted_this_turn.add(name)
 
-        loaded_sorted = sorted(self._loaded)
-        self._log_selection(query, sel, loaded_sorted)
-        return loaded_sorted
+        loaded = list(self._loaded)
+        self._log_selection(query, sel, loaded)
+        return loaded
 
     def record_tool_use(self, tool_name: str) -> None:
         """Note that *tool_name* executed — updates LRU recency.
@@ -435,13 +449,16 @@ class ToolLoader:
 
         Resolves *bundle* to a :class:`ToolBundle` — exact bundle-name match
         first, else (robustness nicety) a bare tool name resolved to its
-        bundle(s) via the reverse index — and admits each member present in
-        *registry* and not already loaded, **cap-aware**: under the cap via
-        :meth:`_admit`; at the cap by LRU-evicting a non-CORE tool that is not
-        being loaded right now (or skipping + logging if nothing is evictable),
-        mirroring :meth:`select`'s admission loop. So ``max_tools`` holds at all
-        times. Emits a same-turn ``TOOL_LOADER`` *loaded superset* line so the
-        recall parser sees the mid-loop expansion.
+        bundle(s) via the reverse index — and **appends** each member present in
+        *registry* and not already loaded, in registry order.
+
+        Add-only by design: this runs mid-turn, and evicting to stay under
+        ``max_tools`` would drop a tool from the middle of the offered list and
+        re-prefill every tool after it — the exact cost the escape hatch is
+        trying to avoid. The overshoot is bounded (one bundle per call) and
+        :meth:`select` trims it back at the next turn boundary. Emits a
+        same-turn ``TOOL_LOADER`` *loaded superset* line so the recall parser
+        sees the mid-loop expansion.
 
         Args:
             bundle: A bundle name from the menu, or a bare tool name to resolve
@@ -450,7 +467,7 @@ class ToolLoader:
                 :meth:`select`); members absent from it are not admitted.
 
         Returns:
-            The sorted loaded set after admission.
+            The loaded set after admission, in admission order.
 
         Raises:
             KeyError: *bundle* is neither a known bundle name nor a known tool
@@ -459,38 +476,27 @@ class ToolLoader:
         """
         members, resolved_name = self._resolve_bundle_members(bundle)
 
-        protected = set(self._core) | set(members)
         sel = _Selection()
-        for member in sorted(members):
-            if member not in registry or member in self._loaded:
+        for member in registry:
+            if member not in members or member in self._loaded:
                 continue
-            if len(self._loaded) < self._max_tools:
-                self._admit(member, sel)
-                continue
-            victim = self._pick_eviction_victim(protected)
-            if victim is None:
-                sel.skipped_at_cap.append(member)
-                continue
-            del self._loaded[victim]
-            sel.evicted.append(victim)
             self._admit(member, sel)
 
         self._load_tools_count += 1
-        logger.info(
-            "TOOL_LOADER %s",
-            json.dumps(
-                {
-                    "turn": self._turn,
-                    "event": "load_tools",
-                    "bundle": resolved_name,
-                    "admitted": sorted(sel.admitted),
-                    "evicted": sorted(sel.evicted),
-                    "skipped_at_cap": sorted(sel.skipped_at_cap),
-                    "loaded": sorted(self._loaded),
-                }
-            ),
-        )
-        return sorted(self._loaded)
+        payload = {
+            "turn": self._turn,
+            "event": "load_tools",
+            "bundle": resolved_name,
+            "admitted": sorted(sel.admitted),
+            "evicted": [],
+            "skipped_at_cap": [],
+            "loaded": list(self._loaded),
+        }
+        over_cap = len(self._loaded) - self._max_tools
+        if over_cap > 0:
+            payload["over_cap"] = over_cap
+        logger.info("TOOL_LOADER %s", json.dumps(payload))
+        return list(self._loaded)
 
     # ── internals ────────────────────────────────────────────────────────
 
@@ -516,6 +522,21 @@ class ToolLoader:
         """Add *name* to the loaded set with fresh bookkeeping."""
         self._loaded[name] = _ToolState(loaded_at=time.time(), load_turn=self._turn)
         sel.admitted.append(name)
+
+    def _trim_to_cap(self, sel: _Selection) -> None:
+        """Evict back down to ``max_tools`` after a mid-turn overshoot.
+
+        Runs at the top of a turn's admission, the only point where dropping a
+        tool is affordable. Survivors keep their relative order (a ``dict``
+        delete does not reorder), so the offered list only loses the evicted
+        entries. Stops when nothing is evictable — CORE alone may exceed the cap.
+        """
+        while len(self._loaded) > self._max_tools:
+            victim = self._pick_eviction_victim(set())
+            if victim is None:
+                return
+            del self._loaded[victim]
+            sel.evicted.append(victim)
 
     def _pick_eviction_victim(self, protected: set[str]) -> Optional[str]:
         """Return the LRU evictable tool name, or ``None`` if nothing is evictable.
@@ -586,9 +607,7 @@ class ToolLoader:
                 break
         return f"{name}: {description}" if description else name
 
-    def _log_selection(
-        self, query: str, sel: _Selection, loaded_sorted: List[str]
-    ) -> None:
+    def _log_selection(self, query: str, sel: _Selection, loaded: List[str]) -> None:
         """Emit one structured ``TOOL_LOADER`` INFO line (Part-2 tuning data)."""
         payload = {
             "turn": self._turn,
@@ -601,7 +620,7 @@ class ToolLoader:
             "admitted": sorted(sel.admitted),
             "evicted": sorted(sel.evicted),
             "skipped_at_cap": sorted(sel.skipped_at_cap),
-            "loaded": loaded_sorted,
+            "loaded": loaded,
         }
         # SKILL key only when the signal fired this turn — keeps the off-state
         # (no recall) log bytes byte-identical to Parts 0-2 (#1451).
