@@ -3,11 +3,11 @@
 """What the user hears when the loop guard stops a turn on repeated calls.
 
 Repeating one call is not evidence the work failed — a model that finished a
-task and then re-ran the same check three times used to have its answer
-replaced by "I can't confirm the task is finished". The guard now asks the
-model once more, with the same tools but ``tool_choice="none"``, and that
-reply is the answer. Repeats that errored or were refused keep their own
-message: there the failure IS the evidence.
+task and then re-ran the same check used to have its answer replaced by "I
+can't confirm the task is finished". When the guard's correction doesn't land
+and the turn ends, it now asks the model once more, with the same tools but
+``tool_choice="none"``, and that reply is the answer. Repeats that errored or
+were refused keep their own message: there the failure IS the evidence.
 """
 
 import json
@@ -28,7 +28,9 @@ _DONE = {"status": "success", "stdout": "3 passed in 0.4s"}
 _ANSWER = "I fixed the loader and pytest passed: 3 passed, 0 failed."
 _CANNED = "can't confirm the task is finished"
 _STATS = {"input_tokens": 100, "output_tokens": 10}
-_REPEATS = 3
+_REPEATS = 3  # max_consecutive_repeats
+_CALLS = _REPEATS + 1  # asking again after the guard's correction ends the turn
+_EXECUTED = _REPEATS - 1  # the calls that ran: the last two were never dispatched
 
 
 class _DummyAgent(Agent):
@@ -158,8 +160,12 @@ def _scope_lines(text: str) -> list:
 
 
 def _repeat_then(*trailing):
-    """Three identical native calls, then whatever the closing call gets."""
-    return [_native_call(n) for n in range(1, _REPEATS + 1)] + list(trailing)
+    """Enough identical native calls to end the turn, then the closing reply.
+
+    The guard corrects once at the limit and only stops on the repeat after
+    that, so ``_EXECUTED`` of these calls actually run.
+    """
+    return [_native_call(n) for n in range(1, _CALLS + 1)] + list(trailing)
 
 
 # ---------------------------------------------------------------------------
@@ -181,13 +187,13 @@ def test_repeated_success_answers_from_the_work_done(agent):
 def test_json_protocol_model_answers_after_repeats_too():
     """The legacy embedded-JSON path must behave like the native one."""
     agent = _make_agent(streaming=False, model_id=None)
-    chat = _stub_chat(agent, *([_json_call()] * _REPEATS), _answer(_ANSWER))
+    chat = _stub_chat(agent, *([_json_call()] * _CALLS), _answer(_ANSWER))
 
     result = agent.process_query("fix the loader and run the tests")
 
     assert result["result"].startswith(_ANSWER)
     assert _CANNED not in result["result"]
-    assert chat.send_messages.call_count == _REPEATS + 1
+    assert chat.send_messages.call_count == _CALLS + 1
     # No native tools to send, so nothing for tool_choice to govern.
     assert chat.send_messages.call_args.kwargs["tools"] is None
     assert "tool_choice" not in chat.send_messages.call_args.kwargs
@@ -202,8 +208,8 @@ def test_closing_request_keeps_the_tools_but_forbids_calls(agent):
     agent.process_query("fix the loader and run the tests")
 
     calls = _model_calls(agent, chat)
-    assert len(calls) == _REPEATS + 1
-    for loop_call in calls[:_REPEATS]:
+    assert len(calls) == _CALLS + 1
+    for loop_call in calls[:_CALLS]:
         assert "tool_choice" not in loop_call.kwargs
 
     wrap_up = calls[-1].kwargs
@@ -215,12 +221,13 @@ def test_closing_request_keeps_the_tools_but_forbids_calls(agent):
     assert wrap_up["system_prompt"] == calls[0].kwargs["system_prompt"]
     instruction = wrap_up["messages"][-1]
     assert instruction["role"] == "user"
-    assert _TOOL in instruction["content"] and str(_REPEATS) in instruction["content"]
+    # The count is the calls that ran, matching what the summary would say.
+    assert _TOOL in instruction["content"] and str(_EXECUTED) in instruction["content"]
     assert "answer now" in instruction["content"]
 
 
 def test_closing_request_answers_every_tool_call(agent):
-    """The guard stops mid-call, so the last call has no result yet.
+    """The guard stops mid-call, so the call it stopped has no result yet.
 
     A tool-call turn with a missing result is rejected outright by
     spec-strict providers, so the request must account for every id.
@@ -237,7 +244,7 @@ def test_closing_request_answers_every_tool_call(agent):
         for call in msg.get("tool_calls") or []
     ]
     answered = [msg["tool_call_id"] for msg in sent if msg.get("role") == "tool"]
-    assert called == [f"call_{n}" for n in range(1, _REPEATS + 1)]
+    assert called == [f"call_{n}" for n in range(1, _CALLS + 1)]
     assert answered == called
     # The call the guard stopped never ran, and the transcript says so.
     assert "not run" in json.dumps(sent[-2]).lower()
@@ -248,10 +255,10 @@ def test_closing_call_counts_its_tokens_and_step(agent):
 
     result = agent.process_query("fix the loader and run the tests")
 
-    assert result["steps_taken"] == _REPEATS + 1
+    assert result["steps_taken"] == _CALLS + 1
     # The step the guard stops never reaches the point where the loop books its
     # stats, so the total is the steps that completed plus the closing call.
-    counted = _REPEATS - 1 + 1
+    counted = _CALLS - 1 + 1
     assert result["output_tokens"] == counted * _STATS["output_tokens"]
     assert result["input_tokens"] == counted * _STATS["input_tokens"]
 
@@ -274,11 +281,11 @@ def test_closing_call_counts_its_tokens_and_step(agent):
         ),
         (
             {"status": "denied", "error": "You declined to run this tool"},
-            _CANNED,
+            "not permitted here",
         ),
         ({"status": "error", "error": "boom"}, "boom"),
     ],
-    ids=["rate-limited", "connection-failure", "not-permitted", "generic-error"],
+    ids=["rate-limit-error", "connection-failure", "not-permitted", "generic-error"],
 )
 def test_failed_repeats_keep_their_message(agent, tool_result, expected):
     agent.tool_result = tool_result
@@ -287,9 +294,10 @@ def test_failed_repeats_keep_their_message(agent, tool_result, expected):
     result = agent.process_query("fix the loader and run the tests")
 
     assert expected in result["result"]
+    assert _CANNED not in result["result"]
     # No closing call: the failure the user needs to hear already happened.
-    assert len(_model_calls(agent, chat)) == _REPEATS
-    assert result["steps_taken"] == _REPEATS
+    assert len(_model_calls(agent, chat)) == _CALLS
+    assert result["steps_taken"] == _CALLS
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +317,7 @@ def test_failed_repeats_keep_their_message(agent, tool_result, expected):
             json.dumps({"thought": "again", "tool": _TOOL, "tool_args": {"path": "."}}),
             f"asked to run {_TOOL} instead of answering",
         ),
-        (_native_call(4), f"asked to run {_TOOL} instead of answering"),
+        (_native_call(_CALLS + 1), f"asked to run {_TOOL} instead of answering"),
     ],
     ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
 )
@@ -350,7 +358,7 @@ def test_stop_during_the_closing_reply_cancels_the_turn():
         yield SimpleNamespace(text="", is_complete=True, stats=dict(_STATS))
 
     real_stream = chat.send_messages_stream.side_effect
-    chat.send_messages_stream.side_effect = [real_stream() for _ in range(_REPEATS)] + [
+    chat.send_messages_stream.side_effect = [real_stream() for _ in range(_CALLS)] + [
         _closing_stream()
     ]
 

@@ -523,7 +523,7 @@ def search_codebase(query: str) -> str:
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
 
-**What the user gets:** after `max_consecutive_repeats` identical calls the turn ends. If those calls worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 **Solutions:**
 ```python
