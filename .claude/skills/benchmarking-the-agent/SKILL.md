@@ -170,8 +170,19 @@ request an OpenAI-style server would reject.
 ## What good looks like
 
 Numbers below are a snapshot from September 2026 — treat them as the shape to expect, and
-re-measure rather than quoting them. On the 14-task battery, with the reference being Claude Code (Sonnet 5) at quality 4.91,
-82 steps, 302 s, $1.26: GLM-5.3 Flash reached 14/14 at quality 4.96 for $0.083, and
-DeepSeek V4.1 Flash 4.88 for $0.105. A model that costs more than the Claude Code
-reference and scores below it (Qwen3.8 Max, 105%, 4.57) is not a candidate, however good
-its public benchmarks look.
+re-measure rather than quoting them.
+
+**Run Claude Code at Opus 5 as the reference, not Sonnet 5.** Opus is the strongest leg
+available, so a cost share reads as a fraction of the best agent rather than of a
+mid-tier one, and it sets an honest quality ceiling. On the 14-task battery Opus scored
+14/14 at quality 4.97, truthfulness 5.00, 83 steps, 456 s, $3.89; Sonnet 5 scored 4.91 for
+$1.26, which is 32% of Opus.
+
+Against that ceiling, GLM-5.3 Flash reached 14/14 at quality 4.96 for $0.083 — within
+0.01 of Opus at 2.1% of its cost — and DeepSeek V4.1 Flash 4.88 for $0.105. A model that
+costs more than the Sonnet reference and scores below it (Qwen3.8 Max, 4.57, $1.325) is
+not a candidate, however good its public benchmarks look.
+
+Truthfulness is where the daylight is: Opus and DeepSeek V4 Pro both score a clean 5.00,
+most others sit at 4.86. That axis — never claiming what the tool record does not
+support — is the one worth optimising next.
