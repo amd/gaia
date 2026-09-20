@@ -44,6 +44,8 @@ step from costing several agent turns:
 | `a; b` | both run, whatever `a` returned |
 | `a \| b` | `a`'s output is piped into `b` |
 | `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
+| `a 2>&1` | `a`'s stderr joins its stdout, and flows on down the pipeline |
+| `a 2>/dev/null` | `a`'s stderr is discarded — its exit code is not |
 
 Every segment of every pipeline goes through the whole allowlist first: one
 refused command anywhere refuses the line before any of it runs, and one
@@ -51,14 +53,20 @@ confirmation covers the line. The result carries the combined output, the exit
 code of the last command that ran, and a `steps` list giving each command and
 its own exit code.
 
-Still refused anywhere on a line: redirection (`>`, `>>`, `<`), command
-substitution (backticks, `$()`), a background `&`, an inline `VAR=value`
-assignment, and newlines — each changes what a command *is*, rather than which
-commands run. Use `write_file` / `edit_file` to write a file.
+`2>&1` and `2>/dev/null` are the only redirections allowed, because they are
+the only two that name no file: they say where a command's stderr goes, and
+this process routes the stream it had already captured. Every other one is
+refused, `2>` to any other path included.
+
+Still refused anywhere on a line: redirection (`>`, `>>`, `<`, `2>FILE`),
+command substitution (backticks, `$()`), a background `&`, an inline
+`VAR=value` assignment, and newlines — each changes what a command *is*,
+rather than which commands run. Use `write_file` / `edit_file` to write a file.
 
 On POSIX no line ever reaches a shell: segments run as argv, pipelines as
 chained processes. On Windows each pipeline goes to `cmd.exe` on its own — a
-compound line is never handed over as one string.
+compound line is never handed over as one string — and the stderr redirection
+travels in it, spelled `2>nul`, because there the shell owns the pipeline.
 
 ---
 
@@ -86,7 +94,7 @@ compound line is never handed over as one string.
    - PathValidator integration
 
 4. **Output Management**
-   - Capture stdout and stderr separately
+   - Capture stdout and stderr separately, unless the command said `2>&1` or `2>/dev/null`
    - Truncate large outputs (max 10,000 chars)
    - Return execution duration
    - Return code reporting

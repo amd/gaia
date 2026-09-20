@@ -187,7 +187,9 @@ DANGEROUS_PS_PATTERNS = (
 
 # Shell operators that change what a command IS, rather than which commands run.
 # Chaining (&&, ||, ;) and pipes are split off first and validated segment by
-# segment; what is left here has no such reading.
+# segment, and the two stderr redirections that write nothing are taken out
+# before the scan (_take_stderr_redirections); what is left here has no such
+# reading.
 # - > >> are output redirection, < is input redirection
 # - ` and $() are command substitution
 # - & backgrounds a command, and cmd.exe runs `dir . &where cmd` as two of them
@@ -373,6 +375,95 @@ def _outside_double_quotes(text: str) -> str:
     return " ".join(text.split('"')[::2])
 
 
+#: The two stderr redirections that create nothing: one merges the stream into
+#: stdout, the other discards it. Exact spellings only — ``2>`` to any other
+#: path writes a file, and stays refused with every other redirection.
+_MERGE_STDERR = "2>&1"
+_DROP_STDERR = "2>/dev/null"
+
+#: cmd.exe's null device. ``2>/dev/null`` there would write ``\dev\null``.
+_WINDOWS_NULL = "2>nul"
+
+#: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
+#: ``2>/dev/null.bak`` are not one of these.
+_STDERR_REDIRECTION = re.compile(r"(?<![^\s])(?:2>&1|2>/dev/null)(?![^\s])")
+
+#: A pipe the way ``_split_pipeline`` reads one: its own token, never ``a|b``.
+_BARE_PIPE = re.compile(r"(?<![^\s])\|(?![^\s])")
+
+
+def _double_quoted(text: str) -> list:
+    """Per character: is it inside a double-quoted span, or a quote itself?"""
+    inside = False
+    mask = []
+    for char in text:
+        if char == '"':
+            inside = not inside
+            mask.append(True)
+        else:
+            mask.append(inside)
+    return mask
+
+
+def _stderr_redirections(text: str) -> list:
+    """Every standalone stderr redirection in *text*, in order.
+
+    Double quotes protect an operand here exactly as they do in
+    ``_outside_double_quotes``, odd-count caveat included: broken quoting
+    takes nothing out, which leaves the operator scan to refuse it. Single
+    quotes do not protect, for the reason ``_split_connectors`` gives — but a
+    ``'2>&1'`` glued to one is not a standalone token either way.
+    """
+    if text.count('"') % 2:
+        return []
+    quoted = _double_quoted(text)
+    return [m for m in _STDERR_REDIRECTION.finditer(text) if not quoted[m.start()]]
+
+
+def _take_stderr_redirections(text: str) -> tuple:
+    """*text* without its stderr redirections, and the one each segment asked for.
+
+    Neither form creates, truncates, or runs anything — they only say where
+    that segment's stderr goes — so they are lifted out here rather than
+    refused by the operator scan. Segments are counted the way
+    ``_split_pipeline`` counts them, so a redirection lands on the command
+    that wrote it. Only the surrounding whitespace survives a removal: a
+    newline elsewhere on the line must still reach the operator scan.
+    """
+    matches = _stderr_redirections(text)
+    if not matches:
+        return text, {}
+    quoted = _double_quoted(text)
+    pipes = [m.start() for m in _BARE_PIPE.finditer(text) if not quoted[m.start()]]
+    modes: Dict[int, str] = {}
+    kept = []
+    end = 0
+    for match in matches:
+        # sh's rule: a second redirection on one segment replaces the first.
+        modes[sum(1 for pipe in pipes if pipe < match.start())] = match.group(0)
+        kept.append(text[end : match.start()])
+        end = match.end()
+    kept.append(text[end:])
+    return "".join(kept), modes
+
+
+def _as_cmd_redirections(text: str) -> str:
+    """*text* with its stderr redirections spelled the way cmd.exe spells them.
+
+    A Windows step runs as a string through cmd.exe, which applies the
+    redirection per segment itself — the one thing this process cannot do for
+    a pipeline it does not own.
+    """
+    out = []
+    end = 0
+    for match in _stderr_redirections(text):
+        out.append(text[end : match.start()])
+        out.append(_MERGE_STDERR if match.group(0) == _MERGE_STDERR else _WINDOWS_NULL)
+        end = match.end()
+    out.append(text[end:])
+    return "".join(out)
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -463,11 +554,18 @@ def _split_connectors(command: str) -> list:
 
 @dataclass(frozen=True)
 class _Step:
-    """One pipeline of a command line, with the connector that gates it."""
+    """One pipeline of a command line, with the connector that gates it.
+
+    ``text`` and ``segments`` have had the stderr redirections lifted out;
+    ``stderr_modes`` holds what each segment asked for, and ``shell_text`` is
+    the line cmd.exe gets, which keeps them.
+    """
 
     text: str
     segments: list
     connector: str
+    stderr_modes: tuple = ()
+    shell_text: str = ""
 
     @property
     def is_cd(self) -> bool:
@@ -523,18 +621,21 @@ def _parse_line(command: str) -> tuple:
     """
     steps: list = []
     parts = _split_connectors(command)
-    for text, connector in parts:
+    for raw_text, connector in parts:
+        text, modes = _take_stderr_redirections(raw_text)
         if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(text)):
             return [], {
                 "status": "error",
                 "error": (
                     "Shell operators (&, >, >>, <, `, $(), newline) are not "
-                    "allowed for security reasons."
+                    "allowed for security reasons. The only redirections "
+                    "allowed are 2>&1 and 2>/dev/null, which write nothing."
                 ),
                 "has_errors": True,
                 "hint": (
-                    "Pipes (|) and chaining (&&, ||, ;) are allowed. Use "
-                    "write_file or edit_file instead of redirecting output."
+                    "Pipes (|) and chaining (&&, ||, ;) are allowed. To keep "
+                    "stderr, write '2>&1'; to drop it, write '2>/dev/null'. "
+                    "To write a file, use write_file or edit_file."
                 ),
             }
         try:
@@ -555,7 +656,20 @@ def _parse_line(command: str) -> tuple:
                 ),
                 "has_errors": True,
             }
-        step = _Step(text=text.strip(), segments=segments, connector=connector)
+        if any(index >= len(segments) for index in modes):
+            return [], {
+                "status": "error",
+                "error": "A stderr redirection here is not attached to a command.",
+                "has_errors": True,
+                "hint": "Write it after the command it belongs to: 'cmd 2>&1 | tail'.",
+            }
+        step = _Step(
+            text=text.strip(),
+            segments=segments,
+            connector=connector,
+            stderr_modes=tuple(modes.get(i, "") for i in range(len(segments))),
+            shell_text=_as_cmd_redirections(raw_text).strip(),
+        )
         error = _cd_shape_refusal(step)
         if error:
             return [], error
@@ -563,29 +677,52 @@ def _parse_line(command: str) -> tuple:
     return steps, None
 
 
+def _captured_stderr(mode: str, default: Any) -> Any:
+    """Where *mode* sends this command's stderr; *default* when it asked for nothing.
+
+    Both are destinations for a stream this process already captures — nothing
+    is opened by name, so neither can create or truncate a file.
+    """
+    if mode == _MERGE_STDERR:
+        return subprocess.STDOUT
+    if mode == _DROP_STDERR:
+        return subprocess.DEVNULL
+    return default
+
+
 def _run_pipeline(
-    segments: list, cwd: str, timeout: float
+    segments: list, modes: tuple, cwd: str, timeout: float
 ) -> subprocess.CompletedProcess:
     """Run validated ``a | b | c`` segments as chained processes, no shell.
 
     ``returncode`` is the rightmost failing stage (pipefail), so ``pytest |
     tail`` cannot turn a failing suite into a passing check. An upstream stage
     killed by SIGPIPE is not a failure: that is how ``| head`` ends a pipeline.
+
+    *modes* is each segment's stderr redirection, if it asked for one. A merged
+    segment writes stderr down its own stdout pipe, which is what puts it in
+    front of the next stage's ``grep``; neither mode touches a return code.
     """
     deadline = time.monotonic() + timeout
     procs: list = []
     errs: list = []
     upstream = None
     try:
-        for argv in segments:
-            errs.append(tempfile.TemporaryFile())  # pylint: disable=consider-using-with
+        for index, argv in enumerate(segments):
+            mode = modes[index] if index < len(modes) else ""
+            err_target = _captured_stderr(mode, None)
+            if err_target is None:
+                errs.append(
+                    tempfile.TemporaryFile()  # pylint: disable=consider-using-with
+                )
+                err_target = errs[-1]
             procs.append(
                 subprocess.Popen(  # pylint: disable=consider-using-with
                     argv,
                     cwd=cwd,
                     stdin=subprocess.DEVNULL if upstream is None else upstream,
                     stdout=subprocess.PIPE,
-                    stderr=errs[-1],
+                    stderr=err_target,
                     env=os.environ.copy(),
                 )
             )
@@ -686,7 +823,9 @@ def _run_step(
     exec_cmd = [part for segment in segments for part in segment]
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
-        exec_cmd = step.text
+        # It keeps the stderr redirections, spelled cmd.exe's way: cmd.exe owns
+        # the pipeline here, so only it can route a middle segment's stderr.
+        exec_cmd = step.shell_text or step.text
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
             import shutil
@@ -699,7 +838,10 @@ def _run_step(
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
     if len(segments) > 1 and not use_shell:
-        return _run_pipeline(segments, cwd, timeout)
+        return _run_pipeline(segments, step.stderr_modes, cwd, timeout)
+
+    # A shell step's redirection is already in the string cmd.exe was handed.
+    mode = "" if use_shell or not step.stderr_modes else step.stderr_modes[0]
 
     # encoding/errors are explicit, and load-bearing. Bare ``text=True``
     # decodes with the locale codec — cp1252 on a default Windows box — and
@@ -716,8 +858,9 @@ def _run_step(
     return subprocess.run(
         exec_cmd,
         cwd=cwd,
-        capture_output=True,
-        # stdin is DEVNULL, never inherited. capture_output redirects
+        stdout=subprocess.PIPE,
+        stderr=_captured_stderr(mode, subprocess.PIPE),
+        # stdin is DEVNULL, never inherited. Capturing redirects
         # stdout/stderr but leaves stdin alone, and this process's stdin is the
         # agent transport's pipe — held open by the TUI and never written to. A
         # child that reads it (directly, or by probing whether it is
@@ -1463,11 +1606,12 @@ class ShellToolsMixin:
             """
             Execute a shell command and return the output.
 
-            Chain on one line to save a call: 'a && b' runs b only if a
-            succeeded, 'a || b' only if it failed, 'a; b' always, 'a | b'
-            pipes, 'cd <dir> && b' runs b there. Every command is
-            allowlist-checked before any runs, and one approval covers the
-            line. Refused: > >> < ` $() & VAR=value newlines.
+            Chain on one line: 'a && b' runs b only if a succeeded, 'a || b'
+            only if it failed, 'a; b' always, 'a | b' pipes, 'cd <dir> && b'
+            runs b there. Every command is allowlist-checked first, and one
+            approval covers the line. '2>&1' keeps stderr and '2>/dev/null'
+            drops it; every other redirection is refused, as are
+            ` $() & VAR=value newline.
 
             Args:
                 command: Shell command to execute
