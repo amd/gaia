@@ -639,23 +639,15 @@ class FileSystemToolsMixin:
         ) -> str:
             """Search for files by name, content, or metadata.
 
-            This is the primary file search tool. When the file system index is available,
-            searches the index first (instant). Falls back to filesystem glob when index
-            is unavailable.
-
-            Search types:
-            - auto: intelligently picks the best strategy based on query
-            - name: search by file/directory name pattern (glob)
-            - content: search inside file contents (grep-like)
-            - metadata: filter by size, date, type only
-
-            Scope 'smart' searches: current directory first, then home common locations,
-            then indexed directories. Use 'everywhere' for full drive search (slow).
+            The primary file search tool: hits the file system index when one
+            is available, else falls back to a filesystem glob.
 
             Args:
-                query: Search query - file name, pattern (e.g. '*.pdf'), or content text
-                search_type: auto, name, content, or metadata (default: auto)
-                scope: smart, home, cwd, everywhere, or a specific path (default: smart)
+                query: File name, pattern (e.g. '*.pdf'), or content text
+                search_type: auto (picks a strategy), name (glob), content
+                    (grep-like), or metadata (size/date/type only)
+                scope: smart (cwd, then home, then indexed dirs), home, cwd,
+                    everywhere (full drive, slow), or a specific path
                 file_types: Comma-separated extensions to filter, e.g. 'pdf,docx,txt'
                 size_range: Size filter, e.g. '>10MB', '<1KB', '1MB-100MB'
                 date_range: Date filter, e.g. 'today', 'this-week', '2026-01', '>2026-01-01'

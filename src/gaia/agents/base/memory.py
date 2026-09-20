@@ -2803,20 +2803,21 @@ class MemoryMixin(ProceduralMemoryMixin):
         ) -> dict:
             """Store a fact, preference, or learning in persistent memory.
 
-            CONTENT RULE — preserve detail: pass the user's full statement
-            verbatim or as close to it as possible. DO NOT summarize,
-            paraphrase, or drop attributes. Future recall fails when the
-            stored content is thinner than what the user actually said.
-              GOOD: "API gateway runs on port 8080 and uses basic HTTP auth"
-              BAD:  "API gateway uses 8080" (lost the auth method)
-              BAD:  "user told me about the gateway" (lost everything)
-            If the user gave multiple distinct facts in one message, call
-            remember() once per fact rather than concatenating into a single
-            blob — each fact should be independently retrievable.
+            Store the user's statement verbatim — summarizing loses the
+            attributes a later recall needs ("gateway on port 8080 with basic
+            HTTP auth", not "gateway uses 8080"). One call per distinct fact,
+            never a concatenated blob. Credential-shaped content and transient
+            observations are refused.
 
-            Categories: fact, preference, error, skill, note, reminder.
-            due_at: ISO 8601 for reminders. context: work/personal scope.
-            sensitive=true for private data. entity: person:name, app:name."""
+            Args:
+                fact: The statement to store, in the user's own words.
+                category: fact, preference, error, skill, note, or reminder.
+                domain: Sub-type, e.g. 'journal', 'todo', 'work'.
+                due_at: ISO 8601 timestamp; reminders only.
+                context: Scope — 'work', 'personal', or 'global'.
+                sensitive: "true" to mark the entry private.
+                entity: Linked entity, e.g. 'person:Linda' or 'app:slack'.
+            """
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",
@@ -2926,33 +2927,25 @@ class MemoryMixin(ProceduralMemoryMixin):
             time_from: str = "",
             time_to: str = "",
         ) -> dict:
-            """Search or browse memory — works as both a search engine AND a database query tool.
+            """Search or browse memory — a search engine and a filtered list in one.
 
-            SEARCH MODE (with query=): semantic + keyword hybrid search across all memories.
-              Example: recall(query='python project settings')
+            With query=, runs hybrid semantic + keyword search. Without it,
+            lists every entry matching the filters — use that to list, browse,
+            or count rather than to find one specific memory. A bare recall()
+            lists recent non-sensitive rows.
 
-            BROWSE/LIST MODE (without query=): returns ALL entries matching your filters.
-              Use this when you want to list, browse, or count memories — not find a specific one.
-              Examples:
-                recall(category='note')                        → all notes
-                recall(category='note', domain='journal')      → all journal entries
-                recall(category='reminder')                    → all reminders / todos
-                recall(category='preference')                  → all stored preferences
-                recall(time_from='2026-01-01', time_to='2026-03-31')  → entries from Q1
-                recall(category='note', limit=50, offset=50)  → second page of notes
-
-            PARAMETERS:
-              query     : free-text search (enables hybrid search mode)
-              category  : filter by category (note, reminder, fact, preference, error, skill)
-              domain    : sub-type filter — e.g. 'journal', 'todo', 'work', 'personal'
-              context   : scope filter ('work', 'personal', 'global')
-              entity    : filter by linked entity (e.g. 'person:Linda')
-              limit     : max results (default 20 for browse, adaptive for search; max 100)
-              offset    : skip first N results for pagination (default 0)
-              time_from : ISO 8601 date lower bound (e.g. '2026-01-01')
-              time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
-
-            All optional; a bare recall() lists recent non-sensitive rows."""
+            Args:
+                query: Free-text search; enables hybrid search mode.
+                category: note, reminder, fact, preference, error, or skill.
+                domain: Sub-type filter, e.g. 'journal', 'todo', 'work'.
+                context: Scope filter — 'work', 'personal', or 'global'.
+                entity: Linked entity, e.g. 'person:Linda'.
+                limit: Max results (default 20 browsing, adaptive searching,
+                    max 100).
+                offset: Skip the first N results, for pagination.
+                time_from: ISO 8601 lower bound, e.g. '2026-01-01'.
+                time_to: ISO 8601 upper bound, e.g. '2026-03-31'.
+            """
             _recall_t0 = time.perf_counter()
             unfiltered = not any(
                 [query, category, domain, context, entity, time_from, time_to]

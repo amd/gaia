@@ -69,7 +69,7 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
 ```python
 {
     "name": "get_weather",
-    "description": "Get current weather for a city.\n\nUse this tool when ...",  # whole docstring
+    "description": "Get current weather for a city.\n\nUse this tool when ...",  # docstring, minus Args:
     "parameters": {
         "city":  {"type": "string", "required": True,
                   "description": "City name, e.g. \"Austin\"."},
@@ -84,16 +84,37 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
 ```
 
 <Note>
-**What's actually captured:** The function name, the full docstring (as
-`description`), and a `{type, required, description}` entry per parameter. The
-type comes from the annotation (`str`, `int`, `float`, `bool`, `tuple`, `set`,
-`dict`, plus generics like `List[str]` and `Optional[...]`); an unannotated or
-unrecognised parameter falls back to `"unknown"`. The per-parameter
-`description` is parsed from the docstring's Google-style `Args:` block, so the
-model reads the constraint at the slot it is filling — write one line per
-argument. Parameter **default values** are still not stored; `required` is
-derived from whether a default exists.
+**What's actually captured:** The function name, the docstring **without its
+`Args:` block** (as `description`), and a `{type, required, description}` entry
+per parameter. The type comes from the annotation (`str`, `int`, `float`,
+`bool`, `tuple`, `set`, `dict`, plus generics like `List[str]` and
+`Optional[...]`); an unannotated or unrecognised parameter falls back to
+`"unknown"`. The per-parameter `description` is parsed from the docstring's
+Google-style `Args:` block, so the model reads the constraint at the slot it is
+filling — write one line per argument, and don't repeat it in the prose.
+Parameter **default values** are still not stored; `required` is derived from
+whether a default exists.
 </Note>
+
+### The description budget
+
+Every model call re-sends the schema of every offered tool, so this text is
+billed on each step of each turn. Two caps, defined in
+`src/gaia/agents/base/tools.py`:
+
+| Field | Budget |
+|-------|--------|
+| `description` (the docstring, minus `Args:`) | 400 characters |
+| Each parameter description (one `Args:` entry) | 160 characters |
+
+`python util/lint.py --tool-descriptions` fails the build when a tool exceeds
+either, naming the tool and its length; `python util/tool_schema_tokens.py`
+shows where the characters go.
+
+Keep what the model needs to call the tool correctly — what it does, when to
+use it instead of a neighbouring tool, what it refuses, what it returns.
+Rationale, history, and worked examples belong in a code comment, not the
+schema.
 
 ---
 
@@ -908,7 +929,8 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
 
         _TOOL_REGISTRY[f.__name__] = {
             "name": f.__name__,
-            "description": f.__doc__ or "",  # whole docstring
+            # Cleaned docstring, minus the Args: block (it ships per-parameter)
+            "description": _schema_description(f.__doc__),
             "parameters": params,
             "function": f,
             "atomic": atomic,
@@ -922,10 +944,12 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
 
 Notable implementation details:
 
-- The full docstring is stored once as `description`, **and** each argument's
-  line from the `Args:` block is stored on that argument's entry. Wrapped
-  continuation lines are joined into one string. An argument with no `Args:`
-  entry simply has no `description` key.
+- `description` is the docstring with its leading indentation and its `Args:`
+  block removed — each argument's line is stored on that argument's entry
+  instead, so the same text is not billed twice per call. Wrapped continuation
+  lines are joined into one string. An argument with no `Args:` entry simply
+  has no `description` key. Sections after `Args:` (`Returns:`, `Raises:`, …)
+  stay in `description`.
 - Default values are **not** stored on the parameter entries. `required` is a
   boolean derived from whether the parameter has a default.
 - Generic annotations are specialised: `list[str]` / `List[str]` → `array`,

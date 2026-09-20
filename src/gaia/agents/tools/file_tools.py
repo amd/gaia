@@ -138,9 +138,8 @@ class FileSearchToolsMixin:
             Args:
                 file_pattern: name, substring, glob ("*.go") or regex to match.
                 directory: WHERE to look. Pass it whenever the user names a
-                    folder ("in tui/internal", "under docs") — without it the
-                    search covers the whole workspace and common document
-                    folders, which is slower and can match the wrong file.
+                    folder ("under docs"); without it the search covers the
+                    whole workspace and can match the wrong file.
                 deep_search: search entire drives. Slow; only after a normal
                     search found nothing.
                 file_types: comma-separated extensions to restrict to, e.g.

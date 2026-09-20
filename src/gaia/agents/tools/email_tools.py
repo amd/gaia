@@ -140,13 +140,10 @@ class EmailToolsMixin:
         def list_inbox(limit: int = 25, unread_only: bool = False) -> str:
             """List recent email in the inbox, newest first.
 
-            The tool to start any mail question with: triaging the inbox,
-            finding which emails need a reply, seeing what arrived today, what
-            is unread, what is waiting on the user, or what is important.
-
-            Returns metadata and a short preview for each message — sender,
-            subject, received time, unread and flagged state — but not full
-            bodies. Use `read_email` when you need the body of one message.
+            Start any mail question here: triage, what needs a reply, what
+            arrived today, what is unread. Returns sender, subject, received
+            time, unread and flagged state, and a short preview — not full
+            bodies. Use read_email for one message's body.
 
             Args:
                 limit: How many messages to return (1-100, default 25)
@@ -167,13 +164,10 @@ class EmailToolsMixin:
         def search_email(query: str, limit: int = 25) -> str:
             """Find email matching a keyword, from anyone, in any mail folder.
 
-            Use to answer "did I get mail about X", to find a message from a
-            named sender, or to look for a receipt, invoice, or thread the user
-            half-remembers.
-
-            Searches every folder, not just the inbox. Results come back in
-            relevance order, NOT newest-first — do not describe them as "the
-            most recent" unless you check the received timestamps yourself.
+            Answers "did I get mail about X", finds a named sender, or a
+            receipt or thread the user half-remembers. Covers every folder,
+            not just the inbox. Results come back in relevance order, NOT
+            newest-first — check the timestamps before calling one "recent".
 
             Args:
                 query: Keywords to search for (e.g. 'invoice from Acme')

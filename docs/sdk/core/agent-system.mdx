@@ -857,8 +857,8 @@ def tool(func):
     sig = inspect.signature(func)
 
     # 2. Build a per-parameter map from type hints + the docstring's Args: block.
-    #    The whole docstring is stored once as `description`; each argument also
-    #    carries its own line so the model reads it at the slot it fills.
+    #    Each argument carries its own line so the model reads it at the slot it
+    #    fills; the Args: block is then dropped from `description` (see below).
     arg_descriptions = parse_arg_descriptions(func.__doc__)
     params = {}
     for name, param in sig.parameters.items():
@@ -872,7 +872,7 @@ def tool(func):
     # 3. Register in the global _TOOL_REGISTRY under the function name.
     _TOOL_REGISTRY[func.__name__] = {
         "name": func.__name__,
-        "description": func.__doc__ or "",  # whole docstring, not per-arg
+        "description": schema_description(func.__doc__),  # docstring, minus Args:
         "parameters": params,
         "function": func,
         "atomic": False,

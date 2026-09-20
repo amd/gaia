@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 _TOOL_REGISTRY: dict[str, dict] = {}
 _SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
 
+# Every model call re-sends the schema of every offered tool, so this text is
+# billed on each step of each turn. Enforced by `python util/lint.py
+# --tool-descriptions`; measure with `python util/tool_schema_tokens.py`.
+MAX_TOOL_DESCRIPTION_CHARS = 400
+MAX_TOOL_PARAM_DESCRIPTION_CHARS = 160
+
 
 # Annotation -> registry type name. Anything absent stays "unknown", which
 # downstream consumers read as "no declared type" rather than a contradiction.
@@ -142,6 +148,32 @@ def _parse_arg_descriptions(docstring: Optional[str]) -> Dict[str, str]:
     return descriptions
 
 
+def _schema_description(docstring: Optional[str]) -> str:
+    """Return the docstring text the tool schema ships, minus the ``Args:`` block.
+
+    Every ``Args:`` entry already rides in ``properties.<arg>.description``, so
+    leaving it here bills the same text twice on every model call. Leading
+    indentation goes too — the raw ``__doc__`` carries the source indent of
+    every continuation line.
+    """
+    if not docstring:
+        return ""
+
+    kept: list[str] = []
+    in_args = False
+    for line in inspect.cleandoc(docstring).splitlines():
+        if in_args:
+            if not _NEXT_SECTION_RE.match(line):
+                continue
+            in_args = False
+        elif _ARGS_HEADER_RE.match(line):
+            in_args = True
+            continue
+        kept.append(line)
+
+    return "\n".join(kept).strip()
+
+
 def tool(
     func: Callable | None = None,
     *,
@@ -202,7 +234,7 @@ def tool(
         # Register the tool with atomic metadata
         _TOOL_REGISTRY[tool_name] = {
             "name": tool_name,
-            "description": f.__doc__ or "",
+            "description": _schema_description(f.__doc__),
             "parameters": params,
             "function": f,
             "atomic": atomic,

@@ -641,6 +641,38 @@ def check_workflow_ancestor_skip() -> CheckResult:
     return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
 
 
+def check_tool_descriptions() -> CheckResult:
+    """Hold every flagship tool description to the per-call token budget."""
+    print("\nChecking tool description budget...")
+    print("-" * 40)
+
+    try:
+        from check_tool_descriptions import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_tool_descriptions import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_tool_descriptions.py: {exc}")
+            return CheckResult("Tool Descriptions", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Tool Descriptions",
+            False,
+            False,
+            1,
+            "See output above; trim the docstring to the budget in "
+            "src/gaia/agents/base/tools.py.",
+        )
+
+    return CheckResult("Tool Descriptions", True, False, 0, "")
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
     print("\n[12/12] Checking documentation version consistency...")
@@ -832,6 +864,11 @@ def main():
         help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
     )
     parser.add_argument(
+        "--tool-descriptions",
+        action="store_true",
+        help="Check flagship tool descriptions against the per-call token budget",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -857,6 +894,7 @@ def main():
             args.dependabot,
             args.workflow_triggers,
             args.workflow_ancestor_skip,
+            args.tool_descriptions,
             args.doc_versions,
             args.all,
         ]
@@ -917,6 +955,9 @@ def main():
 
     if args.workflow_ancestor_skip or run_all:
         results.append(check_workflow_ancestor_skip())
+
+    if args.tool_descriptions or run_all:
+        results.append(check_tool_descriptions())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
