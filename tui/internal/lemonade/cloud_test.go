@@ -38,7 +38,7 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 			}
 			fmt.Fprint(w, `{}`)
 		case "/models":
-			fmt.Fprint(w, `{"data":[{"id":"fireworks.gemma-4-31b-it","recipe":"cloud","downloaded":false},{"id":"local","downloaded":true},{"id":"fireworks.embed","recipe":"cloud","labels":["embeddings"]}]}`)
+			fmt.Fprint(w, `{"data":[{"id":"fireworks.chat","recipe":"cloud","downloaded":false},{"id":"local","downloaded":true},{"id":"fireworks.embed","recipe":"cloud","labels":["embeddings"]}]}`)
 		}
 	}))
 	defer s.Close()
@@ -48,11 +48,27 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	models, err := c.Models(context.Background(), "fireworks")
-	if err != nil || len(models) != 1 || models[0].ID != FireworksModel {
+	if err != nil || len(models) != 1 || models[0].ID != "fireworks.chat" {
 		t.Fatalf("models=%v err=%v", models, err)
 	}
 	if strings.Join(calls, ",") != "/install,/cloud/auth,/models" {
 		t.Fatal(calls)
+	}
+}
+func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
+	if len(RecommendedModels) < 2 || TopRecommendation() != RecommendedModels[0] {
+		t.Fatal("top recommendation must be the first ranked entry")
+	}
+	seen := map[string]bool{}
+	for i, r := range RecommendedModels {
+		rank, note, ok := Rank(r.ID)
+		if !ok || rank != i+1 || note != r.Note || note == "" || !strings.HasPrefix(r.ID, "fireworks.") || seen[r.ID] {
+			t.Fatalf("entry %d %+v: rank=%d note=%q ok=%v", i, r, rank, note, ok)
+		}
+		seen[r.ID] = true
+	}
+	if rank, note, ok := Rank("fireworks.unknown"); ok || rank != 0 || note != "" {
+		t.Fatalf("unknown id resolved: rank=%d note=%q ok=%v", rank, note, ok)
 	}
 }
 func TestErrorsNeverReflectProviderBodyOrFollowRedirects(t *testing.T) {

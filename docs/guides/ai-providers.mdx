@@ -15,13 +15,19 @@ on your Lemonade server.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
    conversation or the agent.
-3. Pick a discovered model. **Gemma 4 31B IT**
-   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it.
+3. Pick a discovered model. The models that scored best on GAIA's agent
+   benchmark appear first, ranked and labelled with why, whenever your account
+   exposes them:
+   - `fireworks.glm-5p3-flash` — best overall, cheapest
+   - `fireworks.deepseek-v4p1-flash` — fastest
+   - `fireworks.deepseek-v4-pro-0813` — most truthful
+
+   The ranking is a snapshot (September 2026) and is refreshed as models change.
    Type to filter the list; use **↑/↓** and **Enter** to select.
 
 The model list comes from Lemonade's provider discovery. A listed model may still
 require deployment or additional account access to serve requests. GAIA does not create a paid
-Fireworks deployment or silently substitute another model when Gemma is absent.
+Fireworks deployment or silently substitute another model when a recommended one is absent.
 Fireworks chat sends conversation history to Fireworks and may incur usage charges.
 
 For **AMD LLM Gateway**, enter your organization's OpenAI-compatible HTTPS base
@@ -81,5 +87,5 @@ contents are omitted from control diagnostics.
 
 See [Lemonade cloud offload](https://lemonade-server.ai/docs/guide/configuration/cloud/)
 for server administration and
-[Gemma 4 31B IT on Fireworks](https://fireworks.ai/models/fireworks/gemma-4-31b-it)
+the [Fireworks model catalog](https://fireworks.ai/models)
 for model availability and deployment requirements.

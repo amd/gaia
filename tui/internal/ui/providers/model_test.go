@@ -4,6 +4,7 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,18 +39,80 @@ func TestProviderScreenOffersAllDestinations(t *testing.T) {
 		}
 	}
 }
-func TestSuggestedGemmaIsFirstAndSelectionIsExplicit(t *testing.T) {
+func ids(models []lemonade.Model) string {
+	var out []string
+	for _, m := range models {
+		out = append(out, m.ID)
+	}
+	return strings.Join(out, ",")
+}
+func TestRecommendedModelsLeadInRankOrderAndSelectionIsExplicit(t *testing.T) {
+	rec := lemonade.RecommendedModels
 	m := New("", 100, 30)
 	m.selected = 1
 	m = m.setup()
-	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.z"}, {ID: lemonade.FireworksModel}}})
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.aaa"}, {ID: rec[2].ID}, {ID: "fireworks.zzz"}, {ID: rec[0].ID}, {ID: rec[1].ID}}})
 	m = next.(Model)
-	if m.ctx.Err() != nil || m.models[0].ID != lemonade.FireworksModel || m.stage != "models" {
-		t.Fatal("model silently selected or suggestion missing")
+	want := strings.Join([]string{rec[0].ID, rec[1].ID, rec[2].ID, "fireworks.aaa", "fireworks.zzz"}, ",")
+	if m.ctx.Err() != nil || m.stage != "models" || ids(m.models) != want {
+		t.Fatalf("model silently selected or order wrong: %s", ids(m.models))
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd().(SelectedMsg).ID != lemonade.FireworksModel {
+	if cmd().(SelectedMsg).ID != lemonade.TopRecommendation().ID {
 		t.Fatal("wrong selection")
+	}
+}
+func TestMissingRecommendedModelIsNeverInjected(t *testing.T) {
+	rec := lemonade.RecommendedModels
+	m := New("", 100, 30)
+	m.selected = 1
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.b"}, {ID: rec[2].ID}, {ID: "fireworks.a"}}})
+	m = next.(Model)
+	if ids(m.models) != strings.Join([]string{rec[2].ID, "fireworks.a", "fireworks.b"}, ",") {
+		t.Fatalf("absent recommendation broke ordering: %s", ids(m.models))
+	}
+	if strings.Contains(m.View(), strings.TrimPrefix(rec[0].ID, "fireworks.")) {
+		t.Fatal("top recommendation shown although the provider does not serve it")
+	}
+}
+func TestRecommendedRowsShowRankAndNoteOnOneLine(t *testing.T) {
+	rec := lemonade.RecommendedModels
+	for _, width := range []int{100, 48} {
+		m := New("", width, 30)
+		m.selected = 1
+		next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.plain-model"}, {ID: rec[1].ID}, {ID: rec[0].ID}}})
+		m = next.(Model)
+		view := ansi.Strip(m.View())
+		for i, r := range rec[:2] {
+			row := fmt.Sprintf("%s · #%d %s", strings.TrimPrefix(r.ID, "fireworks."), i+1, r.Note)
+			if width == 100 && !strings.Contains(view, row) {
+				t.Fatalf("missing %q in %s", row, view)
+			}
+			if strings.Count(view, fmt.Sprintf("#%d ", i+1)) != 1 {
+				t.Fatalf("rank %d rendered on %d lines at width %d: %s", i+1, strings.Count(view, fmt.Sprintf("#%d ", i+1)), width, view)
+			}
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "plain-model") && strings.Contains(line, "#") {
+				t.Fatalf("plain row carries a rank: %q", line)
+			}
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("row overflows width %d: %q", width, line)
+			}
+		}
+	}
+}
+func TestSetupScreenNamesTopRecommendation(t *testing.T) {
+	top := lemonade.TopRecommendation()
+	m := New("", 100, 30)
+	m.selected = 1
+	m = m.setup()
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Recommended model: "+strings.TrimPrefix(top.ID, "fireworks.")+" · "+top.Note) {
+		t.Fatalf("setup screen does not name %s: %s", top.ID, view)
+	}
+	if strings.Contains(view, "Gemma 4 31B") {
+		t.Fatal("setup screen still names a model the provider no longer serves")
 	}
 }
 func TestEmptyCatalogStaysInSetup(t *testing.T) {
@@ -86,7 +149,7 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 		m.selected = 1
 		m = m.setup()
 		m.stage = "models"
-		m.models = []lemonade.Model{{ID: lemonade.FireworksModel}}
+		m.models = []lemonade.Model{{ID: "fireworks.any"}}
 		result := modelsMsg{}
 		if failure {
 			result.err = errors.New("connection failed")
@@ -106,7 +169,7 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 func TestModelSearchAndMetadata(t *testing.T) {
 	m := New("", 80, 24)
 	m.selected = 1
-	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: lemonade.FireworksModel, ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, {ID: "fireworks.qwen"}}})
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.gemma", ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, {ID: "fireworks.qwen"}}})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gemma")})
 	m = next.(Model)
@@ -137,7 +200,7 @@ func TestConnectingCanBeCancelledWithoutWaiting(t *testing.T) {
 func TestOldPanelResultsCannotAffectNewPanel(t *testing.T) {
 	old := New("", 80, 24)
 	m := New("", 80, 24)
-	next, _ := m.Update(modelsMsg{source: old.client, models: []lemonade.Model{{ID: lemonade.FireworksModel}}})
+	next, _ := m.Update(modelsMsg{source: old.client, models: []lemonade.Model{{ID: "fireworks.any"}}})
 	m = next.(Model)
 	if m.stage != "providers" {
 		t.Fatal("late result reopened an old model selection")

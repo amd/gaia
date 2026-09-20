@@ -18,7 +18,31 @@ import (
 )
 
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
-const FireworksModel = "fireworks.gemma-4-31b-it"
+
+// Recommendation is a Fireworks model worth steering users to, with the reason.
+type Recommendation struct {
+	ID   string
+	Note string
+}
+
+// RecommendedModels is ranked by the agent task benchmark (September 2026); refresh it as models change.
+var RecommendedModels = []Recommendation{
+	{ID: "fireworks.glm-5p3-flash", Note: "best overall, cheapest"},
+	{ID: "fireworks.deepseek-v4p1-flash", Note: "fastest"},
+	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
+}
+
+func TopRecommendation() Recommendation { return RecommendedModels[0] }
+
+// Rank returns a model's 1-based rank and note, or ok=false when it is not recommended.
+func Rank(id string) (rank int, note string, ok bool) {
+	for i, r := range RecommendedModels {
+		if r.ID == id {
+			return i + 1, r.Note, true
+		}
+	}
+	return 0, "", false
+}
 
 type Provider struct {
 	Name       string `json:"name"`
