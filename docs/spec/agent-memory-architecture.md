@@ -651,18 +651,30 @@ Active queries (`search_hybrid`, `get_by_category`, system prompt injection) fil
 
 LLM extraction is a hard requirement when Lemonade is available. If extraction fails:
 - **Lemonade unreachable**: `init_memory()` already failed at startup — this state cannot occur at runtime
-- **LLM returns invalid JSON**: Log error with full response, skip extraction for this turn (no silent degradation to an inferior method)
-- **LLM timeout (3s)**: Log warning, skip extraction for this turn
+- **LLM returns invalid JSON**: Log error with the response length and opening characters, skip extraction for this turn (no silent degradation to an inferior method)
+- **LLM timeout (`EXTRACTION_TIMEOUT_S`, 60s)**: Log warning, abandon the call, skip extraction for this turn. The abandoned worker is a daemon thread — nothing joins it, so a hung backend cannot hold the queue or the process
 - **Individual operation fails** (e.g., `knowledge_id` not found for update): Log error, continue with remaining operations
 
 No regex heuristic fallback. If extraction fails, it fails visibly. The LLM still has explicit `remember()` / `update_memory()` / `forget()` tools for anything the auto-extraction misses.
+
+### Where extraction runs
+
+Extraction runs on a background thread, one job at a time per agent, so `process_query()` returns the moment the answer is ready. Each job carries the turn's user text, assistant response and context, frozen at turn end. Up to `EXTRACTION_QUEUE_MAX` (4) turns may wait behind a running job; when full the oldest is dropped with a log line.
+
+`EXTRACTION_MAX_TOKENS` (4096) is the output budget. It is generous because a reasoning model bills its hidden chain-of-thought against the same budget as the JSON, and a budget that only fits the JSON gets spent on thinking — the call then returns prose or nothing.
+
+Anything that exits right after a turn must call `wait_for_memory_extraction(timeout)` (or the module-level `drain_memory_extraction(agent)`) first, or the turn's facts die with the process. In-tree callers: the one-shot `gaia chat -q` path, the flagship sidecar's `close_agent()`, and the eval harnesses.
 
 ### New MemoryMixin Methods
 
 ```python
 _extract_via_llm(user_input: str, assistant_response: str,
                  existing_items: List[Dict]) -> List[Dict]
-    """Mem0-style extraction: ADD/UPDATE/DELETE/NOOP against existing memory. Timeout: 3s."""
+    """Mem0-style extraction: ADD/UPDATE/DELETE/NOOP against existing memory.
+    Abandoned after EXTRACTION_TIMEOUT_S."""
+
+wait_for_memory_extraction(timeout: float = 15.0) -> bool
+    """Block until background extraction is idle. False = still running."""
 
 _get_embedder() -> Any          # Lazy init, cached LemonadeProvider
 _embed_text(text: str) -> np.ndarray  # Single text -> vector (required, not optional)
@@ -974,16 +986,19 @@ def _execute_tool(self, tool_name: str, tool_args: dict) -> Any:
 def _after_process_query(self, user_input: str, assistant_response: str) -> None:
     """Called after process_query() completes.
 
-    1. Store both turns in conversations table (tagged with active context)
-    2. Mem0-style LLM extraction (for turns >= 20 words):
+    1. Store both turns in conversations table (tagged with active context) —
+       synchronously; it is a local write and the turn's own record
+    2. Queue Mem0-style LLM extraction (for turns >= MIN_EXTRACTION_WORDS) and
+       return. On the background thread, one job at a time:
        - Fetch top-10 relevant existing items via search_hybrid()
        - Call _extract_via_llm() with conversation + existing memory
        - LLM returns operations: ADD, UPDATE, DELETE, or NOOP
        - Execute operations (store new, supersede old, delete contradicted)
        - Embed all new/updated items
 
-    No fallback. If extraction fails, it fails visibly (logged error).
-    The LLM still has explicit memory tools for anything auto-extraction misses.
+    No fallback. If extraction fails, it fails visibly (logged error) and the
+    answer is untouched. The LLM still has explicit memory tools for anything
+    auto-extraction misses.
     """
 ```
 
@@ -2100,10 +2115,13 @@ class MemoryMixin:
     def _execute_tool(self, tool_name, tool_args) -> Any
     def _after_process_query(self, user_input, response) -> None
 
-    # LLM extraction
+    # LLM extraction (runs on a background thread, one job at a time)
     def _extract_via_llm(self, user_input: str, assistant_response: str,
                          existing_items: List[Dict]) -> List[Dict]
-        """Mem0-style extraction: ADD/UPDATE/DELETE/NOOP against existing memory. Timeout: 3s."""
+        """Mem0-style extraction: ADD/UPDATE/DELETE/NOOP against existing memory.
+        Abandoned after EXTRACTION_TIMEOUT_S."""
+    def wait_for_memory_extraction(self, timeout: float = 15.0) -> bool
+        """Block until background extraction is idle. False = still running."""
 
     # Hybrid search (required -- raises RuntimeError if Lemonade unavailable)
     def _get_embedder(self) -> Any

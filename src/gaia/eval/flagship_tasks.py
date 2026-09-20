@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia.agents.base.memory import drain_memory_extraction
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -320,6 +321,10 @@ def _run_agent(
         error = f"{type(exc).__name__}: {exc}"
         kind = "unavailable" if isinstance(exc, ConnectionError) else "failed"
     finally:
+        # The next task builds its own agent against the same backend; let this
+        # one's background extraction finish rather than race it.
+        if agent is not None:
+            drain_memory_extraction(agent)
         os.chdir(previous_cwd)
         if previous_db is None:
             os.environ.pop("GAIA_MEMORY_DB", None)

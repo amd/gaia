@@ -1059,6 +1059,11 @@ def main():
                 print(f"  Steps: {result['steps_taken']}")
                 print(f"  Tokens: {result.get('total_tokens', 0):,}")
 
+            # Extraction runs after the answer; this process is about to exit.
+            from gaia.agents.base.memory import drain_memory_extraction
+
+            drain_memory_extraction(agent)
+
             return 0 if result["status"] == "success" else 1
 
         # Interactive mode

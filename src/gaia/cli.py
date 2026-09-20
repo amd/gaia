@@ -739,6 +739,12 @@ async def async_main(action, **kwargs):
                 if kwargs.get("show_stats", False) and result.get("duration"):
                     agent.console.display_stats(result)
 
+                # Extraction runs after the answer; this process is about to
+                # exit, so give it its chance before taking the DB with us.
+                from gaia.agents.base.memory import drain_memory_extraction
+
+                drain_memory_extraction(agent)
+
                 return 0 if result["status"] == "success" else 1
 
             _offer_first_boot_onboarding()

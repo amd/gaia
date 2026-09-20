@@ -33,17 +33,19 @@ Usage:
 Spec: docs/spec/agent-memory-architecture.md
 """
 
-import concurrent.futures
 import ctypes
 import json
 import logging
 import os
 import re
 import sys
+import threading
 import time
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Deque, Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -192,9 +194,22 @@ RECONCILE_SIMILARITY_THRESHOLD = 0.85
 #  "Remember: use port 443") are captured by the extraction pipeline.
 MIN_EXTRACTION_WORDS = 5
 
-#: LLM extraction timeout in seconds.  Raised from 3 → 8 to reduce silent failures
-#  on machines under load or when the embedding model is also busy.
-EXTRACTION_TIMEOUT_S = 8
+#: How long one extraction call may run before it is abandoned. Extraction runs
+#: on a background thread and nobody's turn waits on it, so this is sized for a
+#: reasoning model finishing its JSON — not for a user watching a spinner.
+EXTRACTION_TIMEOUT_S = 60
+
+#: Output budget for the extraction call. A reasoning model bills its hidden
+#: chain-of-thought against the same budget as the answer, so a JSON-sized one
+#: returns prose, or nothing at all.
+EXTRACTION_MAX_TOKENS = 4096
+
+#: Turns that may wait behind a running extraction. Oldest is dropped when full —
+#: newer turns carry the facts a follow-up is most likely to ask about.
+EXTRACTION_QUEUE_MAX = 4
+
+#: How long a one-shot caller (CLI, batch) waits for extraction before exiting.
+EXTRACTION_EXIT_WAIT_S = 15.0
 
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
@@ -211,6 +226,21 @@ CONSOLIDATION_BUDGET_SECONDS = 10.0
 
 # CONSOLIDATION_MIN_TURNS is imported from memory_store: prune() needs the same
 # threshold to know which old turns are still queued for distillation.
+
+
+@dataclass(frozen=True)
+class _ExtractionJob:
+    """One turn's extraction input, frozen at turn end.
+
+    The background worker runs long after the turn returned, by which time the
+    agent's context and last-input state belong to a later turn — so everything
+    it needs is copied here instead of read back off the instance.
+    """
+
+    user_input: str
+    assistant_response: str
+    context: str
+    queued_at: float
 
 
 # ============================================================================
@@ -283,6 +313,32 @@ _MEMORY_TOOLS = frozenset(
 # _CROSS_ENCODER_UNAVAILABLE is a sentinel: once set, we stop retrying.
 _cross_encoder_model = None
 _CROSS_ENCODER_UNAVAILABLE = False
+
+#: Guards the one-time creation of each instance's extraction bookkeeping.
+_EXTRACTION_STATE_LOCK = threading.Lock()
+
+
+def drain_memory_extraction(
+    agent: Any, timeout: float = EXTRACTION_EXIT_WAIT_S
+) -> bool:
+    """Let a departing agent's background extraction finish, within *timeout*.
+
+    For callers that exit right after a turn — one-shot CLI, batch runs, a
+    sidecar closing a per-request agent. Returns True when there was nothing
+    left to wait for (including agents without memory); False when work was
+    still running and is now being dropped, which it says out loud.
+    """
+    wait = getattr(agent, "wait_for_memory_extraction", None)
+    if not callable(wait):
+        return True
+    if wait(timeout):
+        return True
+    logger.warning(
+        "[MemoryMixin] memory extraction was still running after %.0fs and is "
+        "being dropped — this turn's facts were not stored",
+        timeout,
+    )
+    return False
 
 
 #: Opt back in where faiss and torch share one OpenMP runtime and coexist fine
@@ -1127,11 +1183,32 @@ class MemoryMixin(ProceduralMemoryMixin):
     # FAISS Index Lifecycle
     # ==================================================================
 
+    def _get_faiss_lock(self):
+        """Serialize knowledge-index mutation against search.
+
+        Background extraction adds and removes vectors while a turn may be
+        searching; a FAISS index rebuilt mid-search hands back stale positions.
+        Reentrant because ``_faiss_remove`` falls back to a full rebuild.
+        """
+        lock = getattr(self, "_faiss_lock", None)
+        if lock is None:
+            with _EXTRACTION_STATE_LOCK:
+                lock = getattr(self, "_faiss_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._faiss_lock = lock
+        return lock
+
     def _rebuild_faiss_index(self) -> None:
         """Build FAISS IndexFlatIP from stored embedding BLOBs.
 
         IndexFlatIP on L2-normalized vectors = cosine similarity.
         """
+        with self._get_faiss_lock():
+            self._rebuild_faiss_index_locked()
+
+    def _rebuild_faiss_index_locked(self) -> None:
+        """Body of ``_rebuild_faiss_index``. Must hold the FAISS lock."""
         try:
             import faiss
         except ImportError:
@@ -1181,19 +1258,20 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Skips if the knowledge_id already exists (dedup safe).
         """
-        if self._faiss_index is None:
-            return
-        try:
-            # Avoid duplicate entries (e.g., when store() deduped to existing ID)
-            if knowledge_id in self._faiss_id_map:
+        with self._get_faiss_lock():
+            if self._faiss_index is None:
                 return
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
-            self._faiss_index.add(vec.reshape(1, -1))
-            self._faiss_id_map.append(knowledge_id)
-        except Exception as e:
-            logger.debug("[MemoryMixin] FAISS add failed: %s", e)
+            try:
+                # Avoid duplicate entries (e.g., when store() deduped to existing ID)
+                if knowledge_id in self._faiss_id_map:
+                    return
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    vec = vec / norm
+                self._faiss_index.add(vec.reshape(1, -1))
+                self._faiss_id_map.append(knowledge_id)
+            except Exception as e:
+                logger.debug("[MemoryMixin] FAISS add failed: %s", e)
 
     def _faiss_remove(self, knowledge_id: str) -> None:
         """Remove a vector from FAISS index by knowledge_id.
@@ -1202,35 +1280,36 @@ class MemoryMixin(ProceduralMemoryMixin):
         the index without the removed item. For small indexes (<10k) this
         is fast enough (<100ms).
         """
-        if self._faiss_index is None or knowledge_id not in self._faiss_id_map:
-            return
-        try:
-            idx = self._faiss_id_map.index(knowledge_id)
-
-            import faiss
-
-            # Reconstruct all vectors except the removed one
-            n = self._faiss_index.ntotal
-            if n <= 1:
-                self._faiss_index = faiss.IndexFlatIP(self._embedding_dim)
-                self._faiss_id_map = []
+        with self._get_faiss_lock():
+            if self._faiss_index is None or knowledge_id not in self._faiss_id_map:
                 return
+            try:
+                idx = self._faiss_id_map.index(knowledge_id)
 
-            all_vecs = np.zeros((n, self._embedding_dim), dtype=np.float32)
-            for i in range(n):
-                all_vecs[i] = self._faiss_index.reconstruct(i)
+                import faiss
 
-            # Remove the target vector
-            keep_vecs = np.delete(all_vecs, idx, axis=0)
-            keep_ids = self._faiss_id_map[:idx] + self._faiss_id_map[idx + 1 :]
+                # Reconstruct all vectors except the removed one
+                n = self._faiss_index.ntotal
+                if n <= 1:
+                    self._faiss_index = faiss.IndexFlatIP(self._embedding_dim)
+                    self._faiss_id_map = []
+                    return
 
-            new_index = faiss.IndexFlatIP(self._embedding_dim)
-            new_index.add(keep_vecs)
-            self._faiss_index = new_index
-            self._faiss_id_map = keep_ids
-        except Exception as e:
-            logger.debug("[MemoryMixin] FAISS remove failed, rebuilding: %s", e)
-            self._rebuild_faiss_index()
+                all_vecs = np.zeros((n, self._embedding_dim), dtype=np.float32)
+                for i in range(n):
+                    all_vecs[i] = self._faiss_index.reconstruct(i)
+
+                # Remove the target vector
+                keep_vecs = np.delete(all_vecs, idx, axis=0)
+                keep_ids = self._faiss_id_map[:idx] + self._faiss_id_map[idx + 1 :]
+
+                new_index = faiss.IndexFlatIP(self._embedding_dim)
+                new_index.add(keep_vecs)
+                self._faiss_index = new_index
+                self._faiss_id_map = keep_ids
+            except Exception as e:
+                logger.debug("[MemoryMixin] FAISS remove failed, rebuilding: %s", e)
+                self._rebuild_faiss_index_locked()
 
     def _faiss_search(self, query_vec: np.ndarray, top_k: int) -> List[tuple]:
         """Search FAISS index for top_k nearest neighbors.
@@ -1246,21 +1325,22 @@ class MemoryMixin(ProceduralMemoryMixin):
             RuntimeError: on a dimension mismatch with the index, or when a
                 second OpenMP runtime makes the native search fatal.
         """
-        if self._faiss_index is None or self._faiss_index.ntotal == 0:
-            return []
+        with self._get_faiss_lock():
+            if self._faiss_index is None or self._faiss_index.ntotal == 0:
+                return []
 
-        query = _validated_faiss_query(query_vec, self._faiss_index, "knowledge")
-        k = min(top_k, self._faiss_index.ntotal)
-        if k < 1:
-            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
-        assert_faiss_omp_safe("Knowledge memory search")
+            query = _validated_faiss_query(query_vec, self._faiss_index, "knowledge")
+            k = min(top_k, self._faiss_index.ntotal)
+            if k < 1:
+                raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+            assert_faiss_omp_safe("Knowledge memory search")
 
-        scores, indices = self._faiss_index.search(query, k)
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx >= 0 and idx < len(self._faiss_id_map):
-                results.append((self._faiss_id_map[idx], float(score)))
-        return results
+            scores, indices = self._faiss_index.search(query, k)
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx >= 0 and idx < len(self._faiss_id_map):
+                    results.append((self._faiss_id_map[idx], float(score)))
+            return results
 
     # ==================================================================
     # Complexity-Aware Recall Depth
@@ -1480,7 +1560,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         """Mem0-style extraction: conversation + existing memory → operations.
 
         Single LLM call returns JSON array of operations: ADD/UPDATE/DELETE/NOOP.
-        Timeout: 3s.
+        A call that outlives ``EXTRACTION_TIMEOUT_S`` is abandoned — the worker
+        thread is left to finish on its own and its answer is discarded.
 
         Args:
             user_input: The user's message.
@@ -1518,26 +1599,39 @@ class MemoryMixin(ProceduralMemoryMixin):
                 logger.warning("[MemoryMixin] no chat SDK available for extraction")
                 return []
 
-            # Enforce extraction timeout (spec: 3s)
+            outcome: Dict[str, Any] = {}
+            returned = threading.Event()
+
             def _call_llm():
-                return self.chat.send_messages(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt="You are a memory extraction engine. Return valid JSON only.",
-                    temperature=0.1,
-                    max_tokens=1024,
-                )
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_call_llm)
                 try:
-                    response = future.result(timeout=EXTRACTION_TIMEOUT_S)
-                except concurrent.futures.TimeoutError:
-                    logger.warning(
-                        "[MemoryMixin] extraction LLM call timed out (%ds)",
-                        EXTRACTION_TIMEOUT_S,
+                    outcome["response"] = self.chat.send_messages(
+                        messages=[{"role": "user", "content": prompt}],
+                        system_prompt="You are a memory extraction engine. Return valid JSON only.",
+                        temperature=0.1,
+                        max_tokens=EXTRACTION_MAX_TOKENS,
                     )
-                    return []
+                except BaseException as exc:  # re-raised on the caller's thread
+                    outcome["error"] = exc
+                finally:
+                    returned.set()
 
+            # A daemon thread, not an executor: ThreadPoolExecutor joins its
+            # workers at interpreter exit, which would un-abandon the call.
+            threading.Thread(
+                target=_call_llm, name="gaia-memory-extract-llm", daemon=True
+            ).start()
+
+            if not returned.wait(EXTRACTION_TIMEOUT_S):
+                logger.warning(
+                    "[MemoryMixin] extraction abandoned after %ss — the model "
+                    "call is still running and its answer will be discarded",
+                    EXTRACTION_TIMEOUT_S,
+                )
+                return []
+            if "error" in outcome:
+                raise outcome["error"]
+
+            response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
 
             # Strip thinking tags if present (Qwen3.5 models)
@@ -1594,7 +1688,16 @@ class MemoryMixin(ProceduralMemoryMixin):
             return valid_ops
 
         except json.JSONDecodeError as e:
-            logger.warning("[MemoryMixin] extraction returned invalid JSON: %s", e)
+            # The Lemonade provider hands back ``reasoning_content`` when the
+            # model emitted no answer, so prose here means the budget went on
+            # thinking — a different fix from a model that emits bad JSON.
+            logger.warning(
+                "[MemoryMixin] extraction returned invalid JSON (%s); %d chars "
+                "starting %r",
+                e,
+                len(raw_text),
+                raw_text[:160],
+            )
             return []
         except Exception as e:
             logger.warning("[MemoryMixin] LLM extraction failed: %s", e)
@@ -1604,14 +1707,27 @@ class MemoryMixin(ProceduralMemoryMixin):
         self,
         operations: List[Dict],
         existing_items: List[Dict],
-    ) -> None:
+        context: Optional[str] = None,
+    ) -> int:
         """Execute the operations returned by _extract_via_llm().
 
         ADD → store() + embed
         UPDATE → store new + supersede old
         DELETE → delete()
+
+        Args:
+            operations: Validated ops from ``_extract_via_llm``.
+            existing_items: The items the extractor was shown.
+            context: Scope the new rows belong to. Defaults to the agent's
+                active context; the background worker passes the turn's own so
+                a context switch mid-extraction cannot misfile the result.
+
+        Returns:
+            How many operations were applied.
         """
         store = self._memory_store
+        target_context = context if context is not None else self._memory_context
+        applied = 0
 
         for op in operations:
             try:
@@ -1638,8 +1754,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         entity=op.get("entity"),
                         domain=op.get("domain"),
                         source="llm_extract",
-                        context=self._memory_context,
+                        context=target_context,
                     )
+                    applied += 1
                     # Embed the new item
                     try:
                         vec = self._embed_text(op["content"])
@@ -1670,8 +1787,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         entity=op.get("entity"),
                         domain=op.get("domain"),
                         source="llm_extract",
-                        context=self._memory_context,
+                        context=target_context,
                     )
+                    applied += 1
                     # Only supersede when store() actually created a new row.
                     # Dedup can collapse near-identical content back into old_id,
                     # which would point superseded_by at the row itself and hide
@@ -1694,6 +1812,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     kid = op["knowledge_id"]
                     store.delete(kid)
                     self._faiss_remove(kid)
+                    applied += 1
 
             except Exception as e:
                 logger.warning(
@@ -1701,6 +1820,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     op.get("op"),
                     e,
                 )
+
+        return applied
 
     # ==================================================================
     # Deferred Post-Init (requires self.chat / AgentSDK)
@@ -2708,9 +2829,15 @@ class MemoryMixin(ProceduralMemoryMixin):
     # ------------------------------------------------------------------
 
     def _after_process_query(self, user_input: str, assistant_response: str) -> None:
-        """Store conversation turns and run Mem0-style LLM extraction.
+        """Store conversation turns, then hand extraction to the background.
 
-        Called after process_query() completes (via hook in agent.py).
+        Called after process_query() completes (via hook in agent.py). The
+        transcript is written here, synchronously, because it is a local SQLite
+        write and the turn's own record. The extraction model call is not: it
+        costs seconds the user would spend staring at a finished answer, so it
+        is queued and the turn returns. Use ``wait_for_memory_extraction`` where
+        the result has to be on disk before you move on.
+
         Uses _original_user_input so dynamic context prefix is never persisted.
         """
         if getattr(self, "_memory_store", None) is None:
@@ -2720,11 +2847,11 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Use original (pre-augmentation) user text for storage.
         clean_input = self._original_user_input or user_input
+        ctx = self._memory_context
 
         # 1. Store conversation turns
         try:
             session_id = self.memory_session_id
-            ctx = self._memory_context
             self._memory_store.store_turn(session_id, "user", clean_input, context=ctx)
             self._memory_store.store_turn(
                 session_id, "assistant", assistant_response, context=ctx
@@ -2732,33 +2859,150 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)
 
-        # 2. Mem0-style LLM extraction (for turns >= 20 words)
-        if (
-            self._auto_extract_enabled
-            and len(clean_input.split()) >= MIN_EXTRACTION_WORDS
-        ):
-            try:
-                # Fetch relevant existing memory for context
-                existing = self._hybrid_search(
-                    clean_input,
-                    context=self._memory_context,
-                    top_k=10,
-                )
+        # 2. Mem0-style LLM extraction — off the answer path.
+        if not self._auto_extract_enabled:
+            logger.info("[MemoryMixin] extraction skipped: auto-extraction is off")
+            return
+        if len(clean_input.split()) < MIN_EXTRACTION_WORDS:
+            logger.info(
+                "[MemoryMixin] extraction skipped: turn is %d words, under the "
+                "%d-word floor",
+                len(clean_input.split()),
+                MIN_EXTRACTION_WORDS,
+            )
+            return
 
-                # LLM decides operations against existing memory
-                operations = self._extract_via_llm(
-                    clean_input, assistant_response, existing
-                )
+        self._schedule_memory_extraction(
+            _ExtractionJob(
+                user_input=clean_input,
+                assistant_response=assistant_response,
+                context=ctx,
+                queued_at=time.monotonic(),
+            )
+        )
 
-                # Execute operations
-                if operations:
-                    self._execute_extraction_operations(operations, existing)
-                    logger.debug(
-                        "[MemoryMixin] executed %d extraction operations",
-                        len(operations),
-                    )
-            except Exception as e:
-                logger.warning("[MemoryMixin] LLM extraction failed: %s", e)
+    # ------------------------------------------------------------------
+    # Background extraction
+    # ------------------------------------------------------------------
+
+    def _ensure_extraction_state(self) -> None:
+        """Create the background-extraction bookkeeping once per instance.
+
+        Lazy because ``Agent.__init__`` never calls ``super().__init__()``, so a
+        mixin cannot rely on an initializer running.
+        """
+        if getattr(self, "_extraction_idle", None) is not None:
+            return
+        with _EXTRACTION_STATE_LOCK:
+            if getattr(self, "_extraction_idle", None) is not None:
+                return
+            self._extraction_lock = threading.Lock()
+            self._extraction_thread: Optional[threading.Thread] = None
+            self._extraction_queue: Deque[_ExtractionJob] = deque()
+            idle = threading.Event()
+            idle.set()
+            self._extraction_idle = idle
+
+    def _schedule_memory_extraction(self, job: _ExtractionJob) -> None:
+        """Queue *job* for the single background extraction thread."""
+        self._ensure_extraction_state()
+        with self._extraction_lock:
+            if len(self._extraction_queue) >= EXTRACTION_QUEUE_MAX:
+                dropped = self._extraction_queue.popleft()
+                logger.info(
+                    "[MemoryMixin] extraction skipped: queue is full (%d), "
+                    "dropped the turn queued %.1fs ago",
+                    EXTRACTION_QUEUE_MAX,
+                    time.monotonic() - dropped.queued_at,
+                )
+            self._extraction_queue.append(job)
+            if self._extraction_thread is not None:
+                return
+            self._extraction_idle.clear()
+            self._extraction_thread = threading.Thread(
+                target=self._drain_extraction_queue,
+                name="gaia-memory-extraction",
+                daemon=True,
+            )
+            self._extraction_thread.start()
+
+    def _drain_extraction_queue(self) -> None:
+        """Run queued extractions one at a time until the queue is empty."""
+        try:
+            while True:
+                with self._extraction_lock:
+                    if not self._extraction_queue:
+                        self._extraction_thread = None
+                        self._extraction_idle.set()
+                        return
+                    job = self._extraction_queue.popleft()
+                self._run_extraction_job(job)
+        except BaseException:
+            # Boundary: a background thread's crash must not vanish, and must
+            # not leave every later wait_for_memory_extraction() hanging.
+            with self._extraction_lock:
+                self._extraction_thread = None
+                self._extraction_queue.clear()
+                self._extraction_idle.set()
+            logger.error(
+                "[MemoryMixin] extraction worker died; queue dropped", exc_info=True
+            )
+
+    def _run_extraction_job(self, job: _ExtractionJob) -> None:
+        """Extract memories for one captured turn. Never raises."""
+        started = time.monotonic()
+        logger.info(
+            "[MemoryMixin] extraction started (context=%s, waited %.1fs)",
+            job.context,
+            started - job.queued_at,
+        )
+        try:
+            existing = self._hybrid_search(
+                job.user_input, context=job.context, top_k=10
+            )
+            operations = self._extract_via_llm(
+                job.user_input, job.assistant_response, existing
+            )
+            applied = (
+                self._execute_extraction_operations(
+                    operations, existing, context=job.context
+                )
+                if operations
+                else 0
+            )
+            logger.info(
+                "[MemoryMixin] extraction finished: %d memor%s stored in %.1fs",
+                applied,
+                "y" if applied == 1 else "ies",
+                time.monotonic() - started,
+            )
+        except Exception as e:
+            logger.warning(
+                "[MemoryMixin] extraction failed after %.1fs (context=%s): %s",
+                time.monotonic() - started,
+                job.context,
+                e,
+                exc_info=True,
+            )
+
+    def wait_for_memory_extraction(
+        self, timeout: float = EXTRACTION_EXIT_WAIT_S
+    ) -> bool:
+        """Block until no background memory extraction is in flight.
+
+        Callers that exit right after a turn (one-shot CLI, batch runs, tests)
+        need this: without it the process dies with the turn's memories still
+        unwritten.
+
+        Args:
+            timeout: Seconds to wait before giving up.
+
+        Returns:
+            True when extraction is idle, False when *timeout* elapsed first
+            (work is still running and the caller should say so).
+        """
+        self._ensure_extraction_state()
+        return self._extraction_idle.wait(timeout)
 
     # ------------------------------------------------------------------
     # Tool Registration

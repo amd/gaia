@@ -759,7 +759,12 @@ def _close_agent_db(agent: Any) -> None:
     A stub agent injected via ``agent_factory`` in tests has no ``close_db``
     — that is a capability gap, not an error, so it is skipped rather than
     caught-and-swallowed. A real ``close_db()`` failure still propagates.
+
+    Background memory extraction is drained first: it holds the same store.
     """
+    from gaia.agents.base.memory import drain_memory_extraction
+
+    drain_memory_extraction(agent)
     close_db = getattr(agent, "close_db", None)
     if close_db is not None:
         close_db()

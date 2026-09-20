@@ -98,12 +98,22 @@ _DEFAULT_MAX_SESSIONS = 100
 def close_agent(agent: Any) -> None:
     """Release one agent's handles — RAG/index, scratchpad DB, HTTP session.
 
+    Waits, briefly and boundedly, for the agent's background memory extraction
+    first: for a one-shot agent this is the only chance the last turn's facts
+    get to reach disk. Callers are off the turn's critical path by then — the
+    sidecar closes only after ``signal_done``.
+
     ``close()`` is the flagship's teardown; ``close_db()`` is the email agent's,
     accepted so a caller can hand either here. An agent exposing neither is a
     LOUD error, not a quiet skip: this helper reached that state once already by
     probing only ``close_db``, which ``GaiaAgent`` does not define, and every
     eviction leaked the whole agent while looking like it had cleaned up.
     """
+    # Background memory extraction still holds this agent's store and embedder.
+    from gaia.agents.base.memory import drain_memory_extraction
+
+    drain_memory_extraction(agent)
+
     close = getattr(agent, "close", None)
     if not callable(close):
         close = getattr(agent, "close_db", None)
