@@ -1373,7 +1373,7 @@ def _run_capturing_subprocess(host, command):
         seen["shell"] = kwargs.get("shell", False)
         return subprocess_module.CompletedProcess(args, 0, "", "")
 
-    def fake_pipeline(segments, modes, cwd, timeout):
+    def fake_pipeline(segments, modes, envs, cwd, timeout):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
 

@@ -213,11 +213,18 @@ def test_redirection_substitution_and_backgrounding_stay_refused(command, notes)
     assert not (notes / "marker.txt").exists()
 
 
-def test_an_inline_environment_assignment_stays_refused(notes):
+def test_an_inline_environment_assignment_is_scoped_to_its_own_command(notes):
+    """See tests/unit/test_shell_env_assignment.py for the rule in full."""
     result = _run("ls && FOO=bar ls", notes)
 
+    assert result["status"] == "success", result
+
+
+def test_a_loader_variable_stays_refused(notes):
+    result = _run("ls && PATH=/tmp ls", notes)
+
     assert result["status"] == "error", result
-    assert "sets an environment variable" in result["error"]
+    assert result["executed"] is False
 
 
 def test_a_newline_is_not_a_connector(notes):

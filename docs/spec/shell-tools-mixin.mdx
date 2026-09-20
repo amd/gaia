@@ -46,6 +46,7 @@ step from costing several agent turns:
 | `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
 | `a 2>&1` | `a`'s stderr joins its stdout, and flows on down the pipeline |
 | `a 2>/dev/null` | `a`'s stderr is discarded — its exit code is not |
+| `VAR=value a` | `VAR` is set for `a`'s process only |
 
 Every segment of every pipeline goes through the whole allowlist first: one
 refused command anywhere refuses the line before any of it runs, and one
@@ -58,15 +59,35 @@ the only two that name no file: they say where a command's stderr goes, and
 this process routes the stream it had already captured. Every other one is
 refused, `2>` to any other path included.
 
+One or more leading `VAR=value` tokens set that one command's environment —
+`PYTHONPATH=. pytest -q` is the case this exists for. The value never reaches a
+shell: it is handed to the subprocess as an environment entry, and the command
+after it is allowlist-checked exactly as it would be alone, so
+`PYTHONPATH=. rm -rf /` is refused the same way `rm -rf /` is. The variable
+reaches that one process: not a later segment, not a later step, and never this
+process's own environment. A value that looks like a path is held to the same
+allowed-paths rule as an argument, on every segment.
+
+Refused by name are the loader and hook variables — anything that changes
+*which* binary runs or what code one loads: `PATH`, `SHELL`, `ENV`, `IFS`,
+`PAGER`/`EDITOR`/`VISUAL`, and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
+`PYTEST_*`, `BASH_*`, `NODE_*`, `PERL*`, `RUBY*`, `LESS*`, `JAVA*`, `PS*`
+families. Names match case-insensitively, because Windows matches environment
+names that way. An assignment with no command after it, and one in front of
+`cd`, are refused too — neither starts a process for it to apply to.
+
 Still refused anywhere on a line: redirection (`>`, `>>`, `<`, `2>FILE`),
-command substitution (backticks, `$()`), a background `&`, an inline
-`VAR=value` assignment, and newlines — each changes what a command *is*,
-rather than which commands run. Use `write_file` / `edit_file` to write a file.
+command substitution (backticks, `$()`), a background `&`, and newlines — each
+changes what a command *is*, rather than which commands run. Use `write_file` /
+`edit_file` to write a file.
 
 On POSIX no line ever reaches a shell: segments run as argv, pipelines as
 chained processes. On Windows each pipeline goes to `cmd.exe` on its own — a
 compound line is never handed over as one string — and the stderr redirection
-travels in it, spelled `2>nul`, because there the shell owns the pipeline.
+travels in it, spelled `2>nul`, because there the shell owns the pipeline. A
+step carrying an environment assignment is the exception: `cmd.exe` would apply
+it to the whole string, so that step runs as argv on Windows too, and gives up
+`cmd.exe`'s built-in resolution (`dir`, `type`) to keep the assignment scoped.
 
 ---
 

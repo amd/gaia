@@ -36,6 +36,22 @@ def test_shell_injection():
     else:
         print(f"FAIL: chaining did not run - {result.get('error')}")
 
+    # Test 1c: An assignment sets one command's environment, and cannot be
+    # used to redirect the loader at an allowed command.
+    print("\nTest 1c: Loader variable (LD_PRELOAD=/tmp/x.so ls)")
+    result = run_shell("LD_PRELOAD=/tmp/x.so ls", working_directory=os.getcwd())
+    if result["status"] == "error" and result.get("executed") is False:
+        print(f"PASS: refused before anything ran - {result['error']}")
+    else:
+        print("FAIL: a loader variable reached a command!")
+
+    print("\nTest 1d: Allowed assignment (TZ=UTC date +%z)")
+    result = run_shell("TZ=UTC date +%z", working_directory=os.getcwd())
+    if result["status"] == "success" and result.get("stdout", "").strip() == "+0000":
+        print("PASS: the assignment reached that one command")
+    else:
+        print(f"FAIL: assignment did not apply - {result.get('error')}")
+
     # Test 2: Pipe
     print("\nTest 2: Pipe (ls | grep py)")
     result = run_shell("ls | grep py", working_directory=os.getcwd())

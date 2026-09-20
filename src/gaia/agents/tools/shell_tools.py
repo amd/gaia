@@ -198,6 +198,90 @@ DANGEROUS_PS_PATTERNS = (
 # - a newline is a command separator to cmd.exe, and to every shell
 DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:&|>|<|`|\$\(|[\r\n])")
 
+#: A leading ``NAME=value`` token, the way a shell reads one. The value may be
+#: empty, and may hold anything shlex produced — it is handed to the subprocess
+#: as an environment entry, never to a shell, so a metacharacter in it is data.
+_ENV_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+
+#: Variables that change what executes rather than how it behaves: the dynamic
+#: linkers, the shells, and the hook/option variables of the binaries this tool
+#: can actually run (git, gh, pytest, less, powershell). Families are denied
+#: whole — a per-name list goes stale the moment one of those tools adds a hook.
+DENIED_ENV_PREFIXES = (
+    "LD_",  # ELF loader: LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT
+    "DYLD_",  # macOS loader: DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH
+    "GCONV_",  # glibc loads a conversion module by path
+    "BASH_",  # BASH_ENV sources a file before the shell runs
+    "GIT_",  # GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_CONFIG_* inject commands
+    "GH_",  # GH_PAGER, GH_EDITOR, GH_BROWSER run a command of their own
+    "PYTEST_",  # PYTEST_ADDOPTS/PYTEST_PLUGINS re-inject flags and plugins
+    "PERL",  # PERL5OPT/PERL5LIB, and PERL5DB
+    "NODE_",  # NODE_OPTIONS carries --require
+    "RUBY",  # RUBYOPT/RUBYLIB
+    "LESS",  # LESSOPEN is an input filter, i.e. a command
+    "JAVA",  # JAVA_TOOL_OPTIONS
+    "_JAVA",  # _JAVA_OPTIONS
+    "JDK_",  # JDK_JAVA_OPTIONS
+    "PS",  # PSModulePath, PSExecutionPolicyPreference
+)
+
+#: The same rule for variables with no family to deny.
+DENIED_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "SHELL",
+        "ENV",
+        "IFS",
+        "PAGER",
+        "EDITOR",
+        "VISUAL",
+        "BROWSER",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PYTHONEXECUTABLE",
+        "PYTHONBREAKPOINT",
+        "PYTHONUSERBASE",
+        "PYTHONINSPECT",
+        "GREP_OPTIONS",
+        "LOCPATH",
+        "NLSPATH",
+        "TERMINFO",
+    }
+)
+
+
+#: ``PYTHONPATH`` is deliberately absent: it is the case this exists for, and
+#: its containment is the path check every value goes through in
+#: ``_path_traversal_refusal`` rather than a name rule.
+
+
+def _denied_env_name(name: str) -> bool:
+    """True when *name* is a loader or hook variable.
+
+    Case-insensitive, because Windows matches environment names that way: a
+    lowercase ``path=`` overrides ``PATH`` there.
+    """
+    upper = name.upper()
+    return upper in DENIED_ENV_NAMES or upper.startswith(DENIED_ENV_PREFIXES)
+
+
+def _take_env_assignments(segment: list) -> tuple:
+    """A segment's leading ``NAME=value`` tokens, and the argv left after them.
+
+    Leading only, so ``grep a=b file`` is still a pattern. What is left is what
+    the allowlist sees, which is why ``PYTHONPATH=. rm -rf /`` is refused
+    exactly as ``rm -rf /`` is.
+    """
+    env: Dict[str, str] = {}
+    index = 0
+    for token in segment:
+        match = _ENV_ASSIGNMENT.fullmatch(token)
+        if match is None:
+            break
+        env[match[1]] = match[2]
+        index += 1
+    return env, segment[index:]
+
 
 #: PowerShell execution flags that bypass cmdlet filtering outright.
 BLOCKED_PS_FLAGS = frozenset(
@@ -556,9 +640,10 @@ def _split_connectors(command: str) -> list:
 class _Step:
     """One pipeline of a command line, with the connector that gates it.
 
-    ``text`` and ``segments`` have had the stderr redirections lifted out;
-    ``stderr_modes`` holds what each segment asked for, and ``shell_text`` is
-    the line cmd.exe gets, which keeps them.
+    ``text`` and ``segments`` have had the stderr redirections and the leading
+    environment assignments lifted out; ``stderr_modes`` and ``envs`` hold what
+    each segment asked for, and ``shell_text`` is the line cmd.exe gets, which
+    keeps both — so it is only ever used for a step with no assignment.
     """
 
     text: str
@@ -566,6 +651,7 @@ class _Step:
     connector: str
     stderr_modes: tuple = ()
     shell_text: str = ""
+    envs: tuple = ()
 
     @property
     def is_cd(self) -> bool:
@@ -608,7 +694,63 @@ def _cd_shape_refusal(step: _Step) -> Optional[Dict[str, Any]]:
             "has_errors": True,
             "hint": "Write 'cd <dir> && <command>', or pass working_directory.",
         }
+    if step.envs and step.envs[0]:
+        return {
+            "status": "error",
+            "error": "cd takes no environment assignment: it starts no process.",
+            "has_errors": True,
+            "hint": "Put it on the command that needs it: 'cd <dir> && VAR=x <cmd>'.",
+        }
     return None
+
+
+def _env_refusal(name: str) -> Dict[str, Any]:
+    """Why a loader or hook variable is refused, and what is not."""
+    return {
+        "status": "error",
+        "error": (
+            f"Setting '{name}' is not allowed: it changes which binary runs, or "
+            "what code one loads, so it would carry the command back outside "
+            "the allowlist that just cleared it."
+        ),
+        "has_errors": True,
+        "hint": (
+            "The loader and hook variables (PATH, LD_*, DYLD_*, GIT_*, GH_*, "
+            "PYTEST_*, BASH_*, SHELL, PAGER, EDITOR, ...) are the only ones "
+            "refused. Any other 'NAME=value' in front of a command is fine: "
+            "'PYTHONPATH=. pytest -q'."
+        ),
+    }
+
+
+def _no_command_refusal(segment: list) -> Dict[str, Any]:
+    """An assignment with nothing after it sets a variable and runs nothing."""
+    return {
+        "status": "error",
+        "error": f"'{' '.join(segment)}' sets a variable and runs nothing.",
+        "has_errors": True,
+        "hint": "Put the command after it: 'PYTHONPATH=. pytest -q'.",
+    }
+
+
+def _take_segment_envs(segments: list) -> tuple:
+    """``(envs, segments, error)`` — each segment's assignments, split off it.
+
+    One tuple entry per segment, so the count never changes: a segment that is
+    nothing but assignments is a refusal, not a segment that disappears.
+    """
+    envs: list = []
+    stripped: list = []
+    for segment in segments:
+        env, argv = _take_env_assignments(segment)
+        denied = next((name for name in env if _denied_env_name(name)), None)
+        if denied is not None:
+            return (), [], _env_refusal(denied)
+        if not argv:
+            return (), [], _no_command_refusal(segment)
+        envs.append(env)
+        stripped.append(argv)
+    return tuple(envs), stripped, None
 
 
 def _parse_line(command: str) -> tuple:
@@ -663,12 +805,16 @@ def _parse_line(command: str) -> tuple:
                 "has_errors": True,
                 "hint": "Write it after the command it belongs to: 'cmd 2>&1 | tail'.",
             }
+        envs, segments, error = _take_segment_envs(segments)
+        if error is not None:
+            return [], error
         step = _Step(
             text=text.strip(),
             segments=segments,
             connector=connector,
             stderr_modes=tuple(modes.get(i, "") for i in range(len(segments))),
             shell_text=_as_cmd_redirections(raw_text).strip(),
+            envs=envs,
         )
         error = _cd_shape_refusal(step)
         if error:
@@ -690,8 +836,17 @@ def _captured_stderr(mode: str, default: Any) -> Any:
     return default
 
 
+def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
+    """This process's environment plus one segment's assignments.
+
+    A copy every time: ``os.environ`` itself is never touched, so nothing a
+    command sets outlives it or reaches the agent.
+    """
+    return {**os.environ, **assignments}
+
+
 def _run_pipeline(
-    segments: list, modes: tuple, cwd: str, timeout: float
+    segments: list, modes: tuple, envs: tuple, cwd: str, timeout: float
 ) -> subprocess.CompletedProcess:
     """Run validated ``a | b | c`` segments as chained processes, no shell.
 
@@ -702,6 +857,9 @@ def _run_pipeline(
     *modes* is each segment's stderr redirection, if it asked for one. A merged
     segment writes stderr down its own stdout pipe, which is what puts it in
     front of the next stage's ``grep``; neither mode touches a return code.
+
+    *envs* is each segment's own environment assignments, applied to that
+    segment's process and to nothing else.
     """
     deadline = time.monotonic() + timeout
     procs: list = []
@@ -723,7 +881,7 @@ def _run_pipeline(
                     stdin=subprocess.DEVNULL if upstream is None else upstream,
                     stdout=subprocess.PIPE,
                     stderr=err_target,
-                    env=os.environ.copy(),
+                    env=_segment_env(envs[index] if index < len(envs) else {}),
                 )
             )
             if upstream is not None:
@@ -818,7 +976,12 @@ def _run_step(
         and bool(granted)
         and _is_granted_segment(segments[0], granted)
     )
-    use_shell = os.name == "nt" and not lone_granted_segment
+    # An environment assignment is scoped to its own segment, and cmd.exe owns
+    # the whole string it is handed — so a step carrying one runs as argv here
+    # too, and gives up cmd.exe's built-in resolution to keep that scope.
+    use_shell = (
+        os.name == "nt" and not lone_granted_segment and not any(step.envs or ())
+    )
 
     exec_cmd = [part for segment in segments for part in segment]
     if use_shell:
@@ -838,7 +1001,7 @@ def _run_step(
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
     if len(segments) > 1 and not use_shell:
-        return _run_pipeline(segments, step.stderr_modes, cwd, timeout)
+        return _run_pipeline(segments, step.stderr_modes, step.envs, cwd, timeout)
 
     # A shell step's redirection is already in the string cmd.exe was handed.
     mode = "" if use_shell or not step.stderr_modes else step.stderr_modes[0]
@@ -882,7 +1045,7 @@ def _run_step(
         errors="replace",
         timeout=timeout,
         check=False,
-        env=os.environ.copy(),
+        env=_segment_env(step.envs[0] if step.envs else {}),
         shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
     )
 
@@ -1142,19 +1305,32 @@ class ShellToolsMixin:
         return resolved, None
 
     def _path_traversal_refusal(
-        self, segments: list, cwd: str, granted: frozenset
+        self, step: _Step, cwd: str, granted: frozenset
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
         This prevents "cat ../secret.txt" even if "cat" is allowed. Exempt per
         SEGMENT, never per line: a granted CLI's operands are remote ids, but
         'gh … | cat ../secret' must still be checked.
+
+        An environment assignment's value is held to the same rule on EVERY
+        segment, granted or not — it is never a remote id, and a value like
+        ``PYTHONPATH`` decides which code the command imports.
         """
         if not hasattr(self, "path_validator"):
             return None
 
+        segments = step.segments
         scanned = [seg for seg in segments if not _is_granted_segment(seg, granted)]
-        for arg in [a for seg in scanned for a in seg[1:]]:
+        candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
+        candidates += [
+            (f"'{name}='", entry)
+            for env in step.envs or ()
+            for name, value in env.items()
+            for entry in value.split(os.pathsep)
+            if entry
+        ]
+        for label, arg in candidates:
             candidate_path = arg
             if arg.startswith("-"):
                 if "=" in arg:
@@ -1191,7 +1367,7 @@ class ShellToolsMixin:
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
+                            "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
                             "has_errors": True,
                         }
                 except (OSError, ValueError) as exc:
@@ -1604,14 +1780,14 @@ class ShellToolsMixin:
             command: str, working_directory: Optional[str] = None, timeout: int = 30
         ) -> Dict[str, Any]:
             """
-            Execute a shell command and return the output.
+            Execute a shell command and return its output.
 
-            Chain on one line: 'a && b' runs b only if a succeeded, 'a || b'
-            only if it failed, 'a; b' always, 'a | b' pipes, 'cd <dir> && b'
-            runs b there. Every command is allowlist-checked first, and one
-            approval covers the line. '2>&1' keeps stderr and '2>/dev/null'
-            drops it; every other redirection is refused, as are
-            ` $() & VAR=value newline.
+            Chain on one line: 'a && b' on success, 'a || b' on failure,
+            'a; b' always, 'a | b' pipes, 'cd <dir> && b' runs b there. Each
+            is allowlist-checked; one approval covers the line. '2>&1' keeps
+            stderr and '2>/dev/null' drops it; 'PYTHONPATH=. pytest -q' scopes
+            a variable to one command. Other redirections and ` $() &
+            newline are refused.
 
             Args:
                 command: Shell command to execute
@@ -1691,9 +1867,7 @@ class ShellToolsMixin:
                             return error
 
                 for step, step_cwd in zip(steps, step_cwds):
-                    error = self._path_traversal_refusal(
-                        step.segments, step_cwd, granted
-                    )
+                    error = self._path_traversal_refusal(step, step_cwd, granted)
                     if error:
                         return error
 
