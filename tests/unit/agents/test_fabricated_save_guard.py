@@ -78,6 +78,26 @@ NON_CLAIMS = [
         "I will save the routine to routine.md once you confirm the path.",
         id="future-tense",
     ),
+    pytest.param(
+        "I've created the release notes for v0.17.5 and they look good.",
+        id="version-number-not-a-path",
+    ),
+    pytest.param(
+        "I have created the issue at https://github.com/amd/gaia/issues/42.",
+        id="url-not-a-path",
+    ),
+    pytest.param(
+        "I created a draft reply to john.doe@example.com.",
+        id="email-address-not-a-path",
+    ),
+    pytest.param(
+        "I have created an event at 10.30 in your calendar.",
+        id="clock-time-not-a-path",
+    ),
+    pytest.param(
+        "I wrote to john at acme.com.",
+        id="domain-not-a-path",
+    ),
     pytest.param("", id="empty"),
 ]
 
@@ -233,4 +253,59 @@ def test_claim_backed_by_a_write_tool_call_is_accepted(clear_tool_registry):
     result = agent.process_query("Extract the routine and save it", max_steps=10)
 
     assert writes == ["notes/routine.md"]
+    assert _final_text(result) == CLAIM
+
+
+@pytest.mark.parametrize(
+    "exec_tool", ["run_shell_command", "run_python", "execute_python_file"]
+)
+def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec_tool):
+    """A save done via the shell or a Python snippet is a real save."""
+    calls = []
+
+    class _ExecAgent(_DummyAgent):
+        def _register_tools(self):
+            @tool
+            def write_file(file_path: str, content: str) -> dict:
+                """Write content to a file."""
+                return {"status": "success", "file_path": file_path}
+
+            def _exec(command: str) -> dict:
+                calls.append(command)
+                return {"status": "success", "stdout": ""}
+
+            _exec.__name__ = exec_tool
+            _exec.__doc__ = "Run a command that may write files."
+            tool(_exec)
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _ExecAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    agent._tool_requires_confirmation = lambda *_args, **_kwargs: False
+
+    sent = []
+
+    def _send(messages, *_, **__):
+        resp = MagicMock()
+        resp.stats = {}
+        if not sent:
+            resp.text = json.dumps(
+                {
+                    "thought": "saving via exec",
+                    "tool": exec_tool,
+                    "tool_args": {"command": "echo steps > notes/routine.md"},
+                }
+            )
+        else:
+            resp.text = json.dumps({"thought": "", "answer": CLAIM})
+        sent.append(messages)
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+
+    result = agent.process_query("Extract the routine and save it", max_steps=10)
+
+    assert calls == ["echo steps > notes/routine.md"]
+    assert len(sent) == 2, "the guard re-prompted a save that the exec tool performed"
     assert _final_text(result) == CLAIM

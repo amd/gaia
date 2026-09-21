@@ -726,6 +726,12 @@ _FILE_WRITE_TOOL_MARKERS: Tuple[str, ...] = (
     "export",
     "replace",
     "generate_image",
+    # A shell redirect or a Python snippet is the other way an agent saves.
+    "shell",
+    "command",
+    "execute",
+    "python",
+    "script",
 )
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 _FILE_WRITE_CLAIM_PATTERNS = (
@@ -750,7 +756,6 @@ _FILE_WRITE_CLAIM_PATTERNS = (
 )
 _FILE_TARGET_PATTERN = re.compile(
     r"\b(?:file|files|filename|path|directory|folder|disk)\b"
-    r"|[\w~./\\-]+\.[A-Za-z0-9]{1,6}\b"
     r"|[A-Za-z]:[\\/]"
     r"|(?:^|\s)[~/][\w./\\-]+"
     # "…to `routine.md`" — a backticked destination is a path even when the
@@ -758,6 +763,29 @@ _FILE_TARGET_PATTERN = re.compile(
     r"|(?:to|at|in|into)\s+`[^`]+`",
     re.IGNORECASE,
 )
+# Links and addresses are dotted but never save targets, so they are removed
+# before a dotted token is read as a filename.
+_URL_OR_EMAIL_PATTERN = re.compile(
+    r"\b(?:[A-Za-z][\w+.-]*://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
+    re.IGNORECASE,
+)
+_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]+\.([A-Za-z0-9]{1,6})\b")
+# Suffixes that make a dotted token a hostname rather than a file.
+_NON_FILE_SUFFIXES = frozenset(
+    {"com", "org", "net", "io", "ai", "co", "gov", "edu", "dev", "app"}
+)
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    # A suffix with no letter is a version or a clock time, not an extension.
+    return any(
+        any(char.isalpha() for char in suffix)
+        and suffix.lower() not in _NON_FILE_SUFFIXES
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+    )
 
 
 def _claims_file_write(answer: str) -> bool:
@@ -769,8 +797,9 @@ def _claims_file_write(answer: str) -> bool:
     command is not a claim.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
+    prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
     for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
-        if not _FILE_TARGET_PATTERN.search(sentence):
+        if not _names_a_file(sentence):
             continue
         if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
             return True
