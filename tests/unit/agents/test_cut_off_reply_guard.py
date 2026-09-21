@@ -196,8 +196,8 @@ def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
 
 CONTROLS = [
     pytest.param(
-        "Added `trigger_test_label_only: True` to gfx90a's linux entry and "
-        "updated the two tests that cover it; all 41 tests pass.",
+        "Added `trigger_test_label_only: True` to gfx90a's linux entry, so "
+        "it is tested on a pull request only when the gfx90a label is set.",
         id="genuine-final-answer",
     ),
     pytest.param(
@@ -240,7 +240,7 @@ def test_provider_reports_a_cut_off_plain_reply():
         {
             "choices": [
                 {
-                    "message": {"content": "", "reasoning_content": "The fix: add"},
+                    "message": {"content": "The fix: add"},
                     "finish_reason": "length",
                 }
             ]
