@@ -1,6 +1,6 @@
 ---
 name: benchmarking-the-agent
-description: Measure the flagship GAIA agent against Claude Code and across models — quality, truthfulness, steps, tokens, time and real cost — using the task battery, the adversarial suite and the LLM judge. Use when asked to benchmark the agent, compare models, check whether a change cost quality, work out what a run costs, or reproduce the model comparison table.
+description: Measure the flagship GAIA agent against Claude Code and across models — quality, truthfulness, steps, tokens, time and real cost — using the task battery, the adversarial suite and the LLM judge. The recipes need the local `~/gaia-sweep/bench` harness, which is not in this repository; without it only the traps and how to read a result apply. Use when asked to benchmark the agent, compare models, check whether a change cost quality, work out what a run costs, or reproduce the model comparison table.
 ---
 
 # Benchmarking the flagship agent
@@ -36,7 +36,8 @@ Every runner wipes and reuses a shared `BENCH_WORK_ROOT`. **Two batteries at onc
 destroy each other's workdirs.** Before starting anything:
 
 ```bash
-pgrep -fl "run_task.py|run_full_branch.sh|cc_trace.py|judge2.py" | wc -l   # must be 0
+# Bracketed so the pattern does not match the shell running the check itself.
+pgrep -fl "[r]un_task.py|[r]un_full_branch.sh|[c]c_trace.py|[j]udge2.py" | wc -l   # must be 0
 ```
 
 If something is in flight, **queue rather than wait at the keyboard**: copy the wait loop
