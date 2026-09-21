@@ -56,6 +56,7 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
@@ -2536,9 +2537,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                     )
-                    self._auto_store_error(tool_name, error_msg)
-            except Exception:
-                pass
+                    self._auto_store_error(tool_name, error_msg, tool_args)
+            except Exception as log_exc:
+                logger.debug("[MemoryMixin] tool logging failed: %s", log_exc)
             raise
 
         # Truncate result summary
@@ -2562,11 +2563,11 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 # Auto-store novel errors as knowledge
                 if is_error and error_msg:
-                    self._auto_store_error(tool_name, error_msg)
+                    self._auto_store_error(tool_name, error_msg, tool_args, result)
                 elif not is_error:
-                    # It worked. Retire whatever this tool was once blamed for,
+                    # It worked. Retire what this same operation was blamed for,
                     # so a fixed bug stops being replayed into every prompt.
-                    self._forget_errors_for_tool(tool_name)
+                    self._forget_errors_for_operation(tool_name, tool_args)
         except Exception as e:
             logger.debug("[MemoryMixin] tool logging failed: %s", e)
 
@@ -2581,9 +2582,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     #: afterwards, and the agent kept telling users that shell commands and the
     #: network were unavailable while running them successfully.
     #:
-    #: A durable constraint is still stored. "Command 'foo' is not in the
-    #: allowed list" is a rule about this agent and worth remembering; "timed
-    #: out" is weather.
+    #: Refusals by the permission layer are skipped separately, from the
+    #: result's ``executed: False`` — see ``_auto_store_error``.
     _TRANSIENT_ERROR_MARKERS: ClassVar[tuple] = (
         "did not return within",
         "timed out",
@@ -2648,34 +2648,90 @@ class MemoryMixin(ProceduralMemoryMixin):
             return False
         return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
 
-    def _forget_errors_for_tool(self, tool_name: str) -> None:
-        """Drop stored errors for *tool_name* once it has worked again.
+    #: Argument keys naming what a call acted on, in priority order. A shell
+    #: command is keyed by its binary, so ``pytest -q`` working again retires
+    #: ``pytest tests/`` failing, but ``ls`` working does not.
+    _OPERATION_COMMAND_KEYS: ClassVar[tuple] = ("command", "cmd")
+    _OPERATION_TARGET_KEYS: ClassVar[tuple] = (
+        "file_path",
+        "path",
+        "directory",
+        "name",
+        "skill_name",
+        "url",
+    )
+
+    @classmethod
+    def _operation_key(cls, tool_name: str, tool_args: Any) -> str:
+        """Identify the operation a call performed: tool plus what it acted on."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        for key in cls._OPERATION_COMMAND_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                binary = os.path.basename(value.split()[0]).lower()
+                return f"{tool_name} {binary}"
+        for key in cls._OPERATION_TARGET_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{tool_name} {value.strip()}"
+        return f"{tool_name} {json.dumps(args, sort_keys=True, default=str)}"
+
+    def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
+        """Drop stored errors for an operation once it has worked again.
 
         The self-healing half. Without it a stored error is permanent doctrine:
         nothing expires it, nothing lowers its confidence, and the model is told
-        to avoid the tool forever — including after the bug is fixed. A tool that
-        just returned successfully is, by direct evidence, not broken.
+        to avoid the call forever — including after the bug is fixed.
+
+        Scoped to the operation, not the tool: a successful ``ls`` is no
+        evidence that ``pytest`` is on PATH now. Rows stored before errors
+        carried an operation key are matched by tool, as they always were.
         """
+        operation = self._operation_key(tool_name, tool_args)
+        prefix = f"{tool_name}: "
         try:
-            prefix = f"{tool_name}: "
             for entry in self._memory_store.get_by_category(
                 "error", context=self._memory_context, limit=50
             ):
-                if str(entry.get("content", "")).startswith(prefix):
+                stored_op = (entry.get("metadata") or {}).get("operation")
+                if stored_op is not None:
+                    matches = stored_op == operation
+                else:
+                    matches = str(entry.get("content", "")).startswith(prefix)
+                if matches:
                     self._memory_store.delete(entry["id"])
                     logger.debug(
                         "[MemoryMixin] dropped a stale error for '%s' — it worked",
-                        tool_name,
+                        operation,
                     )
         except Exception as exc:  # never let bookkeeping break a good call
             logger.debug(
-                "[MemoryMixin] could not clear errors for %s: %s", tool_name, exc
+                "[MemoryMixin] could not clear errors for %s: %s", operation, exc
             )
 
-    def _auto_store_error(self, tool_name: str, error_msg: str) -> None:
-        """Store a novel tool error as knowledge for future avoidance."""
+    def _auto_store_error(
+        self,
+        tool_name: str,
+        error_msg: str,
+        tool_args: Any = None,
+        result: Any = None,
+    ) -> None:
+        """Store a novel tool error as knowledge for future avoidance.
+
+        A call the permission layer refused before running (``executed: False``
+        on the result) is not stored: it describes the current permission
+        settings, not the world, the tool reports it fresh on every call, and
+        replayed later it teaches the model to avoid what is now allowed.
+        """
         try:
             if not error_msg or not error_msg.strip():
+                return
+            if isinstance(result, dict) and not check_was_executed(result):
+                logger.debug(
+                    "[MemoryMixin] not persisting a refusal for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
                 return
             if self._is_transient_error(error_msg):
                 logger.debug(
@@ -2691,14 +2747,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                 source="error_auto",
                 context=self._memory_context,
                 confidence=0.5,
+                metadata={"operation": self._operation_key(tool_name, tool_args)},
             )
-            # Embed the error
             try:
                 vec = self._embed_text(error_content)
                 self._memory_store.store_embedding(kid, _embedding_to_blob(vec))
                 self._faiss_add(kid, vec)
-            except Exception:
-                pass
+            except Exception as embed_exc:
+                logger.debug("[MemoryMixin] could not embed error: %s", embed_exc)
             logger.debug("[MemoryMixin] auto-stored error: %s", error_content[:80])
         except Exception as e:
             logger.debug("[MemoryMixin] failed to auto-store error: %s", e)

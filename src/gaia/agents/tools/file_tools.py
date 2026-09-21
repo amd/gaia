@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     record_read,
@@ -116,7 +117,7 @@ class FileSearchToolsMixin:
             return None
         is_allowed, reason = validator.validate_read(path)
         if not is_allowed:
-            return {"status": "error", "error": reason}
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -1077,6 +1078,7 @@ class FileSearchToolsMixin:
                         )
                         logger.warning(f"Write denied: {reason}")
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "write_file",
@@ -1399,6 +1401,7 @@ class FileSearchToolsMixin:
                                 "edit", str(resolved_path), 0, "denied", reason
                             )
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": reason,
                                 "operation": "edit_file",
@@ -1408,6 +1411,7 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", reason
                         )
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "edit_file",
