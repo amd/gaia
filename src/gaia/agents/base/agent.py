@@ -40,6 +40,7 @@ from typing import (
 )
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.dsml import parse_dsml_tool_calls
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
@@ -3427,6 +3428,33 @@ Do NOT wrap conversational replies in JSON.
             )
         else:
             logger.debug(f"📥 LLM Response: {response}")
+
+        dsml = parse_dsml_tool_calls(response)
+        if dsml is not None:
+            calls, prose = dsml
+            normalised = [
+                {
+                    "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
+                    "name": c["name"],
+                    "tool_args": c["tool_args"],
+                }
+                for idx, c in enumerate(calls)
+            ]
+            logger.debug(
+                "[PARSE] tool_call_path=dsml_text model_id=%s tools=%s",
+                self.model_id,
+                [c["name"] for c in normalised],
+            )
+            parsed = {
+                "thought": "",
+                "goal": "",
+                "tool_calls": normalised,
+                "content": prose or None,
+            }
+            if len(normalised) == 1:
+                parsed["tool"] = normalised[0]["name"]
+                parsed["tool_args"] = normalised[0]["tool_args"]
+            return parsed
 
         # STEP 1: Fast path - detect plain text conversational responses
         # If response doesn't start with '{', it's likely plain text.
