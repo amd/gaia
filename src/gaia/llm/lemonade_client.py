@@ -4823,9 +4823,9 @@ def create_lemonade_client(
         model: Name of the model to use
                (defaults to env var LEMONADE_MODEL or DEFAULT_MODEL_NAME)
         host: Host address for the Lemonade server
-              (defaults to env var LEMONADE_HOST or DEFAULT_HOST)
+              (defaults to env var LEMONADE_HOST; see the note below)
         port: Port number for the Lemonade server
-              (defaults to env var LEMONADE_PORT or DEFAULT_PORT)
+              (defaults to env var LEMONADE_PORT; see the note below)
         auto_start: Automatically start the server
         auto_load: Automatically load the model
         auto_pull: Whether to automatically pull the model if it's not available
@@ -4843,6 +4843,13 @@ def create_lemonade_client(
         model_lease_priority: Broker lease priority for this client's model
                  loads ("interactive"|"background") — forwarded verbatim to
                  ``LemonadeClient`` (#2151 / V2-11)
+
+    Address resolution:
+        When neither ``host``/``port`` nor ``LEMONADE_HOST``/``LEMONADE_PORT``
+        names an address, the client resolves it: ``LEMONADE_BASE_URL``, then
+        GAIA's own embedded server's recorded port, then
+        ``DEFAULT_HOST``/``DEFAULT_PORT``. A named host or port outranks
+        ``LEMONADE_BASE_URL``.
 
     Returns:
         A configured LemonadeClient instance
