@@ -225,7 +225,7 @@ class GmailReadBackend:
         # Tests inject an httpx.MockTransport-backed client so no test ever
         # needs the network or a real token.
         self._client = http_client or httpx.Client(timeout=timeout_seconds)
-        self._label_names: Optional[Dict[str, str]] = None
+        self._label_cache: Optional[List[Dict[str, Any]]] = None
 
     # -- HTTP ---------------------------------------------------------------
 
@@ -309,17 +309,30 @@ class GmailReadBackend:
             raise ValueError(f"limit must be >= 1, got {limit}")
         return min(limit, _GMAIL_MAX_LIMIT)
 
+    def _labels(self) -> List[Dict[str, Any]]:
+        if self._label_cache is None:
+            data = self._get("/users/me/labels")
+            self._label_cache = [
+                lab for lab in data.get("labels") or [] if lab.get("id")
+            ]
+        return self._label_cache
+
     def _label_map(self) -> Dict[str, str]:
         """Label id -> display name. Gmail's message resource carries only
         opaque ids, and `labels.list` is the only way to name them."""
-        if self._label_names is None:
-            data = self._get("/users/me/labels")
-            self._label_names = {
-                lab["id"]: lab.get("name") or lab["id"]
-                for lab in data.get("labels") or []
-                if lab.get("id")
-            }
-        return self._label_names
+        return {lab["id"]: lab.get("name") or lab["id"] for lab in self._labels()}
+
+    def _fan_out(self, paths: Sequence[str], params: Optional[dict] = None) -> List[Any]:
+        """One GET per path over a bounded pool, under one minted token."""
+        token = self._access_token_fn()
+
+        def fetch(path: str) -> Any:
+            return self._get(path, params=params, token=token)
+
+        with ThreadPoolExecutor(max_workers=min(_FETCH_CONCURRENCY, len(paths))) as pool:
+            # list() forces every result, so a failed subrequest raises here
+            # rather than shortening the listing into a smaller-looking inbox.
+            return list(pool.map(fetch, paths))
 
     def _list_ids(
         self,
@@ -338,31 +351,14 @@ class GmailReadBackend:
         return [m["id"] for m in (data.get("messages") or []) if m.get("id")]
 
     def _fetch_summaries(self, ids: Sequence[str]) -> List[Dict[str, Any]]:
-        """Metadata for every id, fanned out over a bounded pool.
-
-        One token for the whole fan-out: it is a single logical read, and
-        minting per subrequest would be a keyring hit per message.
-        """
+        """Metadata for every id. `metadataHeaders` needs `format=metadata`."""
         if not ids:
             return []
         label_names = self._label_map()
-        token = self._access_token_fn()
-        params = {
-            "format": "metadata",
-            "metadataHeaders": list(_METADATA_HEADERS),
-        }
-
-        def fetch(message_id: str) -> Dict[str, Any]:
-            return self._get(
-                f"/users/me/messages/{message_id}", params=params, token=token
-            )
-
-        with ThreadPoolExecutor(
-            max_workers=min(_FETCH_CONCURRENCY, len(ids))
-        ) as pool:
-            # list() forces every result, so a failed subrequest raises here
-            # rather than shortening the listing into a smaller-looking inbox.
-            messages = list(pool.map(fetch, ids))
+        messages = self._fan_out(
+            [f"/users/me/messages/{mid}" for mid in ids],
+            {"format": "metadata", "metadataHeaders": list(_METADATA_HEADERS)},
+        )
         return [message_summary(m, label_names=label_names) for m in messages]
 
     def list_inbox(
@@ -373,6 +369,46 @@ class GmailReadBackend:
         return self._fetch_summaries(
             self._list_ids(label_ids=label_ids, limit=limit)
         )
+
+    def search(self, query: str, *, limit: int = 25) -> List[Dict[str, Any]]:
+        """Full-mailbox keyword search.
+
+        Gmail returns hits in relevance order, not date order — the tool
+        docstring says so, because a caller assuming newest-first would
+        silently misreport.
+        """
+        if not query or not query.strip():
+            raise ValueError("query must be a non-empty search string")
+        return self._fetch_summaries(self._list_ids(query=query, limit=limit))
+
+    def get_message(self, message_id: str) -> Dict[str, Any]:
+        """One message, body included."""
+        if not message_id or not message_id.strip():
+            raise ValueError("message_id must be a non-empty message id")
+        data = self._get(
+            f"/users/me/messages/{message_id}", params={"format": "full"}
+        )
+        return message_summary(
+            data, label_names=self._label_map(), include_body=True
+        )
+
+    def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:
+        """Labels with their unread and total counts.
+
+        `labels.list` omits the counts, so each one costs a `labels.get`.
+        """
+        ids = [lab["id"] for lab in self._labels()][: self._clamp(limit)]
+        if not ids:
+            return []
+        return [
+            {
+                "id": detail.get("id"),
+                "name": detail.get("name") or detail.get("id") or "",
+                "unread": detail.get("messagesUnread", 0),
+                "total": detail.get("messagesTotal", 0),
+            }
+            for detail in self._fan_out([f"/users/me/labels/{lid}" for lid in ids])
+        ]
 
 
 __all__ = [
