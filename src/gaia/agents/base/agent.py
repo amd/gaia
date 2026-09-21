@@ -4070,7 +4070,10 @@ Do NOT wrap conversational replies in JSON.
             elapsed = time.perf_counter() - started
             waited = getattr(self, "_confirmation_wait_s", 0.0) or 0.0
             if step_timer is not None:
-                step_timer.record_tool(tool_name or "<unnamed>", elapsed, waited)
+                try:
+                    step_timer.record_tool(tool_name or "<unnamed>", elapsed, waited)
+                except Exception as e:  # noqa: BLE001 - never displace a tool error
+                    logger.warning("could not record step tool timing: %s", e)
             if recorder is not None:
                 try:
                     recorder.record_tool(

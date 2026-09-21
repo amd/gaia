@@ -79,9 +79,25 @@ class TestExtractStepStats:
         assert s0.time_to_first_token_ms == 90.0  # 0.09s × 1000
         assert s0.tokens_per_second == 120.0
         assert s0.total_tokens == 950  # no total_tokens key → input+output fallback
-        assert s0.duration_ms == 0  # /stats has no per-step duration
+        assert s0.duration_ms == 0  # no step_seconds here, and /stats has none
         # "<thinking>let me plan</thinking>" → 11 chars // 4 = 2 reasoning tokens
         assert reasoning == 2
+
+    def test_step_seconds_supplies_the_duration(self):
+        """A record carrying the agent's own step_seconds reports it as duration."""
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "step_seconds": 41.2,
+                    "performance_stats": {"input_tokens": 10, "output_tokens": 5},
+                },
+            }
+        ]
+        steps, _ = extract_step_stats(conversation)
+        assert steps[0].duration_ms == 41200
 
     def test_no_stats_messages(self):
         steps, reasoning = extract_step_stats(

@@ -5,7 +5,8 @@
 Each step's ``stats`` record gets a breakdown measured on this process's own
 clock: model time, tool time, and everything else (overhead). Overhead is
 derived as the remainder, so ``llm_seconds + tool_seconds + overhead_seconds``
-always equals ``step_seconds``. Token counts come from each call's own
+reconciles with ``step_seconds`` to within the rounding applied to each of the
+four values independently. Token counts come from each call's own
 response usage, never from Lemonade's ``/stats`` — that endpoint only measures
 local generation and says nothing true about a cloud model.
 

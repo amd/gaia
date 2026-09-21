@@ -273,8 +273,16 @@ def extract_step_stats(conversation: list) -> tuple[list[StepResult], int]:
                         total_tokens=(
                             stats.get("total_tokens", 0) or (in_tok + out_tok)
                         ),
-                        # /stats has no per-step "duration"; tolerated as 0.
-                        duration_ms=int((stats.get("duration", 0) or 0) * 1000),
+                        # step_seconds is this process's own measurement; /stats
+                        # has no per-step duration, so it is only the fallback.
+                        duration_ms=int(
+                            (
+                                content.get("step_seconds")
+                                or stats.get("duration", 0)
+                                or 0
+                            )
+                            * 1000
+                        ),
                         time_to_first_token_ms=ttft_ms,
                         tokens_per_second=float(stats.get("tokens_per_second", 0) or 0),
                         peak_memory_mb=_extract_peak_memory_mb(stats),
