@@ -370,19 +370,22 @@ def _extract_via_llm(
     user_input: str,
     assistant_response: str,
     existing_items: List[Dict],
+    tool_record: Optional[List[Dict]] = None,
 ) -> List[Dict]:
 ```
 
-Sends the conversation turn plus existing memory to the LLM, which returns a JSON array of operations:
+Sends the conversation turn, this turn's tool record (each call, its arguments, whether it succeeded, failed or was refused, and a short result), and existing memory to the LLM, which returns a JSON array of operations:
 
 | Operation | Description | Required fields |
 |-----------|-------------|-----------------|
-| `add` | New knowledge not already in memory | `op`, `category`, `content`, optional: `entity`, `domain`, `confidence` (default 0.4) |
-| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, optional: `entity`, `domain`, `category` (an update naming `system`/`profile`/`permission` is dropped) |
-| `delete` | Remove item contradicted or invalidated | `op`, `knowledge_id`, `reason` |
+| `add` | New knowledge not already in memory | `op`, `category`, `content`, `grounded`, optional: `entity`, `domain`, `confidence` (default 0.4) |
+| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, `grounded`, optional: `entity`, `domain`, `category` (an update naming `system`/`profile`/`permission` is dropped) |
+| `delete` | Remove item contradicted or invalidated | `op`, `knowledge_id`, `reason`, `grounded` |
 | `noop` | Information already captured — not included in output | — |
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
+
+`grounded` must be `"user"` (the user said it) or `"tool"` (a tool result shows it). An op grounded in anything else, or citing a tool when no tool succeeded this turn, is dropped: the assistant's answer alone is not evidence.
 
 **Error handling:** Invalid JSON → logged error, skip this turn. Timeout (3s) → logged warning, skip. Individual operation failure → logged, continue with remaining operations. No fallback to regex heuristics.
 
@@ -449,7 +452,7 @@ Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool fai
 
 **Hook 3: `_after_process_query()` callback**
 
-Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory). For turns ≥ 20 words, the extraction pipeline fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM to decide what operations to perform — no regex heuristic fallback.
+Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory). For turns ≥ 5 words, the extraction pipeline fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM, with the turn's tool record, to decide what operations to perform — no regex heuristic fallback.
 
 ---
 
@@ -1039,7 +1042,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `_backfill_embeddings(limit)` | Embed items missing embeddings |
 | `_hybrid_search(query, ...)` | Vector + BM25 + RRF + cross-encoder search |
 | `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |
-| `_extract_via_llm(user_input, assistant_response, existing_items)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
+| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
 | `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
 | `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
 
