@@ -134,7 +134,12 @@ jobs:
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
           echo ""
-          pytest tests/unit/ -v --tb=short \
+          # -q, not -v: a per-test line for ~13k tests overflows the Actions log
+          # limit, and what gets dropped is the tail — the failure summary and
+          # tracebacks. A red run then reports which job failed and nothing about
+          # why. -rf keeps the short list of failures, which is the part anyone
+          # reads. --tb=short keeps the tracebacks.
+          pytest tests/unit/ -q -rf --tb=short \
             --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - name: Run CLI tool-confirmation integration tests
