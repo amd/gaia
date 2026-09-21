@@ -297,6 +297,8 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
 class LemonadeProvider(LLMClient):
     """Lemonade provider - local AMD-optimized inference."""
 
+    accepts_reasoning_history = True
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -330,6 +332,7 @@ class LemonadeProvider(LLMClient):
         # ``usage`` field, captured here since ``chat()`` itself returns
         # just the message content/tool-call envelope as ``str``.
         self._last_usage: Optional[dict] = None
+        self._last_reasoning: Optional[str] = None
 
     @property
     def provider_name(self) -> str:
@@ -362,6 +365,7 @@ class LemonadeProvider(LLMClient):
         # and the streaming branch below never populates it (no non-streaming
         # JSON body to read a ``usage`` field from).
         self._last_usage = None
+        self._last_reasoning = None
 
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
@@ -468,6 +472,7 @@ class LemonadeProvider(LLMClient):
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
         tool_calls = message.get("tool_calls")
+        self._last_reasoning = message.get("reasoning_content") or None
 
         if tool_calls:
             logger.debug(
@@ -486,11 +491,6 @@ class LemonadeProvider(LLMClient):
             # unchanged so callers can distinguish "no content" from "empty
             # string content".
             tc_content = message.get("content")
-            if tc_content is None:
-                # Some llama.cpp builds put text in ``reasoning_content``
-                # instead of ``content`` when the model emits a thought
-                # before a tool call. Treat that as content too.
-                tc_content = message.get("reasoning_content")
             # Encode as JSON string so callers can keep treating responses as str.
             return json.dumps(
                 {
@@ -500,7 +500,7 @@ class LemonadeProvider(LLMClient):
                 }
             )
 
-        content = message.get("content") or message.get("reasoning_content") or ""
+        content = message.get("content") or ""
         logger.debug(
             "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
             "plain_text",
@@ -541,6 +541,9 @@ class LemonadeProvider(LLMClient):
         server's response didn't include a ``usage`` field)."""
         return self._last_usage
 
+    def get_last_reasoning(self) -> Optional[str]:
+        return self._last_reasoning
+
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
         self._model = model_name
@@ -564,6 +567,7 @@ class LemonadeProvider(LLMClient):
         tool_calls: dict[int, dict] = {}
         finish_reason = ""
         text_seen: list[str] = []
+        reasoning_seen: list[str] = []
 
         def close_thinking():
             nonlocal in_thinking, thought
@@ -590,6 +594,7 @@ class LemonadeProvider(LLMClient):
                     # display it in a collapsible section.
                     reasoning = delta.get("reasoning_content")
                     if reasoning:
+                        reasoning_seen.append(reasoning)
                         if not in_thinking:
                             yield "<think>"
                             in_thinking = True
@@ -609,6 +614,7 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        self._last_reasoning = "".join(reasoning_seen) or None
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield close_thinking()
