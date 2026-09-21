@@ -365,6 +365,274 @@ def test_limit_is_clamped_at_the_tool_boundary(harness_factory):
     assert seen["top"] == "100"
 
 
+# --------------------------------------------------------------------------
+# backend selection — which mailbox, and what to say when there isn't one
+# --------------------------------------------------------------------------
+
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+MAIL_READWRITE = "https://graph.microsoft.com/Mail.ReadWrite"
+
+
+@pytest.fixture
+def mailbox_env(monkeypatch):
+    """Point the mixin at a synthetic connector state."""
+
+    def apply(connections, grants):
+        import gaia.connectors.api as api
+        import gaia.connectors.grants as grants_mod
+
+        minted = {}
+        monkeypatch.setattr(api, "get_connection", lambda p: connections.get(p))
+        monkeypatch.setattr(
+            grants_mod, "list_agent_grants", lambda p: dict(grants.get(p) or {})
+        )
+
+        def fake_token(*, provider, scopes, agent_id, **_):
+            minted["provider"] = provider
+            minted["scopes"] = list(scopes)
+            minted["agent_id"] = agent_id
+            return "test-token"
+
+        monkeypatch.setattr(api, "get_access_token_sync", fake_token)
+        return minted
+
+    return apply
+
+
+def connection(scopes, **extra):
+    return {"provider": "x", "account_email": "me@example.com", "scopes": list(scopes), **extra}
+
+
+class _Bare(EmailToolsMixin):
+    """The mixin with nothing pre-wired, so selection actually runs."""
+
+
+@pytest.mark.parametrize(
+    "connections,grants,provider,scope",
+    [
+        # Google connected read-only and granted -> Gmail, readonly.
+        (
+            {"google": connection([GMAIL_READONLY])},
+            {"google": {"installed:gaia": [GMAIL_READONLY]}},
+            "google",
+            GMAIL_READONLY,
+        ),
+        # The measured box: the connection carries modify, so modify is what
+        # gets requested -- asking for readonly would force a reconnect.
+        (
+            {"google": connection([GMAIL_MODIFY])},
+            {"google": {"installed:gaia": [GMAIL_MODIFY]}},
+            "google",
+            GMAIL_MODIFY,
+        ),
+        # Microsoft only.
+        (
+            {"microsoft": connection([MAIL_READWRITE])},
+            {"microsoft": {"installed:gaia": [MAIL_READWRITE]}},
+            "microsoft",
+            MAIL_READWRITE,
+        ),
+        # Google connected but not granted; Microsoft usable -> Microsoft.
+        (
+            {
+                "google": connection([GMAIL_MODIFY]),
+                "microsoft": connection([MAIL_READWRITE]),
+            },
+            {"microsoft": {"installed:gaia": [MAIL_READWRITE]}},
+            "microsoft",
+            MAIL_READWRITE,
+        ),
+    ],
+)
+def test_backend_selected_from_resolved_read_capability(
+    mailbox_env, connections, grants, provider, scope
+):
+    minted = mailbox_env(connections, grants)
+    backend = _Bare()._build_email_backend()
+
+    expected = "GmailReadBackend" if provider == "google" else "OutlookReadBackend"
+    assert type(backend).__name__ == expected
+
+    backend._access_token_fn()
+    assert minted["provider"] == provider
+    # Exactly the one resolved scope, never the pair.
+    assert minted["scopes"] == [scope]
+    assert minted["agent_id"] == EMAIL_AGENT_ID
+
+
+def test_both_usable_prefers_google_and_announces_the_alternative(mailbox_env):
+    mailbox_env(
+        {
+            "google": connection([GMAIL_READONLY]),
+            "microsoft": connection([MAIL_READWRITE]),
+        },
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "google"
+    assert mixin._email_provider_source == "precedence"
+    assert mixin._email_alternatives == ["microsoft"]
+
+
+def test_env_override_picks_the_other_mailbox(mailbox_env, monkeypatch):
+    mailbox_env(
+        {
+            "google": connection([GMAIL_READONLY]),
+            "microsoft": connection([MAIL_READWRITE]),
+        },
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    monkeypatch.setenv("GAIA_MAIL_PROVIDER", "microsoft")
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "microsoft"
+    assert mixin._email_provider_source == "env-override"
+
+
+def test_env_override_naming_an_unusable_mailbox_fails_loudly(
+    mailbox_env, monkeypatch
+):
+    from gaia.agents.tools._email import MailboxError
+
+    mailbox_env(
+        {"google": connection([GMAIL_READONLY])},
+        {"google": {"installed:gaia": [GMAIL_READONLY]}},
+    )
+    monkeypatch.setenv("GAIA_MAIL_PROVIDER", "microsoft")
+    with pytest.raises(MailboxError) as err:
+        _Bare()._build_email_backend()
+    assert "GAIA_MAIL_PROVIDER" in str(err.value)
+    assert "microsoft" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "connections,grants,needle",
+    [
+        # NOT_CONNECTED
+        ({}, {}, "gaia connectors connect google"),
+        # MISSING_SCOPES — remedy must carry granted UNION needed, because
+        # `--scopes` REPLACES a connection's scopes rather than adding to them.
+        (
+            {"google": connection(["https://www.googleapis.com/auth/calendar.readonly"])},
+            {},
+            "calendar.readonly",
+        ),
+        # NOT_GRANTED — a ledger write, not a browser reconnect.
+        (
+            {"google": connection([GMAIL_MODIFY])},
+            {},
+            "gaia connectors grants grant google installed:gaia",
+        ),
+        # REAUTH_REQUIRED
+        (
+            {"google": {"provider": "google", "scopes": [], "error": "configuration"}},
+            {},
+            "OAuth client",
+        ),
+    ],
+)
+def test_no_mailbox_error_names_each_providers_own_state(
+    mailbox_env, connections, grants, needle
+):
+    from gaia.agents.tools._email import MailboxError
+
+    mailbox_env(connections, grants)
+    with pytest.raises(MailboxError) as err:
+        _Bare()._build_email_backend()
+    message = str(err.value)
+    assert needle in message
+    # Both mailboxes are named, each with its own state.
+    assert "google" in message and "microsoft" in message
+
+
+def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
+    """`--scopes` replaces, so a gap-only remedy strips what the user had."""
+    from gaia.agents.tools._email import MailboxError
+
+    mailbox_env(
+        {"google": connection(["https://www.googleapis.com/auth/calendar.events"])},
+        {},
+    )
+    with pytest.raises(MailboxError) as err:
+        _Bare()._build_email_backend()
+    message = str(err.value)
+    assert "calendar.events" in message
+    assert GMAIL_READONLY in message
+
+
+def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
+    from gaia.agents.tools._email.scopes import SCOPE_GMAIL_FULL_MAILBOX
+
+    minted = mailbox_env(
+        {"google": connection([GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX])},
+        {"google": {"installed:gaia": [GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX]}},
+    )
+    _Bare()._build_email_backend()._access_token_fn()
+    assert minted["scopes"] == [GMAIL_READONLY]
+
+
+def test_backend_reresolves_once_after_an_auth_failure(harness_factory):
+    """A grant made mid-session must not need a restart to take effect."""
+    builds = []
+
+    class Flaky(_Harness):
+        def _build_email_backend(self):
+            builds.append(1)
+            if len(builds) == 1:
+                return make_backend(lambda r: httpx.Response(401, text="expired"))
+            return make_backend(lambda r: json_response({"value": [GRAPH_MESSAGE]}))
+
+    h = Flaky(backend=None)
+    h._email_backend = None
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is True
+    assert len(builds) == 2
+
+
+def test_a_second_auth_failure_is_surfaced_not_retried_forever(harness_factory):
+    builds = []
+
+    class AlwaysDead(_Harness):
+        def _build_email_backend(self):
+            builds.append(1)
+            return make_backend(lambda r: httpx.Response(401, text="expired"))
+
+    h = AlwaysDead(backend=None)
+    h._email_backend = None
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is False
+    assert len(builds) == 2
+
+
+def test_check_mailbox_access_reports_the_resolved_provider(harness_factory):
+    def handler(request):
+        if request.url.path.endswith("/me"):
+            return json_response({"mail": "me@example.com"})
+        return json_response({"value": []})
+
+    h = harness_factory(handler)
+    h._email_provider = "google"
+    h._email_provider_source = "precedence"
+    h._email_alternatives = ["microsoft"]
+    out = json.loads(h._tool("check_mailbox_access")())
+
+    assert out["provider"] == "google"
+    assert out["provider_source"] == "precedence"
+    assert out["alternatives"] == ["microsoft"]
+
+
 def test_backend_is_not_built_until_a_tool_runs():
     """Composing the mixin must not touch the connectors layer."""
 
