@@ -47,6 +47,14 @@ def test_partial_coverage_states_its_denominator():
     assert note.startswith("_") and note.endswith("_")
 
 
+def test_full_coverage_with_a_dead_prefix_warns_without_claiming_a_subset():
+    """Everything is labelled, so nothing renormalises — only the typo is news."""
+    cov = reconcile_labels({"aaaaaaaa": "x", "deadbeef": "y"}, traces("aaaaaaaa"))
+    note = coverage_note(cov)
+    assert "`deadbeef`" in note
+    assert "not the corpus" not in note and "1 of 1" not in note
+
+
 def test_unknown_prefixes_are_named():
     """An unmatched prefix is usually a typo — printing it is the whole fix."""
     cov = reconcile_labels(

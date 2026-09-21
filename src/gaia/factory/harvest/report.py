@@ -105,10 +105,14 @@ def coverage_note(cov: Optional[Dict[str, object]]) -> str:
         return ""
     if matched == sessions and not cov["unknown"]:
         return ""
-    bits = [
-        f"Covers {matched} of {sessions} sessions ({_pct(matched, sessions)}) "
-        "— percentages in this table are of the labelled subset, not the corpus."
-    ]
+    bits = []
+    # Only when the subset really is smaller than the corpus — a file that
+    # covers everything and also carries a dead prefix renormalises nothing.
+    if matched != sessions:
+        bits.append(
+            f"Covers {matched} of {sessions} sessions ({_pct(matched, sessions)}) "
+            "— percentages in this table are of the labelled subset, not the corpus."
+        )
     if cov["unlabelled"]:
         n = cov["unlabelled"]
         bits.append(
