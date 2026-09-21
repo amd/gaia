@@ -1,0 +1,136 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Watch for hub agents whose merged work never shipped (#3895).
+#
+# A fix to an agent under hub/agents/ reaches users only when
+# release_agent_<id>.yml runs off an `agent-pkg-<id>-<version>` tag. Nothing in
+# the PR loop observes that: the fix goes green, merges, and looks shipped while
+# the artifact people install never moves. The email agent sat 19 days and two
+# milestone-blocking fixes behind its published build exactly that way.
+#
+# Why this runs on a TIMER rather than inside the release workflow: the failure
+# is that no release ran at all. A check bolted onto the release lane can only
+# speak while that lane is running, so it is blind to the one state that matters.
+# Against main on a schedule, an idle lane is precisely what it can see.
+#
+# Daily, not weekly: the SLA is 7 days, and a weekly poll would let a stalled
+# release sit up to 14 before anyone heard about it.
+#
+# A red scheduled run is invisible — nobody subscribes to this workflow, which is
+# the same failure mode as the bug it watches for. So drift also opens (or
+# refreshes) a tracking issue, which lands in the normal triage queue.
+
+name: Agent Release Drift
+
+on:
+  schedule:
+    - cron: "23 6 * * *" # daily, 06:23 UTC
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: "Days an unpublished commit may sit before failing"
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+  issues: write # opens/refreshes the drift tracking issue
+
+concurrency:
+  group: agent-release-drift
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The check resolves the newest release tag. A default shallow
+          # checkout fetches none, which would report every agent as never
+          # released — passing while seeing nothing.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Verify release tags were fetched
+        run: |
+          set -euo pipefail
+          count=$(git tag --list 'agent-pkg-*' | wc -l)
+          echo "Found $count agent release tag(s)."
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: no agent-pkg-* tags in this checkout." >&2
+            echo "The drift check reads tags to find the newest release; with" >&2
+            echo "none it would report every agent as unreleased and pass" >&2
+            echo "while detecting nothing. Confirm fetch-depth: 0 above." >&2
+            exit 1
+          fi
+
+      - name: Check for unpublished agent work
+        id: drift
+        env:
+          AGE: ${{ github.event.inputs.max_age_days || '7' }}
+        run: |
+          set -uo pipefail
+          echo "age=$AGE" >> "$GITHUB_OUTPUT"
+          set +e
+          python util/check_agent_release_drift.py \
+            --max-age-days "$AGE" --github-annotations | tee drift.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Agent release drift'
+            echo
+            echo '```'
+            cat drift.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # Runs on drift only. An infra failure (tags missing, Python broken) still
+      # reds the run, but must not file an issue claiming a release is overdue.
+      - name: Open a tracking issue
+        if: failure() && steps.drift.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGE: ${{ steps.drift.outputs.age }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Agent release drift: merged work is unpublished"
+
+          # One open issue, and it is NOT re-commented on each daily run. A bot
+          # that posts "still broken" every morning is the noise that trains
+          # people to mute the thing — the open issue is the whole signal, and
+          # the run's step summary always carries the current detail.
+          existing=$(gh issue list --state open --search "$title in:title" \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$title\")] | first | .number // empty")
+          if [ -n "$existing" ]; then
+            echo "Drift already tracked by #$existing — not commenting again."
+            exit 0
+          fi
+
+          {
+            echo "One or more hub agents have merged changes that are in no"
+            echo "published release, past the ${AGE}-day SLA. Users are running an"
+            echo "older build than the repo says is current."
+            echo
+            echo "Fix: cut the release — tag \`agent-pkg-<id>-v<version>\` from"
+            echo "\`main\` and let \`release_agent_<id>.yml\` publish it."
+            echo
+            echo '```'
+            cat drift.txt
+            echo '```'
+            echo
+            echo "Detected by \`.github/workflows/agent_release_drift.yml\` on"
+            echo "$(date -u '+%Y-%m-%d') · [workflow run]($RUN_URL)"
+          } > body.md
+
+          gh issue create --title "$title" --body-file body.md
