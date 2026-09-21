@@ -2225,6 +2225,10 @@ class LemonadeClient:
         if tools:
             request_params["tools"] = tools
 
+        if self.cloud_model_provider(model):
+            # Without this a cloud stream reports no token counts at all.
+            request_params["stream_options"] = {"include_usage": True}
+
         try:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
@@ -2270,6 +2274,11 @@ class LemonadeClient:
                         }
                         for choice in chunk.choices
                     ],
+                    "usage": (
+                        chunk.usage.model_dump()
+                        if getattr(chunk, "usage", None) is not None
+                        else None
+                    ),
                 }
 
             self.log.debug(

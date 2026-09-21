@@ -41,6 +41,7 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -853,6 +854,8 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # Per-step timing for the running turn (always on); ``None`` between turns.
+    _step_timer: Optional[StepTimer] = None
 
     # Skills (#888): lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -1475,6 +1478,22 @@ Do NOT wrap conversational replies in JSON.
 
         logger.info("[turn] %s", format_summary(record))
         return record
+
+    def _attach_step_timer(self) -> StepTimer:
+        """Start this turn's step timer and route the SDK's call timings to it."""
+        timer = StepTimer()
+        self._step_timer = timer
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.llm_call_sink = timer.record_llm_call
+        return timer
+
+    def _detach_step_timer(self) -> None:
+        """Stop routing call timings; a later turn must not inherit them."""
+        self._step_timer = None
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.llm_call_sink = None
 
     def _publish_turn_metrics(self, record: Optional[Dict[str, Any]]) -> None:
         """Hand the sealed record to the console, if this console wants one.
@@ -4013,7 +4032,7 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage.append(usage)
 
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
-        """Run :meth:`_execute_tool`, timing it for the turn record.
+        """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
         Deliberately a separate method the agent loop calls, rather than timing
         inside ``_execute_tool``: that method is copied onto stand-ins by
@@ -4024,10 +4043,13 @@ Do NOT wrap conversational replies in JSON.
         — so a refused call's latency is never misfiled as agent overhead.
         """
         recorder = getattr(self, "_turn_recorder", None)
+        step_timer = getattr(self, "_step_timer", None)
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
-        if recorder is None or getattr(self, "_tool_timing_depth", 0):
+        if (recorder is None and step_timer is None) or getattr(
+            self, "_tool_timing_depth", 0
+        ):
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result)
             return result
@@ -4045,19 +4067,23 @@ Do NOT wrap conversational replies in JSON.
             return result
         finally:
             self._tool_timing_depth = 0
+            elapsed = time.perf_counter() - started
             waited = getattr(self, "_confirmation_wait_s", 0.0) or 0.0
-            try:
-                recorder.record_tool(
-                    step=getattr(getattr(self, "chat", None), "turn_step", 0),
-                    name=tool_name or "<unnamed>",
-                    # Human approval is excluded — neither tool nor model cost.
-                    # Folding it in made a 1.3s command report as 322.6s.
-                    wall_s=max(0.0, time.perf_counter() - started - waited),
-                    ok=ok,
-                    waited_s=waited,
-                )
-            except Exception as e:  # noqa: BLE001 - never displace a tool error
-                logger.warning("could not record tool timing: %s", e)
+            if step_timer is not None:
+                step_timer.record_tool(tool_name or "<unnamed>", elapsed, waited)
+            if recorder is not None:
+                try:
+                    recorder.record_tool(
+                        step=getattr(getattr(self, "chat", None), "turn_step", 0),
+                        name=tool_name or "<unnamed>",
+                        # Human approval is excluded — neither tool nor model
+                        # cost. Folding it in made a 1.3s command report as 322.6s.
+                        wall_s=max(0.0, elapsed - waited),
+                        ok=ok,
+                        waited_s=waited,
+                    )
+                except Exception as e:  # noqa: BLE001 - never displace a tool error
+                    logger.warning("could not record tool timing: %s", e)
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -5365,6 +5391,7 @@ Do NOT wrap conversational replies in JSON.
             # retries). A recorder left attached would fold the next turn's
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
+            self._detach_step_timer()
 
     def _process_query_impl(
         self,
@@ -5375,6 +5402,7 @@ Do NOT wrap conversational replies in JSON.
     ) -> Dict[str, Any]:
         """Inner implementation of ``process_query`` — see public method docstring."""
         start_time = time.time()  # Track query processing start time
+        step_timer = self._attach_step_timer()
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -5519,6 +5547,7 @@ Do NOT wrap conversational replies in JSON.
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
+            step_timer.begin_step(steps_taken)
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
@@ -7029,17 +7058,15 @@ Do NOT wrap conversational replies in JSON.
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
             perf_stats = response_stats or self.chat.get_stats()
-            if perf_stats:
-                conversation.append(
-                    {
-                        "role": "system",
-                        "content": {
-                            "type": "stats",
-                            "step": steps_taken,
-                            "performance_stats": perf_stats,
-                        },
-                    }
-                )
+            # A step whose backend reported no stats still took model time.
+            if perf_stats or step_timer.has_llm_calls():
+                stats_record = {
+                    "type": "stats",
+                    "step": steps_taken,
+                    "performance_stats": perf_stats or {},
+                }
+                step_timer.attach(stats_record)
+                conversation.append({"role": "system", "content": stats_record})
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
@@ -7582,6 +7609,9 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
+        # Closes the last step, filling its stats record before anyone reads it.
+        timing_summary = step_timer.finish()
+
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
         # empty-answer classification (#2137/#2141) skips persistence. Returned
@@ -7595,6 +7625,7 @@ Do NOT wrap conversational replies in JSON.
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
@@ -7651,6 +7682,8 @@ Do NOT wrap conversational replies in JSON.
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
+            # Where the time went: llm/tool/overhead totals and slowest steps.
+            "timing_summary": timing_summary,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps

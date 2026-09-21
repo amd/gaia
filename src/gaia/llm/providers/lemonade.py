@@ -4,6 +4,7 @@
 
 import json
 import logging
+import time
 from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
@@ -19,6 +20,17 @@ _NATIVE_TC_KEY = "__tool_calls__"
 #: Public because the streaming seam has to tell a control frame from answer
 #: text before it shows anything to a user.
 NATIVE_TOOL_CALLS_PREFIX = '{"' + _NATIVE_TC_KEY + '":'
+
+
+def _reasoning_tokens(usage: dict) -> Optional[int]:
+    """Reasoning tokens from an OpenAI-shape ``usage``, when reported."""
+    for key in ("completion_tokens_details", "output_tokens_details"):
+        details = usage.get(key)
+        if isinstance(details, dict):
+            value = details.get("reasoning_tokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+    return None
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -330,6 +342,9 @@ class LemonadeProvider(LLMClient):
         # ``usage`` field, captured here since ``chat()`` itself returns
         # just the message content/tool-call envelope as ``str``.
         self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
+        self._last_streamed = False
 
     @property
     def provider_name(self) -> str:
@@ -358,10 +373,12 @@ class LemonadeProvider(LLMClient):
         tools: Optional[List[dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
-        # Reset from any previous call — usage is per-call, not cumulative,
-        # and the streaming branch below never populates it (no non-streaming
-        # JSON body to read a ``usage`` field from).
+        # Reset from any previous call — these are per-call, not cumulative.
         self._last_usage = None
+        self._last_finish_reason = None
+        self._last_ttft_seconds = None
+        self._last_streamed = stream
+        request_started = time.perf_counter()
 
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
@@ -415,7 +432,7 @@ class LemonadeProvider(LLMClient):
             **kwargs,
         )
         if effective_stream:
-            return self._handle_stream(response)
+            return self._handle_stream(response, request_started)
 
         # Handle error responses — classify into typed exceptions so the
         # chat layer can decide whether to auto-retry vs. surface a
@@ -449,17 +466,7 @@ class LemonadeProvider(LLMClient):
         # ``usage`` object itself) so downstream aggregation gets equal-or-
         # better fidelity than the polled ``/stats`` endpoint, with no extra
         # HTTP round-trip and no last-request race.
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            timings = response.get("timings")
-            self._last_usage = {
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "total_tokens": int(usage.get("total_tokens") or 0),
-                "tokens_per_second": float(
-                    (timings or {}).get("predicted_per_second") or 0.0
-                ),
-            }
+        self._capture_usage(response)
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
@@ -467,6 +474,7 @@ class LemonadeProvider(LLMClient):
         choice = response["choices"][0]
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
+        self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
 
         if tool_calls:
@@ -521,6 +529,24 @@ class LemonadeProvider(LLMClient):
         vlm = VLMClient(base_url=self._backend.base_url)
         return vlm.extract_from_image(images[0], prompt=prompt)
 
+    def _capture_usage(self, response: dict) -> None:
+        """Record this call's own usage from a response body or stream chunk."""
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return
+        timings = response.get("timings")
+        self._last_usage = {
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+            "tokens_per_second": float(
+                (timings or {}).get("predicted_per_second") or 0.0
+            ),
+        }
+        reasoning = _reasoning_tokens(usage)
+        if reasoning is not None:
+            self._last_usage["reasoning_tokens"] = reasoning
+
     def get_performance_stats(self) -> dict:
         if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):
             # Server-global stats can belong to a concurrent local or cloud request.
@@ -530,16 +556,23 @@ class LemonadeProvider(LLMClient):
                 if key != "tokens_per_second"
             }
         # A non-streaming local call carries its own usage. /stats counts only
-        # the uncached part of whichever request the server served last.
-        if self._last_usage:
+        # the uncached part of whichever request the server served last. A
+        # streamed local call keeps /stats: it carries the ttft the UI shows.
+        if self._last_usage and not self._last_streamed:
             return dict(self._last_usage)
         return self._backend.get_stats() or {}
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
-        call (#1891), or ``None`` when unavailable (a streaming call, or the
-        server's response didn't include a ``usage`` field)."""
+        call (#1891), or the usage a stream carried on its last chunk. ``None``
+        when the server sent none."""
         return self._last_usage
+
+    def get_last_finish_reason(self) -> Optional[str]:
+        return self._last_finish_reason
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        return self._last_ttft_seconds
 
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
@@ -551,7 +584,7 @@ class LemonadeProvider(LLMClient):
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]
 
-    def _handle_stream(self, response) -> Iterator[str]:
+    def _handle_stream(self, response, request_started: float) -> Iterator[str]:
         """Yield prose as it arrives; end with the tool_calls sentinel if any.
 
         A tool-calling turn is only recognisable once the stream is over — the
@@ -572,10 +605,19 @@ class LemonadeProvider(LLMClient):
             return out
 
         for chunk in response:
+            # Cloud models send usage on a final chunk with no choices.
+            self._capture_usage(chunk)
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason
                 delta = choice.get("delta", {})
+                if self._last_ttft_seconds is None and (
+                    delta.get("content")
+                    or delta.get("reasoning_content")
+                    or delta.get("tool_calls")
+                    or choice.get("text")
+                ):
+                    self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
                 content = delta.get("content")
                 if content:
@@ -609,6 +651,7 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        self._last_finish_reason = finish_reason or None
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield close_thinking()

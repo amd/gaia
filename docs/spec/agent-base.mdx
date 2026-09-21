@@ -202,6 +202,7 @@ def process_query(
             "system_prompt": str,    # System prompt used for this query
             "conversation": list,    # Full step-by-step conversation trace
             "steps_taken": int,      # Number of reasoning steps taken
+            "timing_summary": dict,  # Where the time went (see Step Timing)
             "duration": float,       # Total processing time in seconds
             "input_tokens": int,     # Total input tokens across all steps
             "output_tokens": int,    # Total output tokens across all steps
@@ -377,6 +378,41 @@ The LLM must respond with JSON in one of these formats:
     ]
 }
 ```
+
+### Step Timing
+
+Each step's `stats` record in `conversation` carries a timing breakdown next to
+`performance_stats`. The times come from the agent's own clock, and the token
+counts come from each response's own usage, so the figures hold for cloud models
+too.
+
+```python
+{
+    "type": "stats",
+    "step": 3,
+    "performance_stats": {...},    # unchanged: what the backend reported
+    "step_seconds": 41.2,          # this step's wall time
+    "llm_seconds": 39.8,           # model requests, retries and continuations included
+    "tool_seconds": 0.9,           # sum of this step's tool calls
+    "overhead_seconds": 0.5,       # the rest; the three always add up to step_seconds
+    "ttft_seconds": 1.3,           # first request's time to first token; None if not streamed
+    "finish_reason": "length",     # as the provider returned it; None if not reported
+    "reasoning_tokens": 1830,      # None when the provider does not report them
+    "output_tok_per_s": 48.6,      # completion tokens / generation seconds
+    "llm_calls": 2,                # more than 1 means the step retried or continued
+    "tools": [{"name": "run_shell_command", "seconds": 0.9}],
+}
+```
+
+For a streamed request, `output_tok_per_s` counts the tokens after the first over
+the time after the first token: pure decode. A non-streamed request has no
+first-token mark, so it divides all its tokens by the whole request, which makes
+the figure a lower bound.
+
+`timing_summary` in the result totals the run: `wall_seconds`, `llm_seconds`,
+`tool_seconds`, `overhead_seconds`, `llm_calls`, `output_tokens`, and
+`slowest_steps`, the three longest steps, each with its tokens, finish reason, and
+which part (`llm`, `tools`, or `overhead`) dominated it.
 
 ### Error Handling
 
