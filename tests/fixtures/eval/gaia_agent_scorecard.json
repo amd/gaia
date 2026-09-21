@@ -1,0 +1,113 @@
+{
+  "run_id": "eval-fixture-flagship",
+  "timestamp": "2026-09-21T00:00:00+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia",
+    "ctx_size": 65536
+  },
+  "summary": {
+    "total_scenarios": 5,
+    "passed": 3,
+    "failed": 1,
+    "infra_error": 1,
+    "pass_rate": 0.6,
+    "judged_pass_rate": 0.75,
+    "avg_score": 8.25,
+    "by_category": {
+      "tool_selection": {
+        "passed": 2,
+        "failed": 1,
+        "infra_error": 0,
+        "avg_score": 8.0
+      },
+      "memory": {
+        "passed": 1,
+        "failed": 0,
+        "infra_error": 1,
+        "avg_score": 9.0
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "flagship_known_path_read",
+      "category": "tool_selection",
+      "agent_type": "gaia",
+      "status": "PASS",
+      "overall_score": 8.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Read the Q3 report and tell me the revenue.",
+          "agent_response": "Q3 revenue was $14.2 million.",
+          "agent_tools": ["query_specific_file"],
+          "overall_score": 8.0,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario_id": "flagship_multi_step_plan",
+      "category": "tool_selection",
+      "agent_type": "gaia",
+      "status": "FAIL",
+      "overall_score": 6.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Summarize the report, then chart the revenue trend.",
+          "agent_response": "Summarized the report but did not produce a chart.",
+          "agent_tools": ["query_specific_file"],
+          "overall_score": 6.0,
+          "pass": false
+        }
+      ]
+    },
+    {
+      "scenario_id": "flagship_memory_recall",
+      "category": "memory",
+      "agent_type": "gaia",
+      "status": "PASS",
+      "overall_score": 9.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What did I say my favourite editor was?",
+          "agent_response": "You mentioned it earlier in the session.",
+          "agent_tools": ["recall_memory"],
+          "overall_score": 9.0,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario_id": "flagship_memory_write",
+      "category": "memory",
+      "agent_type": "gaia",
+      "status": "INFRA_ERROR",
+      "overall_score": null,
+      "error": "backend unreachable",
+      "turns": []
+    },
+    {
+      "scenario_id": "doc_profile_known_path_read",
+      "category": "tool_selection",
+      "agent_type": "doc",
+      "status": "PASS",
+      "overall_score": 10.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Read the Q3 report and tell me the revenue.",
+          "agent_response": "Q3 revenue was $14.2 million.",
+          "agent_tools": ["query_specific_file"],
+          "overall_score": 10.0,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

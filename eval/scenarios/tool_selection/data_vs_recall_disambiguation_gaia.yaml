@@ -1,0 +1,50 @@
+id: data_vs_recall_disambiguation_gaia
+name: "Data Tool vs Recall -- Disambiguation (flagship)"
+category: tool_selection
+agent_type: gaia
+severity: high
+description: |
+  Flagship counterpart to data_vs_recall_disambiguation. The flagship's full
+  profile carries analyze_data_file and the scratchpad outright, so there is no
+  conditional activation to observe here -- the question is one of scale
+  instead. With ~80 registered tools and only ~26 exposed per turn by semantic
+  selection, does the structured-data tool get surfaced at all for an aggregate
+  question over a CSV, or does the selector hand the model query_documents and
+  memory recall and leave analyze_data_file off the turn entirely?
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: sales_data
+      path: "eval/corpus/documents/sales_data_2025.csv"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What was the total Q1 revenue across all salespeople in eval/corpus/documents/sales_data_2025.csv?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: q1_total_revenue
+      expected_answer: "$340,000"
+    success_criteria: |
+      Agent computes the aggregate by analyzing the structured data file
+      (analyze_data_file) and reports total Q1 revenue of $340,000.
+      PASS if the correct $340,000 total is returned via data analysis.
+      FAIL if the agent answers from query_documents chunk retrieval, misroutes
+      to a memory tool (recall), or returns a wrong total.
+
+  - turn: 2
+    objective: "Ask 'Who was the top salesperson by revenue?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_salesperson
+      expected_answer: "Sarah Chen with $70,000"
+    success_criteria: |
+      Agent identifies Sarah Chen (top by revenue, $70,000) from the same data
+      file. PASS if Sarah Chen is named as the top salesperson.
+
+expected_outcome: |
+  Semantic tool selection surfaces analyze_data_file for an aggregate question
+  over a CSV despite competing against ~80 registered tools, and the agent uses
+  it rather than RAG chunk retrieval or memory recall -- computing the correct
+  Q1 total and top salesperson.

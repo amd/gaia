@@ -268,11 +268,12 @@ governance is later adopted, email writes are the obvious first
 
 ## Acceptance bar
 
-**Blocker first:** [#2983](https://github.com/amd/gaia/issues/2983) — the flagship
-has no scorecard and no release eval gate. Committed baselines exist only for
-`rag_quality`, `tool_selection`, and `context_retention`
+**Blocker first:** [#2983](https://github.com/amd/gaia/issues/2983) — the flagship's
+scorecard adapter and release gate now exist (`release_agent_gaia.yml`), but no eval
+run has produced a card yet, so there is still nothing to regress against. Committed
+baselines exist only for `rag_quality`, `tool_selection`, and `context_retention`
 (`tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/`). An email category for the
-flagship has to exist before "no regression" means anything.
+flagship has to exist before "no regression" means anything for email work.
 
 To justify decommissioning, the flagship plus skill must:
 

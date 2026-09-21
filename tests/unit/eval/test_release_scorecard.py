@@ -2016,3 +2016,179 @@ class TestGenScorecardCtxSizePreRead:
         payload = mod.build_payload(benchmark_dir, gt_path, environment=env)
 
         assert payload.environment["ctx_size"] == 16384
+
+
+# ---------------------------------------------------------------------------
+# Adapter tests: TestGaiaAdapter (flagship agent)
+# ---------------------------------------------------------------------------
+
+GAIA_HARNESS_FIXTURE = FIXTURE_DIR / "gaia_agent_scorecard.json"
+
+
+class TestGaiaAdapter:
+    """Tests for hub/agents/gaia/python/packaging/gen_scorecard.py adapter."""
+
+    def _load_gen_scorecard(self):
+        adapter_path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "gaia"
+            / "python"
+            / "packaging"
+            / "gen_scorecard.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "gaia_gen_scorecard", adapter_path
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _run_json(self, tmp_path, scenarios, config=None):
+        """Write a minimal harness scorecard.json and return its path."""
+        payload = {
+            "run_id": "unit-test-run",
+            "config": config if config is not None else {"model": "judge-model"},
+            "scenarios": scenarios,
+        }
+        path = tmp_path / "scorecard.json"
+        path.write_text(json.dumps(payload))
+        return path
+
+    def test_happy_path_aggregate_matches_hand_recompute(self):
+        mod = self._load_gen_scorecard()
+        payload = mod.build_payload(GAIA_HARNESS_FIXTURE, ctx_size=65536)
+
+        # Flagship judged scenarios: tool_selection 8.0 + 6.0 -> 0.7 (weight 2),
+        # memory 9.0 -> 0.9 (weight 1). The doc scenario and the INFRA_ERROR one
+        # are excluded.
+        by_name = {m["name"]: m for m in payload.metrics}
+        assert by_name["tool_selection"]["value"] == pytest.approx(0.7)
+        assert by_name["tool_selection"]["weight"] == 2.0
+        assert by_name["memory"]["value"] == pytest.approx(0.9)
+        assert by_name["memory"]["weight"] == 1.0
+
+        expected = round(100 * ((0.7 * 2) + (0.9 * 1)) / 3, 2)
+        assert expected == 76.67
+        _components, aggregate = compute_aggregate(payload.metrics)
+        assert aggregate == pytest.approx(expected)
+
+        assert payload.aggregate_name == "weighted_judge_score"
+        # dataset_size (flagship scenarios) and test_cases_run (judged) differ.
+        assert payload.dataset_size == 4
+        assert payload.test_cases_run == 3
+        assert payload.agent_name == "GAIA"
+        assert payload.environment["ctx_size"] == 65536
+
+    def test_doc_scenarios_excluded_from_flagship_card(self):
+        mod = self._load_gen_scorecard()
+        payload = mod.build_payload(GAIA_HARNESS_FIXTURE, ctx_size=65536)
+
+        ids = payload.config["scenario_ids"]
+        assert "doc_profile_known_path_read" not in ids
+        assert all(not i.startswith("doc_") for i in ids)
+        # The doc scenario scored 10.0; folding it in would lift tool_selection
+        # from 0.7 to 0.8.
+        by_name = {m["name"]: m for m in payload.metrics}
+        assert by_name["tool_selection"]["value"] == pytest.approx(0.7)
+
+    def test_infra_error_excluded_from_judged(self):
+        mod = self._load_gen_scorecard()
+        payload = mod.build_payload(GAIA_HARNESS_FIXTURE, ctx_size=65536)
+
+        assert "flagship_memory_write" not in payload.config["scenario_ids"]
+        # memory keeps weight 1, not 2 — the INFRA_ERROR scenario contributes
+        # no evidence even though it resolved to the flagship.
+        by_name = {m["name"]: m for m in payload.metrics}
+        assert by_name["memory"]["weight"] == 1.0
+
+    def test_zero_judged_raises_loudly(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        path = self._run_json(
+            tmp_path,
+            [
+                {
+                    "scenario_id": "a",
+                    "category": "tool_selection",
+                    "agent_type": "gaia",
+                    "status": "INFRA_ERROR",
+                    "overall_score": None,
+                },
+                {
+                    "scenario_id": "b",
+                    "category": "memory",
+                    "agent_type": "gaia",
+                    "status": "TIMEOUT",
+                    "overall_score": None,
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match="Zero judged flagship scenarios"):
+            mod.build_payload(path, ctx_size=65536)
+
+    def test_missing_per_scenario_provenance_raises(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        path = self._run_json(
+            tmp_path,
+            [
+                {
+                    "scenario_id": "a",
+                    "category": "tool_selection",
+                    "status": "PASS",
+                    "overall_score": 9.0,
+                }
+            ],
+            config={"model": "judge-model", "agent_type": "gaia"},
+        )
+        # The run config says gaia, but no scenario carries provenance — that
+        # must not be silently counted as flagship.
+        with pytest.raises(ValueError, match="agent_type"):
+            mod.build_payload(path, ctx_size=65536)
+
+    def test_missing_ctx_size_raises(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        path = self._run_json(
+            tmp_path,
+            [
+                {
+                    "scenario_id": "a",
+                    "category": "tool_selection",
+                    "agent_type": "gaia",
+                    "status": "PASS",
+                    "overall_score": 9.0,
+                }
+            ],
+        )
+        with pytest.raises(ValueError, match="ctx_size"):
+            mod.build_payload(path)
+
+    def test_rendered_scorecard_validates(self):
+        mod = self._load_gen_scorecard()
+        payload = mod.build_payload(GAIA_HARNESS_FIXTURE, ctx_size=65536)
+        text = render_scorecard(payload)
+        assert validate_scorecard(parse_scorecard(text)) == []
+
+    def test_rendered_scorecard_leaks_no_host_or_absolute_path(self):
+        mod = self._load_gen_scorecard()
+        payload = mod.build_payload(
+            GAIA_HARNESS_FIXTURE, ctx_size=65536, agent_model="Gemma-4-E4B-it-GGUF"
+        )
+        text = render_scorecard(payload)
+
+        # The fixture's config carries backend_url http://localhost:4200 and the
+        # scenarios carry agent_response transcripts — none may ship.
+        for leak in (
+            "localhost",
+            "127.0.0.1",
+            ":4200",
+            "backend_url",
+            "agent_response",
+        ):
+            assert leak not in text, f"published scorecard leaks {leak!r}"
+        # No absolute filesystem path, including the fixture's own location.
+        assert str(GAIA_HARNESS_FIXTURE) not in text
+        assert "/home/" not in text
+        assert "C:\\" not in text
+        # The dataset pointer stays repo-relative.
+        assert payload.dataset_reference == "eval/scenarios/"

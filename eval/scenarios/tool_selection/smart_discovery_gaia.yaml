@@ -1,0 +1,43 @@
+id: smart_discovery_gaia
+name: "Smart Discovery (flagship)"
+category: tool_selection
+agent_type: gaia
+severity: critical
+description: |
+  Flagship counterpart to smart_discovery. Nothing is pre-indexed, so the agent
+  has to find the file itself before it can answer. On the flagship the local
+  discovery and indexing tools compete for ~26 exposed slots against ~80
+  registered tools -- among them web search, which answers a generic "PTO
+  policy" question plausibly and wrongly. Tests whether local discovery is
+  surfaced and preferred.
+
+persona: power_user
+
+setup:
+  index_documents: []  # No pre-indexed documents
+
+turns:
+  - turn: 1
+    objective: "Ask about PTO policy with no documents indexed"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent discovers and indexes employee_handbook.md (or similar HR document),
+      then correctly answers: first-year employees get 15 PTO days.
+      FAIL if agent says 'no documents available' without trying to find them.
+
+  - turn: 2
+    objective: "Ask follow-up: 'what about the remote work policy?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval"
+    success_criteria: "Agent answers from already-indexed document without re-indexing"
+
+expected_outcome: |
+  Local file discovery and indexing surface ahead of the flagship's other ~80
+  tools for a question that cannot be answered without context, and the agent
+  finds, indexes and answers from the employee handbook rather than guessing or
+  reaching for the web.

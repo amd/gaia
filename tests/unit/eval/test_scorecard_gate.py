@@ -65,6 +65,21 @@ class TestMissingCard:
         result = main(["--scorecard", str(scorecard)])
         assert result == 1
 
+    def test_missing_card_says_which_card_and_how_to_make_it(
+        self, tmp_path, capsys
+    ):
+        # Exit 1 alone cannot distinguish "card missing" from a regression, an
+        # unreadable card, or a bad flag — every failure path returns 1. Pin the
+        # message so this case can actually fail on its own.
+        scorecard = tmp_path / "SCORECARD.md"
+        assert main(["--scorecard", str(scorecard)]) == 1
+
+        output = capsys.readouterr()
+        combined = output.out + output.err
+        assert "missing" in combined
+        assert str(scorecard) in combined
+        assert "gen_scorecard.py" in combined
+
 
 # ---------------------------------------------------------------------------
 # Case (b) — strict regression with --baseline-file → exit 1
