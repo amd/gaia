@@ -14,6 +14,7 @@ spelled correctly — a mock of ``git log`` proves the function was called, not
 that the revision range is right.
 """
 
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -241,8 +242,13 @@ def _commit(repo: Path, rel_path: str, text: str, days_ago: int, subject: str) -
         check=True,
         capture_output=True,
         text=True,
+        # Inherit the real environment and override only what must be pinned.
+        # A hand-built env would have to name a PATH that finds git on Linux,
+        # macOS and Windows alike, which is three ways to be wrong; HOME plus an
+        # explicit identity is all the isolation from the host gitconfig this
+        # needs, and the fixed dates are what the age assertions rest on.
         env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            **os.environ,
             "HOME": str(repo),
             "GIT_AUTHOR_NAME": "t",
             "GIT_AUTHOR_EMAIL": "t@example.com",
