@@ -122,8 +122,14 @@ The connector plumbing is already shared. `gmail_backend.py` and
 `outlook_backend.py` obtain tokens via
 `gaia.connectors.api.get_access_token_sync(provider=..., scopes=..., agent_id=...)`
 — the same call a core mixin makes. Grants are enforced centrally by
-`check_agent_grant()`. Moving the backends into `src/gaia/agents/tools/` is largely
-a relocation, not a rewrite.
+`check_agent_grant()`.
+
+The **credentials** are shared; the **code is not**. Each core backend is a lean
+reimplementation of the read half of its sidecar counterpart, because the flagship
+must not depend on the package it is meant to replace — and because the sidecar's
+backends return raw provider resources, leaving the flattening to a tool layer that
+does not come along. Phase 0 wrote 248 lines against `outlook_backend.py`'s 722;
+Phase 4 wrote 418 against `gmail_backend.py`'s 1256.
 
 ### New and changed files
 
@@ -131,8 +137,8 @@ a relocation, not a rewrite.
 |---|---|
 | `src/gaia/agents/tools/email_tools.py` | New — `EmailToolsMixin`, ~19 tools |
 | `src/gaia/agents/tools/_email/graph.py` | New — read-only Microsoft Graph backend (Phase 0) |
-| `src/gaia/agents/tools/_email/gmail.py` | New — relocated from `gaia_agent_email/gmail_backend.py` (Phase 4) |
-| `src/gaia/agents/tools/_email/scopes.py` | New — relocated; keeps the `https://mail.google.com/` exclusion (#2533) |
+| `src/gaia/agents/tools/_email/gmail.py` | New — read-only Gmail backend, reimplemented (Phase 4) |
+| `src/gaia/agents/tools/_email/scopes.py` | New — declared vs read-capable scopes; keeps the `https://mail.google.com/` exclusion (#2533) |
 | `src/gaia/agents/registry.py` | Add `"email"` to `KNOWN_TOOLS` |
 | `hub/skills/inbox-triage/SKILL.md` | New — the judgment layer |
 | `hub/agents/gaia/python/gaia-agent.yaml` | Bump `tools_count` (drift-guarded by `test_gaia_agent.py`) |
@@ -310,7 +316,12 @@ against the committed baseline.
 
 **Phase 3** — briefing, tasks, scheduling. Needs daemon-managed jobs.
 
-**Phase 4** — Gmail / Google connector.
+**Phase 4** — Gmail / Google connector. The same five read tools, now backed by
+either mailbox. Google's consent declares `gmail.readonly` only, while the scope
+actually requested at token time resolves against what the connection already
+carries, so an existing `gmail.modify` user is never sent through a browser
+reconnect. When both mailboxes are usable, Gmail wins and `GAIA_MAIL_PROVIDER`
+overrides that.
 
 **Phase 5** — deprecate. Not before Phases 0–4 have shipped and the eval bar is met.
 
