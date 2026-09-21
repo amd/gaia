@@ -164,3 +164,33 @@ def test_classify_writes_nothing_when_a_batch_fails(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         classify.main()
     assert not (cache / "labels.txt").exists()
+
+
+def _one_session_cache(cache):
+    (cache / "intents.jsonl").write_text(
+        json.dumps({"session_id": "aaaaaaaa-uuid", "goal": "work"}), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv_tail, expected",
+    [
+        (["--out", "MISSING/labels.txt"], "does not exist"),
+        (["--batch", "0"], "--batch must be at least 1"),
+    ],
+)
+def test_bad_arguments_fail_before_any_model_call(
+    tmp_path, monkeypatch, argv_tail, expected
+):
+    """Every batch is model spend and the write is last — check the args first."""
+    _one_session_cache(tmp_path)
+    called = []
+    monkeypatch.setattr(
+        classify, "run_claude", lambda *a, **k: called.append(1) or "{}"
+    )
+    tail = [a.replace("MISSING", str(tmp_path / "nope")) for a in argv_tail]
+    monkeypatch.setattr("sys.argv", ["classify", "--cache", str(tmp_path), *tail])
+    with pytest.raises(SystemExit) as err:
+        classify.main()
+    assert expected in str(err.value)
+    assert not called

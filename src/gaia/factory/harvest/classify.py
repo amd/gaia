@@ -164,6 +164,15 @@ def main() -> None:
 
     rows = load_intents(args.cache)
     out_path = args.out or (args.cache / "labels.txt")
+    # Checked before the first call: every batch is model spend, and the write
+    # is last, so an unwritable destination would discard the whole run.
+    if args.batch < 1:
+        raise SystemExit(f"--batch must be at least 1, got {args.batch}.")
+    if not out_path.parent.is_dir():
+        raise SystemExit(
+            f"Cannot write {out_path}: {out_path.parent} does not exist. "
+            "Create it, or drop --out to write to the cache directory."
+        )
     askable, labels = split_unclassifiable(rows)
     if labels:
         print(

@@ -47,9 +47,9 @@ python -m gaia.factory.harvest.classify
 python -m gaia.factory.harvest.synthesize > "$FACTORY/analysis.md"
 ```
 
-All accept `--root` (transcripts elsewhere) and `--out` / `--cache`; `context` and
-`savings` also take `--projects` if the raw transcripts are not under
-`~/.claude/projects`.
+Only `scan` takes `--root` (transcripts elsewhere); `scan` and `classify` write with
+`--out`. Every other step reads the cache with `--cache`, and `context` and `savings`
+also take `--projects` if the raw transcripts are not under `~/.claude/projects`.
 
 Outputs in `~/.gaia/cache/factory/`:
 
