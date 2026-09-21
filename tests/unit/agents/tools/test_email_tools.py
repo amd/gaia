@@ -633,6 +633,27 @@ def test_check_mailbox_access_reports_the_resolved_provider(harness_factory):
     assert out["alternatives"] == ["microsoft"]
 
 
+def test_read_email_body_is_bounded_and_truncation_is_visible(harness_factory):
+    """Quoted thread history is unbounded; the NPU profile runs a 32K window."""
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    huge = "x" * (_MAX_BODY_CHARS + 5000)
+    message = dict(GRAPH_MESSAGE, body={"contentType": "text", "content": huge})
+    h = harness_factory(lambda r: json_response(message))
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
+    assert len(out["body"]) == _MAX_BODY_CHARS
+    assert out["body_truncated"] is True
+    assert out["body_original_chars"] == len(huge)
+
+
+def test_a_short_body_is_not_marked_truncated(harness_factory):
+    h = harness_factory(lambda r: json_response(GRAPH_MESSAGE))
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
+    assert "body_truncated" not in out
+    assert out["body"] == "<p>Can you confirm?</p>"
+
+
 def test_backend_is_not_built_until_a_tool_runs():
     """Composing the mixin must not touch the connectors layer."""
 
