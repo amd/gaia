@@ -2290,7 +2290,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         errors = self._get_context_items("error", ctx, limit=5)
         if errors:
-            error_lines = [f"  - {e['content']} ({self._memory_age(e)})" for e in errors]
+            error_lines = [
+                f"  - {e['content']} ({self._memory_age(e)})" for e in errors
+            ]
             user_sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
 
         for group in (prefs, facts, skills, errors):
@@ -2366,6 +2368,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             return []
         shown = getattr(self, "_stable_memory_ids", set())
         ctx = self._memory_context
+        # A default (global) session is unscoped and reads every context.
+        contexts = None if ctx == "global" else (ctx, "global")
         hits = self._faiss_search(self._embed_text(query), TURN_RECALL_TOP_K * 4)
         items: List[Dict] = []
         for kid, score in hits:
@@ -2377,7 +2381,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 or item["category"] not in _TURN_RECALL_CATEGORIES
                 or item.get("sensitive")
                 or item.get("superseded_by")
-                or item.get("context") not in (ctx, "global")
+                or (contexts is not None and item.get("context") not in contexts)
             ):
                 continue
             items.append(item)

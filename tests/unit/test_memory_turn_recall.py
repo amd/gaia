@@ -167,15 +167,45 @@ class TestRelevantMemoriesAreSurfaced:
         assert item["use_count"] == 0
 
 
+class TestContextScope:
+    def test_a_scoped_session_skips_other_contexts(self, host, store):
+        _remember(
+            store,
+            host.vectors,
+            "toybox CI personal-context row",
+            _axis(0),
+            category="note",
+            context="personal",
+        )
+        host._rebuild_faiss_index()
+        host._memory_turn_query = QUERY
+
+        assert "personal-context row" not in host.get_memory_dynamic_context()
+
+    def test_a_default_session_reads_every_context(self, host, store):
+        _remember(
+            store,
+            host.vectors,
+            "toybox CI personal-context row",
+            _axis(0),
+            category="note",
+            context="personal",
+        )
+        host._rebuild_faiss_index()
+        host._memory_context = "global"
+        host._memory_turn_query = QUERY
+
+        assert "personal-context row" in host.get_memory_dynamic_context()
+
+
 class TestWhatIsNeverSurfaced:
     @pytest.mark.parametrize(
         "kwargs",
         [
-            {"category": "note", "context": "personal"},
             {"category": "note", "sensitive": True},
             {"category": "reminder", "due_at": "2030-01-01T00:00:00+00:00"},
         ],
-        ids=["other-context", "sensitive", "reminder"],
+        ids=["sensitive", "reminder"],
     )
     def test_excluded_rows(self, host, store, kwargs):
         _remember(store, host.vectors, "toybox CI secret-ish row", _axis(0), **kwargs)
