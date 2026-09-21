@@ -256,32 +256,35 @@ def test_claim_backed_by_a_write_tool_call_is_accepted(clear_tool_registry):
     assert _final_text(result) == CLAIM
 
 
-@pytest.mark.parametrize(
-    "exec_tool", ["run_shell_command", "run_python", "execute_python_file"]
-)
-def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec_tool):
-    """A save done via the shell or a Python snippet is a real save."""
+def _run_turn_with_other_tool(tool_name, mark_requires_confirmation=False):
+    """Run a turn where `tool_name` is called and the answer claims a save.
+
+    Returns the messages sent to the LLM — two batches mean the claim was
+    accepted, three mean the guard re-prompted.
+    """
     calls = []
 
-    class _ExecAgent(_DummyAgent):
+    class _OtherToolAgent(_DummyAgent):
         def _register_tools(self):
             @tool
             def write_file(file_path: str, content: str) -> dict:
                 """Write content to a file."""
                 return {"status": "success", "file_path": file_path}
 
-            def _exec(command: str) -> dict:
+            def _other(command: str) -> dict:
                 calls.append(command)
                 return {"status": "success", "stdout": ""}
 
-            _exec.__name__ = exec_tool
-            _exec.__doc__ = "Run a command that may write files."
-            tool(_exec)
+            _other.__name__ = tool_name
+            _other.__doc__ = "Run a command."
+            tool(_other)
 
     with patch("gaia.agents.base.agent.AgentSDK"):
-        agent = _ExecAgent(silent_mode=True, skip_lemonade=True)
+        agent = _OtherToolAgent(silent_mode=True, skip_lemonade=True)
     agent.streaming = False
     agent._tool_requires_confirmation = lambda *_args, **_kwargs: False
+    if mark_requires_confirmation:
+        agent._tools_registry[tool_name]["requires_confirmation"] = True
 
     sent = []
 
@@ -291,14 +294,14 @@ def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec
         if not sent:
             resp.text = json.dumps(
                 {
-                    "thought": "saving via exec",
-                    "tool": exec_tool,
+                    "thought": "working",
+                    "tool": tool_name,
                     "tool_args": {"command": "echo steps > notes/routine.md"},
                 }
             )
         else:
             resp.text = json.dumps({"thought": "", "answer": CLAIM})
-        sent.append(messages)
+        sent.append([dict(m) for m in messages])
         return resp
 
     agent.chat = MagicMock()
@@ -307,5 +310,46 @@ def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec
     result = agent.process_query("Extract the routine and save it", max_steps=10)
 
     assert calls == ["echo steps > notes/routine.md"]
+    return sent, result
+
+
+@pytest.mark.parametrize(
+    "exec_tool", ["run_shell_command", "run_python", "execute_python_file"]
+)
+def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec_tool):
+    """A save done via the shell or a Python snippet is a real save."""
+    sent, result = _run_turn_with_other_tool(exec_tool)
+
     assert len(sent) == 2, "the guard re-prompted a save that the exec tool performed"
+    assert _final_text(result) == CLAIM
+
+
+@pytest.mark.parametrize(
+    "other_tool", ["create_calendar_event", "download_url", "export_report"]
+)
+def test_tool_that_writes_no_file_does_not_suppress_the_guard(
+    clear_tool_registry, other_tool
+):
+    """Naming a tool `create_*` or `export_*` does not make it a save."""
+    sent, _ = _run_turn_with_other_tool(other_tool)
+
+    assert len(sent) == 3
+    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
+
+
+def test_read_only_mcp_call_does_not_suppress_the_guard(clear_tool_registry):
+    """An unclassified MCP tool wrote nothing, so the claim is still unbacked."""
+    sent, _ = _run_turn_with_other_tool("mcp_search_issues")
+
+    assert len(sent) == 3
+    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
+
+
+def test_mcp_tool_that_declares_confirmation_is_believed(clear_tool_registry):
+    """A third-party tool that flags itself consequential can have written."""
+    sent, result = _run_turn_with_other_tool(
+        "mcp_write_remote_file", mark_requires_confirmation=True
+    )
+
+    assert len(sent) == 2
     assert _final_text(result) == CLAIM

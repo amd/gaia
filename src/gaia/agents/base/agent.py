@@ -718,25 +718,12 @@ _FILE_WRITE_TOOLS: Tuple[str, ...] = (
     "write_python_file",
     "edit_file",
 )
-# Matched permissively against every tool called this turn: any of these
-# markers means something plausibly touched disk, so the claim is believed.
-# Over-matching only costs recall; under-matching would block a true save.
-_FILE_WRITE_TOOL_MARKERS: Tuple[str, ...] = (
-    "write",
-    "save",
-    "edit",
-    "create",
-    "download",
-    "export",
-    "replace",
-    "generate_image",
-    # A shell redirect or a Python snippet is the other way an agent saves.
-    "shell",
-    "command",
-    "execute",
-    "python",
-    "script",
-)
+# Tools whose completed call makes a save claim believable. The confirmation
+# set is already exactly the tools that write or execute, minus the one entry
+# that merely spawns a notifier, so it is read rather than duplicated here.
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
+    "notify_desktop",
+}
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 _FILE_WRITE_CLAIM_PATTERNS = (
     # "I saved …", "I've written …", "I have now created …"
@@ -3984,6 +3971,19 @@ Do NOT wrap conversational replies in JSON.
         if flag is not None:
             return bool(flag)
         return tool_name.startswith("mcp_")
+
+    def _tool_can_touch_disk(self, tool_name: str) -> bool:
+        """Whether a call that already ran could have put bytes on disk.
+
+        Deliberately not ``_tool_requires_confirmation``: that one exempts a
+        pre-authorized write and treats an unclassified ``mcp_`` tool as
+        consequential, and both of those readings are inverted here. A
+        third-party tool counts only when it declared the flag itself.
+        """
+        if tool_name in _DISK_TOUCHING_TOOLS:
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        return bool(entry.get("requires_confirmation"))
 
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
@@ -7336,8 +7336,7 @@ Do NOT wrap conversational replies in JSON.
                         (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
                     )
                     _wrote_this_turn = any(
-                        any(_m in _tname.lower() for _m in _FILE_WRITE_TOOL_MARKERS)
-                        for _tname, _ in tool_call_log
+                        self._tool_can_touch_disk(_tname) for _tname, _ in tool_call_log
                     )
                     if _write_tool and not _wrote_this_turn:
                         file_write_claim_reprompts += 1
