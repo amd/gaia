@@ -221,6 +221,8 @@ at it directly; the fetcher will not be talked into it.
 
 - Guide: <https://amd-gaia.ai/docs/guides/gaia>
 - Technical reference: [`SPEC.md`](./SPEC.md)
+- Integration playbook for AI coding assistants: [`SKILL.md`](./SKILL.md)
+- Eval results: [`SCORECARD.md`](./SCORECARD.md) — what was measured, on which version and commit. It is regenerated only when a fresh eval runs, not on every release, so it can lag the package version above.
 - Changes: [`CHANGELOG.md`](./CHANGELOG.md)
 - Issues: <https://github.com/amd/gaia/issues>
 

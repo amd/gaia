@@ -126,7 +126,6 @@
 #     Email added a macos-15-intel smoke leg to catch that. Add the same here if
 #     Intel-Mac backward-compat becomes a real support burden; today darwin-x64
 #     is best-effort and its absence/breakage fails loudly at install.
-#   * the eval / scorecard gates (email-specific corpora + thresholds).
 #   * the whole-package zip (disabled upstream — exceeded the edge upload limit).
 
 name: Release Agent (gaia)
@@ -659,11 +658,77 @@ jobs:
           npm run build
           npm test
 
+  # ── Stage 4b: scorecard presence + regression gate ──────────────────
+  # PRESENCE + REGRESSION ONLY. Unlike email, no absolute bar (--min-aggregate /
+  # --min-urgent-recall) is enforced: email resolves those from a thresholds
+  # manifest built on a labelled corpus, and the flagship has neither that
+  # manifest nor a second measurement to derive a bar from. A number invented
+  # here would be a guess wearing the costume of a bar. Follow-up: set an
+  # absolute bar once more than one flagship measurement exists.
+  # Regression tolerance is the gate's default band — max(1·stdev, 1.5pp).
+  scorecard-gate:
+    name: Scorecard gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history so git describe can find previous tags
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install core + PyYAML
+        run: pip install -e . pyyaml
+      - name: Resolve previous release tag (best-effort baseline)
+        id: prev_tag
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Most recent agent-pkg-gaia-* tag strictly before the current ref. On
+          # workflow_dispatch the ref is a branch, not a tag, so this finds the
+          # latest tag of the right pattern reachable from it.
+          PREV="$(git describe --tags --abbrev=0 \
+            --match 'agent-pkg-gaia-*' \
+            "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "${PREV}" ]; then
+            echo "Baseline tag: ${PREV}"
+          else
+            echo "No previous release tag found — presence-only check."
+          fi
+      - name: Resolve package version being released
+        id: pkgver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same source the "Resolve version" stage validates the tag against,
+          # so re-reading it here needs no extra trust assumption.
+          PKG_VER="$(python -c "import json; print(json.load(open('${PKG_DIR}/package.json'))['version'])")"
+          echo "version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "Package version: ${PKG_VER}"
+      - name: Run scorecard gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREV="${{ steps.prev_tag.outputs.prev_tag }}"
+          PKGVER="${{ steps.pkgver.outputs.version }}"
+          # --expected-version is what turns a stale published score into a loud
+          # release failure: the card is regenerated only when a fresh eval runs,
+          # so without this it silently drifts behind the package version.
+          if [ -n "${PREV}" ]; then
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/gaia/npm/SCORECARD.md \
+              --baseline-ref "${PREV}" --expected-version "${PKGVER}"
+          else
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/gaia/npm/SCORECARD.md \
+              --expected-version "${PKGVER}"
+          fi
+
   # ── Stage 5: publish to the hub + npm (single atomic step) ──────────
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [version, freeze, tui, tests]
+    needs: [version, freeze, tui, tests, scorecard-gate]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until
     # a maintainer approves — the human backstop for an accidental/tampered
@@ -921,6 +986,15 @@ jobs:
             fi
           done
 
+          # SCORECARD.md renders as the hub page's Scorecard tab. Guarded on
+          # presence so a release cut before the first flagship eval still
+          # publishes; the scorecard-gate job is what makes the card mandatory.
+          scorecard_args=()
+          SCORECARD="hub/agents/gaia/npm/SCORECARD.md"
+          if [ -f "${SCORECARD}" ]; then
+            scorecard_args+=(--eval-scorecard "${SCORECARD}")
+          fi
+
           # Sidecar binaries only — the TUI is already published in the
           # terminal-hub lane and is deliberately not republished here.
           args=()
@@ -946,6 +1020,7 @@ jobs:
             --manifest "${MANIFEST}" \
             --strict-immutable \
             "${doc_args[@]}" \
+            "${scorecard_args[@]}" \
             "${args[@]}"
 
       - name: Regenerate binaries.lock.json with real hashes

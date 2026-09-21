@@ -45,6 +45,14 @@ The corpus + greedy decoding (`temperature=0.0`) are fixed, and the `needs_llm` 
 
 **`--experiments` defaults to 1.** Measured run-to-run stdev on the email corpus is 0.0023 (CV 0.27%), so repeats cost hours of serial-slot time to tighten the CI by ~0.26pp. A single run records `stdev: 0.0`, and the gate's `--regression-floor-pp` supplies the noise tolerance instead. Raise `--experiments` only when you are specifically characterising variance.
 
+## Aggregate metric — GAIA flagship (#2983)
+
+The flagship is the second adopter, and it measures a different kind of thing. Email runs `gaia eval benchmark` over a **labelled corpus** and scores predictions against ground truth. The flagship runs `gaia eval agent` — a **scenario harness** whose answers an LLM judge scores 0–10 — so there is no accuracy to report and its aggregate is named **`weighted_judge_score`**: one metric per eval category, each category's value the mean judge score over its scenarios normalised onto [0, 1], weighted by how many scenarios that category contributed.
+
+The adapter is [`hub/agents/gaia/python/packaging/gen_scorecard.py`](https://github.com/amd/gaia/tree/main/hub/agents/gaia/python/packaging/gen_scorecard.py). It reads `<run-dir>/scorecard.json` and keeps only the scenarios whose recorded provenance says the flagship (`agent_type: gaia`) actually ran them — a run can mix agents, so the harness's own pooled `summary.by_category` would fold other agents' scores into the flagship's number.
+
+The release gate on `release_agent_gaia.yml` enforces **presence + no-regression only**, with no `--min-aggregate` or `--min-urgent-recall`: those come from email's thresholds manifest, and the flagship has no equivalent manifest and no second measurement yet to derive a bar from. An absolute bar is a follow-up.
+
 ## File format
 
 Scorecard files are **Markdown with YAML front matter** (`.md`). The front matter holds all machine-readable fields; the body is a human-readable summary with a worked recomputation and a Reproduction section.
@@ -215,6 +223,7 @@ The `doc-root` is the location of the agent's canonical README:
 | Agent | doc-root |
 |-------|----------|
 | Email Triage (`@amd-gaia/agent-email`) | `hub/agents/email/npm/` |
+| GAIA flagship (`@amd-gaia/gaia`) | `hub/agents/gaia/npm/` |
 
 The relative link `./SCORECARD.md` resolves both in-repo and when the directory is published as an npm package. The npm `files` array includes `SCORECARD.md` (not a `scorecards/` directory).
 
