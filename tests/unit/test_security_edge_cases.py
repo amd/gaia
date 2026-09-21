@@ -150,7 +150,7 @@ class TestCreateBackupPermissionError:
     """Test create_backup when shutil.copy2 raises PermissionError."""
 
     @pytest.fixture
-    def validator(self, tmp_path):
+    def validator(self, tmp_path, mock_home):
         return PathValidator(allowed_paths=[str(tmp_path)])
 
     def test_permission_error_returns_none(self, validator, tmp_path):
@@ -179,15 +179,14 @@ class TestCreateBackupPermissionError:
         result = validator.create_backup(str(ghost))
         assert result is None
 
-    def test_generic_exception_returns_none(self, validator, tmp_path):
-        """create_backup returns None for any unexpected exception."""
+    def test_a_programming_error_is_not_swallowed(self, validator, tmp_path):
+        """Only a filesystem failure skips the backup; a bug surfaces."""
         target = tmp_path / "weird_file.txt"
         target.write_text("data")
 
         with patch("shutil.copy2", side_effect=RuntimeError("Unexpected")):
-            result = validator.create_backup(str(target))
-
-        assert result is None
+            with pytest.raises(RuntimeError):
+                validator.create_backup(str(target))
 
 
 # ============================================================================
