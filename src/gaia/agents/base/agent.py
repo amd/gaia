@@ -5767,6 +5767,7 @@ Do NOT wrap conversational replies in JSON.
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
             response_stats = None
+            response_finish_reason = None
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -5816,6 +5817,7 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                response_finish_reason = chunk_response.finish_reason
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -5974,6 +5976,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        response_finish_reason = chat_response.finish_reason
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -7069,7 +7072,11 @@ Do NOT wrap conversational replies in JSON.
                         )
                     continue
 
-                unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                unfinished_kind = (
+                    "cut_off"
+                    if response_finish_reason == "length"
+                    else _unfinished_answer_kind(answer_candidate)
+                )
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -7086,6 +7093,27 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                         answer_candidate[-120:],
                     )
+                if unfinished_kind == "cut_off" and can_reprompt_unfinished:
+                    unfinished_answer_reprompts += 1
+                    logger.debug(
+                        "[WORKFLOW] Blocking reply cut off by the output-token "
+                        "limit as final answer: %s",
+                        answer_candidate[-120:],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your last reply hit the output-token limit and "
+                                "was cut off, so it is not an answer and nothing "
+                                "in it was carried out. Keep reasoning short: take "
+                                "the next step now with a tool call, or give a "
+                                "brief final answer if the task is complete."
+                            ),
+                        }
+                    )
+                    continue
+
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
                     logger.debug(

@@ -720,6 +720,9 @@ class _FakeLLMClient:
     def get_last_usage(self):
         return None
 
+    def get_last_finish_reason(self):
+        return None
+
     def get_performance_stats(self):
         return {}
 

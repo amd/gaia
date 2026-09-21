@@ -330,6 +330,7 @@ class LemonadeProvider(LLMClient):
         # ``usage`` field, captured here since ``chat()`` itself returns
         # just the message content/tool-call envelope as ``str``.
         self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
 
     @property
     def provider_name(self) -> str:
@@ -362,6 +363,7 @@ class LemonadeProvider(LLMClient):
         # and the streaming branch below never populates it (no non-streaming
         # JSON body to read a ``usage`` field from).
         self._last_usage = None
+        self._last_finish_reason = None
 
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
@@ -467,6 +469,7 @@ class LemonadeProvider(LLMClient):
         choice = response["choices"][0]
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
+        self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
 
         if tool_calls:
@@ -541,6 +544,9 @@ class LemonadeProvider(LLMClient):
         server's response didn't include a ``usage`` field)."""
         return self._last_usage
 
+    def get_last_finish_reason(self) -> Optional[str]:
+        return self._last_finish_reason
+
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
         self._model = model_name
@@ -609,6 +615,7 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        self._last_finish_reason = finish_reason or None
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield close_thinking()

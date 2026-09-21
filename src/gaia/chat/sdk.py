@@ -55,6 +55,9 @@ class AgentResponse:
     # as it was (the polled ``/stats`` measurement). ``None`` for providers/
     # calls that don't expose per-call usage.
     usage: Optional[Dict[str, Any]] = None
+    # Why the reply ended, as the provider reported it; ``"length"`` means
+    # the output-token limit cut it off.
+    finish_reason: Optional[str] = None
 
 
 class AgentSDK:
@@ -420,7 +423,11 @@ class AgentSDK:
             usage = self.llm_client.get_last_usage()
 
             return AgentResponse(
-                text=response, stats=stats, usage=usage, is_complete=True
+                text=response,
+                stats=stats,
+                usage=usage,
+                is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
             )
 
         except ConnectionError as e:
@@ -506,7 +513,12 @@ class AgentSDK:
             stats = self.get_stats()
             self._recorder_end(stats)
 
-            yield AgentResponse(text="", stats=stats, is_complete=True)
+            yield AgentResponse(
+                text="",
+                stats=stats,
+                is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
+            )
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context
