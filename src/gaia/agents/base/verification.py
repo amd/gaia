@@ -103,8 +103,12 @@ def _is_scope_line(line: str) -> bool:
     return bool(_SCOPE_BODY_RE.match(_SCOPE_MARKUP_RE.sub("", line)))
 
 
+#: ``subtests?`` sits between the count and the outcome when pytest-subtests is
+#: installed ("70 passed, 19 subtests passed in 1.32s"). Without it the whole
+#: summary failed to match and a run that really did pass was called unverified.
 _PYTEST_SUMMARY_RE = re.compile(
-    r"(?m)^=*[ \t]*(?:\d+ (?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
+    r"(?m)^=*[ \t]*(?:\d+ (?:subtests? )?"
+    r"(?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
     r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$"
 )
 _UNITTEST_SUMMARY_RE = re.compile(
@@ -135,7 +139,7 @@ def summary_reports_failure(tool_name: str, result: Any) -> bool:
     output = _python_run_output(result)
     summaries = list(_PYTEST_SUMMARY_RE.finditer(output))
     if summaries and re.search(
-        r"\b[1-9]\d* (?:failed|errors?)\b", summaries[-1].group(0)
+        r"\b[1-9]\d* (?:subtests? )?(?:failed|errors?)\b", summaries[-1].group(0)
     ):
         return True
     unittest = list(_UNITTEST_SUMMARY_RE.finditer(output))

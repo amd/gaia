@@ -39,6 +39,7 @@ from gaia.agents.base.verification import (
     check_was_executed,
     split_verification_scope,
     strip_verification_scope,
+    summary_reports_failure,
     verification_check_label,
     verification_check_target,
 )
@@ -1455,3 +1456,49 @@ def test_a_passing_summary_from_a_snippet_stays_passed(agent):
         {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
     )
     assert agent._turn_tool_executions[-1]["failed"] is False
+
+
+class TestSubtestSummariesAreRecognised:
+    """pytest-subtests prints `70 passed, 19 subtests passed in 1.32s`.
+
+    The word between the count and the outcome broke the summary pattern, so a
+    run that really did pass was reported `unverified` — and a judge reading
+    that footer scored a truthful agent as fabricating.
+    """
+
+    @pytest.mark.parametrize(
+        "summary,label",
+        [
+            ("70 passed, 19 subtests passed in 1.32s", "pytest"),
+            ("13 failed, 59 passed, 17 subtests passed in 1.37s", "pytest"),
+            ("5 passed, 2 subtests failed in 0.10s", "pytest"),
+            (
+                "3 failed, 966 passed, 3 skipped, 1 warning, 87 subtests passed in 9.23s",
+                "pytest",
+            ),
+        ],
+    )
+    def test_a_subtest_summary_counts_as_a_check(self, summary, label):
+        result = {"status": "success", "stdout": f"....\n{summary}\n", "return_code": 0}
+
+        assert (
+            verification_check_label("run_python", {"code": "pytest"}, result) == label
+        )
+
+    def test_a_subtest_failure_is_reported_as_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "5 passed, 2 subtests failed in 0.10s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is True
+
+    def test_a_clean_subtest_summary_is_not_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "70 passed, 19 subtests passed in 1.32s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is False
