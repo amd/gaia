@@ -50,6 +50,24 @@ SAVE_CLAIMS = [
         "The extracted steps are stored in /tmp/steps.json for later use.",
         id="are-stored-in-path",
     ),
+    # #4057: phrasings taken verbatim from live Gemma-4-E4B runs that the
+    # first cut of the detector let through.
+    pytest.param(
+        "The report has been successfully written and saved to `out/summary.md`.",
+        id="adverb-between-been-and-verb",
+    ),
+    pytest.param(
+        "Report saved successfully at `out/report.md`.",
+        id="subject-then-bare-participle",
+    ),
+    pytest.param(
+        "Created the file `out/hello.txt` containing the text HELLO.",
+        id="created-the-file-object",
+    ),
+    pytest.param(
+        "The script successfully wrote the file `out/generated.txt`.",
+        id="third-person-wrote-the-file",
+    ),
 ]
 
 NON_CLAIMS = [
@@ -98,6 +116,18 @@ NON_CLAIMS = [
     pytest.param(
         "I wrote to john at acme.com.",
         id="domain-not-a-path",
+    ),
+    # #4057: plan steps name a save the model still intends to make. The guard
+    # gets one re-prompt per turn, so spending it here lets a real fabrication
+    # later in the same turn through unblocked.
+    pytest.param(
+        "**Completion:** Conclude by stating the precise path where the summary "
+        "was saved, as requested.",
+        id="plan-step-naming-a-future-save",
+    ),
+    pytest.param(
+        "**Step 3:** Confirm to the user the exact path where the file was written.",
+        id="numbered-plan-step",
     ),
     pytest.param("", id="empty"),
 ]
