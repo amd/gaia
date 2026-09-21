@@ -913,10 +913,16 @@ turn — no extra model call:
 A call counts as a check when the tool is one of `run_tests`, `run_lint`,
 `typecheck`, or `build`, or when its `command` argument names a known runner
 (`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
-classifier also recognizes completed `execute_python_file` results containing a
-pytest summary or unittest run summary and an integer exit code. Reading a file
-containing test output, a refusal, or an ordinary script exit does not establish
-that tests ran. Other unrecognized runners remain `unverified`.
+classifier also recognizes completed `execute_python_file` and `run_python`
+results containing a pytest summary or unittest run summary and an integer exit
+code. Reading a file containing test output, a refusal, or an ordinary script
+exit does not establish that tests ran. Other unrecognized runners remain `unverified`.
+
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
