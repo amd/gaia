@@ -289,7 +289,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    findings, report = run_check(max_age_days=args.max_age_days)
+    # Passed explicitly rather than left to the defaults: a default argument
+    # binds at import, which would ignore any later override of these.
+    findings, report = run_check(
+        max_age_days=args.max_age_days,
+        repo_root=REPO_ROOT,
+        agents_dir=AGENTS_DIR,
+    )
     print("Agent release drift check\n")
     print(report or "  (no agent manifests found)")
 
