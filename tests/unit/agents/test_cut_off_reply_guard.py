@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """A reply the output-token limit cut off is never the final answer.
 
-On TheRock benchmark tasks tr-8319-cb and tr-7998-cb, fireworks.deepseek-v4p1-flash
-spent its whole 8192-token output budget reasoning. The provider returned that
-unfinished reasoning (a plan, cut off mid-sentence) as the reply, and the loop
-accepted it as the answer after ~30 of 150 steps, with no file changed.
+All three failed TheRock benchmark runs (tr-7998, tr-7998-cb, tr-8319-cb) ended
+on a fireworks.deepseek-v4p1-flash reply that used the whole 8192-token output
+budget. The provider dropped ``finish_reason=length``, so the loop took each
+cut-off reply as the final answer after ~30 of 150 steps: two were unfinished
+reasoning handed back as text, one a tool call cut off mid-argument.
 """
 
 import json
@@ -13,12 +14,46 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import _MAX_UNFINISHED_ANSWER_REPROMPTS, Agent
+from gaia.agents.base.agent import (
+    _CUT_OFF_FAILURE_ANSWER,
+    _MAX_CUT_OFF_CONTINUATIONS,
+    Agent,
+)
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.providers.lemonade import LemonadeProvider
 
-# Opening and closing paragraphs of the tr-8319-cb reply, verbatim.
+# The final model replies of the three failed runs. tr-7998 is verbatim; the
+# other two are 38-39K characters, so their opening and closing paragraphs are
+# kept verbatim.
+TR7998_REPLY = (
+    "Baseline confirmed empirically just now:\n\n"
+    "**58 passed** (+19 subtests), rc=0 \u2014 recorded above from an actual "
+    "run this turn (`pytest -q`).\n\n"
+    "Now let me make the fix real rather than describing it. First change "
+    "\u2014 teach the loader about components that have no node of their own:"
+    "\n\n<\uff5cDSML\uff5c calls>\n"
+    '<\uff5cDSML\uff5c invoke name="edit_file">\n'
+    '<\uff5cDSML\uff5c parameter name="file_path" string="true">'
+    "/Users/Shared/gaia-bench-work/runs-therock/fireworks_deepseek-v4p1-flash/"
+    "tr-7998/test_tools/determine_rocm_test_dependencies.py"
+    "</\uff5cDSML\uff5c parameter>\n"
+    '<\uff5cDSML\uff5c parameter name="old_content" string="true">Algorithm\n'
+    "---------\n1. Load the consumer graph.\n"
+    "2. For each changed subproject, walk its `consumers` edges to a depth set "
+    "by the\n   component's policy level (see the level ladder below).\n"
+    "3. UNION the per-subproject walk results across all changed subprojects"
+)
+TR7998_CB_REPLY = (
+    "Now I understand the domain. Let me think about the fix.\n\n"
+    "The problem: TensileLite is bundled inside hipblaslt and hipsparselt, has "
+    "no CMake target, so no node in the consumer graph. A change confined to "
+    "TensileLite selects no tests at all.\n\n"
+    "Edge interplay:_apply_policies include/exclude none default fine optional "
+    "future exclude hipplas possible demonstration unnecessary avoid clutter "
+    "keep minimal clean table w explanatory comment block matching file tone "
+    "rich commentary"
+)
 TR8319_CB_REPLY = (
     "Now I understand the structure. The fix: gfx90a is postsubmit-only, but "
     "on PRs with `ci:run-all-archs` it gets selected (all families) and "
@@ -26,7 +61,7 @@ TR8319_CB_REPLY = (
     "added.\n\n"
     "The cleanest fix consistent with the existing design: add "
     "`trigger_test_label_only: True` to gfx90a's linux entry in the "
-    "postsubmit matrix. That flag already exists and does exactly this — "
+    "postsubmit matrix. That flag already exists and does exactly this \u2014 "
     "only run tests when the family's label is present on the PR, bypassed on "
     "workflow_dispatch.\n\n"
     "Proceed baseline suite first then edits sequential verify compile "
@@ -34,6 +69,11 @@ TR8319_CB_REPLY = (
     "errors good!).\n\n"
     "Finally rerun full targeted"
 )
+FAILED_RUN_REPLIES = [
+    pytest.param(TR7998_REPLY, id="tr-7998-cut-off-tool-call"),
+    pytest.param(TR7998_CB_REPLY, id="tr-7998-cb-cut-off-reasoning"),
+    pytest.param(TR8319_CB_REPLY, id="tr-8319-cb-cut-off-reasoning"),
+]
 
 EDIT_CALL = json.dumps(
     {
@@ -116,11 +156,12 @@ def _final(result):
     return strip_verification_scope(result["result"]).strip()
 
 
-def test_cut_off_plan_is_reprompted_and_work_continues(agent):
+@pytest.mark.parametrize("reply", FAILED_RUN_REPLIES)
+def test_cut_off_reply_is_continued_not_answered(agent, reply):
     edits = _register_edit_file(agent)
     sent = _stub_chat(
         agent,
-        (TR8319_CB_REPLY, "length"),
+        (reply, "length"),
         (EDIT_CALL, "tool_calls"),
         ("Added trigger_test_label_only to gfx90a.", "stop"),
     )
@@ -128,19 +169,29 @@ def test_cut_off_plan_is_reprompted_and_work_continues(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
 
     assert len(sent) == 3
-    correction = sent[1][-1]["content"]
-    assert "cut off" in correction and "output-token limit" in correction
+    assert sent[1][-2] == {"role": "assistant", "content": reply}
+    assert "cut off at the output-token limit" in sent[1][-1]["content"]
     assert edits == ["build_tools/github_actions/amdgpu_family_matrix.py"]
     assert _final(result) == "Added trigger_test_label_only to gfx90a."
 
 
-def test_cut_off_reprompts_are_bounded_per_turn(agent):
-    replies = [(TR8319_CB_REPLY, "length")] * (_MAX_UNFINISHED_ANSWER_REPROMPTS + 3)
+def test_repeated_cut_offs_end_with_an_honest_failure(agent):
+    replies = [(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3)
     sent = _stub_chat(agent, *replies)
 
-    agent.process_query("Fix gfx90a PR testing", max_steps=20)
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
 
-    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert len(sent) == _MAX_CUT_OFF_CONTINUATIONS + 1
+    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+
+
+def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
+    sent = _stub_chat(agent, (TR8319_CB_REPLY, "length"))
+
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=1)
+
+    assert len(sent) == 1
+    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
 
 
 CONTROLS = [

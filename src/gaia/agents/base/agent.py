@@ -646,6 +646,21 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Do not call any more tools.]"
 )
 
+# A reply that ended on the output-token limit (finish_reason=length).
+_MAX_CUT_OFF_CONTINUATIONS = 2
+_CUT_OFF_CONTINUE_PROMPT = (
+    "Your last reply was cut off at the output-token limit before it finished, "
+    "so nothing in it was carried out. Continue from where you stopped: keep "
+    "your reasoning brief and make the next tool call, or give the final "
+    "answer if the task is complete."
+)
+_CUT_OFF_FAILURE_ANSWER = (
+    "I could not finish this task: my replies kept getting cut off at the "
+    "model's output-token limit, so the work they described was never carried "
+    "out. Retry with a higher output-token limit (max_tokens) or a model that "
+    "reasons more briefly."
+)
+
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
 _MAX_UNFINISHED_ANSWER_REPROMPTS = 2
@@ -5316,6 +5331,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        cut_off_continuations = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -6117,6 +6133,43 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
+
+            # A reply the output-token limit cut off is unfinished whatever it
+            # says; parsing it would turn half a thought into the answer.
+            if response_finish_reason == "length" and not response.startswith(
+                '{"__tool_calls__":'
+            ):
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": "reply cut off at the output-token limit",
+                        "type": "output_truncated",
+                    }
+                )
+                if (
+                    cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
+                    or steps_taken >= steps_limit
+                ):
+                    logger.warning(
+                        "[WORKFLOW] Reply cut off at the output-token limit "
+                        "%d time(s) this turn; stopping (step %d/%d)",
+                        cut_off_continuations + 1,
+                        steps_taken,
+                        steps_limit,
+                    )
+                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    break
+                cut_off_continuations += 1
+                logger.info(
+                    "[WORKFLOW] Reply cut off at the output-token limit; "
+                    "asking the model to continue (%d/%d)",
+                    cut_off_continuations,
+                    _MAX_CUT_OFF_CONTINUATIONS,
+                )
+                if response:
+                    messages.append({"role": "assistant", "content": response})
+                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,
@@ -7072,11 +7125,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                     continue
 
-                unfinished_kind = (
-                    "cut_off"
-                    if response_finish_reason == "length"
-                    else _unfinished_answer_kind(answer_candidate)
-                )
+                unfinished_kind = _unfinished_answer_kind(answer_candidate)
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -7093,27 +7142,6 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                         answer_candidate[-120:],
                     )
-                if unfinished_kind == "cut_off" and can_reprompt_unfinished:
-                    unfinished_answer_reprompts += 1
-                    logger.debug(
-                        "[WORKFLOW] Blocking reply cut off by the output-token "
-                        "limit as final answer: %s",
-                        answer_candidate[-120:],
-                    )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your last reply hit the output-token limit and "
-                                "was cut off, so it is not an answer and nothing "
-                                "in it was carried out. Keep reasoning short: take "
-                                "the next step now with a tool call, or give a "
-                                "brief final answer if the task is complete."
-                            ),
-                        }
-                    )
-                    continue
-
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
                     logger.debug(
