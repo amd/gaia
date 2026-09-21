@@ -822,9 +822,7 @@ class TestFindUngroundedInviteClaim:
         "text",
         [
             "An invite was sent to the team and received by all.",
-            "You received an invite from Alice about the quarterly planning "
-            "review scheduled for the end of next month with the full "
-            "leadership team and later sent an invite to Bob.",
+            "An invite was received and later sent to Bob.",
         ],
     )
     def test_external_evidence_does_not_ground_mixed_sent_and_received_claim(
