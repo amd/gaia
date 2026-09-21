@@ -35,6 +35,7 @@ from check_agent_release_drift import (  # noqa: E402
     latest_release,
     main,
     manifest_version,
+    parse_git_date,
     parse_version,
     run_check,
     tag_version,
@@ -380,6 +381,45 @@ def test_tagging_a_release_turns_the_check_green(repo):
     findings, report = run_check(7, NOW, repo, agents_dir)
     assert [f.status for f in findings] == ["ok"]
     assert "agent-pkg-email-v0.7.0" in report
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-08-22T12:00:00Z",  # git's spelling for a UTC commit
+        "2026-08-22T12:00:00+00:00",
+        "2026-08-22T05:00:00-07:00",
+        "  2026-08-22T12:00:00Z  ",
+    ],
+)
+def test_parse_git_date_accepts_every_spelling_git_emits(text):
+    """The `Z` case is a real crash, not a style preference.
+
+    Python 3.10's `fromisoformat` rejects a trailing `Z`, and git emits exactly
+    that for a commit made in UTC — which is every CI runner. On 3.10 the check
+    died before reporting anything. A dev box on a non-UTC clock never sees it.
+    """
+    assert parse_git_date(text) == datetime.fromisoformat(
+        text.strip().replace("Z", "+00:00")
+    )
+
+
+def test_commits_since_reads_a_z_suffixed_timestamp(monkeypatch, tmp_path):
+    """Pins the wiring, not just the parser.
+
+    Stubbed rather than driven through a real commit on purpose: whether git
+    spells a UTC commit `Z` or `+00:00` depends on the git version, so a real
+    commit exercises this on a CI runner and silently does not on a dev box
+    running an older git or a non-UTC clock. That gap is exactly how the crash
+    reached CI in the first place.
+    """
+    monkeypatch.setattr(
+        "check_agent_release_drift._git",
+        lambda args, root: "abc123\x1f2026-08-22T12:00:00Z\x1ffix: something\n",
+    )
+    commits = commits_since("some-tag", "hub/agents/email/", tmp_path)
+    assert len(commits) == 1
+    assert commits[0].when == datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
 
 
 def test_commits_since_is_oldest_first(repo):

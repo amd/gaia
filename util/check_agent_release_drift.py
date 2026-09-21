@@ -152,6 +152,19 @@ def git_tags(repo_root: Path = REPO_ROOT) -> List[str]:
     return [line for line in _git(["tag", "--list"], repo_root).splitlines() if line]
 
 
+def parse_git_date(text: str) -> datetime:
+    """Parse git's ``%cI`` timestamp.
+
+    Python 3.10's ``fromisoformat`` rejects a trailing ``Z``, which git emits
+    for a commit made in UTC — so on 3.10 the check would crash outright
+    against any UTC-committed repo, which is every CI runner.
+    """
+    text = text.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    return datetime.fromisoformat(text)
+
+
 def commits_since(ref: str, path: str, repo_root: Path = REPO_ROOT) -> List[Commit]:
     """Commits touching ``path`` after ``ref``, oldest first."""
     out = _git(
@@ -163,9 +176,7 @@ def commits_since(ref: str, path: str, repo_root: Path = REPO_ROOT) -> List[Comm
         if not line.strip():
             continue
         sha, when, subject = line.split("\x1f", 2)
-        commits.append(
-            Commit(sha=sha[:8], when=datetime.fromisoformat(when), subject=subject)
-        )
+        commits.append(Commit(sha=sha[:8], when=parse_git_date(when), subject=subject))
     return commits
 
 
