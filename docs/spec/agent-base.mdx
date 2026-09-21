@@ -111,6 +111,7 @@ def __init__(
     min_context_size: int = 32768,
     skip_lemonade: bool = False,
     device: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -137,6 +138,8 @@ def __init__(
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
         device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected
             hardware at startup; an unavailable device fails loudly (default: None = no check)
+        max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
+            32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
     """
 ```
 

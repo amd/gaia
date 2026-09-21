@@ -115,6 +115,13 @@ CHUNK_TRUNCATION_SIZE = 2500
 # for multi-file generation) override it explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
+# Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
+# system prompt plus history, so 8K is the most output it can spare.
+LOCAL_MAX_OUTPUT_TOKENS = 8192
+# A cloud reasoning model spends output tokens on thinking too; its window is
+# the provider's, not local hardware's.
+CLOUD_MAX_OUTPUT_TOKENS = 32768
+
 
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
@@ -1075,6 +1082,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -1111,9 +1119,23 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            max_output_tokens: Output-token cap for each LLM reply, thinking
+                          included. None (default) picks per model:
+                          CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
+                          LOCAL_MAX_OUTPUT_TOKENS otherwise.
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
+        if max_output_tokens is not None and (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens <= 0
+        ):
+            raise ValueError(
+                f"max_output_tokens must be a positive integer or None, got "
+                f"{max_output_tokens!r}."
+            )
+        self.max_output_tokens = max_output_tokens
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1256,6 +1278,8 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
         # and cold-reloads the resident model.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
@@ -1264,12 +1288,16 @@ Do NOT wrap conversational replies in JSON.
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
-            # prompt + history, leaving 8K for output gives plenty of headroom
-            # for both prose answers and long tool-call arg blobs (the eval
-            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
-            # higher would steal from the input-history budget.
-            max_tokens=8192,
+            max_tokens=(
+                max_output_tokens
+                if max_output_tokens is not None
+                else (
+                    CLOUD_MAX_OUTPUT_TOKENS
+                    if not (use_claude or use_chatgpt)
+                    and cloud_model_provider(model_id)
+                    else LOCAL_MAX_OUTPUT_TOKENS
+                )
+            ),
         )
         self.chat = AgentSDK(chat_config)
         # ``self.model_id`` was set earlier (before ``_register_tools``) so the
@@ -1285,6 +1313,20 @@ Do NOT wrap conversational replies in JSON.
 
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
+
+    def _max_output_tokens(self) -> int:
+        """Output-token cap for the next LLM call, re-read per call so a model
+        switch mid-session takes effect."""
+        if self.max_output_tokens is not None:
+            return self.max_output_tokens
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
+            self.chat.effective_model
+        ):
+            return CLOUD_MAX_OUTPUT_TOKENS
+        return LOCAL_MAX_OUTPUT_TOKENS
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -3372,14 +3414,15 @@ Do NOT wrap conversational replies in JSON.
                 # context window — those are separate limits and conflating
                 # them led to misleading error messages telling users to
                 # raise ``--ctx-size`` when their ctx was already 32K. The
-                # actual fix is bumping the output budget in
-                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # actual fix is bumping the output budget via the agent's
+                # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
                     f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call — increase AgentConfig.max_tokens."
+                    f"finishing the call ({self._max_output_tokens()} max) — "
+                    f"pass a larger max_output_tokens to the agent."
                 )
             if not raw_tool_calls:
                 raise ValueError(
@@ -5908,6 +5951,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -6086,6 +6130,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -6378,6 +6423,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
 
                     for chunk_response in stream_gen:
@@ -6420,6 +6466,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
