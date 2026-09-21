@@ -46,11 +46,11 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import ClassVar, FrozenSet, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-from gaia.agents.base.project_map import ProjectMapMixin
+from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_discovery import (
     DISCOVERY_THRESHOLD_ENV,
     SkillDiscovery,
@@ -332,6 +332,18 @@ class GaiaAgent(
         self.register_code_index_tools()
         self.register_email_tools()
         super()._register_tools()
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """The shell, always on when this session works in a code repository.
+
+        Coding requests rarely read like shell requests ("skip these tests on
+        PRs"), so semantic selection left a repo session without a shell even
+        though the project map tells the model which commands it accepts.
+        """
+        root = self._project_map_root()
+        if root and is_code_repository(root):
+            return frozenset({"run_shell_command"})
+        return frozenset()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 
