@@ -297,6 +297,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
 class LemonadeProvider(LLMClient):
     """Lemonade provider - local AMD-optimized inference."""
 
+    # llama.cpp ignores unknown message fields; a proxied model that rejects one 400s by name.
     accepts_reasoning_history = True
 
     def __init__(
@@ -501,6 +502,18 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
+        if not content and finish_reason == "stop" and self._last_reasoning:
+            # Some llama.cpp builds route a completed answer into
+            # ``reasoning_content``. A reply cut off by the token limit
+            # (``finish_reason="length"``) is left empty on purpose — that text
+            # is an unfinished thought, not an answer.
+            logger.warning(
+                "Lemonade returned empty 'content' with finish_reason=stop; "
+                "treating 'reasoning_content' as the answer (model=%s)",
+                effective_model,
+            )
+            content = self._last_reasoning
+            self._last_reasoning = None
         logger.debug(
             "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
             "plain_text",

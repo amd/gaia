@@ -646,20 +646,29 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Do not call any more tools.]"
 )
 
-_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)(?:</think>|\Z)", re.DOTALL)
+_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Anchored: only a reply that *opens* with an unclosed block was cut off
+# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
+# reasoning silently deletes everything the model said after it.
+_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
 
 
 def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
     """Split inline ``<think>`` reasoning out of a reply.
 
-    Returns ``(answer_text, reasoning)``. An unclosed ``<think>`` (the reply
-    was cut off mid-thought) is reasoning to the end, and text before a lone
-    ``</think>`` (the template opened the block in the prompt) is reasoning.
+    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
+    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
+    before a lone ``</think>`` (the template opened the block in the prompt) is
+    reasoning.
     """
     parts: List[str] = []
     if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
         head, _, text = text.partition("</think>")
         parts.append(head.strip())
+    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
+    if cut_off:
+        parts.append(cut_off.group(1).strip())
+        text = ""
     parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
     answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
     return answer, "\n\n".join(p for p in parts if p) or None
@@ -4806,6 +4815,19 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _history_for_request(self) -> List[Dict[str, Any]]:
+        """``conversation_history``, with earlier requests' reasoning stripped.
+
+        Every subclass that prepopulates a request from history must go through
+        here, or ``resend_reasoning_across_requests`` only holds for some of them.
+        """
+        history = getattr(self, "conversation_history", None) or []
+        if self.resend_reasoning_across_requests:
+            return list(history)
+        return [
+            {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
+        ]
+
     def _build_assistant_message(
         self,
         raw_response: str,
@@ -5333,13 +5355,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            if self.resend_reasoning_across_requests:
-                messages.extend(self.conversation_history)
-            else:
-                messages.extend(
-                    {k: v for k, v in m.items() if k != "reasoning_content"}
-                    for m in self.conversation_history
-                )
+            messages.extend(self._history_for_request())
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )

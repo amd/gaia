@@ -75,6 +75,8 @@ class AgentResponse:
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
     is_complete: bool = True
+    usage: Optional[Dict[str, Any]] = None   # per-call token usage, when the provider reports it
+    reasoning: Optional[str] = None          # the model's reasoning, kept apart from `text`
 ```
 
 ### AgentSDK
