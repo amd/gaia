@@ -214,6 +214,7 @@
     },
     {
       "scenario_id": "csv_analysis",
+      "_stale_note": "Stale: recorded before #3906 pointed this scenario at the gaia agent, so this score is not from the agent it now runs (gaia, while the rest of rag_quality runs doc). Re-baseline from the next rag_quality run before reading a delta here as a regression.",
       "status": "PASS",
       "overall_score": 9.82,
       "turns": [
