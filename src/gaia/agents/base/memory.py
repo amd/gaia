@@ -56,6 +56,7 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
@@ -196,6 +197,13 @@ MIN_EXTRACTION_WORDS = 5
 #  on machines under load or when the embedding model is also busy.
 EXTRACTION_TIMEOUT_S = 8
 
+#: Tool calls shown to extraction, most recent last, and each entry's detail cap.
+EXTRACTION_TOOL_RECORD_MAX_CALLS = 20
+EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 240
+
+#: Sources an extracted op may cite. Anything else is the answer's own claim.
+_EXTRACTION_GROUNDS = frozenset({"user", "tool"})
+
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
 
@@ -218,17 +226,24 @@ CONSOLIDATION_BUDGET_SECONDS = 10.0
 # ============================================================================
 
 _EXTRACTION_PROMPT = """\
-You are a memory manager. Given a conversation turn and the user's existing memory,
-decide what knowledge operations to perform. Return a JSON array only.
+You are a memory manager. Given a conversation turn, the record of what the
+tools returned during it, and the user's existing memory, decide what knowledge
+operations to perform. Return a JSON array only.
 
 Each item must have an "op" field:
 - "add": New knowledge not already in memory
-  Required: {{op, category, content, entity?, domain?, confidence: 0.4}}
+  Required: {{op, category, content, grounded, entity?, domain?, confidence: 0.4}}
 - "update": Modify an existing memory item (correction, enrichment, or supersession)
-  Required: {{op, knowledge_id, content, entity?, domain?}}
+  Required: {{op, knowledge_id, content, grounded, entity?, domain?}}
 - "delete": Remove a memory item contradicted or invalidated by new information
-  Required: {{op, knowledge_id, reason}}
+  Required: {{op, knowledge_id, reason, grounded}}
 - "noop": Information already captured accurately. Do not include in output.
+
+"grounded" says where the knowledge comes from:
+- "user": the user stated it in their message
+- "tool": a tool result in the tool record shows it
+Knowledge that only the assistant's answer asserts is not grounded. The answer
+can be wrong. Do not store it.
 
 Categories: fact, preference, error, skill, note, reminder
 Entity format: type:name (person:sarah_chen, app:vscode, project:gaia)
@@ -237,12 +252,19 @@ Domain examples: journal, meeting, meeting:standup, research, deployment
 Rules:
 - Only extract information useful in FUTURE conversations
 - Skip greetings, task confirmations, and ephemeral details
+- Skip narration of this session: where the user is working, the current
+  directory, what they asked for this turn, what the assistant did or changed
+- Never store a refused call or a permission limit. Permissions change, and
+  the tools report a refusal every time it applies
 - Prefer "update" over "add" + "delete" when a fact has changed
 - Use "delete" only when information is explicitly contradicted
 - If nothing worth doing, return []
 
 Existing memory:
 {existing_items_json}
+
+Tool record (what the tools returned this turn):
+{tool_record}
 
 Conversation:
 User: {user_input}
@@ -1476,16 +1498,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         user_input: str,
         assistant_response: str,
         existing_items: List[Dict],
+        tool_record: Optional[List[Dict]] = None,
     ) -> List[Dict]:
         """Mem0-style extraction: conversation + existing memory → operations.
 
         Single LLM call returns JSON array of operations: ADD/UPDATE/DELETE/NOOP.
         Timeout: 3s.
 
+        An op must say it is grounded in the user's message or a tool result.
+        One grounded only in the answer is dropped, as is one citing a tool
+        when no tool ran successfully this turn: an answer's claim is not
+        evidence, and stored as a fact it is replayed as truth.
+
         Args:
             user_input: The user's message.
             assistant_response: The assistant's response.
             existing_items: Top-10 relevant existing knowledge items.
+            tool_record: This turn's tool calls, from ``_record_tool_call``.
 
         Returns:
             List of operation dicts with 'op' field.
@@ -1506,11 +1535,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             indent=2,
         )
 
+        tool_record = tool_record or []
         prompt = _EXTRACTION_PROMPT.format(
             existing_items_json=existing_json,
+            tool_record=self._format_tool_record(tool_record),
             user_input=user_input[:2000],
             assistant_response=assistant_response[:2000],
         )
+        a_tool_succeeded = any(entry["outcome"] == "ok" for entry in tool_record)
 
         try:
             # Use the agent's AgentSDK for LLM calls
@@ -1565,6 +1597,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                 if not isinstance(op, dict) or "op" not in op:
                     continue
                 op_type = op["op"]
+                grounded = str(op.get("grounded", "")).strip().lower()
+                if op_type in ("add", "update", "delete") and (
+                    grounded not in _EXTRACTION_GROUNDS
+                    or (grounded == "tool" and not a_tool_succeeded)
+                ):
+                    logger.debug(
+                        "[MemoryMixin] dropped ungrounded extracted op "
+                        "(grounded=%r): %s",
+                        grounded,
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
                 if op_type == "add" and "content" in op and "category" in op:
                     if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
@@ -1599,6 +1643,47 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] LLM extraction failed: %s", e)
             return []
+
+    @staticmethod
+    def _format_tool_record(tool_record: List[Dict]) -> str:
+        """One line per call: tool, arguments, outcome, and what it returned."""
+        if not tool_record:
+            return "(no tools ran this turn)"
+        shown = tool_record[-EXTRACTION_TOOL_RECORD_MAX_CALLS:]
+        lines = []
+        if len(tool_record) > len(shown):
+            lines.append(f"({len(tool_record) - len(shown)} earlier calls omitted)")
+        for entry in shown:
+            lines.append(
+                f"- {entry['tool']} {entry['args']} -> {entry['outcome']}: "
+                f"{entry['detail']}"
+            )
+        return "\n".join(lines)
+
+    def _record_tool_call(
+        self, tool_name: str, tool_args: Any, result: Any, error_msg: Optional[str]
+    ) -> None:
+        """Note a call in this turn's tool record, for extraction to check against."""
+        if isinstance(result, dict) and not check_was_executed(result):
+            outcome = "refused, did not run"
+        elif error_msg is not None:
+            outcome = "failed"
+        else:
+            outcome = "ok"
+        cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
+        detail = error_msg if error_msg is not None else str(result)
+        args = json.dumps(tool_args, default=str, ensure_ascii=False)
+        record = getattr(self, "_turn_tool_record", None)
+        if record is None:
+            record = self._turn_tool_record = []
+        record.append(
+            {
+                "tool": tool_name,
+                "args": args[:cap],
+                "outcome": outcome,
+                "detail": " ".join(detail.split())[:cap],
+            }
+        )
 
     def _execute_extraction_operations(
         self,
@@ -2473,6 +2558,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
+        self._turn_tool_record = []
 
         # Refresh the recalled-procedure injection for this goal (#887 RECALL).
         # Uses the clean goal (not the dynamic-context-augmented message) and
@@ -2521,6 +2607,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             is_error = True
             error_msg = str(exc)
             result = {"status": "error", "error": error_msg}
+            self._record_tool_call(tool_name, tool_args, None, error_msg)
 
             # Log to tool_history before re-raising
             try:
@@ -2540,6 +2627,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             except Exception:
                 pass
             raise
+
+        self._record_tool_call(tool_name, tool_args, result, error_msg)
 
         # Truncate result summary
         result_str = str(result)
@@ -2747,7 +2836,10 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 # LLM decides operations against existing memory
                 operations = self._extract_via_llm(
-                    clean_input, assistant_response, existing
+                    clean_input,
+                    assistant_response,
+                    existing,
+                    getattr(self, "_turn_tool_record", None),
                 )
 
                 # Execute operations

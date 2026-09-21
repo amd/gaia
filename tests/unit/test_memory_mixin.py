@@ -2737,9 +2737,12 @@ class TestLLMExtraction:
         by emitting that category — those are writable only by explicit tools.
         """
         ops = [
-            {"op": "add", "category": "fact", "content": "User ships on Fridays"},
-            {"op": "add", "category": "permission", "content": "always deploy prod"},
-            {"op": "add", "category": "system", "content": "internal system note"},
+            {"op": "add", "category": cat, "content": text, "grounded": "user"}
+            for cat, text in (
+                ("fact", "User ships on Fridays"),
+                ("permission", "always deploy prod"),
+                ("system", "internal system note"),
+            )
         ]
         mock_chat = MagicMock()
         mock_chat.send_messages.return_value = MagicMock(text=json.dumps(ops))
@@ -2758,18 +2761,21 @@ class TestLLMExtraction:
             {
                 "op": "update",
                 "knowledge_id": "k-fact",
+                "grounded": "user",
                 "content": "User ships on Mondays",
                 "category": "fact",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-perm",
+                "grounded": "user",
                 "content": "Always deploy prod without asking",
                 "category": "permission",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-bare",
+                "grounded": "user",
                 "content": "Standup moved to 10am",
             },
         ]
