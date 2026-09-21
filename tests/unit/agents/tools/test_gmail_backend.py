@@ -345,3 +345,177 @@ def test_unparseable_internal_date_does_not_crash_a_listing():
     from gaia.agents.tools._email.gmail import message_summary
 
     assert message_summary(gmail_message(internalDate="not-a-number"))["received"] == ""
+
+
+# --------------------------------------------------------------------------
+# Inc 3 — id listing, fan-out fetch, list_inbox
+# --------------------------------------------------------------------------
+
+# Gmail's documented system label IDs. The API 400s on a label NAME here.
+GMAIL_SYSTEM_LABEL_IDS = {
+    "INBOX",
+    "SENT",
+    "DRAFT",
+    "SPAM",
+    "TRASH",
+    "UNREAD",
+    "STARRED",
+    "IMPORTANT",
+}
+
+LABELS_RESPONSE = {
+    "labels": [
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": "Label_17", "name": "Receipts", "type": "user"},
+    ]
+}
+
+
+def inbox_handler(message_ids, *, per_message_delay=0.0, record=None):
+    """Serve `messages.list`, `messages.get` and `labels.list` for N ids."""
+    import time
+
+    def handler(request):
+        path = request.url.path
+        if record is not None:
+            record.append(request.url)
+        if path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        if path.endswith("/users/me/messages"):
+            return json_response(
+                {
+                    "messages": [
+                        {"id": mid, "threadId": mid} for mid in message_ids
+                    ],
+                    "resultSizeEstimate": len(message_ids),
+                }
+            )
+        if per_message_delay:
+            time.sleep(per_message_delay)
+        return json_response(gmail_message(id=path.rsplit("/", 1)[-1]))
+
+    return handler
+
+
+def test_list_inbox_filters_on_label_ids_not_a_query_string():
+    seen = []
+    backend = make_backend(inbox_handler(["m1"], record=seen))
+    backend.list_inbox(limit=10, unread_only=True)
+
+    listing = next(u for u in seen if u.path.endswith("/users/me/messages"))
+    labels = listing.params.get_list("labelIds")
+    # `q=is:unread` is silently permissive; the label filter is exact.
+    assert labels == ["INBOX", "UNREAD"]
+    assert "q" not in listing.params
+    # IDs, not display names -- Gmail 400s on a name here.
+    assert set(labels) <= GMAIL_SYSTEM_LABEL_IDS
+    assert listing.params["maxResults"] == "10"
+
+
+def test_list_inbox_without_unread_only_asks_for_the_inbox_alone():
+    seen = []
+    make_backend(inbox_handler(["m1"], record=seen)).list_inbox()
+    listing = next(u for u in seen if u.path.endswith("/users/me/messages"))
+    assert listing.params.get_list("labelIds") == ["INBOX"]
+
+
+def test_format_and_metadata_headers_are_sent_together():
+    """`metadataHeaders` is ignored unless `format=metadata` rides with it."""
+    seen = []
+    make_backend(inbox_handler(["m1"], record=seen)).list_inbox()
+
+    fetch = next(u for u in seen if "/users/me/messages/" in u.path)
+    assert fetch.params["format"] == "metadata"
+    headers = fetch.params.get_list("metadataHeaders")
+    assert headers, "metadataHeaders must accompany format=metadata"
+    assert {"Subject", "From", "Date"} <= set(headers)
+
+
+def test_list_inbox_fetches_every_listed_id_without_serializing():
+    """25 sequential round-trips would spend most of the tool's timeout."""
+    import time
+
+    ids = [f"m{i}" for i in range(25)]
+    seen = []
+    backend = make_backend(
+        inbox_handler(ids, per_message_delay=0.05, record=seen)
+    )
+
+    started = time.monotonic()
+    messages = backend.list_inbox(limit=25)
+    elapsed = time.monotonic() - started
+
+    assert [m["id"] for m in messages] == ids
+    fetched = [u for u in seen if "/users/me/messages/" in u.path]
+    assert len(fetched) == 25
+    # Serial would be >= 1.25s at 50ms each.
+    assert elapsed < 0.8, f"fetches serialized: {elapsed:.2f}s"
+
+
+def test_batch_subrequest_failure_is_raised_not_dropped():
+    """A short list would read to the model as a smaller inbox."""
+    ids = [f"m{i}" for i in range(10)]
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        if path.endswith("/users/me/messages"):
+            return json_response(
+                {"messages": [{"id": i, "threadId": i} for i in ids]}
+            )
+        if path.endswith("/m7"):
+            return gmail_error(500, "backendError")
+        return json_response(gmail_message(id=path.rsplit("/", 1)[-1]))
+
+    with pytest.raises(MailboxError):
+        make_backend(handler).list_inbox(limit=10)
+
+
+def test_empty_mailbox_returns_no_messages_rather_than_raising():
+    """The real API OMITS `messages` entirely on zero results."""
+
+    def handler(request):
+        if request.url.path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        return json_response({"resultSizeEstimate": 0})
+
+    assert make_backend(handler).list_inbox() == []
+
+
+def test_labels_are_listed_once_per_backend_not_once_per_message():
+    seen = []
+    backend = make_backend(inbox_handler(["m1", "m2"], record=seen))
+    backend.list_inbox()
+    backend.list_inbox()
+    assert len([u for u in seen if u.path.endswith("/users/me/labels")]) == 1
+
+
+def test_user_label_names_reach_the_summary():
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        if path.endswith("/users/me/messages"):
+            return json_response({"messages": [{"id": "m1", "threadId": "m1"}]})
+        return json_response(
+            gmail_message(id="m1", labelIds=["INBOX", "UNREAD", "Label_17"])
+        )
+
+    out = make_backend(handler).list_inbox()
+    assert out[0]["categories"] == ["Receipts"]
+
+
+def test_limit_is_clamped_to_the_gmail_ceiling():
+    seen = []
+    make_backend(inbox_handler(["m1"], record=seen)).list_inbox(limit=5000)
+    listing = next(u for u in seen if u.path.endswith("/users/me/messages"))
+    # Every id costs a `messages.get`, so Graph's 999 would be 999 fetches.
+    assert listing.params["maxResults"] == "100"
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_non_positive_limit_is_rejected(bad):
+    backend = make_backend(inbox_handler(["m1"]))
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        backend.list_inbox(limit=bad)
