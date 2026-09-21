@@ -401,7 +401,12 @@ def mailbox_env(monkeypatch):
 
 
 def connection(scopes, **extra):
-    return {"provider": "x", "account_email": "me@example.com", "scopes": list(scopes), **extra}
+    return {
+        "provider": "x",
+        "account_email": "me@example.com",
+        "scopes": list(scopes),
+        **extra,
+    }
 
 
 class _Bare(EmailToolsMixin):
@@ -497,9 +502,7 @@ def test_env_override_picks_the_other_mailbox(mailbox_env, monkeypatch):
     assert mixin._email_provider_source == "env-override"
 
 
-def test_env_override_naming_an_unusable_mailbox_fails_loudly(
-    mailbox_env, monkeypatch
-):
+def test_env_override_naming_an_unusable_mailbox_fails_loudly(mailbox_env, monkeypatch):
     from gaia.agents.tools._email import MailboxError
 
     mailbox_env(
@@ -521,7 +524,11 @@ def test_env_override_naming_an_unusable_mailbox_fails_loudly(
         # MISSING_SCOPES — remedy must carry granted UNION needed, because
         # `--scopes` REPLACES a connection's scopes rather than adding to them.
         (
-            {"google": connection(["https://www.googleapis.com/auth/calendar.readonly"])},
+            {
+                "google": connection(
+                    ["https://www.googleapis.com/auth/calendar.readonly"]
+                )
+            },
             {},
             "calendar.readonly",
         ),

@@ -85,9 +85,7 @@ def test_the_resolver_is_provider_agnostic(connection, granted, expected):
 
 def test_an_unknown_provider_resolves_to_nothing():
     assert (
-        resolve_request_scope(
-            "dropbox", connection_scopes=["x"], granted_scopes=["x"]
-        )
+        resolve_request_scope("dropbox", connection_scopes=["x"], granted_scopes=["x"])
         is None
     )
 

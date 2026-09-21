@@ -13,11 +13,11 @@ double accepts both.
 import httpx
 import pytest
 
+from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 from gaia.agents.tools._email.gmail import (
     GMAIL_API_BASE,
     GmailReadBackend,
 )
-from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 
 
 def make_backend(handler, **kwargs):
@@ -384,9 +384,7 @@ def inbox_handler(message_ids, *, per_message_delay=0.0, record=None):
         if path.endswith("/users/me/messages"):
             return json_response(
                 {
-                    "messages": [
-                        {"id": mid, "threadId": mid} for mid in message_ids
-                    ],
+                    "messages": [{"id": mid, "threadId": mid} for mid in message_ids],
                     "resultSizeEstimate": len(message_ids),
                 }
             )
@@ -437,9 +435,7 @@ def test_list_inbox_fetches_every_listed_id_without_serializing():
 
     ids = [f"m{i}" for i in range(25)]
     seen = []
-    backend = make_backend(
-        inbox_handler(ids, per_message_delay=0.05, record=seen)
-    )
+    backend = make_backend(inbox_handler(ids, per_message_delay=0.05, record=seen))
 
     started = time.monotonic()
     messages = backend.list_inbox(limit=25)
@@ -461,9 +457,7 @@ def test_batch_subrequest_failure_is_raised_not_dropped():
         if path.endswith("/users/me/labels"):
             return json_response(LABELS_RESPONSE)
         if path.endswith("/users/me/messages"):
-            return json_response(
-                {"messages": [{"id": i, "threadId": i} for i in ids]}
-            )
+            return json_response({"messages": [{"id": i, "threadId": i} for i in ids]})
         if path.endswith("/m7"):
             return gmail_error(500, "backendError")
         return json_response(gmail_message(id=path.rsplit("/", 1)[-1]))

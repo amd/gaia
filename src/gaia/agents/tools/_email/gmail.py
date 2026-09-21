@@ -64,9 +64,7 @@ _RESERVED_LABEL_IDS = frozenset(
 )
 _RESERVED_LABEL_PREFIX = "CATEGORY_"
 
-_GMAIL_ENABLE_URL = (
-    "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
-)
+_GMAIL_ENABLE_URL = "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
 
 
 def _error_detail(response: httpx.Response) -> tuple:
@@ -322,14 +320,18 @@ class GmailReadBackend:
         opaque ids, and `labels.list` is the only way to name them."""
         return {lab["id"]: lab.get("name") or lab["id"] for lab in self._labels()}
 
-    def _fan_out(self, paths: Sequence[str], params: Optional[dict] = None) -> List[Any]:
+    def _fan_out(
+        self, paths: Sequence[str], params: Optional[dict] = None
+    ) -> List[Any]:
         """One GET per path over a bounded pool, under one minted token."""
         token = self._access_token_fn()
 
         def fetch(path: str) -> Any:
             return self._get(path, params=params, token=token)
 
-        with ThreadPoolExecutor(max_workers=min(_FETCH_CONCURRENCY, len(paths))) as pool:
+        with ThreadPoolExecutor(
+            max_workers=min(_FETCH_CONCURRENCY, len(paths))
+        ) as pool:
             # list() forces every result, so a failed subrequest raises here
             # rather than shortening the listing into a smaller-looking inbox.
             return list(pool.map(fetch, paths))
@@ -366,9 +368,7 @@ class GmailReadBackend:
     ) -> List[Dict[str, Any]]:
         """Newest-first inbox messages, with metadata but no bodies."""
         label_ids = ["INBOX", "UNREAD"] if unread_only else ["INBOX"]
-        return self._fetch_summaries(
-            self._list_ids(label_ids=label_ids, limit=limit)
-        )
+        return self._fetch_summaries(self._list_ids(label_ids=label_ids, limit=limit))
 
     def search(self, query: str, *, limit: int = 25) -> List[Dict[str, Any]]:
         """Full-mailbox keyword search.
@@ -385,12 +385,8 @@ class GmailReadBackend:
         """One message, body included."""
         if not message_id or not message_id.strip():
             raise ValueError("message_id must be a non-empty message id")
-        data = self._get(
-            f"/users/me/messages/{message_id}", params={"format": "full"}
-        )
-        return message_summary(
-            data, label_names=self._label_map(), include_body=True
-        )
+        data = self._get(f"/users/me/messages/{message_id}", params={"format": "full"})
+        return message_summary(data, label_names=self._label_map(), include_body=True)
 
     def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:
         """Labels with their unread and total counts.
