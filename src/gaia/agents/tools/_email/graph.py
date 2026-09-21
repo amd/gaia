@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import httpx
 
+from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+
 logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
@@ -36,14 +38,6 @@ _FULL_SELECT = _LIST_SELECT + ",body"
 
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
-
-
-class MailboxError(RuntimeError):
-    """A mailbox request failed in a way the caller should surface verbatim."""
-
-
-class MailboxAuthError(MailboxError):
-    """The mailbox rejected our credentials or refused the requested scope."""
 
 
 def _address(entity: Optional[Dict[str, Any]]) -> str:
