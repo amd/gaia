@@ -723,16 +723,14 @@ _FILE_WRITE_TOOLS: Tuple[str, ...] = (
 # merely spawns a notifier), and the names below write a file as a side effect
 # of doing something else, so they are gated on cost rather than on danger and
 # never reach that set.
-_DISK_TOUCHING_TOOLS: FrozenSet[str] = (
-    frozenset(TOOLS_REQUIRING_CONFIRMATION)
-    - {"notify_desktop"}
-    | {
-        "take_screenshot",
-        "text_to_speech",
-        "transcribe_media",
-        "refine_transcript",
-    }
-)
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
+    "notify_desktop"
+} | {
+    "take_screenshot",
+    "text_to_speech",
+    "transcribe_media",
+    "refine_transcript",
+}
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 _FILE_WRITE_CLAIM_PATTERNS = (
     # "I saved …", "I've written …", "I have now created …"
