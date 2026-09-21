@@ -52,6 +52,17 @@ def test_provider_never_returns_reasoning_as_the_answer():
     assert provider.get_last_reasoning() == "The fix: add"
 
 
+def test_provider_recovers_an_answer_routed_into_reasoning_content():
+    # Some llama.cpp builds put a *finished* answer in ``reasoning_content``.
+    # Dropping it loses the reply; the user gets the empty-response apology.
+    provider = _provider(_reply({"content": "", "reasoning_content": "It is 4."}))
+
+    assert provider.chat([{"role": "user", "content": "2+2?"}]) == "It is 4."
+    # Promoted to the answer, so it is no longer reasoning — otherwise it would
+    # be both shown and resent as `reasoning_content`.
+    assert provider.get_last_reasoning() is None
+
+
 def test_provider_keeps_reasoning_on_a_tool_call_reply():
     provider = _provider(
         _reply(
@@ -252,7 +263,7 @@ def test_inline_think_block_is_reasoning_not_answer(agent):
 
 
 def test_unclosed_think_block_is_not_the_answer(agent):
-    _stub_chat(
+    sent = _stub_chat(
         agent,
         ("<think>Still working out the fix, then", None),
         ("It says hello.", None),
@@ -262,6 +273,66 @@ def test_unclosed_think_block_is_not_the_answer(agent):
 
     answer = strip_verification_scope(result["result"]).strip()
     assert "Still working" not in answer
+    # Name the outcome rather than only asserting an absence: today the loop
+    # ends on the empty-response branch without re-prompting. Continuing a
+    # cut-off reply is #4054's job, so that PR must update this assertion.
+    assert len(sent) == 1
+    assert "empty response" in answer.lower()
+
+
+def test_a_reply_merely_mentioning_think_is_not_truncated(agent):
+    # `<think>` part-way through prose is the model *talking about* the tag.
+    # Treating it as a cut-off thought silently deleted the rest of the answer.
+    mention = "Wrap reasoning in a <think> tag to hide it from the user."
+    _stub_chat(agent, (mention, None))
+
+    result = agent.process_query("How do I hide reasoning?", max_steps=3)
+
+    assert strip_verification_scope(result["result"]).strip() == mention
+
+
+def _stub_stream(agent, *replies):
+    """Same contract as ``_stub_chat``, but over the streaming branch.
+
+    The loop reads ``reasoning`` off the ``is_complete`` chunk only, so a bug
+    there is invisible to every non-streaming test.
+    """
+    replies = list(replies)
+    sent = []
+
+    def _send(messages, *_, **__):
+        sent.append([dict(m) for m in messages])
+        text, reasoning = replies.pop(0)
+        for piece in (text, ""):
+            chunk = MagicMock()
+            chunk.text = piece
+            chunk.is_complete = piece == ""
+            chunk.stats = {}
+            chunk.reasoning = reasoning
+            yield chunk
+
+    agent.streaming = True
+    agent.chat = MagicMock()
+    agent.chat.send_messages_stream = MagicMock(side_effect=_send)
+    return sent
+
+
+def test_streaming_loop_keeps_reasoning_and_sends_it_back(agent):
+    call = json.dumps({"tool": "read_it", "tool_args": {}})
+    sent = _stub_stream(
+        agent,
+        (call, "Read the file before answering."),
+        ("It says hello.", "It greets."),
+    )
+
+    result = agent.process_query("What does the file say?", max_steps=5)
+
+    assert sent[1][1]["reasoning_content"] == "Read the file before answering."
+    assert _assistant_reasoning(result["conversation"]) == [
+        "Read the file before answering.",
+        "It greets.",
+    ]
+    assert strip_verification_scope(result["result"]).strip() == "It says hello."
 
 
 PRIOR_REQUEST = [
