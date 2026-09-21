@@ -707,6 +707,107 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# Fabricated-save guard (#4010): a final answer that asserts a file was
+# written when no write tool ran this turn.
+_MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+# File-writing tools the guard can name in its correction. Presence of one of
+# these in the registry is what makes the claim checkable at all.
+_FILE_WRITE_TOOLS: Tuple[str, ...] = (
+    "write_file",
+    "write_markdown_file",
+    "write_python_file",
+    "edit_file",
+)
+# Tools whose completed call makes a save claim believable. Two sources: the
+# confirmation set covers the write/execute tools (minus the one entry that
+# merely spawns a notifier), and the names below write a file as a side effect
+# of doing something else, so they are gated on cost rather than on danger and
+# never reach that set.
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
+    "notify_desktop"
+} | {
+    "take_screenshot",
+    "text_to_speech",
+    "transcribe_media",
+    "refine_transcript",
+}
+_FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
+_FILE_WRITE_CLAIM_PATTERNS = (
+    # "I saved …", "I've written …", "I have now created …"
+    re.compile(
+        rf"\bi(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+|successfully\s+)*"
+        rf"{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # "… has been saved", "… was written", "… is now stored"
+    re.compile(
+        rf"\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|already\s+|successfully\s+)*"
+        rf"(?:been\s+)?{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # A bare "Saved to …" / "Written to …" opening a sentence or line
+    re.compile(
+        rf"(?:^|[.!?]\s+|\n)\s*{_FILE_WRITE_VERBS}\s+"
+        rf"(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
+        re.IGNORECASE,
+    ),
+)
+_FILE_TARGET_PATTERN = re.compile(
+    r"\b(?:file|files|filename|path|directory|folder|disk)\b"
+    r"|[A-Za-z]:[\\/]"
+    r"|(?:^|\s)[~/][\w./\\-]+"
+    # "…to `routine.md`" — a backticked destination is a path even when the
+    # model invents a bare name with no extension.
+    r"|(?:to|at|in|into)\s+`[^`]+`",
+    re.IGNORECASE,
+)
+# Links and addresses are dotted but never save targets, so they are removed
+# before a dotted token is read as a filename.
+_URL_OR_EMAIL_PATTERN = re.compile(
+    r"\b(?:[A-Za-z][\w+.-]*://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
+    re.IGNORECASE,
+)
+# Bounded on purpose: unbounded, the run scans quadratically and a 32KB hex
+# digest in one answer stalls the whole process for over a second under the
+# GIL. No coverage is lost — with no leading \b a longer path still matches
+# from a later offset.
+_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]{1,80}\.([A-Za-z0-9]{1,6})\b")
+# Suffixes that make a dotted token a hostname rather than a file.
+_NON_FILE_SUFFIXES = frozenset(
+    {"com", "org", "net", "io", "ai", "co", "gov", "edu", "dev", "app"}
+)
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    # A suffix with no letter is a version or a clock time, not an extension.
+    return any(
+        any(char.isalpha() for char in suffix)
+        and suffix.lower() not in _NON_FILE_SUFFIXES
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+    )
+
+
+def _claims_file_write(answer: str) -> bool:
+    """True when the prose asserts a file has already been written to disk.
+
+    A sentence must carry both a completed write verb and a file/path target,
+    so "I saved the routine to notes/routine.md" fires while "I created a
+    summary of the meeting" does not. Fenced code is ignored — a sample
+    command is not a claim.
+    """
+    prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
+    prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
+        if not _names_a_file(sentence):
+            continue
+        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+            return True
+    return False
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3882,6 +3983,19 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
+    def _tool_can_touch_disk(self, tool_name: str) -> bool:
+        """Whether a call that already ran could have put bytes on disk.
+
+        Deliberately not ``_tool_requires_confirmation``: that one exempts a
+        pre-authorized write and treats an unclassified ``mcp_`` tool as
+        consequential, and both of those readings are inverted here. A
+        third-party tool counts only when it declared the flag itself.
+        """
+        if tool_name in _DISK_TOUCHING_TOOLS:
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        return bool(entry.get("requires_confirmation"))
+
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -5316,6 +5430,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        file_write_claim_reprompts = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7219,6 +7334,50 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
+
+                # Fabricated-save guard: the answer says a file was written but
+                # no tool that can touch disk ran this turn, so nothing was.
+                if (
+                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                    and steps_taken < steps_limit - 1
+                    and _claims_file_write(answer_candidate)
+                ):
+                    _registry = self._tools_registry
+                    _write_tool = next(
+                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
+                    )
+                    # Read the execution log, not tool_call_log: the latter is
+                    # appended before the call runs, so a refused, errored or
+                    # declined write would silence the guard on the exact harm
+                    # it exists to catch.
+                    _wrote_this_turn = any(
+                        _entry["ran"]
+                        and not _entry["failed"]
+                        and self._tool_can_touch_disk(_entry["tool"])
+                        for _entry in (self._turn_tool_executions or [])
+                    )
+                    if _write_tool and not _wrote_this_turn:
+                        file_write_claim_reprompts += 1
+                        logger.debug(
+                            "[WORKFLOW] Blocking unbacked file-write claim as final "
+                            "answer: %s",
+                            answer_candidate[:120],
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: Your answer says a file was saved, but no "
+                                    "file-writing tool ran in this turn — nothing was "
+                                    "written to disk. If the file is still needed, call "
+                                    f"`{_write_tool}` now with the full content and the "
+                                    "exact path. If you mean a file written earlier in "
+                                    "the conversation, say that explicitly instead of "
+                                    "claiming you just saved it."
+                                ),
+                            }
+                        )
+                        continue
 
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
