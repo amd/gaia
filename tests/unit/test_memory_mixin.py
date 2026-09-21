@@ -1594,9 +1594,7 @@ class TestSearchPastConversationsTool:
         assert result["past_conversation_turns"] == 0
         assert result["message"].startswith("No past conversations are stored")
 
-    def test_a_miss_in_a_populated_history_says_how_much_exists(
-        self, mixin_with_tools
-    ):
+    def test_a_miss_in_a_populated_history_says_how_much_exists(self, mixin_with_tools):
         mixin_with_tools.memory_store.store_turn(
             "an-earlier-session", "user", "we talked about gardening"
         )
