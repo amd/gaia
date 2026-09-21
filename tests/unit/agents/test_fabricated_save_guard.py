@@ -8,6 +8,7 @@ the user was told it succeeded while nothing reached disk.
 """
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -110,6 +111,24 @@ def test_save_claims_are_detected(answer):
 @pytest.mark.parametrize("answer", NON_CLAIMS)
 def test_non_claims_are_not_detected(answer):
     assert _claims_file_write(answer) is False
+
+
+def test_a_long_unbroken_token_does_not_stall_the_process():
+    """A 32KB hex digest in one line used to cost >1s of GIL-held scanning."""
+    answer = "I saved it to " + "0123456789abcdef" * 2000 + " ok"
+
+    started = time.perf_counter()
+    _claims_file_write(answer)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.2, f"scan took {elapsed:.2f}s"
+
+
+def test_a_path_longer_than_the_scan_bound_is_still_detected():
+    deep = "/".join(["segment"] * 40) + "/routine.md"
+
+    assert len(deep) > 80
+    assert _claims_file_write(f"I saved it to {deep}") is True
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +275,12 @@ def test_claim_backed_by_a_write_tool_call_is_accepted(clear_tool_registry):
     assert _final_text(result) == CLAIM
 
 
-def _run_turn_with_other_tool(tool_name, mark_requires_confirmation=False):
+def _run_turn_with_other_tool(
+    tool_name,
+    mark_requires_confirmation=False,
+    command="save the routine",
+    result=None,
+):
     """Run a turn where `tool_name` is called and the answer claims a save.
 
     Returns the messages sent to the LLM — two batches mean the claim was
@@ -273,7 +297,7 @@ def _run_turn_with_other_tool(tool_name, mark_requires_confirmation=False):
 
             def _other(command: str) -> dict:
                 calls.append(command)
-                return {"status": "success", "stdout": ""}
+                return dict(result) if result else {"status": "success", "stdout": ""}
 
             _other.__name__ = tool_name
             _other.__doc__ = "Run a command."
@@ -296,7 +320,7 @@ def _run_turn_with_other_tool(tool_name, mark_requires_confirmation=False):
                 {
                     "thought": "working",
                     "tool": tool_name,
-                    "tool_args": {"command": "echo steps > notes/routine.md"},
+                    "tool_args": {"command": command},
                 }
             )
         else:
@@ -307,21 +331,60 @@ def _run_turn_with_other_tool(tool_name, mark_requires_confirmation=False):
     agent.chat = MagicMock()
     agent.chat.send_messages = MagicMock(side_effect=_send)
 
-    result = agent.process_query("Extract the routine and save it", max_steps=10)
+    outcome = agent.process_query("Extract the routine and save it", max_steps=10)
 
-    assert calls == ["echo steps > notes/routine.md"]
-    return sent, result
+    assert calls == [command]
+    return sent, outcome
 
 
-@pytest.mark.parametrize(
-    "exec_tool", ["run_shell_command", "run_python", "execute_python_file"]
-)
+# run_shell_command is in the disk-touching set but is deliberately absent
+# here: its read-only allowlist and blocked redirection operators mean the real
+# tool cannot perform a save, so a test asserting one would be fiction.
+@pytest.mark.parametrize("exec_tool", ["run_python", "execute_python_file"])
 def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec_tool):
-    """A save done via the shell or a Python snippet is a real save."""
-    sent, result = _run_turn_with_other_tool(exec_tool)
+    """A save done by running Python is a real save."""
+    sent, result = _run_turn_with_other_tool(
+        exec_tool, command="open('notes/routine.md', 'w').write(steps)"
+    )
 
     assert len(sent) == 2, "the guard re-prompted a save that the exec tool performed"
     assert _final_text(result) == CLAIM
+
+
+@pytest.mark.parametrize("writer", ["take_screenshot", "transcribe_media"])
+def test_claim_backed_by_a_side_effect_writer_is_accepted(clear_tool_registry, writer):
+    """Tools that write a file as a side effect are saves too.
+
+    They are cheap and safe, so they never enter the confirmation set that the
+    disk-touching set is otherwise derived from.
+    """
+    sent, result = _run_turn_with_other_tool(writer)
+
+    assert len(sent) == 2, "the guard re-prompted a save that the tool performed"
+    assert _final_text(result) == CLAIM
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param({"status": "error", "error": "path not allowed"}, id="error"),
+        pytest.param({"status": "denied", "error": "user declined"}, id="denied"),
+    ],
+)
+def test_write_that_did_not_succeed_does_not_suppress_the_guard(
+    clear_tool_registry, outcome
+):
+    """A refused or declined write left nothing on disk — #4010's exact harm.
+
+    The call was logged before it ran, so counting attempts would silence the
+    guard on the failure it exists to catch.
+    """
+    sent, _ = _run_turn_with_other_tool(
+        "write_python_file", command="notes/routine.md", result=outcome
+    )
+
+    assert len(sent) == 3
+    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
 
 
 @pytest.mark.parametrize(

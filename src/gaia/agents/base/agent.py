@@ -718,12 +718,21 @@ _FILE_WRITE_TOOLS: Tuple[str, ...] = (
     "write_python_file",
     "edit_file",
 )
-# Tools whose completed call makes a save claim believable. The confirmation
-# set is already exactly the tools that write or execute, minus the one entry
-# that merely spawns a notifier, so it is read rather than duplicated here.
-_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
-    "notify_desktop",
-}
+# Tools whose completed call makes a save claim believable. Two sources: the
+# confirmation set covers the write/execute tools (minus the one entry that
+# merely spawns a notifier), and the names below write a file as a side effect
+# of doing something else, so they are gated on cost rather than on danger and
+# never reach that set.
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = (
+    frozenset(TOOLS_REQUIRING_CONFIRMATION)
+    - {"notify_desktop"}
+    | {
+        "take_screenshot",
+        "text_to_speech",
+        "transcribe_media",
+        "refine_transcript",
+    }
+)
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 _FILE_WRITE_CLAIM_PATTERNS = (
     # "I saved …", "I've written …", "I have now created …"
@@ -760,7 +769,11 @@ _URL_OR_EMAIL_PATTERN = re.compile(
     r"\b(?:[A-Za-z][\w+.-]*://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
     re.IGNORECASE,
 )
-_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]+\.([A-Za-z0-9]{1,6})\b")
+# Bounded on purpose: unbounded, the run scans quadratically and a 32KB hex
+# digest in one answer stalls the whole process for over a second under the
+# GIL. No coverage is lost — with no leading \b a longer path still matches
+# from a later offset.
+_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]{1,80}\.([A-Za-z0-9]{1,6})\b")
 # Suffixes that make a dotted token a hostname rather than a file.
 _NON_FILE_SUFFIXES = frozenset(
     {"com", "org", "net", "io", "ai", "co", "gov", "edu", "dev", "app"}
@@ -7335,8 +7348,15 @@ Do NOT wrap conversational replies in JSON.
                     _write_tool = next(
                         (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
                     )
+                    # Read the execution log, not tool_call_log: the latter is
+                    # appended before the call runs, so a refused, errored or
+                    # declined write would silence the guard on the exact harm
+                    # it exists to catch.
                     _wrote_this_turn = any(
-                        self._tool_can_touch_disk(_tname) for _tname, _ in tool_call_log
+                        _entry["ran"]
+                        and not _entry["failed"]
+                        and self._tool_can_touch_disk(_entry["tool"])
+                        for _entry in (self._turn_tool_executions or [])
                     )
                     if _write_tool and not _wrote_this_turn:
                         file_write_claim_reprompts += 1
