@@ -519,3 +519,119 @@ def test_non_positive_limit_is_rejected(bad):
     backend = make_backend(inbox_handler(["m1"]))
     with pytest.raises(ValueError, match="limit must be >= 1"):
         backend.list_inbox(limit=bad)
+
+
+# --------------------------------------------------------------------------
+# Inc 4 — search, get_message, list_folders
+# --------------------------------------------------------------------------
+
+
+def test_search_sends_the_q_parameter():
+    seen = []
+    make_backend(inbox_handler(["m1"], record=seen)).search("invoice from acme")
+
+    listing = next(u for u in seen if u.path.endswith("/users/me/messages"))
+    assert listing.params["q"] == "invoice from acme"
+    # Search spans every folder, so it must not be narrowed to the inbox.
+    assert not listing.params.get_list("labelIds")
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_empty_search_query_is_rejected(bad):
+    backend = make_backend(inbox_handler(["m1"]))
+    with pytest.raises(ValueError, match="non-empty search string"):
+        backend.search(bad)
+
+
+def test_get_message_asks_for_the_full_format_and_returns_a_body():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url)
+        if request.url.path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        return json_response(gmail_message(id="m1"))
+
+    out = make_backend(handler).get_message("m1")
+
+    fetch = next(u for u in seen if u.path.endswith("/users/me/messages/m1"))
+    # `format=metadata` strips the parts entirely -- reading a body needs full.
+    assert fetch.params["format"] == "full"
+    assert "metadataHeaders" not in fetch.params
+    assert out["body"].strip() == "Can you confirm the Q3 figures?"
+    assert out["body_content_type"] == "text"
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_empty_message_id_is_rejected(bad):
+    backend = make_backend(inbox_handler(["m1"]))
+    with pytest.raises(ValueError, match="non-empty message id"):
+        backend.get_message(bad)
+
+
+FOLDER_LABELS = {
+    "labels": [
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": "SENT", "name": "SENT", "type": "system"},
+        {"id": "SPAM", "name": "SPAM", "type": "system"},
+        {"id": "Label_17", "name": "Receipts", "type": "user"},
+    ]
+}
+
+FOLDER_COUNTS = {
+    "INBOX": {"messagesTotal": 120, "messagesUnread": 4},
+    "SENT": {"messagesTotal": 40, "messagesUnread": 0},
+    "SPAM": {"messagesTotal": 7, "messagesUnread": 7},
+    "Label_17": {"messagesTotal": 3, "messagesUnread": 1},
+}
+
+
+def folders_handler(record=None):
+    def handler(request):
+        path = request.url.path
+        if record is not None:
+            record.append(request.url)
+        if path.endswith("/users/me/labels"):
+            return json_response(FOLDER_LABELS)
+        label_id = path.rsplit("/", 1)[-1]
+        detail = dict(FOLDER_COUNTS[label_id])
+        name = next(
+            lab["name"] for lab in FOLDER_LABELS["labels"] if lab["id"] == label_id
+        )
+        detail.update({"id": label_id, "name": name})
+        return json_response(detail)
+
+    return handler
+
+
+def test_list_folders_uses_labels_get_for_exact_counts():
+    """`labels.list` omits counts entirely -- only `labels.get` carries them."""
+    seen = []
+    folders = make_backend(folders_handler(seen)).list_folders()
+
+    detail_calls = {u.path.rsplit("/", 1)[-1] for u in seen if "/labels/" in u.path}
+    assert detail_calls == {"INBOX", "SENT", "SPAM", "Label_17"}
+
+    by_name = {f["name"]: f for f in folders}
+    assert by_name["INBOX"]["unread"] == 4
+    assert by_name["INBOX"]["total"] == 120
+    assert by_name["Receipts"]["unread"] == 1
+
+
+def test_folder_shape_matches_the_outlook_backends():
+    folders = make_backend(folders_handler()).list_folders()
+    assert set(folders[0]) == {"id", "name", "unread", "total"}
+    assert all(isinstance(f["unread"], int) for f in folders)
+    assert all(isinstance(f["total"], int) for f in folders)
+
+
+def test_system_and_user_labels_are_both_listed_as_folders():
+    names = {f["name"] for f in make_backend(folders_handler()).list_folders()}
+    assert {"SENT", "SPAM", "Receipts"} <= names
+
+
+def test_the_inbox_folder_is_findable_the_way_the_tool_looks_it_up():
+    """Gmail names it INBOX where Outlook says Inbox; the tool lowercases."""
+    folders = make_backend(folders_handler()).list_folders()
+    inbox = next((f for f in folders if (f["name"] or "").lower() == "inbox"), None)
+    assert inbox is not None and inbox["unread"] == 4
