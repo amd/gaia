@@ -112,7 +112,10 @@ Classify from the first user message, never the auto-generated title — the tit
 summarises what happened, which leaks the outcome into the label.
 
 To label by hand, write the same two-column file yourself. It carries session-id
-prefixes, so it belongs in the cache directory like everything else derived.
+prefixes, so it belongs in the cache directory like everything else derived. `report`
+checks those prefixes against the corpus either way: nothing matching is an error, and
+partial coverage is stated in every use-case table so the labelled subset is never read
+as the whole corpus.
 
 ## What to actually report
 

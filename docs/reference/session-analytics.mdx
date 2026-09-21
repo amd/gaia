@@ -183,6 +183,11 @@ To label by hand instead, write `$FACTORY/labels.txt` as
 `<8-char-session-prefix> <use-case>`, one per line. It carries session-id
 prefixes, so it stays in the cache directory, never in a repo.
 
+Prefixes are checked against the corpus. A file where nothing matches stops the
+run rather than rendering an empty table, and a partially-matched file prints how
+many sessions it covers — on stderr and inside each use-case table — so the
+labelled subset is never mistaken for the whole corpus.
+
 ## Writing the analysis
 
 *Optional, and the second of the two steps that call a model.*

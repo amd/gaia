@@ -13,7 +13,7 @@ metadata:
       - edit_file
       - search_file_content
       - search_code_index
-      - execute_python_file
+      - run_python
     provenance:
       source: starter-pack
 ---
@@ -76,8 +76,8 @@ can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outsid
 the run — all refused. If you need something the grant will not allow, say so
 rather than working around it.
 
-For a suite pytest cannot drive (npm, go, make), write a runner and use
-`execute_python_file`. Then report what the run actually said. If you could not run it, say that
+For a suite pytest cannot drive (npm, go, make), run it with `run_python`
+rather than writing a runner file into the project. Then report what the run actually said. If you could not run it, say that
 plainly — *"I could not execute the suite, so this is unverified"* — rather than
 implying it passed.
 

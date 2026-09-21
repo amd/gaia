@@ -36,7 +36,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 13 CORE leaves 13).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=28 minus 15 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -118,6 +118,12 @@ def test_file_edit_tools_are_core(flagship_registry):
     assert {"write_file", "edit_file"} <= flagship_registry
 
 
+def test_run_python_is_core(flagship_registry):
+    """Without it the model guesses a number or leaves a script in the repo."""
+    assert "run_python" in FULL_CORE_TOOLS
+    assert "run_python" in flagship_registry
+
+
 def test_bundle_menu_renders_for_the_flagship():
     """An undiscoverable escape hatch is the same as no escape hatch."""
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
@@ -145,7 +151,10 @@ def test_optional_tools_are_present_on_a_full_install(flagship_registry):
 
 def test_core_is_subset_of_bundle_union():
     """Every CORE tool is in a bundle too, except the CORE-only load_tools."""
-    assert set(FULL_CORE_TOOLS) - _bundle_members() == {"load_tools"}
+    assert set(FULL_CORE_TOOLS) - _bundle_members() == {
+        "load_tools",
+        "read_tool_output",
+    }
 
 
 def test_bundles_have_unique_names():
