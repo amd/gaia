@@ -445,7 +445,7 @@ Prepends per-turn dynamic context (time + upcoming items) to the user message. S
 
 **Hook 2: `_execute_tool()` override**
 
-Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
+Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool runs and fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. A call refused before it ran (`executed: False` on the result) is not stored, and a success clears errors stored for the same operation (the tool plus the program or path it acted on). Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
 
 **Hook 3: `_after_process_query()` callback**
 
