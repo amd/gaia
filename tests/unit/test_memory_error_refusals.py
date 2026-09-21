@@ -13,21 +13,28 @@ taught later sessions to avoid calls that were allowed.
 Two rules:
 
 * a call the permission layer refused before running (``executed: False``) is
-  never stored;
+  never stored, and it does not retire what is already stored either — a
+  declined confirmation is no evidence the operation works now;
 * a success retires only the errors stored for the same operation — a working
   ``ls`` is no evidence that ``pytest`` is on PATH.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, Dict
+from unittest.mock import patch
 
 import pytest
 
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.agents.tools.file_monitor_tools import FileToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
 
@@ -70,6 +77,19 @@ def _stored_errors(store: MemoryStore):
     return store.get_by_category("error", context="global", limit=100)
 
 
+@contextmanager
+def _registered(mixin: Any, register: str):
+    """Register a mixin's tools into an empty global registry, then restore it."""
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    try:
+        getattr(mixin, register)()
+        yield _TOOL_REGISTRY
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
 class TestRefusalsAreNotStored:
     def test_a_refused_shell_command_is_not_stored(self, host, store):
         refusal, _ = ShellToolsMixin()._validate_shell_command("rm -rf build")
@@ -107,6 +127,50 @@ class TestRefusalsAreNotStored:
         assert not outside.exists()
 
         host.run("write_file", {"file_path": str(outside)}, refusal)
+
+        assert _stored_errors(store) == []
+
+    def test_a_refused_watch_directory_is_not_stored(self, host, store, tmp_path):
+        allowed = tmp_path / "work"
+        allowed.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        mixin = FileToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(allowed)])
+        mixin.watch_directories = []
+        with _registered(mixin, "register_file_tools") as registry:
+            refusal = registry["add_watch_directory"]["function"](
+                directory=str(outside)
+            )
+        assert refusal["status"] == "error"
+        assert refusal["executed"] is False
+        assert mixin.watch_directories == []
+
+        host.run("add_watch_directory", {"directory": str(outside)}, refusal)
+
+        assert _stored_errors(store) == []
+
+    def test_a_refused_index_document_is_not_stored(self, host, store, tmp_path):
+        allowed = tmp_path / "work"
+        allowed.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        doc = outside / "notes.txt"
+        doc.write_text("hello")
+        validator = PathValidator(allowed_paths=[str(allowed)])
+        mixin = RAGToolsMixin()
+        mixin.rag = object()  # truthy; the refusal fires before RAG is touched
+        mixin.indexed_files = set()
+        mixin._is_path_allowed = lambda path: validator.is_path_allowed(
+            path, prompt_user=False
+        )
+        with _registered(mixin, "register_rag_tools") as registry:
+            refusal = registry["index_document"]["function"](file_path=str(doc))
+        assert refusal["status"] == "error"
+        assert refusal["executed"] is False
+        assert mixin.indexed_files == set()
+
+        host.run("index_document", {"file_path": str(doc)}, refusal)
 
         assert _stored_errors(store) == []
 
@@ -176,6 +240,96 @@ class TestSuccessRetiresOnlyTheSameOperation:
         )
 
         host.run("run_shell_command", {"command": "ls"}, {"status": "success"})
+
+        assert _stored_errors(store) == []
+
+
+class _ScriptedConsole(AgentConsole):
+    """A real console whose confirmation answer each test step sets."""
+
+    approve = True
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        return self.approve
+
+
+class _MemoryAgent(MemoryMixin, Agent):
+    """A real agent on a real store, with one confirmation-gated tool."""
+
+    CONFIRMATION_REQUIRED_TOOLS = frozenset({"purge_cache"})
+
+    def __init__(self, store: MemoryStore, **kwargs):
+        self._console_override = _ScriptedConsole()
+        self.ran: list = []
+        self.outcome: Dict[str, Any] = {"status": "success"}
+        super().__init__(**kwargs)
+        self._memory_store = store
+        self._memory_context = "global"
+        self._memory_session_id = "s1"
+
+    def _get_system_prompt(self) -> str:
+        return "memory"
+
+    def _create_console(self):
+        return self._console_override
+
+    def _embed_text(self, text):
+        raise RuntimeError("no embedder in unit tests")
+
+    def _register_tools(self) -> None:
+        agent = self
+
+        @tool
+        def purge_cache(path: str) -> Dict[str, Any]:
+            """Irreversible cache purge. Requires confirmation."""
+            agent.ran.append(path)
+            return agent.outcome
+
+
+@pytest.fixture
+def gated_agent(store):
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            yield _MemoryAgent(store, silent_mode=True, skip_lemonade=True)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+class TestADeclinedConfirmationRetiresNothing:
+    """A refusal is not a success, so it must not clear the operation's errors.
+
+    ``Agent._execute_tool`` answers a declined confirmation with
+    ``{"status": "denied"}`` — not ``"error"`` — so the retire branch used to
+    fire for an operation that never ran.
+    """
+
+    def test_a_decline_keeps_the_stored_error(self, gated_agent, store):
+        args = {"path": "/work/cache"}
+        gated_agent.outcome = {
+            "status": "error",
+            "error": "purge failed: cache is locked by another process",
+        }
+        gated_agent._execute_tool("purge_cache", args)
+        assert len(_stored_errors(store)) == 1
+
+        gated_agent.console.approve = False
+        denied = gated_agent._execute_tool("purge_cache", args)
+
+        assert denied["status"] == "denied"
+        assert gated_agent.ran == ["/work/cache"]  # the body never ran again
+        assert len(_stored_errors(store)) == 1
+
+    def test_a_real_success_still_retires_it(self, gated_agent, store):
+        args = {"path": "/work/cache"}
+        gated_agent.outcome = {"status": "error", "error": "cache is locked"}
+        gated_agent._execute_tool("purge_cache", args)
+        assert len(_stored_errors(store)) == 1
+
+        gated_agent.outcome = {"status": "success"}
+        gated_agent._execute_tool("purge_cache", args)
 
         assert _stored_errors(store) == []
 

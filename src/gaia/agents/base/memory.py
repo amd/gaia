@@ -2564,7 +2564,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Auto-store novel errors as knowledge
                 if is_error and error_msg:
                     self._auto_store_error(tool_name, error_msg, tool_args, result)
-                elif not is_error:
+                elif not is_error and check_was_executed(result):
                     # It worked. Retire what this same operation was blamed for,
                     # so a fixed bug stops being replayed into every prompt.
                     self._forget_errors_for_operation(tool_name, tool_args)
