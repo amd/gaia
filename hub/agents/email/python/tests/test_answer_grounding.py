@@ -793,14 +793,14 @@ class TestFindUngroundedInviteClaim:
         convo = [
             _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
         ]
-        text = "You have received a calendar invite from the vendor."
+        text = "An invite was received from the vendor."
         assert find_ungrounded_invite_claim(text, convo) is None
 
     def test_self_organized_event_does_not_ground_received_invite_claim(self):
         convo = [
             _events_tool_entry("list_calendar_events", [_event(organizer_self=True)])
         ]
-        text = "You have received a calendar invite from the vendor."
+        text = "An invite was received from the vendor."
         assert find_ungrounded_invite_claim(text, convo) is not None
 
     def test_external_evidence_from_an_earlier_listing_is_retained(self):
