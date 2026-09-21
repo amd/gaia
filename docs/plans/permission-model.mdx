@@ -1,0 +1,707 @@
+---
+title: "Permission Model"
+description: "Decide what an agent may run from what a command does, not how it is spelled"
+icon: "lock"
+---
+
+# Permission Model
+
+<Info>
+**Status:** Proposed. Waiting on owner review, and no code until then.
+
+**Date:** 2026-09-21
+
+**Builds on:** #3808 with its fail-open fix ([kovtcharov/gaia#5](https://github.com/kovtcharov/gaia/pull/5)), #4043
+
+**Would replace:** the per-spelling shell fixes #4037, #4041, #4042, #4044
+
+**Related:** the typed tool outcome (`ToolOutcome`, P1 of the architecture review), #3907 (agent scratch directory), #4023 (rate limit)
+</Info>
+
+## Summary
+
+GAIA decides whether a shell command may run by reading the text the model typed. Every
+time a model writes a safe command a new way, that check refuses it, and someone patches
+in one more spelling. This plan replaces the text check with one model:
+
+1. **Parse the command into what it does:** which programs run, which files each one
+   reads, writes or deletes, whether it runs code GAIA can't see into, and whether it
+   reaches the network.
+2. **Decide on those facts**, against a mode the user picked and rules the user wrote. The
+   file tools and `run_python` report the same facts, so an effect gets the same answer
+   whichever tool causes it.
+3. **Run exactly what was parsed.** GAIA runs the plan with its own executor instead of
+   passing the text to a shell. The tool's outcome then **reports what actually ran and
+   changed**, in the same shape the test-result work is adding.
+
+A new command then needs at most a rule in a config file or a change of mode. GAIA doesn't
+refuse a program it has never heard of. It treats the program as able to do anything, and
+asks. Only four kinds of command are refused:
+
+- text that can't be parsed
+- anything that reaches past the credential floor
+- a command a yes/no prompt can't honestly describe
+- anything a rule the user wrote denies
+
+## 1. Why the current model keeps breaking
+
+The shell tool matches text. `DANGEROUS_SHELL_OPERATORS` refuses a character wherever it
+appears, `ALLOWED_COMMANDS` admits a program by its name, and per-program functions catch
+flags. Each one guesses from the outside what the text will do.
+
+Nine tasks were blocked in one benchmark campaign. Each fix admitted one more spelling:
+
+| # | What the agent wrote | Why it was blocked | Fix |
+|---|---|---|---|
+| 1 | `grep a x.txt \| wc -l` | on macOS and Linux the pipe ran as a single argv and returned wrong output | #4019 |
+| 2 | `python -m pytest -q` | the pytest grant only knew the spelling `pytest` | #4020 |
+| 3 | `ls && cat README.md` | `&&` is in the operator blocklist | #4037 |
+| 4 | `pytest -q 2>&1 \| tail` | `>` and `&` are in the blocklist | #4041 |
+| 5 | `PYTHONPATH=. pytest -q` | `NAME=value` was read as a program name | #4042 |
+| 6 | `for f in *.py; do …; done` | `for` was reported as a missing file | #4044 |
+| 7 | `git -C sub log` | `-C` was read as the git subcommand | #3909 |
+| 8 | `python3 - <<'EOF' … EOF` | the heredoc's newline and `<` | #3995 |
+| 9 | copy the project to a scratch folder, apply the patch there, run the tests | the destination was outside the allowed folders, so it was refused with no prompt | none |
+
+Two of the nine show the model itself is wrong, not just incomplete:
+
+- **Which characters get blocked says nothing about danger.** Under full access, `rm` ran,
+  while `2>&1` was refused even though it writes nothing.
+- **A refusal with no way forward turns careful work into a false claim.** In case 9 the
+  agent couldn't copy the project, so it ran the tests on the unpatched code and reported
+  "still green".
+
+The campaign's shell corpus shows how much of this comes down to spelling. It holds the
+1,371 distinct commands the models actually ran, and 675 of them were refused:
+
+- 333 for an operator somewhere in the text
+- 216 for a program not on the list
+- 80 by the rate limiter, which isn't a permission (#4023)
+- the rest for git flags, `find` actions, missing skill grants, environment assignments
+  and paths
+
+None of the 1,371 touched a credential or a system path. A script sorted them by what
+they do. The replay test in stage 2 replaces these numbers with the parser's own:
+
+| What the command does | Share | Refused then |
+|---|---|---|
+| Only reads | 67% (921) | 281 |
+| Runs code (`python`, `pytest`, a heredoc piped into `python`) | 20% (271) | 221 |
+| Changes files (`rm`, `cp`, `mkdir`, `>`) | 11% (152) | 151 |
+| Reaches the network by name (`curl`) | 1% (16) | 15 |
+| Uses syntax a parser shouldn't model (`$(…)`, loops) | 0.2% (3) | 3 |
+
+281 commands that only read were refused. 164 of those were refused for an operator in the
+text, and most of the rest by the rate limiter.
+
+## 2. Principles
+
+1. **Decide on what a command does, not how it's written.** Two spellings of one action
+   get one answer.
+2. **What GAIA parsed is what runs.** GAIA runs the parsed plan itself, so there's no
+   second interpreter to read the text differently from the check that approved it.
+3. **An unknown program may do anything, so GAIA asks.** It is never let through silently,
+   and never a dead end.
+4. **Every refusal says why and what would work instead:** a mode, a rule, a folder, or
+   another tool.
+5. **Only promise what GAIA enforces.** Where GAIA can't see an effect, such as code
+   running inside `python`, it says so instead of implying a guarantee.
+
+## 3. The model
+
+### 3.1 From command to facts
+
+```
+command text ──parse──▶ plan ──classify──▶ facts ──decide──▶ allow / ask / deny
+                         │                                        │
+                         └───────────────── execute ◀─────────────┘
+                                               │
+                                  report: what ran, changed, checked
+```
+
+**Parse.** A small POSIX shell parser turns the text into a plan. The plan is a list of
+steps joined by `&&`, `||`, `;` or a newline. Each step is a pipeline. Each pipeline is a
+list of simple commands, each with its argv, its `NAME=value` prefixes and its
+redirections. The parser covers what models actually write:
+
+- quoting (`'…'`, `"…"`, `\`)
+- `~`, and `$VAR` or `${VAR}` for a short list of variables (`HOME`, `PWD`, `USER`,
+  `TMPDIR`, and any variable the same line set earlier). Any other variable makes the
+  plan opaque, so a command can't print a token from the environment without asking.
+- globs, expanded against the disk so the facts name real files
+- comments and line continuations
+- `|`, `&&`, `||`, `;`, newlines, `( … )` groups and `!`
+- the redirections `>`, `>>`, `<`, `2>&1`, `2>/dev/null` and `&>`
+- heredocs and here-strings, taken as literal stdin
+- `cd`, which moves the steps after it, and `NAME=value cmd`
+
+Anything else makes the plan **opaque**, and the plan names the construct:
+
+- `$( … )` and backticks
+- `<( … )`
+- loops, conditionals and functions
+- a trailing `&`
+- `eval` and `source`
+
+Opaque doesn't mean refused (see §3.8).
+
+**Classify.** Each simple command gets its facts from a **program table**. The table is
+data: it ships as JSON and can be extended in config.
+
+```json
+{
+  "cat":    {"effect": "read", "flags": ["-n", "-b", "-s", "-A"]},
+  "sort":   {"effect": "read", "flags": ["-n", "-r", "-u", "-k", "-t"],
+             "write_flags": ["-o", "--output"]},
+  "rm":     {"effect": "delete"},
+  "cp":     {"effect": "copy"},
+  "curl":   {"effect": "network", "write_flags": ["-o", "--output"]},
+  "python": {"effect": "code", "module_flag": "-m"},
+  "pytest": {"effect": "code", "check": "pytest"},
+  "env":    {"effect": "wrapper"},
+  "git":    {"value_flags": ["-C", "--git-dir", "--work-tree"],
+             "code_flags": ["-c", "--config-env", "--exec-path"],
+             "subcommands": {"status": "read", "log": "read", "commit": "write",
+                             "push": "network", "clone": "network"}}
+}
+```
+
+- **A program that isn't in the table gets the effect `code`**, meaning it may do
+  anything.
+- **`module_flag`** makes `python -m pytest` count as the program `pytest`.
+- **A `wrapper`** (`env`, `timeout`, `xargs`, `find -exec`) has its inner command parsed
+  and classified in turn.
+- **`code_flags` and escalating environment names turn a command into `code`** instead of
+  getting it refused. The environment names are the ones that change which binary runs or
+  what it loads, such as `PATH`, `LD_*`, `DYLD_*`, `GIT_*` and `PYTEST_*`. #4042's
+  denylist becomes this list.
+- **A few programs keep a classifier function**, named from the table, because their
+  arguments are a language of their own: PowerShell's `-Command`, `gh` through today's
+  `BINARY_POLICIES`, and `awk` and `sed`, whose scripts count as `code` when they run
+  commands or write files (`system`, `e`, `w`, redirection).
+
+Five more rules keep a `read` classification honest, and close the ways around the table:
+
+- **A `read` entry lists the flags it accepts.** Any other flag makes the command `code`.
+  For example, `sort --compress-program` names a program to run.
+- **Interpreter options are read in the interpreter's own order.** `python -c … -m pytest`
+  runs the `-c` code, not pytest. Any flag the table doesn't recognise makes the command
+  `code`.
+- **Commands that install packages or open a remote shell are `code` as well as
+  `network`.** That covers `pip install`, `npm install` and `ssh`.
+- **Git subcommands classed as `read` run with external diff, textconv and fsmonitor
+  switched off.** The table holds the arguments that do this, so repository config can't
+  make `git status` run a command.
+- **A command built from data at run time has unknown paths.** That is the inner command of
+  `xargs` or `find -exec`. Only a rule or a prompt can cover it.
+
+**Resolve.** GAIA finds a program with its own PATH search, which never looks in the
+current folder. It then classifies and runs that exact file. A program named by a path,
+or one that resolves inside a write root, counts as `code`. Otherwise a `cat` the agent
+wrote into the workspace would count as the real `cat`.
+
+**Facts.** Each simple command produces these facts:
+
+| Fact | Example |
+|---|---|
+| `reads`: paths | `cat README.md` reads `{ws}/README.md` |
+| `writes` and `deletes`: paths | `cp -R . /tmp/prv` reads `{ws}` and writes `/tmp/prv` |
+| `code`: runs code GAIA can't see into, with the runner's name | `pytest -q` gives `pytest` |
+| `network`: the host, when the command names one | `curl https://api.github.com/…` gives `api.github.com` |
+| `opaque`: the construct that stopped the parser | `$(…)` |
+
+The file tools and `run_python` report the same facts: `write_file` reports `writes`, and
+`run_python` reports `code: python`. The shell stops being a policy of its own.
+
+### 3.2 Two settings: reach and approval
+
+This part comes from Codex, which keeps *where* a command may act separate from *when to
+ask*.
+
+**Reach** is what may run without asking:
+
+- `read`: reads inside the read roots.
+- `workspace`: reads inside the read roots, plus writes and deletes inside the write
+  roots.
+- `anywhere`: everything, with no path boundary.
+
+**Approval** is what happens when something goes beyond the reach:
+
+- `ask` a person.
+- `refuse`, with a named reason and a remedy. This applies when nobody can answer: CI,
+  scheduled skills, benchmarks, or a console with no person behind it.
+
+The two kinds of root have separate defaults:
+
+- **Read roots** default to today's `allowed_paths`, which is the home folder for the
+  flagship agent.
+- **Write roots** default to the workspace, meaning the folder the session was opened on,
+  plus the agent's scratch directory from #3907.
+
+Two kinds of folder inside the workspace are never write roots, so writing to them always
+asks:
+
+- `.git/`
+- any folder on the session's `PATH`, such as an activated `.venv/bin`
+
+Otherwise a write that didn't ask, followed by a read that didn't ask, would add up to
+running code nobody approved. The write could be a git hook, git config, or a program
+that shadows a real one.
+
+Code facts only fall inside the `anywhere` reach. Without an operating-system sandbox GAIA
+can't limit what code does, so it doesn't pretend to (see §3.9).
+
+### 3.3 Presets
+
+The presets are named points on those two settings, modelled on Claude Code's modes:
+
+| Preset | Reach | Approval | Like |
+|---|---|---|---|
+| **read-only** | read | refuse | Claude Code `plan`; Codex `read-only` + `never` |
+| **ask** (default) | read | ask | Claude Code `default`; Codex `read-only` + `on-request` |
+| **accept-edits** | workspace | ask | Claude Code `acceptEdits` |
+| **full-access** | anywhere | none needed | Claude Code `bypassPermissions`; Codex `danger-full-access` + `never` |
+
+Any preset runs **unattended** when no person can answer, and then approval becomes
+`refuse`. Benchmarks and CI use accept-edits unattended plus the rules they need, which is
+like Claude Code's `dontAsk`.
+
+The active preset is always on screen, and you can switch among the first three during a
+session. There are exactly two ways into full access:
+
+- the `--full-access` launch flag
+- `permissions.default_mode = "full-access"` in config
+
+A session started either way can switch out of full access and back in. A session started
+any other way needs a relaunch to enter it.
+
+### 3.4 Rules
+
+Rules are configuration, and they are matched against facts, not text:
+
+```json
+"permissions": {
+  "default_mode": "ask",
+  "allow": ["shell(pytest)", "shell(git commit)", "network(api.github.com)"],
+  "ask":   ["delete(**/.env*)"],
+  "deny":  ["shell(sudo)", "shell(git push --force)"],
+  "write_roots": ["~/scratch"]
+}
+```
+
+- **`shell(<program> [<args>…])`** matches one simple command by its resolved program (see
+  Resolve in §3.1) and its subcommand. Each command in a line is decided on its own:
+  - `shell(pytest)` covers `pytest -q`, `python -m pytest` and
+    `PYTHONPATH=. pytest 2>&1 | tail`.
+  - It never covers the `rm` in `pytest && rm x`.
+- **`code(<runner>)`** covers code facts from any tool: `code(python)` covers `run_python`
+  and `python -c` alike.
+- **`read(…)`, `write(…)` and `delete(…)`** take path globs.
+- **`network(<host>)`** takes host globs.
+- **`tool(<name>)`** covers every call to one tool, with its paths still inside the read
+  roots. It is for tools that report no facts, such as MCP and email tools, and for
+  carrying over today's blanket approvals (§6).
+
+What a rule covers:
+
+- **A `shell`, `code` or `network` rule covers a command's code and network facts, but
+  never its paths.** Paths still need the reach or a path rule. So `shell(git commit)`
+  can't commit to a repository outside the write roots through `-C` or `--git-dir` without
+  asking. And a rule's text says what running the program implies, for example "git
+  commit runs the repository's hooks".
+- **Flags are compared as a set, wherever they appear in the argv.** That catches `-f` as
+  well as `--force`, in any order. A deny rule on arguments still can't list every
+  spelling, so the docs call argument-level denies best-effort. Deny the program when it
+  matters.
+
+**Where rules live:**
+
+- User rules go in `~/.gaia/config.json`. Only user config can extend the program table.
+- Per-project rules go in the same file, under the project's path. "Always" answers are
+  saved there, never into the repository.
+- A repository can carry its own `.gaia/permissions.json`. Its `deny` and `ask` rules
+  apply at once. Everything else in it applies only after the user accepts it once, with
+  the acceptance pinned to the file's hash. That covers `allow` rules and roots. A cloned
+  repository must not be able to grant itself anything.
+
+**Skill grants stay.** A loaded skill's `shell:execute:gh` turns into session rules taken
+from `gh`'s policy table:
+
+- its read subcommands are allowed
+- its writes ask
+- its credential actions are denied
+
+The rules are withdrawn when the skill unloads. This is finer than either product's global
+list. Its effect is the same as today, with one exception: a granted command piped into a
+read (`gh issue list | head`) no longer asks (§6, item 4).
+
+### 3.5 The decision
+
+Each simple command in the plan is checked against these steps in order, and the first
+one that applies wins. The whole line gets the strictest answer any of its commands got.
+
+1. **The text can't be parsed**, for example an unbalanced quote or a dangling operator:
+   deny with `invalid_syntax`.
+2. **The command reaches past the credential floor** (§3.10): deny with `protected_path`.
+3. **A deny rule matches:** deny with `rule`, naming the rule and the file it's in.
+4. **The command is unshowable**, meaning a prompt can't honestly describe it, such as an
+   encoded PowerShell command: deny with `unshowable`.
+5. **Full access is on:** allow.
+6. **Every fact is covered**, by the reach, an allow rule, or a skill grant: allow. The
+   reach covers a read inside the read roots, and in accept-edits a write or delete inside
+   the write roots.
+7. **Otherwise, ask.** Unattended, deny with `needs_approval` and give the remedy that
+   would have allowed the command.
+
+The line is decided up front, so GAIA can ask once. Each step is then decided again just
+before it runs, against the real paths as they resolve at that moment. If the answer
+changes, the line stops. That way an earlier step can't plant a symlink for a later path,
+glob, `cd` or redirection to follow outside the roots.
+
+Every denial carries a `reason` from a fixed set of codes, one plain sentence, and a
+`remedy`. The remedy names the mode, the exact rule text, the folder to add, or the tool
+to use instead. For example:
+
+- "Write into the scratch directory, `{scratch}`, which is in reach."
+- "Use `edit_file`."
+
+### 3.6 Asking
+
+GAIA builds a prompt from the facts, not from the text, and offers the narrowest way to
+never be asked again:
+
+```
+Run pytest in toybox/ — runs project code (GAIA can't see what it touches)
+  pytest -q
+[y] yes   [a] always in this project: shell(pytest)   [n] no
+
+Copy into /tmp/prv — outside this workspace
+  cp -R . /tmp/prv
+[y] yes   [f] add /tmp/prv for this session   [n] no
+```
+
+The second prompt resolves case 9 with one keystroke. That is Codex's idea of asking at
+the boundary instead of refusing. GAIA can't do it the way Codex's `on-failure` does,
+because that works by waiting for the sandbox to block the command, and GAIA has no
+sandbox. Instead GAIA reads the boundary crossing from the facts and asks before running
+anything.
+
+The "always" option has three limits:
+
+- It isn't offered for inline code (`python -c`, a heredoc). Approving one snippet isn't
+  approving every snippet.
+- For a path, it covers only this workspace.
+- For a program, it covers only that program and subcommand, never a whole tool.
+
+### 3.7 Running and reporting
+
+GAIA runs the plan with its own executor, which extends the pipeline runner #4019 and
+#4037 already built:
+
+- each simple command runs as an argv process, with no shell
+- pipes are chained
+- `&&`, `||` and `;` short-circuit as a shell would
+- `cd` moves the steps after it
+- GAIA opens each redirection itself, re-checks the path just before opening it, and never
+  follows a final symlink
+
+Because the executor did the work, it can say what happened. The shell tool's outcome
+carries:
+
+- **ran:** each step's argv, directory, exit code and duration, and which steps were
+  skipped
+- **mutations:** each declared write or delete, confirmed by checking the path before and
+  after the step
+- **check:** a test runner's result, with the directory it ran in
+- **facts:** the facts the decision read, so a reader can see what was allowed and why
+
+`mutations` and `check` are the `Mutation` and `CheckResult` types from the typed tool
+outcome (P1 of the architecture review). They are not a second shape. `facts` is the one
+new field, and it is the same type before and after: the decision reads it before the
+run, and the outcome records it after. Whichever change lands first defines these types.
+
+Enforcement reads the report too:
+
+- The session's own mutations are how accept-edits knows which files the agent created
+  (see §9, decision 5).
+- The answer contract can see where the tests ran and whether a patch was applied first.
+  That is exactly what the false claim in case 9 got wrong.
+
+There is a limit to what the report knows. For a `code` step, `mutations` only covers what
+the command line names. Inside a git work tree, the executor can also compare `git status`
+before and after the step, to report changes it didn't predict. That detects those
+changes but doesn't prevent them.
+
+**On Windows**, the executor also runs argv directly, so cmd.exe no longer parses the
+model's text. Two paths still go through cmd.exe:
+
+- its built-in commands, such as `dir` and `type`
+- `.bat` and `.cmd` shims such as `npm.cmd`, which Windows hands to cmd.exe to parse
+
+For those two, a cmd.exe metacharacter (`& | < > ^ % !`) in any argument makes the
+command opaque.
+
+### 3.8 What stays refused, and why
+
+The character blocklist goes. This is what replaces it:
+
+| Refused | Why a parser can't just handle it |
+|---|---|
+| Text that can't be parsed | The shell would reject it too. |
+| The credential floor (§3.10) | It is kept outside the modes on purpose. |
+| Unshowable commands | Saying yes to text the user can't read isn't consent. |
+| Deny rules from the user or an administrator | The user said no. |
+
+Opaque syntax is **not** on that list. It runs through a real shell (`bash` if present,
+otherwise `sh`) in two situations:
+
+- the user approves it at the prompt, which shows the whole script and offers "once" only
+- full access is on
+
+No rule can allow opaque syntax, because a rule that allowed a harmless loop would also
+allow `eval`. Unattended, opaque syntax is denied as `opaque`, and the denial names the
+construct. The remedy is `run_python`, or the same work written without that construct.
+On Windows it also needs Git Bash.
+
+These constructs stay opaque for four reasons:
+
+- `$( … )` and `eval` run code that is chosen only when the command runs
+- loops change control flow in ways the executor doesn't model
+- a trailing `&` leaves a process running after the call returns
+- the Windows cases above pass through cmd.exe's parser
+
+### 3.9 Network
+
+GAIA can't enforce network access. Blocking `curl` by name stops a harmless `curl` and
+misses `python -c "import urllib…"`. So the plan only says what it can see:
+
+- **A command that names where it connects reports a `network` fact with the host.** That
+  covers `curl`, `wget`, `gh`, `git fetch`, `git push` and `git clone`. Below full access,
+  such a command asks unless a `network(host)` rule matches.
+- **`network(host)` rules are advisory, and say so in their text and in the UI.** The host
+  is only the one the command line names. `git fetch` contacts whatever remote the
+  repository's config names, and `curl` follows redirects.
+- **A `code` fact reports its network access as unknown.** Such a command already asks, or
+  runs under a rule the user wrote, and the rule text says what it grants: "allow pytest:
+  runs project code, which can read, write and reach anything the user can".
+- **No surface shows "network off"**, because nothing makes it true. An operating-system
+  sandbox could make it true on some platforms, as it does for Codex: Seatbelt on macOS,
+  bubblewrap or Landlock on Linux. That work is listed under Later. Windows has no
+  equivalent GAIA can use today.
+
+### 3.10 Full access and the credential floor
+
+The owner has decided that full access means no prompts and no path boundary. The read
+and write roots are dropped, for the shell and the file tools alike. Deny rules still
+apply, because the user wrote them.
+
+**Recommendation: full access keeps the credential floor**, with a separate, explicit
+setting to turn it off: `permissions.protect_credentials = false`. The floor is made of
+three lists in `security.py`, plus three kinds of command:
+
+- `SECRET_DIRECTORIES`
+- `SENSITIVE_FILE_NAMES`
+- `BLOCKED_DIRECTORIES`
+- commands that print a credential, such as `gh auth token`
+- environment dumps: `env`, `printenv` and `set` with no arguments
+- a recursive read whose root contains a floor folder, such as `grep -r x ~`. The remedy
+  is to search a narrower folder.
+
+The reasons to keep it:
+
+- A user turns on full access to stop being asked about their own work. That isn't a
+  choice to hand their keys to an agent that may have just read an untrusted issue body.
+- It costs real work nothing. None of the 1,371 commands touched a credential or a system
+  path.
+
+The floor only covers what GAIA can see. It doesn't stop code that opens `~/.ssh` from
+inside `python`, and the user docs say so.
+
+## 4. The nine cases under this model
+
+| # | Command | Result | What the user does |
+|---|---|---|---|
+| 1 | `grep a x.txt \| wc -l` | A pipeline of two reads. Allowed in every preset. | Nothing |
+| 2 | `python -m pytest -q` | `module_flag` makes it `pytest`. The skill grant or `shell(pytest)` covers it. | Nothing: the table entry is data |
+| 3 | `ls && cat README.md` | Two reads, decided separately. Allowed. | Nothing |
+| 4 | `pytest -q 2>&1 \| tail` | `2>&1` writes nothing. `pytest` is decided as usual. | Nothing |
+| 5 | `PYTHONPATH=. pytest -q` | The assignment is part of the command, and the program is still `pytest`. | Nothing |
+| 6 | `for f in *.py; do wc -l "$f"; done` | Opaque, because of the loop. Asks once and shows the script. Runs under full access. Unattended, denied with the loop named and `run_python` as the remedy. | Answer the prompt, or use full access |
+| 7 | `git -C sub log` | The git entry steps over `-C sub`, which is path-checked. `log` is a read. | Nothing |
+| 8 | `python3 - <<'EOF' …` / `cat > f <<'EOF'` | The heredoc is stdin. The first command is `code: python`. The second writes `f`. | Answer the prompt, or add `code(python)`. The write goes through without asking in accept-edits |
+| 9 | copy to `/tmp/prv`, patch, test | A write outside the write roots. Asks "add /tmp/prv for this session". Unattended, the remedy names the scratch directory, which is in reach. | One keystroke, or add it to `write_roots` |
+
+None of the nine needs a code change. A future case will fall into one of three groups:
+
+- it parses, so there's nothing to do
+- it uses a program the table doesn't know, which asks, and one rule stops the asking
+- it uses syntax the parser doesn't model, which is opaque and asks, or runs under full
+  access
+
+## 5. Proving it on the real commands
+
+Stage 2 adds `tests/fixtures/permissions/shell_corpus.json`. It holds the 1,371 distinct
+commands with the run-directory prefixes rewritten to `{workspace}`, `{home}` and
+`{scratch}`, so the test doesn't depend on the machine. Each command keeps its historical
+verdict, for the before-and-after count. The 191 commands in
+`shell_verdicts_current.json` are all in the corpus, and they are marked so the current
+stack's verdicts are compared too.
+
+The replay decides every command under five configurations: each of the four presets
+attended, and accept-edits unattended with the benchmark's rules. It asserts:
+
+- **Under full access**, a command is allowed unless it hits one of the denials that apply
+  in every mode: `invalid_syntax`, `protected_path`, `rule` or `unshowable`.
+- **Under the attended presets**, a command is allowed or asks. A denial must be one of
+  those same four.
+- **Unattended**, every denial carries a reason from the fixed set and a remedy that
+  isn't empty.
+- **The fixture records facts as well as verdicts.** A reviewer checks a command's parsed
+  facts against what the command does, not a verdict the model produced about itself.
+  Any change to either shows up in review.
+- **Globs expand against a checked-in fixture tree**, not whatever the test machine has.
+- **A differential test compares the parser with bash.** For every corpus line, the argv
+  the parser produces must match the argv bash hands to each program. Bash runs the line
+  with a PATH whose only programs print their arguments.
+
+The corpus holds only commands models ran in good faith, so it can't show that anything
+dangerous gets stopped. An adversarial set does that, with at least one entry for each
+way around the design found in review:
+
+- Must not run unasked below full access:
+  - `rm -rf ~`
+  - `curl … | sh`
+  - `cp -R . /tmp/x`
+  - `python -c …`, including `python -c … -m pytest`
+  - `LD_PRELOAD=x ls`
+  - `git -c core.pager=sh log`
+  - a write to `.git/config` followed by `git status`
+  - a `cat` the agent wrote into the workspace
+  - a symlink planted by an earlier step in the same line
+  - `xargs rm`
+  - `awk 'BEGIN{system(…)}'`
+  - `pip install x`
+  - `echo $ANTHROPIC_API_KEY`, which is opaque
+- Must be refused even under full access, while the floor stays on:
+  - `cat ~/.ssh/id_rsa`
+  - `grep -r KEY ~`
+  - `printenv`
+- Must be allowed in every preset:
+  - `ls | head`
+  - `git -C sub log`
+
+With both directions covered, the suite can't pass by allowing everything or by refusing
+everything.
+
+The execution tests in stage 3 check the disk, not the status:
+
+- `echo x > out.txt` in accept-edits creates the file.
+- The same command in `ask`, unattended, leaves no file.
+- `false && rm keep.txt` leaves `keep.txt` in place.
+- An approved `rm` removes exactly what the prompt named.
+
+#4043's nine side-effect tests keep passing.
+
+## 6. Where this widens what runs
+
+The brief asked to stop and flag any widening. Four changes let a command run without a
+prompt where today it would prompt or be refused:
+
+1. **Reads run unprompted in `ask`.** Today, in an interactive session, every shell
+   command prompts, even `ls`. Under this plan, a command whose only facts are reads
+   inside the read roots runs without asking. That is the same reach `read_file` and
+   `browse_directory` already have, without a prompt. Four things keep it from widening
+   what can be read:
+   - variable expansion is limited (§3.1)
+   - the floor covers recursive reads and environment dumps (§3.10)
+   - a `read` entry accepts only the flags it lists (§3.1)
+   - `.git/` and `PATH` folders are never write roots (§3.2)
+
+   Recommended.
+2. **Combinations of reads run unattended.** Unattended runs refuse
+   `ls | head && cat x 2>&1` today. Under this plan it runs, just as each of its parts
+   already does. #4019, #4037 and #4041 already made this choice.
+3. **Writes go through without asking in accept-edits**, including shell writes such as
+   `mkdir`, `cp` and `>`, but only inside the write roots. The user has to pick this new
+   preset. It is narrower than #3995, which ran anything inside the allowed folders under
+   full access. For the flagship agent, those folders are the whole home folder.
+4. **A skill-granted command piped into a read runs unasked.** Today `gh issue list | head`
+   asks, because the grant covers `gh` and not the pipeline. This follows from item 1: each
+   command in the line is decided separately, and `head` alone doesn't ask.
+
+This plan deliberately does **not** do these things:
+
+- **It adds no auto mode without a sandbox.** Codex's `--full-auto` can run code freely
+  inside the workspace because its sandbox keeps the code there. GAIA has no sandbox, so a
+  preset like that would give code the user's whole account while implying a boundary.
+  Code runs unasked only under full access, or under a rule the user wrote.
+- **`GAIA_AUTO_APPROVE_TOOLS` doesn't widen.** Today it approves the file tools and
+  `run_python`, which means arbitrary Python, yet the shell still refuses `python -c`.
+  Under this plan it becomes `ask` unattended plus a `tool(…)` rule for each tool it
+  approves now. Those rules cover calls to those tools only, and nothing in the shell. The
+  inconsistency becomes visible configuration instead of hidden code, and nothing it runs
+  changes. Moving benchmarks to an explicit profile is up to whoever runs them.
+- **No rule can allow opaque syntax** (§3.8), and **a repository's permission file can't
+  grant anything the user hasn't accepted** (§3.4).
+
+## 7. Surfaces
+
+| Surface | Today | Change |
+|---|---|---|
+| Agent loop | Confirmation is decided by tool name (`TOOLS_REQUIRING_CONFIRMATION`), and path checks are separate (`PathValidator`) | `decide()` handles every tool that reports facts. Tools that report none, such as MCP and email tools, keep the name-based confirmation. `PathValidator`'s roots become the reach |
+| TUI | Answers y, a or n. Full access comes from `/full-access confirm`, `--full-access`, or the saved `full_access` key | The status bar shows the preset, and Shift+Tab cycles through the first three. The prompt shows the question built from facts and a scoped "always". `/full-access confirm` only works in a session launched with full access. The saved key moves to `permissions.default_mode` |
+| Agent UI | A checkbox to always allow a tool for the rest of the chat, kept in the browser. No full access | A preset selector in the composer. The backend's scoped options replace the whole-tool checkbox. Full access comes from the launch flag or config |
+| CLI | No modes | `--permission-mode` and `--full-access`, plus `gaia permissions {list, allow, deny, add-dir, trust}` |
+| stdio and SSE | `tool_decision` sends allow, deny or always | The prompt carries `question`, `facts` and `options`. The answer names the option chosen |
+
+## 8. Stages
+
+Each stage is one PR with tests. Nothing changes for users before stage 3.
+
+1. **Core model:** `src/gaia/permissions/`, holding the parser, the program table (JSON),
+   facts, rules and `decide()`. Pure code with unit tests, wired to nothing.
+2. **Corpus replay:** the fixture and the replay test from §5, run against stage 1. This
+   proves the definition of done before any user sees a change.
+3. **Shell executor:** `run_shell_command` becomes parse, decide, execute, report. It
+   removes `DANGEROUS_SHELL_OPERATORS` and the per-program text checks. It needs a
+   `gaia eval agent` run, because the tool description changes.
+4. **Agent loop and file tools:** one decision for the shell, the file tools and
+   `run_python`. Full access drops the path boundary, and "always" saves scoped rules.
+5. **TUI:** the TUI row in §7.
+6. **Agent UI:** the Agent UI row in §7.
+7. **CLI:** the CLI row in §7.
+8. **Docs:** a user guide at `docs/guides/permissions.mdx`, plus updates to
+   `docs/reference/cli.mdx`, `docs/spec/shell-tools-mixin.mdx`, and the flagship agent's
+   README, SPEC and SKILL.
+
+**Later, and only with a sandbox:** on macOS and Linux, a sandbox would let code run
+unasked inside the workspace and would make "no network" true. This isn't possible on
+Windows today.
+
+## 9. Decisions for the owner
+
+1. **Should reads run unprompted in `ask`?** (§6, item 1.) Recommend yes.
+2. **Should the credential floor stay under full access?** (§3.10.) Recommend keeping it,
+   with an explicit setting to turn it off.
+3. **Should full access be reachable only by the launch flag or config?** This means
+   `/full-access confirm` stops working in a session that wasn't launched with it.
+   Recommend yes, which matches the brief.
+4. **What happens to the open shell stack?** Recommend this order:
+   - first merge #4019, which fixes a wrong-output bug, then #4043, then #3808 with its fix
+   - close #4037, #4041, #4042 and #4044 in favour of stage 3, which keeps their tests
+5. **Should deletes go through without asking in accept-edits?** Recommend: only for files
+   the session created (known from its own mutations) or that git can restore. Other
+   deletes ask. The looser choice, any delete inside the write roots, is what Codex does.
+6. **Should write roots default to the session folder plus scratch?** The alternative is
+   the home folder the flagship agent reads from. Recommend the session folder. This
+   changes nothing today, since every write prompts, and it keeps accept-edits bounded.
+
+## Appendix: where each idea comes from
+
+| Idea | Source |
+|---|---|
+| Reach and approval as separate settings; asking at the boundary | Codex: `--sandbox` × `--ask-for-approval`, `on-failure` and `on-request` |
+| Named presets; a middle step where edits don't ask; the mode always visible; two ways into the widest mode | Claude Code permission modes |
+| Rules checked per command in a compound line; allow, ask and deny lists in config | Claude Code settings; Codex exec policy |
+| Refusals that say why and what works; skill-scoped grants | GAIA |
+| One decision over facts from every tool; an executor that reports what ran | New in this plan |
