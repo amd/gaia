@@ -7,6 +7,8 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-21
+
 ### Fixed
 
 - **Received-invite grounding now recognizes Google events with omitted
