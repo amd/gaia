@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
@@ -1949,19 +1950,28 @@ class ShellToolsMixin:
                     except subprocess.TimeoutExpired as exc:
                         stdout_parts.append(_as_text(exc.stdout))
                         stderr_parts.append(_as_text(exc.stderr))
-                        return {
-                            "status": "error",
-                            "error": f"Command timed out after {timeout} seconds",
-                            "command": command,
-                            "stdout": "".join(stdout_parts),
-                            "stderr": "".join(stderr_parts),
-                            "has_errors": True,
-                            "timed_out": True,
-                            "timeout": timeout,
-                            "duration_seconds": time.monotonic() - start_time,
-                            "cwd": cwd,
-                            "steps": ran,
-                        }
+                        return attach_check(
+                            {
+                                "status": "error",
+                                "error": f"Command timed out after {timeout} seconds",
+                                "command": command,
+                                "stdout": "".join(stdout_parts),
+                                "stderr": "".join(stderr_parts),
+                                "has_errors": True,
+                                "timed_out": True,
+                                "timeout": timeout,
+                                "duration_seconds": time.monotonic() - start_time,
+                                "cwd": cwd,
+                                "steps": ran,
+                            },
+                            check_from_command(
+                                command,
+                                [seg for st in steps for seg in st.segments],
+                                None,
+                                "".join(stdout_parts),
+                                "".join(stderr_parts),
+                            ),
+                        )
                     except FileNotFoundError as exc:
                         # Mid-line, the outer handler's "nothing ran" answer
                         # would disown the commands that did; report it the way
@@ -2019,7 +2029,14 @@ class ShellToolsMixin:
                 }
                 if waited:
                     outcome["waited_seconds"] = round(waited, 1)
-                return outcome
+                check = check_from_command(
+                    command,
+                    [seg for st in steps for seg in st.segments],
+                    last_code,
+                    "".join(stdout_parts),
+                    "".join(stderr_parts),
+                )
+                return attach_check(outcome, check)
 
             except FileNotFoundError as exc:
                 # The executable is not there, so nothing started. Said out loud

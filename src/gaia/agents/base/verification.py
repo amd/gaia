@@ -12,6 +12,16 @@ conversation history, so it is HARD-CAPPED at ``VERIFICATION_SCOPE_MAX_CHARS``.
 :func:`strip_verification_scope` removes it again for consumers that need the
 answer text alone.
 
+What a check reported comes from the tool that ran it — a
+:class:`~gaia.agents.base.checks.CheckResult` on its result. Reading the tool's
+text output is the fallback, kept for results that carry none (hub agents,
+MCP tools, anything written before the field existed).
+
+The same log answers a second question: does what the answer claims about
+tests (:mod:`gaia.agents.base.claims`) match what ran?
+:func:`unsupported_test_claim` compares the two so the loop can ask for one
+correction.
+
 Pure and dependency-free on purpose: the agent loop, the Agent-UI SSE handler,
 and hub agents all consume it.
 """
@@ -21,6 +31,15 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+
+from gaia.agents.base.checks import (
+    CheckResult,
+    check_kind,
+    command_check_label,
+    declares_check,
+    runner_summary,
+)
+from gaia.agents.base.claims import passing_test_claim
 
 VERIFICATION_SCOPE_PREFIX = "Verification: "
 VERIFICATION_SCOPE_MAX_CHARS = 200
@@ -35,28 +54,6 @@ _CHECK_TOOLS: FrozenSet[str] = frozenset(
         "run_tests",
         "typecheck",
     }
-)
-
-# A shell-style call is a check when its command names a test / lint / build
-# runner. Deliberately conservative: a miss reads "unverified" (honest and
-# cautious), a false positive would claim a check that never ran.
-_CHECK_COMMAND_RE = re.compile(
-    r"\b("
-    r"pytest|py\.test|tox|nox"
-    r"|python\s+-m\s+(?:pytest|unittest)"
-    r"|npm\s+(?:run\s+)?(?:test|lint|build|typecheck)"
-    r"|yarn\s+(?:test|lint|build)"
-    r"|pnpm\s+(?:run\s+)?(?:test|lint|build)"
-    r"|go\s+(?:test|vet|build)"
-    r"|cargo\s+(?:test|clippy|check|build)"
-    r"|dotnet\s+(?:test|build)"
-    r"|mvn\s+(?:test|verify)"
-    r"|make\s+(?:test|check|lint|build)"
-    r"|ctest|jest|vitest|mocha"
-    r"|ruff|flake8|pylint|mypy|pyright|eslint|tsc|shellcheck"
-    r"|util[/\\]lint\.py"
-    r")\b",
-    re.IGNORECASE,
 )
 
 # Argument keys that carry a shell command, in priority order.
@@ -151,8 +148,13 @@ def verification_check_label(
 ) -> Optional[str]:
     """Short label when this call is a verification check, else ``None``.
 
-    ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``.
+    ``pytest tests/unit -q`` → ``"pytest"``; ``read_file`` → ``None``. What
+    the tool declared wins; everything below it is the fallback for results
+    that declare nothing.
     """
+    if declares_check(result):
+        reported = CheckResult.from_result(result)
+        return reported.label if reported else None
     name = (tool_name or "").strip()
     if name in ("execute_python_file", "run_python") and isinstance(result, dict):
         return_code = result.get("return_code")
@@ -162,16 +164,13 @@ def verification_check_label(
             or isinstance(return_code, bool)
         ):
             return None
-        output = _python_run_output(result)
-        summary = _PYTEST_SUMMARY_RE.search(output)
-        if summary and re.search(
-            r"\b[1-9]\d* (?:passed|failed|error|errors|xfailed|xpassed)\b",
-            summary.group(0),
-        ):
-            return "pytest"
-        if _UNITTEST_SUMMARY_RE.search(output):
-            return "unittest"
-        return None
+        output = "\n".join(
+            value
+            for key in ("stdout", "stderr")
+            if isinstance((value := result.get(key)), str)
+        )
+        found = runner_summary(output)
+        return found[0] if found else None
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):
@@ -179,15 +178,7 @@ def verification_check_label(
     for key in _COMMAND_KEYS:
         command = tool_args.get(key)
         if isinstance(command, str) and command.strip():
-            match = _CHECK_COMMAND_RE.search(command)
-            if not match:
-                return None
-            label = " ".join(match.group(0).split()).lower()
-            return {
-                "python -m pytest": "pytest",
-                "py.test": "pytest",
-                "python -m unittest": "unittest",
-            }.get(label, label)
+            return command_check_label(command)
     return None
 
 
@@ -684,3 +675,119 @@ def verify_after_change_correction(changed: str) -> str:
         "(pytest, or run_python) and report what they printed. If they can't be "
         "run, say plainly that the change is unverified."
     )
+
+
+# ---------------------------------------------------------------------------
+# What the answer claims, and whether the record backs it
+# ---------------------------------------------------------------------------
+
+#: Tools that rewrite a file, so a check older than one of these is stale.
+#: Names only — a shell command that edits in place (``sed -i``, ``git apply``)
+#: is not counted, because a miss here reads "claim supported" and the cost of
+#: a false correction on an honest answer is higher than a missed stale one.
+_FILE_MUTATION_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "edit_file",
+        "edit_python_file",
+        "replace_function",
+        "update_gaia_md",
+        "write_file",
+        "write_markdown_file",
+        "write_python_file",
+    }
+)
+
+
+#: Why the record does not back a pass claim, phrased for the correction.
+NO_TEST_RUN = "no test run is recorded for this turn"
+
+
+TEST_RUN_FAILED = "the test run recorded for this turn did not pass"
+
+
+TEST_RUN_STALE = (
+    "the test run recorded for this turn finished before the last file change"
+)
+
+
+def is_file_mutation(tool_name: str) -> bool:
+    """True when this tool call rewrote a file."""
+    return (tool_name or "").strip() in _FILE_MUTATION_TOOLS
+
+
+def verification_record(
+    tool_name: str, tool_args: Any, result: Any, *, errored: bool
+) -> Dict[str, Any]:
+    """One tool call as :func:`build_verification_scope` reads it.
+
+    A result whose tool declared its check is taken at its word — label,
+    target, kind and outcome, or "not a check" — straight from the tool that
+    ran it. Only a result that declares nothing is classified from its
+    arguments and output, and judged by *errored* (the caller's own "did this
+    call fail" predicate).
+    """
+    declared = declares_check(result)
+    reported = CheckResult.from_result(result)
+    if reported is not None:
+        label: Optional[str] = reported.label
+        target: Optional[str] = reported.target
+        kind: Optional[str] = reported.kind
+        failed = not reported.passed
+    elif declared:
+        label = target = kind = None
+        failed = errored
+    else:
+        label = verification_check_label(tool_name, tool_args, result)
+        target = verification_check_target(tool_name, tool_args) if label else None
+        kind = check_kind(label) if label else None
+        failed = errored
+    return {
+        "tool": tool_name,
+        "check_label": label,
+        "check_target": target,
+        "check_kind": kind,
+        "failed": failed,
+        "ran": check_was_executed(result),
+        "mutated": is_file_mutation(tool_name),
+        "declared": declared,
+    }
+
+
+def unsupported_test_claim(
+    answer: str, executions: List[Dict[str, Any]]
+) -> Optional[Tuple[str, str]]:
+    """``(claim, why)`` when *answer* reports a test result the record denies.
+
+    ``None`` when the answer makes no test claim, or when a test check ran,
+    passed, and — if this turn rewrote a file — ran after the last rewrite. A
+    check that passed and was then invalidated by an edit is the same false
+    claim as one that never ran.
+
+    Records come from :func:`verification_record`, in execution order. Only a
+    ``kind == "test"`` check is evidence — a clean lint says nothing about a
+    pass count. A repeated check counts by its latest run, matching the footer
+    (#3989).
+    """
+    claim = passing_test_claim(answer)
+    if not claim:
+        return None
+    last_mutation = -1
+    latest: Dict[Tuple[str, Any], Tuple[int, Dict[str, Any]]] = {}
+    for index, execution in enumerate(executions or []):
+        if not execution.get("ran", True):
+            continue
+        if execution.get("mutated") and not execution.get("failed"):
+            last_mutation = index
+        label = execution.get("check_label")
+        if not label:
+            continue
+        if (execution.get("check_kind") or check_kind(label)) == "test":
+            latest[(label, execution.get("check_target"))] = (index, execution)
+    if not latest:
+        return (claim, NO_TEST_RUN)
+    passed = [(index, e) for index, e in latest.values() if not e.get("failed")]
+    if not passed:
+        return (claim, TEST_RUN_FAILED)
+    if all(index < last_mutation for index, _ in passed):
+        return (claim, TEST_RUN_STALE)
+    return None

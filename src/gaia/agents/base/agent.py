@@ -48,13 +48,12 @@ from gaia.agents.base.verification import (
     VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
     check_output,
-    check_was_executed,
     project_has_tests,
     strip_verification_scope,
     summary_reports_failure,
+    unsupported_test_claim,
     unverified_change,
-    verification_check_label,
-    verification_check_target,
+    verification_record,
     verify_after_change_correction,
 )
 
@@ -652,6 +651,11 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Write your one-sentence response to the user now. "
     "Do not call any more tools.]"
 )
+
+# Test-claim guard: an answer reporting a pass count the turn never produced.
+# One correction — a second disagreement is better than a loop, and the
+# verification footer states the truth either way.
+_MAX_TEST_CLAIM_CORRECTIONS = 1
 
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
@@ -5189,21 +5193,16 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
-        label = verification_check_label(tool_name, tool_args, result)
-        log.append(
-            {
-                "tool": tool_name,
-                "check_label": label,
-                "check_target": (
-                    verification_check_target(tool_name, tool_args) if label else None
-                ),
-                "failed": self._is_error_result(result)
-                or summary_reports_failure(tool_name, result),
-                "ran": check_was_executed(result),
-                "args": tool_args if isinstance(tool_args, dict) else {},
-                "output": check_output(tool_name, result),
-            }
+        record = verification_record(
+            tool_name, tool_args, result, errored=self._is_error_result(result)
         )
+        # A snippet that prints a failing summary still exits 0.
+        record["failed"] = record["failed"] or summary_reports_failure(
+            tool_name, result
+        )
+        record["args"] = tool_args if isinstance(tool_args, dict) else {}
+        record["output"] = check_output(tool_name, result)
+        log.append(record)
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -5350,6 +5349,7 @@ Do NOT wrap conversational replies in JSON.
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
+        test_claim_corrections = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7401,6 +7401,47 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": _correction})
                         conversation.append({"role": "user", "content": _correction})
+                        continue
+                # Last guard before the answer is sealed: the footer below
+                # already knows whether a test ran, so an answer that reports a
+                # pass count the record cannot show gets one chance to fix it.
+                test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if test_claim:
+                    claim, why = test_claim
+                    can_correct_claim = (
+                        steps_taken < steps_limit - 1
+                        and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                    )
+                    if not can_correct_claim:
+                        logger.warning(
+                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "%d/%d corrections used, step %d/%d",
+                            claim,
+                            why,
+                            test_claim_corrections,
+                            _MAX_TEST_CLAIM_CORRECTIONS,
+                            steps_taken,
+                            steps_limit,
+                        )
+                    else:
+                        test_claim_corrections += 1
+                        logger.debug(
+                            "[WORKFLOW] Correcting unsupported test claim %r (%s)",
+                            claim,
+                            why,
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f'Your answer says "{claim}", but {why}. '
+                                    "Either run the check now, or answer "
+                                    "without that claim."
+                                ),
+                            }
+                        )
                         continue
 
                 # Scope line goes on AFTER the subclass hook: a subclass that

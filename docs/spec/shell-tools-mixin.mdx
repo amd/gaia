@@ -227,6 +227,7 @@ class ShellToolsMixin:
                 "timeout": int,
                 "cwd": str,
                 "output_truncated": bool,
+                "check_result": dict | None,  # CheckResult when a test/lint/build runner ran
                 "rate_limited": bool,  # If rate limited
                 "wait_time_seconds": float,  # Time to wait
                 "timed_out": bool  # If command timed out
