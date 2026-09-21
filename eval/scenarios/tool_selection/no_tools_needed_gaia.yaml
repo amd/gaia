@@ -1,0 +1,41 @@
+id: no_tools_needed_gaia
+name: "No Tools -- General Knowledge (flagship)"
+category: tool_selection
+agent_type: gaia
+severity: high
+description: |
+  Flagship counterpart to no_tools_needed, and the restraint case that matters
+  most at flagship scale. No documents are indexed and the questions are
+  general knowledge and arithmetic -- but semantic selection still puts ~26 of
+  the flagship's ~80 registered tools in front of the model on every turn.
+  Tests that a large exposed tool surface does not by itself provoke tool calls
+  the question never needed.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask 'What is the capital of France?'"
+    ground_truth:
+      expected_answer: "Paris"
+    success_criteria: "Agent answers 'Paris' directly. FAIL if agent calls any tools (search_file, browse_files, etc.)."
+
+  - turn: 2
+    objective: "Ask 'What is 15% of 200?'"
+    ground_truth:
+      expected_answer: "30"
+    success_criteria: "Agent answers '30' directly. FAIL if agent calls any tools."
+
+  - turn: 3
+    objective: "Ask 'Tell me a fun fact about penguins.'"
+    ground_truth:
+      expected_behavior: "Agent provides a factual statement about penguins without tool calls"
+    success_criteria: "Agent provides a reasonable fun fact about penguins directly from general knowledge. No tools should be invoked."
+
+expected_outcome: |
+  A wide exposed tool surface does not induce spurious tool use: the agent
+  answers all three general-knowledge and arithmetic questions directly, with
+  zero tool calls.

@@ -1,0 +1,41 @@
+id: known_path_read_gaia
+name: "Known Path -- Use read_file Directly (flagship)"
+category: tool_selection
+agent_type: gaia
+severity: high
+description: |
+  Flagship counterpart to known_path_read. The user provides an exact file
+  path. On the flagship ~26 of ~80 registered tools reach the model each turn,
+  so this exercises both halves of the selection problem at once: that the
+  direct-read tool is surfaced for an explicitly named path, and that the agent
+  then shows restraint -- reading the file rather than spending a turn on
+  search, when the selector also puts discovery and web tools in front of it.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent reads the file directly (read_file or query_specific_file) and states $14.2M. PASS if agent retrieves the correct answer. FAIL if agent calls search_file before reading the explicitly named file."
+
+  - turn: 2
+    objective: "Ask 'Now what is the CEO's Q4 outlook?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: ceo_outlook
+      expected_answer: "Projected 15-18% growth driven by enterprise segment expansion"
+    success_criteria: "Agent answers from the already-read document: 15-18% projected growth"
+
+expected_outcome: |
+  The direct-read tool is surfaced for an explicitly named path and the agent
+  uses it, without detouring through search or the wider discovery surface the
+  flagship's tool selection also exposes.
