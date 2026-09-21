@@ -26,6 +26,7 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    is_broad_root,
     root_depth,
     search_roots,
 )
@@ -408,12 +409,15 @@ class FileSearchToolsMixin:
                     for location in common_locations:
                         if len(matching_files) >= 20:
                             break
-                        # Skip anything already covered by a searched root
+                        # Skip anything already covered by a searched root. A
+                        # broad root was only walked shallowly, so it covers
+                        # nothing.
                         try:
                             resolved = location.resolve()
                             if any(
-                                resolved == root or str(resolved).startswith(str(root))
+                                resolved.is_relative_to(root.resolve())
                                 for root in roots
+                                if not is_broad_root(root)
                             ):
                                 continue
                         except (OSError, ValueError):
