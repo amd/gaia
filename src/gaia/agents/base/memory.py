@@ -2661,6 +2661,27 @@ class MemoryMixin(ProceduralMemoryMixin):
         "url",
     )
 
+    @staticmethod
+    def _command_program(command: str) -> str:
+        """The program a command runs, past ``env``, ``VAR=value`` and ``-m``.
+
+        ``env TOYBOX_CLOCK=frozen pytest -q`` and ``python -m pytest`` both run
+        pytest, so a fix that adds a variable is the same operation.
+        """
+        tokens = command.split()
+        i = 0
+        while i < len(tokens) and (
+            tokens[i] == "env" or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[i])
+        ):
+            i += 1
+        if i == len(tokens):
+            return os.path.basename(tokens[0]).lower()
+        program = os.path.basename(tokens[i]).lower()
+        is_module_run = tokens[i + 1 : i + 2] == ["-m"] and i + 2 < len(tokens)
+        if program.startswith("python") and is_module_run:
+            return tokens[i + 2].lower()
+        return program
+
     @classmethod
     def _operation_key(cls, tool_name: str, tool_args: Any) -> str:
         """Identify the operation a call performed: tool plus what it acted on."""
@@ -2668,8 +2689,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         for key in cls._OPERATION_COMMAND_KEYS:
             value = args.get(key)
             if isinstance(value, str) and value.strip():
-                binary = os.path.basename(value.split()[0]).lower()
-                return f"{tool_name} {binary}"
+                return f"{tool_name} {cls._command_program(value)}"
         for key in cls._OPERATION_TARGET_KEYS:
             value = args.get(key)
             if isinstance(value, str) and value.strip():

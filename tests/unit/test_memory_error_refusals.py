@@ -198,6 +198,18 @@ class TestOperationKey:
             ("load_skill", {"name": "coding"}, "load_skill coding"),
             ("find_files", {"query": "x", "limit": 3}, 'find_files {"limit": 3, "query": "x"}'),
             ("list_windows", None, "list_windows {}"),
+            (
+                "run_shell_command",
+                {"command": "env TOYBOX_CLOCK=frozen pytest -q"},
+                "run_shell_command pytest",
+            ),
+            (
+                "run_shell_command",
+                {"command": "PYTHONPATH=. python3 -m pytest tests"},
+                "run_shell_command pytest",
+            ),
+            ("run_shell_command", {"command": "python -m"}, "run_shell_command python"),
+            ("run_shell_command", {"command": "env"}, "run_shell_command env"),
         ],
     )
     def test_keys(self, tool_name, args, expected):
