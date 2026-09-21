@@ -4,8 +4,6 @@ What's new in `@amd-gaia/agent-email`, in plain language. For the technical deta
 behind any entry — API shapes, endpoints, and version semantics — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.7.0/hub/agents/email/npm/SPEC.md).
 
-## [Unreleased]
-
 ## [0.7.0] - 2026-09-21
 
 - **Asking a content question about your mail ("who signed this?", "what

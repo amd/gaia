@@ -5,8 +5,6 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the REST
 contract version is tracked separately as
 `gaia_agent_email.contract.SCHEMA_VERSION` (see `CONTRACT.md`).
 
-## [Unreleased]
-
 ## [0.7.0] - 2026-09-21
 
 ### Fixed
