@@ -748,9 +748,12 @@ _FILE_WRITE_CLAIM_PATTERNS = (
         rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
         re.IGNORECASE,
     ),
-    # A bare "Saved to …" / "Report saved successfully at …" opening a line
+    # A bare "Saved to …" / "Report saved successfully at …" opening a line.
+    # The subject slot refuses negations, or "Nothing saved to disk" reads as
+    # a claim and burns the turn's only re-prompt.
     re.compile(
-        rf"(?:^|[.!?]\s+|\n)\s*(?:the\s+)?(?:[\w'-]+\s+)?{_FILE_WRITE_VERBS}\s+"
+        rf"(?:^|[.!?]\s+|\n)\s*(?:the\s+)?"
+        rf"(?:(?!(?:not|never|no|nothing|none)\b)[\w'-]+\s+)?{_FILE_WRITE_VERBS}\s+"
         rf"{_WRITE_ADVERBS}(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
         re.IGNORECASE,
     ),
@@ -771,6 +774,14 @@ _PLAN_FRAME_PATTERN = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?[*_#>\s]*"
     r"(?:step\s*\d*|phase\s*\d*|completion|plan|next steps?|final step"
     r"|approach|goal)\b[^:\n]{0,30}:"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+# A plan label alone cannot exempt a sentence — "Step 3: I saved it to x.md"
+# would then be a one-token bypass. The save also has to sit in a subordinate
+# clause, which is where a step that has not happened yet puts it.
+_SUBORDINATE_CUE_PATTERN = re.compile(
+    r"\b(?:where|which|that|whether|if)\b"
     r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
     re.IGNORECASE,
 )
@@ -812,6 +823,19 @@ def _names_a_file(sentence: str) -> bool:
     )
 
 
+def _is_plan_narration(sentence: str) -> bool:
+    """True when the sentence frames a save as a step still to be taken."""
+    if not _PLAN_FRAME_PATTERN.search(sentence):
+        return False
+    cue = _SUBORDINATE_CUE_PATTERN.search(sentence)
+    if cue is None:
+        return False
+    return all(
+        (match := pattern.search(sentence)) is None or match.start() > cue.start()
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+    )
+
+
 def _claims_file_write(answer: str) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
@@ -823,7 +847,7 @@ def _claims_file_write(answer: str) -> bool:
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
     for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
-        if _PLAN_FRAME_PATTERN.search(sentence):
+        if _is_plan_narration(sentence):
             continue
         if not _names_a_file(sentence):
             continue
