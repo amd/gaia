@@ -609,6 +609,60 @@ class TestAHomeSandboxIsCappedToo:
         assert "target_other.md" in tools["find_files"]("target_*", scope="home")
 
 
+class TestBothToolsAgreeOnTheProject:
+    """The two search tools must not answer the same question differently.
+
+    ``search_scope`` exists so the depth rule has one home. A copy of it inside
+    ``find_files`` capped the project at ten levels while ``search_file`` walked
+    it to ``DEEP_ROOT_DEPTH``, so whether a file was findable depended on which
+    tool the model happened to pick.
+    """
+
+    @pytest.fixture
+    def deep_project(self, tmp_path, monkeypatch):
+        root = (tmp_path / "proj").resolve()
+        buried = root.joinpath(*(f"lvl{i}" for i in range(12)))
+        buried.mkdir(parents=True)
+        (buried / "buried_config.py").write_text("BURIED = 1\n")
+        monkeypatch.chdir(root)
+        return root
+
+    def test_find_files_reaches_a_file_below_the_old_ten_level_cap(self, deep_project):
+        _, tools = _filesystem_agent(deep_project)
+
+        for scope in ("cwd", "smart"):
+            assert "buried_config.py" in tools["find_files"](
+                "buried_*", scope=scope
+            ), scope
+
+    def test_search_file_reaches_it_too(self, deep_project):
+        mixin = FileSearchToolsMixin()
+        mixin.path_validator = _Sandbox(deep_project)
+        saved = dict(_TOOL_REGISTRY)
+        try:
+            mixin.register_file_search_tools()
+            fn = _TOOL_REGISTRY["search_file"]["function"]
+            fn.mixin = mixin
+            result = fn("buried_config.py")
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+
+        assert [Path(f).name for f in result["files"]] == ["buried_config.py"]
+
+    def test_a_broad_root_is_still_capped_on_the_content_path(self, tmp_path):
+        """Deferring to the shared policy must not lift the full-access cap.
+
+        Content search has its own ceiling of 8; the shallow cap is lower, and
+        taking the larger of the two would crawl ``/`` two levels further than
+        before this module existed.
+        """
+        from gaia.agents.tools.search_scope import SHALLOW_ROOT_DEPTH, root_depth
+
+        assert root_depth(_FS_ROOT, [_FS_ROOT]) == SHALLOW_ROOT_DEPTH
+        assert min(8, root_depth(_FS_ROOT, [_FS_ROOT])) == SHALLOW_ROOT_DEPTH
+
+
 class TestProjectSandboxesAreUnchanged:
     def test_a_cwd_inside_a_project_root_does_not_reorder_roots(
         self, tmp_path, monkeypatch

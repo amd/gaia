@@ -44,6 +44,11 @@ def is_broad_root(root: Path) -> bool:
 
     Full access grants ``/``; the flagship's default grants ``~``. Either walked
     exhaustively is a whole-disk crawl.
+
+    Deliberately just those two. A container of homes (``/home``, ``C:\\Users``)
+    is as expensive to walk, but only reaches the approved set by a user
+    approving it by name — and demoting a root someone chose on purpose is the
+    bug this module exists to avoid.
     """
     resolved = Path(root).expanduser().resolve()
     return resolved == Path(resolved.anchor) or resolved == Path.home().resolve()
