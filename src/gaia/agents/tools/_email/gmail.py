@@ -20,10 +20,11 @@ import base64
 import binascii
 import html
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
 from email.utils import getaddresses
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import httpx
 
@@ -302,6 +303,76 @@ class GmailReadBackend:
                 "state — reconnect Google with `gaia connectors connect google`."
             )
         return address
+
+    def _clamp(self, limit: int) -> int:
+        if limit < 1:
+            raise ValueError(f"limit must be >= 1, got {limit}")
+        return min(limit, _GMAIL_MAX_LIMIT)
+
+    def _label_map(self) -> Dict[str, str]:
+        """Label id -> display name. Gmail's message resource carries only
+        opaque ids, and `labels.list` is the only way to name them."""
+        if self._label_names is None:
+            data = self._get("/users/me/labels")
+            self._label_names = {
+                lab["id"]: lab.get("name") or lab["id"]
+                for lab in data.get("labels") or []
+                if lab.get("id")
+            }
+        return self._label_names
+
+    def _list_ids(
+        self,
+        *,
+        label_ids: Optional[Sequence[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 25,
+    ) -> List[str]:
+        params: Dict[str, Any] = {"maxResults": self._clamp(limit)}
+        if label_ids:
+            params["labelIds"] = list(label_ids)
+        if query:
+            params["q"] = query
+        data = self._get("/users/me/messages", params=params)
+        # The key is absent, not empty, when nothing matches.
+        return [m["id"] for m in (data.get("messages") or []) if m.get("id")]
+
+    def _fetch_summaries(self, ids: Sequence[str]) -> List[Dict[str, Any]]:
+        """Metadata for every id, fanned out over a bounded pool.
+
+        One token for the whole fan-out: it is a single logical read, and
+        minting per subrequest would be a keyring hit per message.
+        """
+        if not ids:
+            return []
+        label_names = self._label_map()
+        token = self._access_token_fn()
+        params = {
+            "format": "metadata",
+            "metadataHeaders": list(_METADATA_HEADERS),
+        }
+
+        def fetch(message_id: str) -> Dict[str, Any]:
+            return self._get(
+                f"/users/me/messages/{message_id}", params=params, token=token
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=min(_FETCH_CONCURRENCY, len(ids))
+        ) as pool:
+            # list() forces every result, so a failed subrequest raises here
+            # rather than shortening the listing into a smaller-looking inbox.
+            messages = list(pool.map(fetch, ids))
+        return [message_summary(m, label_names=label_names) for m in messages]
+
+    def list_inbox(
+        self, *, limit: int = 25, unread_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Newest-first inbox messages, with metadata but no bodies."""
+        label_ids = ["INBOX", "UNREAD"] if unread_only else ["INBOX"]
+        return self._fetch_summaries(
+            self._list_ids(label_ids=label_ids, limit=limit)
+        )
 
 
 __all__ = [
