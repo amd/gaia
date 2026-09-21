@@ -130,22 +130,24 @@ You have persistent memory across sessions. USE IT PROACTIVELY:
 - Every fact, preference, name, project detail, deadline, or observation is worth storing.
 
 Preferences:
-  - tone: professional but friendly
-  - code_style: black formatter, 88 char lines
+  - tone: professional but friendly (learned 2026-02-11)
+  - code_style: black formatter, 88 char lines (learned 2026-01-20, last confirmed 2026-03-02)
 
 Known facts:
-  - Project uses React 19 with app router (confidence: 0.82)
-  - User's name is Alex, role is tech lead (confidence: 0.95)
+  - Project uses React 19 with app router (confidence: 0.82, learned 2026-03-01)
+  - User's name is Alex, role is tech lead (confidence: 0.95, learned 2026-01-20)
 
 Skills:
-  - Deploy workflow: test → build → push → verify (confidence: 0.88)
-  - Docker compose: always use --build flag on first run (confidence: 0.72)
-  - Git bisect: use binary search for regression hunting (confidence: 0.65)
+  - Deploy workflow: test → build → push → verify (confidence: 0.88, learned 2026-02-02)
+  - Docker compose: always use --build flag on first run (confidence: 0.72, learned 2026-02-15)
+  - Git bisect: use binary search for regression hunting (confidence: 0.65, learned 2026-03-10)
 
 Known errors to avoid:
-  - execute_code: "import torch" fails -- torch not installed on this machine
-  - pip install: always use --index-url for PyTorch packages
+  - execute_code: "import torch" fails -- torch not installed on this machine (learned 2026-03-12)
+  - pip install: always use --index-url for PyTorch packages (learned 2026-03-12)
 ```
+
+Each personal item carries the absolute date it was learned and, if it was later stored again or updated, the date it was last confirmed. The dates are absolute rather than "3 days ago" so the prompt stays byte-stable for the session; the per-turn context carries the current time.
 
 Example output (zero memories stored):
 
@@ -167,7 +169,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 
 ### get_memory_dynamic_context()
 
-Returns the **per-turn dynamic context** that is prepended to the user message each turn. Contains the current time and upcoming/overdue items.
+Returns the **per-turn dynamic context** that is prepended to the user message each turn. Contains the current time, upcoming/overdue items, and the stored memories most relevant to the user's message.
 
 ```python
 def get_memory_dynamic_context(self) -> str
@@ -183,9 +185,14 @@ Upcoming/overdue:
   - [DUE Mar 27] Online course starts next week
   - [OVERDUE Mar 24] Follow up on deployment review
 Raise these only if they fit what the user just said, or if the conversation is just starting. Never derail an unrelated turn with them. They are already marked as raised — do not call update_memory for that.
+
+Stored memories that may bear on this message:
+  - [note] staging deploys need VPN on (learned 2026-02-03, last confirmed 2026-03-20)
 ```
 
-Always returns at least the current time. Returns an empty string only if `init_memory()` has not been called.
+Always returns at least the current time.
+
+**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error, each with cosine similarity of at least `TURN_RECALL_MIN_SIMILARITY` (0.5). Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
 
 The upcoming/overdue section is **rate-limited, not per-turn**. It rides the first turn of a session and the first turn after `REMINDER_PAUSE_SECONDS` (30 min) of silence — a natural pause — so an `[OVERDUE ...]` block never lands on an unrelated turn.
 
