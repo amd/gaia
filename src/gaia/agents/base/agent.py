@@ -6600,7 +6600,9 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
-                                response_reasoning = chunk_response.reasoning
+                                response_reasoning = getattr(
+                                    chunk_response, "reasoning", None
+                                )
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -6760,7 +6762,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
-                        response_reasoning = chat_response.reasoning
+                        response_reasoning = getattr(chat_response, "reasoning", None)
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -7054,7 +7056,7 @@ Do NOT wrap conversational replies in JSON.
 
                     for chunk_response in stream_gen:
                         if chunk_response.is_complete:
-                            plan_reasoning = chunk_response.reasoning
+                            plan_reasoning = getattr(chunk_response, "reasoning", None)
                             if chunk_response.text:
                                 full_response = chunk_response.text
                         else:
@@ -7096,7 +7098,7 @@ Do NOT wrap conversational replies in JSON.
                         max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
-                    plan_reasoning = chat_response.reasoning
+                    plan_reasoning = getattr(chat_response, "reasoning", None)
                     self.console.stop_progress()
 
                 plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
