@@ -119,6 +119,7 @@ def __init__(
     skip_lemonade: bool = False,
     device: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    resend_reasoning_across_requests: bool = False,
 ) -> None:
     """
     Initialize the Agent.
@@ -147,6 +148,9 @@ def __init__(
             hardware at startup; an unavailable device fails loudly (default: None = no check)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
             32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+        resend_reasoning_across_requests: Send the model's stored reasoning from earlier
+            user requests back to it. Within one request, each step's reasoning is always
+            sent back on its assistant message as `reasoning_content` (default: False)
     """
 ```
 
