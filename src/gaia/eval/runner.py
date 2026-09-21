@@ -1916,9 +1916,17 @@ class AgentEvalRunner:
                     del completed[sid]
                 else:
                     try:
-                        results.append(
-                            json.loads(trace_path.read_text(encoding="utf-8"))
+                        prior = json.loads(trace_path.read_text(encoding="utf-8"))
+                        # A trace written before provenance existed carries no
+                        # agent_type; without this a resumed run mixes stamped
+                        # and unstamped results in one scorecard.
+                        prior.setdefault(
+                            "agent_type",
+                            _resolve_scenario_agent_type(
+                                scenario_data, self.agent_type
+                            ),
                         )
+                        results.append(prior)
                         print(f"[SKIP] {sid} -- already completed (resume mode)")
                         continue
                     except (json.JSONDecodeError, OSError):
