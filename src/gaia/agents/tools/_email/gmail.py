@@ -16,8 +16,14 @@ shared truth, not the Python.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import html
 import logging
-from typing import Any, Callable, Dict, Optional
+from datetime import datetime, timezone
+from email.header import decode_header, make_header
+from email.utils import getaddresses
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import httpx
 
@@ -79,6 +85,129 @@ def _error_detail(response: httpx.Response) -> tuple:
     if not help_url.startswith("https://"):
         help_url = ""
     return reason, help_url
+
+
+def _decode(raw: Optional[str]) -> str:
+    """Decode RFC 2047 encoded words. Idempotent on already-plain text."""
+    if not raw:
+        return ""
+    try:
+        return str(make_header(decode_header(raw)))
+    except (UnicodeDecodeError, LookupError, ValueError):
+        return raw
+
+
+def _header_map(payload: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for header in payload.get("headers") or []:
+        name = (header.get("name") or "").lower()
+        if name and name not in out:
+            out[name] = header.get("value") or ""
+    return out
+
+
+def _address_list(raw: Optional[str]) -> str:
+    """Render one RFC 5322 address header as Graph's ``Name <addr>`` list.
+
+    Split on commas and ``"Doe, Jane" <j@x>`` becomes two broken addresses.
+    """
+    parts: List[str] = []
+    for name, addr in getaddresses([_decode(raw)]):
+        name, addr = name.strip(), addr.strip()
+        if name and addr and name.lower() != addr.lower():
+            parts.append(f"{name} <{addr}>")
+        elif addr or name:
+            parts.append(addr or name)
+    return ", ".join(parts)
+
+
+def _received(internal_date: Any) -> str:
+    """``internalDate`` is epoch millis as a string; Graph emits UTC ISO."""
+    try:
+        millis = int(internal_date)
+    except (TypeError, ValueError):
+        return ""
+    stamp = datetime.fromtimestamp(millis / 1000, tz=timezone.utc)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _find_part(part: Dict[str, Any], mime_type: str) -> Optional[Dict[str, Any]]:
+    if (part.get("mimeType") or "").lower() == mime_type and not part.get("filename"):
+        return part
+    for child in part.get("parts") or []:
+        found = _find_part(child, mime_type)
+        if found is not None:
+            return found
+    return None
+
+
+def _decode_part(part: Dict[str, Any]) -> str:
+    data = (part.get("body") or {}).get("data")
+    if not data:
+        return ""
+    try:
+        raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    except (binascii.Error, ValueError) as exc:
+        raise MailboxError(
+            "Gmail returned a message body that is not valid base64, so it "
+            "cannot be read. Open the message in Gmail directly, and report "
+            "this at https://github.com/amd/gaia/issues if it repeats."
+        ) from exc
+    return raw.decode("utf-8", errors="replace")
+
+
+def _select_body(payload: Dict[str, Any]) -> tuple:
+    """The readable body and its type. Binary parts are never decoded."""
+    for mime_type, kind in (("text/plain", "text"), ("text/html", "html")):
+        part = _find_part(payload, mime_type)
+        if part is not None:
+            return _decode_part(part), kind
+    return "", "text"
+
+
+def _categories(
+    label_ids: Optional[Iterable[str]], label_names: Optional[Dict[str, str]]
+) -> List[str]:
+    """User-applied labels only — Gmail's own state and tabs are not tags."""
+    names = label_names or {}
+    return [
+        names.get(lid, lid)
+        for lid in label_ids or []
+        if lid not in _RESERVED_LABEL_IDS and not lid.startswith(_RESERVED_LABEL_PREFIX)
+    ]
+
+
+def message_summary(
+    msg: Dict[str, Any],
+    *,
+    label_names: Optional[Dict[str, str]] = None,
+    include_body: bool = False,
+) -> Dict[str, Any]:
+    """Flatten a Gmail ``message`` into the shape the agent's tools return.
+
+    Byte-identical in shape to ``graph.message_summary`` — that parity is what
+    lets the tools and the skill stay unaware of which mailbox answered.
+    """
+    payload = msg.get("payload") or {}
+    headers = _header_map(payload)
+    labels = set(msg.get("labelIds") or [])
+    summary: Dict[str, Any] = {
+        "id": msg.get("id"),
+        "thread_id": msg.get("threadId") or msg.get("id"),
+        "subject": _decode(headers.get("subject")) or "(no subject)",
+        "from": _address_list(headers.get("from")),
+        "to": _address_list(headers.get("to")),
+        "cc": _address_list(headers.get("cc")),
+        "received": _received(msg.get("internalDate")),
+        "unread": "UNREAD" in labels,
+        "flagged": "STARRED" in labels,
+        "categories": _categories(msg.get("labelIds"), label_names),
+        # Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
+        "preview": html.unescape(msg.get("snippet") or "").strip(),
+    }
+    if include_body:
+        summary["body"], summary["body_content_type"] = _select_body(payload)
+    return summary
 
 
 class GmailReadBackend:
@@ -178,4 +307,5 @@ class GmailReadBackend:
 __all__ = [
     "GMAIL_API_BASE",
     "GmailReadBackend",
+    "message_summary",
 ]
