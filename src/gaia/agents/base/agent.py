@@ -4853,7 +4853,12 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        note = hook() if callable(hook) else ""
+        try:
+            note = hook() if callable(hook) else ""
+        except Exception as exc:
+            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
+            logger.debug("Could not build the overflow recovery note: %s", exc)
+            return messages
         if not note:
             return messages
 
