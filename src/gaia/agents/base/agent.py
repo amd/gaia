@@ -4842,7 +4842,45 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
-        return [first] + shrunk_rest
+        return self._with_overflow_note([first] + shrunk_rest)
+
+    def _with_overflow_note(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Restate a mixin's ``overflow_recovery_note`` on the last user message.
+
+        Stubbing old tool results drops what they taught this turn (memory's
+        lessons). User messages are never stubbed, so the note survives.
+        """
+        hook = getattr(self, "overflow_recovery_note", None)
+        note = hook() if callable(hook) else ""
+        if not note:
+            return messages
+
+        def _text(content: Any) -> str:
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict)
+                )
+            return str(content or "")
+
+        if any(note in _text(m.get("content")) for m in messages):
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                content = f"{content}\n\n{note}"
+            elif isinstance(content, list):
+                content = [*content, {"type": "text", "text": note}]
+            else:
+                continue
+            return messages[:i] + [{**message, "content": content}] + messages[i + 1 :]
+        return messages
 
     def _create_tool_message(
         self,
