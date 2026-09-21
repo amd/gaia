@@ -8,6 +8,9 @@ command itself: `python -m pytest`, right after bare `pytest` failed to import
 the project. Pacing keeps the rate exactly as capped and loses no step.
 """
 
+import time
+from types import SimpleNamespace
+
 import pytest
 
 from gaia.agents.tools import shell_tools
@@ -34,8 +37,13 @@ class _Clock:
 @pytest.fixture
 def clock(monkeypatch):
     clock = _Clock()
-    monkeypatch.setattr(shell_tools.time, "time", clock.time)
-    monkeypatch.setattr(shell_tools.time, "sleep", clock.sleep)
+    # Swap the module's handle, not the real `time`: patching the module itself
+    # also records subprocess.Popen.wait's POSIX poll backoff as pacing sleeps.
+    monkeypatch.setattr(
+        shell_tools,
+        "time",
+        SimpleNamespace(time=clock.time, sleep=clock.sleep, monotonic=time.monotonic),
+    )
     return clock
 
 
