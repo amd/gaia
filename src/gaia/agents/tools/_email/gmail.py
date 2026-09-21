@@ -20,6 +20,7 @@ import base64
 import binascii
 import html
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
@@ -65,6 +66,10 @@ _RESERVED_LABEL_IDS = frozenset(
 _RESERVED_LABEL_PREFIX = "CATEGORY_"
 
 _GMAIL_ENABLE_URL = "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
+
+# Gmail message ids are hex-ish opaque strings. Anything else reaching the URL
+# path is a model mistake at best.
+_MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _error_detail(response: httpx.Response) -> tuple:
@@ -385,6 +390,12 @@ class GmailReadBackend:
         """One message, body included."""
         if not message_id or not message_id.strip():
             raise ValueError("message_id must be a non-empty message id")
+        # The id reaches here from a model; it is interpolated into a URL path.
+        if not _MESSAGE_ID_RE.fullmatch(message_id):
+            raise ValueError(
+                f"message_id {message_id!r} is not a Gmail message id. Use an "
+                "id returned by list_inbox or search."
+            )
         data = self._get(f"/users/me/messages/{message_id}", params={"format": "full"})
         return message_summary(data, label_names=self._label_map(), include_body=True)
 

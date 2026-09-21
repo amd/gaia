@@ -563,6 +563,14 @@ def test_empty_message_id_is_rejected(bad):
         backend.get_message(bad)
 
 
+@pytest.mark.parametrize("bad", ["../labels/INBOX", "m1?alt=media", "m1/attachments"])
+def test_a_message_id_that_would_redirect_the_request_is_refused(bad):
+    """The id comes from a model and lands in the URL path."""
+    backend = make_backend(inbox_handler(["m1"]))
+    with pytest.raises(ValueError, match="not a Gmail message id"):
+        backend.get_message(bad)
+
+
 FOLDER_LABELS = {
     "labels": [
         {"id": "INBOX", "name": "INBOX", "type": "system"},
