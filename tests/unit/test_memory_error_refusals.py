@@ -86,9 +86,7 @@ class TestRefusalsAreNotStored:
 
         assert _stored_errors(store) == []
 
-    def test_a_path_outside_the_allowlist_is_not_stored(
-        self, host, store, tmp_path
-    ):
+    def test_a_path_outside_the_allowlist_is_not_stored(self, host, store, tmp_path):
         allowed = tmp_path / "work"
         allowed.mkdir()
         outside = tmp_path / "elsewhere" / "run_tests.py"
@@ -168,9 +166,7 @@ class TestSuccessRetiresOnlyTheSameOperation:
         host.run("read_file", {"file_path": "/work/a.txt"}, {"status": "success"})
         assert _stored_errors(store) == []
 
-    def test_a_row_stored_without_an_operation_is_retired_by_tool(
-        self, host, store
-    ):
+    def test_a_row_stored_without_an_operation_is_retired_by_tool(self, host, store):
         """Rows written before the operation key existed keep the old rule."""
         store.store(
             category="error",
@@ -196,7 +192,11 @@ class TestOperationKey:
             ),
             ("read_file", {"file_path": "/a/b.py"}, "read_file /a/b.py"),
             ("load_skill", {"name": "coding"}, "load_skill coding"),
-            ("find_files", {"query": "x", "limit": 3}, 'find_files {"limit": 3, "query": "x"}'),
+            (
+                "find_files",
+                {"query": "x", "limit": 3},
+                'find_files {"limit": 3, "query": "x"}',
+            ),
             ("list_windows", None, "list_windows {}"),
             (
                 "run_shell_command",
