@@ -732,25 +732,61 @@ _DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) -
     "refine_transcript",
 }
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
+# Adverbs the model sprinkles around the verb. They carry no meaning for the
+# guard, but every slot they can occupy has to be spelled out or the claim
+# reads as unmatched ("has been successfully written" vs "has been written").
+_WRITE_ADVERBS = r"(?:(?:just|now|already|successfully)\s+)*"
 _FILE_WRITE_CLAIM_PATTERNS = (
     # "I saved …", "I've written …", "I have now created …"
     re.compile(
-        rf"\bi(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+|successfully\s+)*"
-        rf"{_FILE_WRITE_VERBS}\b",
+        rf"\bi(?:'ve|\s+have)?\s+{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
         re.IGNORECASE,
     ),
-    # "… has been saved", "… was written", "… is now stored"
+    # "… has been saved", "… was written", "… has been successfully written"
     re.compile(
-        rf"\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|already\s+|successfully\s+)*"
-        rf"(?:been\s+)?{_FILE_WRITE_VERBS}\b",
+        rf"\b(?:has|have|had|was|were|is|are)\s+{_WRITE_ADVERBS}"
+        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
         re.IGNORECASE,
     ),
-    # A bare "Saved to …" / "Written to …" opening a sentence or line
+    # A bare "Saved to …" / "Report saved successfully at …" opening a line.
+    # The subject slot refuses negations, or "Nothing saved to disk" reads as
+    # a claim and burns the turn's only re-prompt.
     re.compile(
-        rf"(?:^|[.!?]\s+|\n)\s*{_FILE_WRITE_VERBS}\s+"
-        rf"(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
+        rf"(?:^|[.!?]\s+|\n)\s*(?:the\s+)?"
+        rf"(?:(?!(?:not|never|no|nothing|none)\b)[\w'-]+\s+)?{_FILE_WRITE_VERBS}\s+"
+        rf"{_WRITE_ADVERBS}(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
         re.IGNORECASE,
     ),
+    # "Created the file X", "The script successfully wrote the file X" — the
+    # file is the direct object, so no preposition follows the verb.
+    re.compile(
+        rf"(?<!\bnot\s)(?<!\bnever\s)\b{_FILE_WRITE_VERBS}\s+{_WRITE_ADVERBS}"
+        rf"(?:the|a|an|your|this|that)\s+(?:new\s+)?files?\b",
+        re.IGNORECASE,
+    ),
+)
+# Plan prose names a save the model still intends to make ("**Completion:**
+# Conclude by stating the path where the summary was saved"). Reading that as
+# a claim spends the turn's single re-prompt, so a real fabrication later in
+# the same turn goes through unblocked (#4057). Plan text belongs to the
+# narration guard above, not to this one.
+_PLAN_FRAME_PATTERN = re.compile(
+    r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?[*_#>\s]*"
+    r"(?:step\s*\d*|phase\s*\d*|completion|plan|next steps?|final step"
+    r"|approach|goal)\b[^:\n]{0,30}:"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+# A plan label alone cannot exempt a sentence — "Step 3: I saved it to x.md"
+# would then be a one-token bypass. The save also has to sit in a subordinate
+# clause, which is where a step that has not happened yet puts it. The "by
+# stating" alternatives are repeated from the frame pattern on purpose: they
+# are both a frame label and a subordinate cue, and the two gates are checked
+# independently.
+_SUBORDINATE_CUE_PATTERN = re.compile(
+    r"\b(?:where|which|that|whether|if)\b"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
 )
 _FILE_TARGET_PATTERN = re.compile(
     r"\b(?:file|files|filename|path|directory|folder|disk)\b"
@@ -790,17 +826,32 @@ def _names_a_file(sentence: str) -> bool:
     )
 
 
+def _is_plan_narration(sentence: str) -> bool:
+    """True when the sentence frames a save as a step still to be taken."""
+    if not _PLAN_FRAME_PATTERN.search(sentence):
+        return False
+    cue = _SUBORDINATE_CUE_PATTERN.search(sentence)
+    if cue is None:
+        return False
+    return all(
+        (match := pattern.search(sentence)) is None or match.start() > cue.start()
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+    )
+
+
 def _claims_file_write(answer: str) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
     A sentence must carry both a completed write verb and a file/path target,
     so "I saved the routine to notes/routine.md" fires while "I created a
     summary of the meeting" does not. Fenced code is ignored — a sample
-    command is not a claim.
+    command is not a claim — and so is a sentence in a planning frame.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
     for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
+        if _is_plan_narration(sentence):
+            continue
         if not _names_a_file(sentence):
             continue
         if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
