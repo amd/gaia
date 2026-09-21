@@ -818,11 +818,21 @@ class TestFindUngroundedInviteClaim:
         text = "The invite was sent to your inbox."
         assert find_ungrounded_invite_claim(text, convo) is not None
 
-    def test_external_evidence_does_not_ground_mixed_sent_and_received_claim(self):
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "An invite was sent to the team and received by all.",
+            "You received an invite from Alice about the quarterly planning "
+            "review scheduled for the end of next month with the full "
+            "leadership team and later sent an invite to Bob.",
+        ],
+    )
+    def test_external_evidence_does_not_ground_mixed_sent_and_received_claim(
+        self, text
+    ):
         convo = [
             _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
         ]
-        text = "An invite was sent to the team and received by all."
         assert find_ungrounded_invite_claim(text, convo) is not None
 
     def test_negation_far_from_the_word_invite_still_suppresses(self):

@@ -299,6 +299,39 @@ class TestDetectCalendarConflictsAttendees:
 
         assert out["conflicts"][0]["organizer_self"] is False
 
+    def test_conflict_result_grounds_received_invite_claim(self):
+        cal = _FakeCalendar(
+            [
+                {
+                    "id": "evt1",
+                    "summary": "Vendor meeting",
+                    "start": {"dateTime": "2026-08-06T09:00:00Z"},
+                    "end": {"dateTime": "2026-08-06T10:00:00Z"},
+                    "organizer": {"email": "vendor@example.com"},
+                    "attendees": [{"email": "me@example.com", "self": True}],
+                }
+            ]
+        )
+        out = detect_calendar_conflicts_impl(
+            cal,
+            start_iso="2026-08-06T09:30:00Z",
+            end_iso="2026-08-06T10:30:00Z",
+        )
+        conversation = [
+            {
+                "role": "tool",
+                "name": "detect_calendar_conflicts",
+                "content": json.dumps({"ok": True, "data": out}),
+            }
+        ]
+
+        assert (
+            find_ungrounded_invite_claim(
+                "You received a calendar invite from the vendor.", conversation
+            )
+            is None
+        )
+
     def test_conflicting_event_with_real_attendees_reports_them(self):
         cal = _FakeCalendar(
             [

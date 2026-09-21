@@ -918,7 +918,10 @@ def _calendar_has_received_invite_evidence(
         "detect_calendar_conflicts": "conflicts",
     }
     for entry in _tool_entries(conversation):
-        collection_key = collections.get(entry.get("name"))
+        tool_name = entry.get("name")
+        if not isinstance(tool_name, str):
+            continue
+        collection_key = collections.get(tool_name)
         if collection_key is None:
             continue
         payload = _parse_tool_payload(entry.get("content"))
@@ -945,22 +948,25 @@ def find_ungrounded_invite_claim(
     """
     if not final_answer:
         return None
-    match = _INVITE_CLAIM_RE.search(final_answer)
-    if not match:
-        return None
-    clause = _clause_around(final_answer, match.start(), match.end())
-    if _CLAUSE_NEGATION_RE.search(clause):
+    matches = list(_INVITE_CLAIM_RE.finditer(final_answer))
+    if not matches:
         return None
     if "create_event_from_email" in tools_called_this_turn(conversation):
         return None
-    claim = match.group(0).lower()
-    if (
-        "received" in claim
-        and not re.search(r"\b(?:sent|confirmed)\b", claim)
-        and _calendar_has_received_invite_evidence(conversation)
-    ):
-        return None
-    return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+    has_received_evidence = _calendar_has_received_invite_evidence(conversation)
+    for match in matches:
+        clause = _clause_around(final_answer, match.start(), match.end())
+        if _CLAUSE_NEGATION_RE.search(clause):
+            continue
+        claim = match.group(0).lower()
+        if (
+            "received" in claim
+            and not re.search(r"\b(?:sent|confirmed)\b", claim)
+            and has_received_evidence
+        ):
+            continue
+        return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+    return None
 
 
 _INVITE_GROUNDING_CORRECTION = (
