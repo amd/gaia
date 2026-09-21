@@ -150,6 +150,11 @@ follow the steps below), or do it yourself:
 Classify from the **first user message**, not the auto-generated session title — the
 title summarizes what happened, which leaks the outcome into the label.
 
+Prefixes are checked against the corpus. A file where nothing matches stops the
+run rather than rendering an empty table, and a partially-matched file prints how
+many sessions it covers — on stderr and inside each use-case table — so the
+labelled subset is never mistaken for the whole corpus.
+
 ## Things that will mislead you if you skip them
 
 - **Subagents are not sessions.** A delegated `Task`/`Agent` run gets its own
