@@ -5833,7 +5833,9 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
-                                response_finish_reason = chunk_response.finish_reason
+                                response_finish_reason = getattr(
+                                    chunk_response, "finish_reason", None
+                                )
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -5992,7 +5994,9 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
-                        response_finish_reason = chat_response.finish_reason
+                        response_finish_reason = getattr(
+                            chat_response, "finish_reason", None
+                        )
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
