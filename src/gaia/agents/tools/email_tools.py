@@ -53,10 +53,9 @@ _EMAIL_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
 
 _MAX_LIMIT = 100
 
-# One message must not swallow the context window. Quoted thread history makes
-# a Gmail body unbounded where Graph server-trims, and the NPU profile runs a
-# 32K window.
-_MAX_BODY_CHARS = 40_000
+# ~12% of the 32K NPU window at the worst measured 3.0 chars/token, so a
+# triage turn can read several messages. Caps one body, not a whole turn.
+_MAX_BODY_CHARS = 12_000
 
 
 def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:

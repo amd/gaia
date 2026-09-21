@@ -67,8 +67,7 @@ _RESERVED_LABEL_PREFIX = "CATEGORY_"
 
 _GMAIL_ENABLE_URL = "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
 
-# Gmail message ids are hex-ish opaque strings. Anything else reaching the URL
-# path is a model mistake at best.
+# The shape Gmail issues for a message id.
 _MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
@@ -328,7 +327,12 @@ class GmailReadBackend:
     def _fan_out(
         self, paths: Sequence[str], params: Optional[dict] = None
     ) -> List[Any]:
-        """One GET per path over a bounded pool, under one minted token."""
+        """One GET per path over a bounded pool, under one minted token.
+
+        The pool shares this instance's ``httpx.Client``, whose connection
+        pool guards its own state with a thread lock. Do not swap in a client
+        without that guarantee, or hand each worker its own.
+        """
         token = self._access_token_fn()
 
         def fetch(path: str) -> Any:
@@ -390,7 +394,7 @@ class GmailReadBackend:
         """One message, body included."""
         if not message_id or not message_id.strip():
             raise ValueError("message_id must be a non-empty message id")
-        # The id reaches here from a model; it is interpolated into a URL path.
+        # Ids arrive from the model; accept only the shape Gmail issues.
         if not _MESSAGE_ID_RE.fullmatch(message_id):
             raise ValueError(
                 f"message_id {message_id!r} is not a Gmail message id. Use an "

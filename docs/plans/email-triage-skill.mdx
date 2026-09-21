@@ -324,6 +324,13 @@ carries, so an existing `gmail.modify` user is never sent through a browser
 reconnect. When both mailboxes are usable, Gmail wins and `GAIA_MAIL_PROVIDER`
 overrides that.
 
+`read_email` caps one body at 12,000 characters and says so in the result when it
+truncates — roughly 12% of the 32K NPU context at the worst measured density
+(3.0 characters per token, for quoted thread history). **The cap is per message,
+not per turn:** an agent that reads eight messages while triaging can still
+exhaust the window, and nothing accounts for a turn's cumulative body budget.
+Tracked separately.
+
 **Phase 5** — deprecate. Not before Phases 0–4 have shipped and the eval bar is met.
 
 ## Decommission blast radius

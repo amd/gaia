@@ -371,9 +371,8 @@ LABELS_RESPONSE = {
 }
 
 
-def inbox_handler(message_ids, *, per_message_delay=0.0, record=None):
+def inbox_handler(message_ids, *, record=None):
     """Serve `messages.list`, `messages.get` and `labels.list` for N ids."""
-    import time
 
     def handler(request):
         path = request.url.path
@@ -388,8 +387,6 @@ def inbox_handler(message_ids, *, per_message_delay=0.0, record=None):
                     "resultSizeEstimate": len(message_ids),
                 }
             )
-        if per_message_delay:
-            time.sleep(per_message_delay)
         return json_response(gmail_message(id=path.rsplit("/", 1)[-1]))
 
     return handler
@@ -429,23 +426,51 @@ def test_format_and_metadata_headers_are_sent_together():
     assert {"Subject", "From", "Date"} <= set(headers)
 
 
-def test_list_inbox_fetches_every_listed_id_without_serializing():
-    """25 sequential round-trips would spend most of the tool's timeout."""
+def test_list_inbox_fetches_every_listed_id_and_the_fetches_overlap():
+    """25 sequential round-trips would spend most of the tool's timeout.
+
+    Overlap is observed directly rather than inferred from elapsed time: a
+    wall-clock margin flakes on a loaded runner, and a test people re-run is
+    a test nobody reads.
+    """
+    import threading
     import time
+
+    from gaia.agents.tools._email.gmail import _FETCH_CONCURRENCY
 
     ids = [f"m{i}" for i in range(25)]
     seen = []
-    backend = make_backend(inbox_handler(ids, per_message_delay=0.05, record=seen))
+    lock = threading.Lock()
+    state = {"in_flight": 0, "peak": 0}
 
-    started = time.monotonic()
-    messages = backend.list_inbox(limit=25)
-    elapsed = time.monotonic() - started
+    def handler(request):
+        path = request.url.path
+        seen.append(request.url)
+        if path.endswith("/users/me/labels"):
+            return json_response(LABELS_RESPONSE)
+        if path.endswith("/users/me/messages"):
+            return json_response(
+                {"messages": [{"id": mid, "threadId": mid} for mid in ids]}
+            )
+        with lock:
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            # Hold the slot open so a peer can enter it. The duration only
+            # widens the window; no assertion depends on how long it is.
+            time.sleep(0.02)
+        finally:
+            with lock:
+                state["in_flight"] -= 1
+        return json_response(gmail_message(id=path.rsplit("/", 1)[-1]))
+
+    messages = make_backend(handler).list_inbox(limit=25)
 
     assert [m["id"] for m in messages] == ids
-    fetched = [u for u in seen if "/users/me/messages/" in u.path]
-    assert len(fetched) == 25
-    # Serial would be >= 1.25s at 50ms each.
-    assert elapsed < 0.8, f"fetches serialized: {elapsed:.2f}s"
+    assert len([u for u in seen if "/users/me/messages/" in u.path]) == 25
+    assert state["peak"] > 1, "fetches never overlapped — the pool serialized"
+    # Unbounded fan-out would trip Gmail's per-user concurrency limit.
+    assert state["peak"] <= _FETCH_CONCURRENCY
 
 
 def test_batch_subrequest_failure_is_raised_not_dropped():
