@@ -12,6 +12,7 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
+import inspect
 import json
 import logging
 import time
@@ -737,7 +738,7 @@ class TestSystemPrompt:
         assert "sk-supersecret999" not in prompt
 
     def test_system_prompt_filters_by_active_context(self, mixin_host):
-        """System prompt includes global + active context items only."""
+        """Default global reads every context; a set context reads it + global."""
         mixin_host.memory_store.store(
             category="fact",
             content="Work specific deployment process",
@@ -751,9 +752,10 @@ class TestSystemPrompt:
             confidence=0.9,
         )
 
-        # Active context is "global" — should NOT include work or personal
+        # Active context is "global" (no scoping in use) — every context shows
         prompt = mixin_host.get_memory_system_prompt()
-        assert "dentist" not in prompt.lower()
+        assert "deployment" in prompt.lower()
+        assert "dentist" in prompt.lower()
 
         # Switch to work context — should include work + global
         mixin_host.set_memory_context("work")
@@ -923,17 +925,12 @@ class TestRememberTool:
         upcoming = mixin_with_tools.memory_store.get_upcoming(within_days=7)
         assert any("course" in r["content"].lower() for r in upcoming)
 
-    def test_remember_with_context(self, mixin_with_tools):
-        """remember with explicit context stores in that context."""
+    def test_remember_does_not_take_a_context(self, mixin_with_tools):
+        """The model can't file a memory under a label no session reads."""
         func = mixin_with_tools._registered_tools["remember"]["function"]
-        result = func(
-            fact="Work deployment uses kubectl",
-            category="fact",
-            context="work",
-        )
-
-        results = mixin_with_tools.memory_store.get_by_category("fact", context="work")
-        assert any("kubectl" in r["content"] for r in results)
+        assert "context" not in inspect.signature(func).parameters
+        update = mixin_with_tools._registered_tools["update_memory"]["function"]
+        assert "context" not in inspect.signature(update).parameters
 
     def test_remember_defaults_to_active_context(self, mixin_with_tools):
         """remember without context uses the active context."""
@@ -1999,16 +1996,10 @@ class TestIntegrationScenarios:
         remember = mixin_with_tools._registered_tools["remember"]["function"]
         recall = mixin_with_tools._registered_tools["recall"]["function"]
 
-        remember(
-            fact="Deploy to prod with kubectl apply",
-            category="skill",
-            context="work",
-        )
-        remember(
-            fact="Deploy hobby site to Vercel",
-            category="skill",
-            context="personal",
-        )
+        mixin_with_tools.set_memory_context("work")
+        remember(fact="Deploy to prod with kubectl apply", category="skill")
+        mixin_with_tools.set_memory_context("personal")
+        remember(fact="Deploy hobby site to Vercel", category="skill")
 
         work_results = recall(query="deploy", context="work")
         work_items = work_results.get("results", work_results.get("items", []))

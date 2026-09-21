@@ -1379,15 +1379,23 @@ class MemoryStore:
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_category_contexts(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str | None, limit: int = 10
     ) -> List[Dict]:
         """Get non-sensitive knowledge by category for a specific context AND global.
 
-        Single query that replaces two sequential get_by_category() calls in
-        _get_context_items() — avoids the 2-round-trips-per-category overhead
-        during system prompt construction.
+        ``context=None`` reads every context. Single query that replaces two
+        sequential get_by_category() calls in _get_context_items() — avoids the
+        2-round-trips-per-category overhead during system prompt construction.
         """
-        if context == "global":
+        if context is None:
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND sensitive = 0 AND superseded_by IS NULL
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, limit)
+        elif context == "global":
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
