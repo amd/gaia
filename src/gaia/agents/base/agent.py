@@ -779,7 +779,10 @@ _PLAN_FRAME_PATTERN = re.compile(
 )
 # A plan label alone cannot exempt a sentence — "Step 3: I saved it to x.md"
 # would then be a one-token bypass. The save also has to sit in a subordinate
-# clause, which is where a step that has not happened yet puts it.
+# clause, which is where a step that has not happened yet puts it. The "by
+# stating" alternatives are repeated from the frame pattern on purpose: they
+# are both a frame label and a subordinate cue, and the two gates are checked
+# independently.
 _SUBORDINATE_CUE_PATTERN = re.compile(
     r"\b(?:where|which|that|whether|if)\b"
     r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
