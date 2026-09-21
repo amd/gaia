@@ -231,6 +231,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         return () => document.removeEventListener('mousedown', handler);
     }, [agentPickerOpen]);
 
+    // Suffix for the notification id — Date.now() alone repeats on rapid retries.
+    const agentSwitchErrorSeq = useRef(0);
+
     const handleAgentChange = useCallback(async (newAgentId: string) => {
         setAgentPickerOpen(false);
         if (newAgentId === displayedAgentId) return;
@@ -245,8 +248,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
                 setActiveAgentId(previousAgentId);
                 const detail = err instanceof Error ? err.message : 'Could not switch agent.';
+                agentSwitchErrorSeq.current += 1;
                 addNotification({
-                    id: `agent-switch-${Date.now()}`,
+                    id: `agent-switch-${Date.now()}-${agentSwitchErrorSeq.current}`,
                     type: 'error',
                     agentId: sessionId,
                     agentName: 'GAIA',
@@ -258,11 +262,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     priority: 'high',
                     sessionId,
                 });
+                // Open the panel — the picker snapping back is otherwise the only signal.
+                setNotificationPanelVisible(true);
             }
         } else {
             onAgentChange?.(newAgentId);
         }
-    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange, addNotification]);
+    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange, addNotification, setNotificationPanelVisible]);
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
