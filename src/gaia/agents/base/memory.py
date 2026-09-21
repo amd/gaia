@@ -3306,10 +3306,31 @@ class MemoryMixin(ProceduralMemoryMixin):
                     filtered.append(r)
                 results = filtered[:limit]
 
+            if results:
+                return {
+                    "status": "found",
+                    "count": len(results),
+                    "results": self._redact_credentials(results),
+                }
+            earlier_turns = mixin._memory_store.count_conversation_turns(
+                exclude_session=getattr(mixin, "_memory_session_id", None)
+            )
+            if earlier_turns == 0:
+                message = (
+                    "No past conversations are stored: this is the first "
+                    "session with memory, so no search can find one."
+                )
+            else:
+                message = (
+                    f"No stored conversation matched. {earlier_turns} turns "
+                    "from earlier sessions are stored."
+                )
             return {
-                "status": "found" if results else "empty",
-                "count": len(results),
-                "results": self._redact_credentials(results),
+                "status": "empty",
+                "count": 0,
+                "results": [],
+                "past_conversation_turns": earlier_turns,
+                "message": message,
             }
 
         logger.info("[MemoryMixin] registered 5 memory tools (v2)")
