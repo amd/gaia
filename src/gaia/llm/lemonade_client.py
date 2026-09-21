@@ -1980,7 +1980,7 @@ class LemonadeClient:
         }
         """
         if self.cloud_model_provider(model):
-            # These local llama.cpp defaults are inserted by LemonadeProvider.
+            # llama.cpp-only sampling knobs; cloud providers do not accept them.
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
 

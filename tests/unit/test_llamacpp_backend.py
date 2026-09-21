@@ -728,6 +728,7 @@ class TestLemonadeProviderRepetitionDefaults:
         """chat() should inject repeat_penalty and repeat_last_n defaults."""
         provider = LemonadeProvider.__new__(LemonadeProvider)
         provider._backend = MagicMock(spec=LemonadeClient)
+        provider._backend.cloud_model_provider.return_value = None
         provider._model = "Gemma-4-E4B-it-GGUF"
         provider._system_prompt = None
 
