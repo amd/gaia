@@ -233,6 +233,15 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
+def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
+    """Return the agent a scenario actually runs: its own ``agent_type:`` wins.
+
+    A scorecard that records only the CLI flag misattributes every scenario that
+    overrides it (#2983), so the resolved value is what gets stamped on results.
+    """
+    return scenario_data.get("agent_type") or cli_agent_type
+
+
 def _compute_effective_timeout(base_timeout: int, scenario_data: dict) -> int:
     """Return per-scenario timeout covering startup overhead + turns + docs."""
     num_turns = len(scenario_data.get("turns", []))
@@ -1128,6 +1137,9 @@ def run_scenario_subprocess(
     # Inject category from scenario YAML — eval agent doesn't include this field
     result.setdefault("category", scenario_data.get("category", "unknown"))
 
+    # Provenance: which agent actually answered, not which one the CLI asked for.
+    result["agent_type"] = _resolve_scenario_agent_type(scenario_data, agent_type)
+
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
     for turn in result.get("turns", []):
@@ -1924,6 +1936,9 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
+                    "agent_type": _resolve_scenario_agent_type(
+                        scenario_data, self.agent_type
+                    ),
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
                     "turns": [],
@@ -1944,8 +1959,9 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Per-scenario agent_type from YAML overrides CLI --agent-type
-            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
+            scenario_agent_type = _resolve_scenario_agent_type(
+                scenario_data, self.agent_type
+            )
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -2041,7 +2057,9 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
+                scenario_agent_type = _resolve_scenario_agent_type(
+                    scenario_data, self.agent_type
+                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
