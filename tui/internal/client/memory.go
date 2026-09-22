@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -110,6 +111,18 @@ func (s *SubprocessClient) FetchMemory(ctx context.Context) (MemoryDump, error) 
 			// wire, same as it does for a normal turn.
 			return MemoryDump{}, fmt.Errorf("%s", e.Content)
 		}
+	}
+	// A cancelled context closes the channel the same way a dead child does,
+	// so the two have to be told apart here or a timeout is reported as the
+	// agent hanging up — which is what a cold start looked like: the child was
+	// answering normally, just not yet.
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return MemoryDump{}, fmt.Errorf(
+				"the agent did not answer in time. It may still be starting up — " +
+					"send a message first, then try /memory again")
+		}
+		return MemoryDump{}, fmt.Errorf("the memory request was cancelled before the agent answered")
 	}
 	return MemoryDump{}, fmt.Errorf("the agent closed the connection before answering")
 }

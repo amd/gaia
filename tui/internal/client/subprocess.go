@@ -744,6 +744,16 @@ func (s *SubprocessClient) Supports(c Capability) (supported, known bool) {
 // -- Supports already answers immediately -- so this is a no-op.
 func (s *SubprocessClient) ProbeCapabilities(context.Context) error { return nil }
 
+// AgentStarted reports whether the child is already spawned, so a caller can
+// tell a fast round-trip to a warm agent from one that has to pay the cold
+// start first (imports, skill loading, backend probe -- tens of seconds). The
+// UI uses it to say which of the two the user is waiting on.
+func (s *SubprocessClient) AgentStarted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.started
+}
+
 // FullAccessAtLaunch reports whether the child was spawned with full access already on,
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.

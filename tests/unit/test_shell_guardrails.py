@@ -5,6 +5,42 @@
 
 import pytest
 
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo calc.exe",
+        "powershell -Mta calc.exe",
+        "powershell -Sta -NoLogo -com calc.exe",
+        'powershell -comm "calc.exe"',
+        "powershell -InputFormat Text calc.exe",
+        "powershell -ConfigurationName x calc.exe",
+        "powershell -Unknown Get-Process",
+        "powershell -NoLogo",
+        "powershell -NoLogo calc",
+        'powershell -Command "Get-Process | calc"',
+        'powershell -Command "Get-Process\ncalc.exe"',
+    ],
+)
+def test_powershell_switches_cannot_hide_executable_body(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -NoLogo Get-Process",
+        "powershell -Sta -NoLogo -com Get-Process",
+        'powershell -Command "Get-Content ./a.txt"',
+        'powershell -Command "Get-ChildItem . -Recurse"',
+        "git ls-files -o",
+        "git ls-files --others",
+    ],
+)
+def test_reviewed_switches_and_relative_path_reads_remain_allowed(command):
+    assert ShellToolsMixin()._validate_shell_command(command)[0] is None
+
+
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     DANGEROUS_SHELL_OPERATORS,
@@ -45,8 +81,9 @@ def check(command: str, *, full_access: bool):
 
 
 def segments_for(command: str, *, full_access: bool):
-    _error, segments = _Shell(full_access)._validate_shell_command(command)
-    return segments
+    """Every segment the validator walked, flattened across the line's steps."""
+    _error, steps = _Shell(full_access)._validate_shell_command(command)
+    return [segment for step in steps for segment in step.segments]
 
 
 # ---------------------------------------------------------------------------
@@ -218,14 +255,24 @@ class TestDangerousOperators:
     def test_command_substitution_dollar(self):
         assert DANGEROUS_SHELL_OPERATORS.search("echo $(whoami)")
 
-    def test_semicolon(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls; rm -rf /")
+    def test_chaining_is_split_off_before_this_scan(self):
+        """`&&`, `||` and `;` pick which commands run; they do not change what
+        a command IS, so each one goes through the whole allowlist on its own.
 
-    def test_logical_and(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls && rm -rf /")
+        `rm` is refused here for being `rm`, not for the operator in front of it.
+        """
+        for command in ("ls; rm -rf /", "ls && rm -rf /", "ls || rm -rf /"):
+            error, _ = ShellToolsMixin()._validate_shell_command(command)
+            assert error is not None, command
+            assert "not in the allowed list" in error["error"]
 
-    def test_logical_or(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls || rm -rf /")
+    def test_a_lone_ampersand_is_not_a_chaining_operator(self):
+        """`&` backgrounds a command, and cmd.exe runs `dir&whoami` as two."""
+        assert DANGEROUS_SHELL_OPERATORS.search("dir&whoami")
+        assert DANGEROUS_SHELL_OPERATORS.search("ls & rm -rf /")
+
+    def test_newline(self):
+        assert DANGEROUS_SHELL_OPERATORS.search("ls\nrm -rf /")
 
     def test_pipe_is_safe(self):
         # Single pipe is allowed (handled by pipe logic, not this regex)
@@ -463,9 +510,7 @@ class TestTiers:
     def test_an_undescribable_escalation_is_refused(self, command):
         assert validate(command)["tier"] == TIER_REFUSE
 
-    @pytest.mark.parametrize(
-        "command", ["cat a && rm b", "echo hi > f", "cat 'unterminated"]
-    )
+    @pytest.mark.parametrize("command", ["echo hi > f", "cat 'unterminated"])
     def test_what_the_runner_cannot_execute_is_refused(self, command):
         error, _ = _Host()._validate_shell_command(command)
         assert error["tier"] == TIER_REFUSE
@@ -482,7 +527,7 @@ class TestConfirmableCommandsReachThePrompt:
         assert refusal(command) is None
 
     @pytest.mark.parametrize(
-        "command", ["git -c core.pager=evil.sh status", "cat a && rm b"]
+        "command", ["git -c core.pager=evil.sh status", "echo hi > f"]
     )
     def test_refused_escalations_stay_refused_even_with_a_host_opt_in(self, command):
         assert refusal(command, host_opt_in=True) is not None
@@ -613,8 +658,12 @@ class TestFullAccessKeepsTheRefuseTier:
 
 
 class TestOperatorsUnderFullAccess:
-    def test_compound_refused_by_default(self):
-        result = check("cd . && ls", full_access=False)
+    """Chaining (`&&`, `||`, `;`, `|`) is allowed in both modes — each segment
+    goes through the allowlist on its own. What full access adds is the rest:
+    redirections, backgrounding, substitution, newlines and heredocs."""
+
+    def test_a_redirect_is_refused_by_default(self):
+        result = check("cd . && ls > out.txt", full_access=False)
         assert result is not None
         assert "Shell operators" in result["error"]
 
@@ -637,12 +686,13 @@ class TestOperatorsUnderFullAccess:
     @pytest.mark.parametrize(
         "command",
         [
-            "cd build && cmake ..",
-            "pytest -q || echo failed",
-            "echo one ; echo two",
+            "make build > out.txt",
+            "echo one & echo two",
+            "echo `whoami`",
+            "echo one\necho two",
         ],
     )
-    def test_same_sequences_refused_by_default(self, command):
+    def test_the_operators_full_access_adds_are_refused_by_default(self, command):
         result = check(command, full_access=False)
         assert result is not None
         assert "Shell operators" in result["error"]
@@ -695,10 +745,11 @@ class TestPerSegmentWalkSurvivesFullAccess:
     """The per-segment walk is what produces the audit record; it must not be
     short-circuited just because the operators now parse."""
 
-    def test_a_second_segment_is_refused_by_default_for_the_operator(self):
+    def test_a_second_segment_is_refused_by_default_for_its_binary(self):
         result = check("ls && gh auth token", full_access=False)
         assert result is not None
-        assert "Shell operators" in result["error"]
+        assert result["tier"] == TIER_REFUSE
+        assert "Shell operators" not in result["error"]
 
     def test_a_refused_second_segment_refuses_the_whole_command(self):
         result = check("ls && gh auth token", full_access=True)
@@ -849,8 +900,12 @@ class _ExecHost(ShellToolsMixin):
 def shell_tool(monkeypatch):
     """Return a factory for the real ``run_shell_command`` closure."""
 
-    def build(full_access: bool):
+    def build(full_access: bool, wait_cap=None):
         host = _ExecHost(full_access)
+        if wait_cap is not None:
+            # No patience for pacing, so the per-minute cap refuses on the spot
+            # instead of sleeping the test out.
+            host.max_rate_limit_wait_seconds = wait_cap
         captured = {}
 
         def fake_tool(**kwargs):
@@ -883,13 +938,15 @@ class TestExecutorUnderFullAccess:
         assert "first" in result["stdout"]
         assert "second" in result["stdout"]
 
-    def test_the_same_command_never_reaches_a_shell_by_default(
+    def test_the_line_never_reaches_a_shell_whole_by_default(
         self, shell_tool, tmp_path
     ):
+        """Chaining runs step by step by default, so the text a shell would
+        have to read whole — here a heredoc body — never gets there."""
         run = shell_tool(full_access=False)
 
         result = run(
-            "cd . && echo first && echo second", working_directory=str(tmp_path)
+            "python3 - <<'EOF'\nprint(6 * 7)\nEOF", working_directory=str(tmp_path)
         )
 
         assert result["status"] == "error"
@@ -910,7 +967,7 @@ class TestExecutorUnderFullAccess:
             assert not result.get("rate_limited")
 
     def test_the_rate_limit_still_applies_by_default(self, shell_tool, tmp_path):
-        run = shell_tool(full_access=False)
+        run = shell_tool(full_access=False, wait_cap=0)
 
         # echo is allowlisted, so it skips the burst limit (#3737) but not the
         # per-minute cap of 10.
@@ -1024,3 +1081,199 @@ class TestFullAccessStaysInsideTheWorkspace:
 
         assert result["status"] == "error"
         assert not target.exists()
+
+
+# ---------------------------------------------------------------------------
+# Read-only allowlist bypasses (C4)
+#
+# Probe strings from a security review of the read-only whitelist: the refused
+# ones were answered "allowed" before, the allowed ones pin behaviour the fix
+# must not cost. They go through the WHOLE validator rather than one regex,
+# because each bypass reached the shell by a different door — the operator
+# scan, the PowerShell flag list, the `-Command` body, or a git/wmic flag the
+# subcommand check never looked at.
+# ---------------------------------------------------------------------------
+
+
+def refused(command: str) -> bool:
+    """True when the full validator refuses *command*."""
+    error, _ = ShellToolsMixin()._validate_shell_command(command)
+    return error is not None
+
+
+class TestUnspacedAmpersandIsAnOperator:
+    """cmd.exe splits on `&` with or without whitespace around it."""
+
+    def test_unspaced_ampersand_chains_a_second_command(self):
+        assert refused("dir . &where cmd")
+
+    @pytest.mark.parametrize(
+        "command",
+        ["dir&whoami", "dir .&where cmd", "ls >& out", "ls <& in", "sleep 10 &"],
+    )
+    def test_every_ampersand_spelling_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command", ["ls -la /tmp", "git status", "cat file.txt", "ls | grep foo"]
+    )
+    def test_ordinary_commands_still_run(self, command):
+        assert not refused(command)
+
+
+class TestPowerShellFlagPrefixes:
+    """PowerShell resolves a parameter from a prefix, so exact matching leaks."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "powershell -e ZQBjAGgAbwA=",
+            "powershell -ec ZQBjAGgAbwA=",
+            "powershell -enc ZQBjAGgAbwA=",
+            "powershell -encod ZQBjAGgAbwA=",
+            "powershell -EncodedCommand ZQBjAGgAbwA=",
+            "powershell -fi C:/evil.ps1",
+            "powershell -File C:/evil.ps1",
+            "powershell -exec bypass -Command Get-Process",
+            "powershell -ExecutionPolicy Bypass -Command Get-Process",
+        ],
+    )
+    def test_any_prefix_of_a_blocked_parameter_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "powershell -Command Get-Process",
+            "powershell -c Get-Process",
+            'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
+        ],
+    )
+    def test_command_is_not_a_prefix_of_anything_blocked(self, command):
+        assert not refused(command)
+
+
+class TestPowerShellCommandBodyEscapes:
+    """The outer operator scan skips the `-Command` body, so it is checked here."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -Command "Get-Content x > C:/out.txt"',
+            "powershell -Command \"[System.Diagnostics.Process]::Start('calc')\"",
+            "powershell -Command \"[System.IO.File]::WriteAllText('a','b')\"",
+            "powershell -Command \"(Get-WmiObject Win32_Process).Create('calc')\"",
+            'powershell -Command "& calc.exe"',
+            'powershell -Command "&$var"',
+            'powershell -Command ". ./evil.ps1"',
+            'powershell -Command "Get-Process; Get-Service"',
+            'powershell -Command "Get-Process $env:USERNAME"',
+        ],
+    )
+    def test_code_the_cmdlet_allowlist_cannot_see_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"',
+            'powershell -Command "Get-Process | Sort-Object WS -Descending | '
+            'Select-Object -First 15 Name, Id, WS"',
+            'powershell -Command "Get-ChildItem -Filter *.log"',
+        ],
+    )
+    def test_plain_read_only_cmdlets_still_run(self, command):
+        assert not refused(command)
+
+
+class TestGitAndWmicFileWrites:
+    """The allowlisted read-only binaries that can still write a chosen path."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git log --output=C:/out.txt --format=pwned",
+            "git log --o C:/out.txt",
+            "git log -o C:/out.txt",
+            "git log -oC:/out.txt",
+            "wmic /output:C:/out.txt cpu get name",
+            "wmic /append:C:/out.txt os get caption",
+        ],
+    )
+    def test_an_output_flag_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git log --oneline -10",
+            "git branch -a",
+            "git diff --stat",
+            "git status",
+            "wmic cpu get name",
+            "wmic os get caption",
+        ],
+    )
+    def test_read_only_spellings_are_untouched(self, command):
+        assert not refused(command)
+
+
+class TestQuotedOperatorsAreData:
+    """cmd.exe and sh both read `&` between double quotes as a literal.
+
+    Scanning the quoted span too would refuse ordinary reads whose argument
+    happens to contain a URL query string.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        ['grep "a&b" file.txt', 'grep "a>b" file.txt', 'cat "a|b.txt"'],
+    )
+    def test_an_operator_inside_double_quotes_is_an_argument(self, command):
+        assert not refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" ; id'],
+    )
+    def test_an_operator_outside_the_quotes_is_still_an_operator(self, command):
+        assert refused(command)
+
+    def test_unbalanced_quotes_are_scanned_whole(self):
+        """Broken quoting means the shell's parse is anyone's guess — refuse."""
+        assert refused('dir "a &calc')
+
+
+class TestPowerShellRunsAFileInsteadOfACmdlet:
+    """A body naming a path or an executable never matches the cmdlet regex.
+
+    Every probe here passed the `verb-noun` allowlist by containing no cmdlet
+    at all, which made the whole PowerShell filter a no-op for that call.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            r'powershell -Command ".\evil.ps1"',
+            r'powershell -Command "C:\evil.ps1"',
+            r'powershell -Command "\\host\share\evil.ps1"',
+            r'powershell -Command ". .\evil.ps1"',
+            r'powershell -Command "Get-Process | .\evil.ps1"',
+            'powershell -Command "calc.exe"',
+            'powershell -Command "payload.bat"',
+        ],
+    )
+    def test_running_a_file_by_path_is_refused(self, command):
+        assert refused(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            r'powershell -Command "Get-Content C:\temp\a.txt"',
+            'powershell -Command "Get-Content C:/temp/a.txt"',
+            'powershell -Command "Get-ChildItem -Filter *.log"',
+        ],
+    )
+    def test_a_path_operand_is_still_a_read(self, command):
+        """The rule is command position only, or every file argument breaks."""
+        assert not refused(command)
