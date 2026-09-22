@@ -37,8 +37,11 @@ from gaia.agents.base.verification import (
     VERIFICATION_SCOPE_PREFIX,
     build_verification_scope,
     check_was_executed,
+    split_verification_scope,
     strip_verification_scope,
+    summary_reports_failure,
     verification_check_label,
+    verification_check_target,
 )
 from gaia.llm.lemonade_client import _cloud_request_error
 
@@ -176,8 +179,11 @@ def test_non_dict_args_do_not_raise():
 # ---------------------------------------------------------------------------
 
 
-def _execution(label=None, failed=False, name="some_tool"):
-    return {"tool": name, "check_label": label, "failed": failed}
+def _execution(label=None, failed=False, name="some_tool", target=None):
+    record = {"tool": name, "check_label": label, "failed": failed}
+    if target is not None:
+        record["check_target"] = target
+    return record
 
 
 def test_no_tools_at_all_is_unverified():
@@ -260,6 +266,207 @@ def test_label_list_is_capped_with_a_count():
 def test_duplicate_labels_collapse():
     statement = build_verification_scope([_execution("pytest")] * 5)
     assert statement.count("pytest") == 1
+
+
+# ---------------------------------------------------------------------------
+# A check that ran more than once is judged by its latest run (#3989)
+# ---------------------------------------------------------------------------
+
+
+def test_a_check_that_failed_then_passed_after_a_fix_is_verified():
+    statement = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_check_that_passed_then_failed_after_an_edit_did_not_pass():
+    statement = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest ran and did not pass" in statement
+    assert "passed," not in statement
+
+
+def test_the_two_orders_no_longer_read_the_same():
+    fixed = build_verification_scope(
+        [_execution("pytest", failed=True), _execution("pytest")]
+    )
+    broken = build_verification_scope(
+        [_execution("pytest"), _execution("pytest", failed=True)]
+    )
+    assert fixed != broken
+
+
+def test_only_the_last_of_many_runs_counts():
+    statement = build_verification_scope(
+        [
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+            _execution("pytest", failed=True),
+        ]
+    )
+    assert "pytest ran and did not pass" in statement
+
+
+def test_distinct_labels_are_each_judged_on_their_own_latest_run():
+    statement = build_verification_scope(
+        [
+            _execution("ruff", failed=True),
+            _execution("pytest"),
+            _execution("ruff"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "ruff, pytest passed" in statement
+    assert "mypy did not" in statement
+
+
+def test_distinct_labels_with_one_run_each_are_unchanged():
+    statement = build_verification_scope(
+        [_execution("ruff"), _execution("pytest", failed=True)]
+    )
+    assert "ruff passed, pytest did not." in statement
+
+
+def test_a_refused_attempt_then_a_fail_then_a_fix_is_verified():
+    statement = build_verification_scope(
+        [
+            _blocked("pytest"),
+            _execution("pytest", failed=True),
+            _execution("pytest"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in statement
+
+
+def test_one_label_on_both_sides_is_counted_not_named_twice():
+    """ "pytest passed, pytest did not." read as the harness contradicting itself.
+
+    It came from a shell pytest that failed at collection and a later pytest run
+    through run_python that passed: two targets, one label.
+    """
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest -q tests/test_archive.py"),
+            _execution("pytest", target='run_python {"code": "..."}'),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest passed, pytest did not" not in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+
+
+def test_a_split_label_sits_beside_labels_that_did_not_split():
+    statement = build_verification_scope(
+        [
+            _execution("ruff"),
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert "ruff passed" in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+    assert "mypy did not" in statement
+
+
+def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/"),
+        ]
+    )
+    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_the_check_target_is_the_command_with_whitespace_collapsed():
+    assert verification_check_target(
+        "run_shell_command", {"command": "  pytest   tests/ -q "}
+    ) == verification_check_target("run_shell_command", {"command": "pytest tests/ -q"})
+    assert verification_check_target(
+        "run_shell_command", {"command": "pytest tests/"}
+    ) != verification_check_target(
+        "run_shell_command", {"command": "pytest tests/test_cart.py"}
+    )
+
+
+def test_a_named_check_tool_is_targeted_by_its_arguments():
+    assert verification_check_target(
+        "run_tests", {"path": "tests/"}
+    ) != verification_check_target("run_tests", {"path": "tests/unit"})
+    assert verification_check_target(
+        "run_tests", {"path": "tests/", "quiet": True}
+    ) == verification_check_target("run_tests", {"quiet": True, "path": "tests/"})
+
+
+def test_loop_keeps_a_failed_suite_visible_after_a_narrow_rerun(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest tests/"),
+        (
+            {"status": "success", "return_code": 0, "stdout": "1 passed"},
+            "pytest tests/test_cart.py",
+        ),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "did not" in line
+
+
+def test_loop_reports_a_fixed_test_as_verified(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
+    assert line == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+
+
+def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
+    _scripted_runs(
+        agent,
+        ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+        ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
+    )
+    line = _scope_line(agent.process_query("refactor", max_steps=5)["result"])
+    assert "pytest ran and did not pass" in line
+    assert "pytest passed" not in line
+
+
+def _scripted_runs(agent_, *runs):
+    """Script the model to run each command in turn, the shell returning each result."""
+    results = [result for result, _ in runs]
+    real_tool_result = _DummyAgent.shell_result
+
+    def _next_result():
+        return results.pop(0) if results else real_tool_result
+
+    responses = [_tool_call(command) for _, command in runs] + [_answer("Done.")]
+    chat = _stub_chat(agent_, *responses)
+    send = chat.send_messages.side_effect
+
+    def _send(*args, **kwargs):
+        agent_.shell_result = _next_result()
+        return send(*args, **kwargs)
+
+    chat.send_messages.side_effect = _send
 
 
 def test_every_state_fits_the_bound():
@@ -915,6 +1122,201 @@ def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
     assert "did not run" not in statement
 
 
+# ---------------------------------------------------------------------------
+# Exactly one statement per answer, whatever the model wrote (#3675)
+# ---------------------------------------------------------------------------
+
+ECHOED = (
+    "Verification: unverified — 5 tool calls ran, none of them a test, lint, or build."
+)
+
+MODEL_ECHOES = [
+    ("plain_trailing", f"All five calls succeeded.\n\n{ECHOED}"),
+    ("no_blank_line", f"All five calls succeeded.\n{ECHOED}"),
+    ("trailing_whitespace", f"All five calls succeeded.\n\n{ECHOED}   \n\n"),
+    (
+        "bold_markdown",
+        "All five calls succeeded.\n\n**Verification:** unverified — 5 tool calls ran.",
+    ),
+    (
+        "italic_markdown",
+        "All five calls succeeded.\n\n_Verification: unverified — 5 tool calls ran._",
+    ),
+    (
+        "blockquoted",
+        "All five calls succeeded.\n\n> Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "bulleted",
+        "All five calls succeeded.\n\n- **Verification:** unverified — 5 tool calls ran.",
+    ),
+    ("mid_answer", f"First part.\n\n{ECHOED}\n\nSecond part."),
+    ("twice_over", f"Body.\n\n{ECHOED}\n\n{ECHOED}"),
+    (
+        "heading",
+        "All five calls succeeded.\n\n## Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "ordered_list",
+        "All five calls succeeded.\n\n1. Verification: unverified — 5 tool calls ran.",
+    ),
+    (
+        "em_dash_variants",
+        "All five calls succeeded.\n\nVerification: unverified - 5 tool calls ran.",
+    ),
+]
+
+
+def _scope_lines(text):
+    return [
+        line
+        for line in text.splitlines()
+        if line.lstrip(" >-*_`").startswith("Verification:")
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer", [case[1] for case in MODEL_ECHOES], ids=[case[0] for case in MODEL_ECHOES]
+)
+def test_an_echoed_statement_is_replaced_not_duplicated(agent, answer):
+    emitted = agent._with_verification_scope(answer)
+    assert len(_scope_lines(emitted)) == 1, emitted
+
+
+def test_the_surviving_statement_is_the_one_derived_from_this_turn(agent):
+    agent._turn_tool_executions = [
+        {"tool": "run_shell_command", "check_label": "pytest", "failed": False}
+    ]
+    emitted = agent._with_verification_scope(f"Body.\n\n{ECHOED}")
+    assert _scope_lines(emitted) == [agent.verification_scope_statement()]
+    assert "5 tool calls ran" not in emitted
+
+
+def test_the_answer_text_around_an_echo_is_preserved(agent):
+    emitted = agent._with_verification_scope(f"First part.\n\n{ECHOED}\n\nSecond part.")
+    assert "First part." in emitted
+    assert "Second part." in emitted
+
+
+def test_an_answer_that_is_only_an_echo_keeps_exactly_one_statement(agent):
+    emitted = agent._with_verification_scope(ECHOED)
+    assert emitted == agent.verification_scope_statement()
+
+
+def test_an_answer_with_no_echo_is_unchanged_but_for_the_appended_line(agent):
+    emitted = agent._with_verification_scope("Just an answer.")
+    assert emitted.startswith("Just an answer.")
+    assert len(_scope_lines(emitted)) == 1
+
+
+def test_the_loop_emits_one_statement_when_the_model_echoes_one(agent):
+    """End-to-end: the echo comes back through conversation history."""
+    agent.shell_result = {"status": "success", "return_code": 0, "stdout": "ok"}
+    _stub_chat(
+        agent,
+        _tool_call("ls -la"),
+        _answer(f"Listed the directory.\n\n{ECHOED}"),
+    )
+
+    result = agent.process_query("list the directory")["result"]
+
+    assert len(_scope_lines(result)) == 1, result
+    assert "5 tool calls ran" not in result
+
+
+def test_split_returns_the_body_and_the_last_statement():
+    body, line = split_verification_scope(f"Body.\n\n{ECHOED}")
+    assert body == "Body."
+    assert line == ECHOED
+
+
+def test_split_tolerates_a_non_string():
+    assert split_verification_scope(None) == ("", "")
+
+
+# --- what the splitter must NOT touch ---------------------------------------
+#
+# It runs on every Agent-UI answer, so anything it rewrites, it rewrites for
+# every answer. Only the generated statement goes.
+
+KEEP_VERBATIM = [
+    (
+        "blank_lines_inside_a_code_block",
+        "Here you go:\n\n```python\ndef a():\n    pass\n\n\ndef b():\n    pass\n```",
+    ),
+    (
+        "a_users_own_verification_step",
+        "Here is the plan:\n\n1. Build\n\nVerification: run pytest before tagging.\n\nDone.",
+    ),
+    ("the_word_in_prose", "verification: none was performed on this branch."),
+    ("a_colon_line_that_is_not_a_statement", "Verification: TBD"),
+    ("paragraph_spacing", "Line A.\n\n\nLine B."),
+    (
+        "a_footer_quoted_inside_a_code_fence",
+        "Here is what it looks like:\n\n```\n"
+        "Verification: unverified - no tools ran, so nothing was checked.\n```",
+    ),
+    (
+        "a_footer_inside_a_tilde_fence",
+        "Example:\n\n~~~text\nVerification: verified - pytest ran and passed.\n~~~",
+    ),
+    (
+        "a_footer_inside_an_indented_fence",
+        "Steps:\n\n  ```\n  Verification: verified - pytest ran and passed.\n  ```",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "text", [t for _, t in KEEP_VERBATIM], ids=[i for i, _ in KEEP_VERBATIM]
+)
+def test_text_that_is_not_a_generated_statement_is_untouched(text):
+    assert strip_verification_scope(text) == text
+
+
+@pytest.mark.parametrize(
+    "text", [t for _, t in KEEP_VERBATIM], ids=[i for i, _ in KEEP_VERBATIM]
+)
+def test_the_body_survives_byte_for_byte_when_a_statement_is_removed(text):
+    """Removing the line must not reflow what is left (the email agent compares
+    the stripped answer against its own grounded text for exact identity)."""
+    emitted = f"{text}\n\n{ECHOED}"
+    assert strip_verification_scope(emitted) == text
+
+
+def test_only_the_statements_blank_separator_is_removed():
+    assert strip_verification_scope(f"Body.\n\n{ECHOED}") == "Body."
+    assert strip_verification_scope(f"Body.\n{ECHOED}") == "Body."
+
+
+def test_a_quoted_footer_survives_while_the_real_one_is_replaced(agent):
+    """An answer explaining the feature must keep its example intact."""
+    answer = "Here is what the footer looks like:\n\n```\n" f"{ECHOED}\n```\n\n{ECHOED}"
+    emitted = agent._with_verification_scope(answer)
+    assert "```\n" + ECHOED + "\n```" in emitted
+    assert len(_scope_lines(emitted)) == 2  # the quoted one, and exactly one real
+    assert emitted.rstrip().endswith(agent.verification_scope_statement())
+
+
+def test_an_unterminated_fence_is_left_alone_rather_than_edited_inside():
+    """Ambiguous markup: keep the answer whole instead of guessing."""
+    text = "Broken:\n\n```\n" + ECHOED
+    assert strip_verification_scope(text) == text
+
+
+def test_an_answer_without_a_statement_comes_back_byte_for_byte():
+    """The email agent compares the stripped answer against the original."""
+    text = "Line one.\r\nLine two.\r\n\r\nStill line two.\n"
+
+    assert strip_verification_scope(text) == text
+
+
+def test_an_exotic_separator_is_not_treated_as_a_line_break():
+    text = "before\x0cafter"
+
+    assert strip_verification_scope(text) == text
+
+
 @pytest.mark.parametrize(
     "stdout,stderr,code,label",
     [
@@ -946,6 +1348,11 @@ def test_python_runner_results_identify_checks(stdout, stderr, code, label):
         verification_check_label("read_file", {"file_path": "output.txt"}, result)
         is None
     )
+
+
+def test_a_run_python_pytest_summary_is_a_check():
+    result = {"stdout": "3 passed in 0.01s", "return_code": 0}
+    assert verification_check_label("run_python", {"code": "..."}, result) == ("pytest")
 
 
 def test_refused_python_runner_is_not_a_check():
@@ -1010,3 +1417,88 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         )
         == runner
     )
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "========================= 1 failed, 3 passed in 10.03s =========================",
+        "==================== 3 passed, 1 error in 0.20s ====================",
+        "Ran 4 tests in 0.001s\n\nFAILED (failures=1)",
+    ],
+)
+def test_a_failing_summary_is_a_failed_check_whatever_the_exit_code(
+    agent, tool, summary
+):
+    """A snippet that prints pytest's result exits 0 whatever pytest said.
+
+    A benchmark run read "1 failed, 3 passed" that way and the line said
+    "verified — pytest ran and passed".
+    """
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        tool,
+        {"code": "subprocess.run(['pytest']); print(r.stdout)"},
+        {"status": "success", "stdout": summary + "\nReturn code: 1", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is True
+    statement = agent.verification_scope_statement()
+    assert "ran and passed" not in statement
+    assert "did not pass" in statement
+
+
+def test_a_passing_summary_from_a_snippet_stays_passed(agent):
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is False
+
+
+class TestSubtestSummariesAreRecognised:
+    """pytest-subtests prints `70 passed, 19 subtests passed in 1.32s`.
+
+    The word between the count and the outcome broke the summary pattern, so a
+    run that really did pass was reported `unverified` — and a judge reading
+    that footer scored a truthful agent as fabricating.
+    """
+
+    @pytest.mark.parametrize(
+        "summary,label",
+        [
+            ("70 passed, 19 subtests passed in 1.32s", "pytest"),
+            ("13 failed, 59 passed, 17 subtests passed in 1.37s", "pytest"),
+            ("5 passed, 2 subtests failed in 0.10s", "pytest"),
+            (
+                "3 failed, 966 passed, 3 skipped, 1 warning, 87 subtests passed in 9.23s",
+                "pytest",
+            ),
+        ],
+    )
+    def test_a_subtest_summary_counts_as_a_check(self, summary, label):
+        result = {"status": "success", "stdout": f"....\n{summary}\n", "return_code": 0}
+
+        assert (
+            verification_check_label("run_python", {"code": "pytest"}, result) == label
+        )
+
+    def test_a_subtest_failure_is_reported_as_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "5 passed, 2 subtests failed in 0.10s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is True
+
+    def test_a_clean_subtest_summary_is_not_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "70 passed, 19 subtests passed in 1.32s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is False

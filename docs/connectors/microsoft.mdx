@@ -217,6 +217,15 @@ The app registration is personal-account-only, but you connected via
 `microsoft_work`. Reconnect using `microsoft` instead — see
 [Device-code sign-in](#device-code-sign-in).
 
+### `AADSTS65002` / preauthorization required
+
+Your tenant refuses one of the requested scopes outright, before any consent
+screen. GAIA no longer requests `openid` by default for exactly this reason —
+it was only ever used to read your address out of the sign-in token, and GAIA
+now reads it from Microsoft Graph instead. If you still hit this, you passed
+`--scopes` with `openid` in the list, or your tenant restricts one of the Graph
+scopes you asked for: drop `openid` and reconnect with the default scope set.
+
 ### `AADSTS65001` / consent required
 
 You declined consent, or the agent is requesting a scope you didn't approve.

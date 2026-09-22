@@ -590,23 +590,31 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	return inst, nil
 }
 
-// callerMode mirrors the built-in sidecar mode environment variables used by
-// the Python callers. Unknown IDs intentionally default to user mode: only
-// registered built-in agents have a caller-owned mode switch.
-func callerMode(agentID string) string {
-	envVar := ""
+// ModeEnvVar names the sidecar mode variable for the built-in agents, "" for an
+// agent that has no mode switch. Only registered built-in agents have one.
+func ModeEnvVar(agentID string) string {
 	switch agentID {
 	case "email":
-		envVar = "GAIA_EMAIL_AGENT_MODE"
+		return "GAIA_EMAIL_AGENT_MODE"
 	case "gaia":
-		envVar = "GAIA_GAIA_AGENT_MODE"
+		return "GAIA_GAIA_AGENT_MODE"
 	}
-	if envVar != "" {
-		if mode := os.Getenv(envVar); mode != "" {
-			return mode
-		}
+	return ""
+}
+
+// CallerMode mirrors the built-in sidecar mode environment variables used by
+// the Python callers, and reports whether the caller expressed a preference at
+// all. An unset variable is NO preference: the daemon attaches to whatever is
+// running and only conflicts on an explicit, differing mode.
+func CallerMode(agentID string) (string, bool) {
+	envVar := ModeEnvVar(agentID)
+	if envVar == "" {
+		return "", false
 	}
-	return "user"
+	if mode := strings.TrimSpace(os.Getenv(envVar)); mode != "" {
+		return mode, true
+	}
+	return "", false
 }
 
 // callerDevSrcDir resolves the same per-agent source layout as the daemon,
@@ -642,8 +650,14 @@ func callerDevSrcDir(agentID string) (string, error) {
 }
 
 func ensureRequestBody(agentID string) ([]byte, error) {
-	mode := callerMode(agentID)
-	body := map[string]string{"mode": mode}
+	body := map[string]string{}
+	mode, explicit := CallerMode(agentID)
+	if !explicit {
+		// No key at all — the daemon reads a present "mode" as a REQUEST and
+		// 409s a sidecar already running in the other one.
+		return json.Marshal(body)
+	}
+	body["mode"] = mode
 	if mode == "dev" {
 		devSrcDir, err := callerDevSrcDir(agentID)
 		if err != nil {

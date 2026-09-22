@@ -375,6 +375,25 @@ def test_local_provider_keeps_lemonade_performance_stats(monkeypatch):
     get_stats.assert_called_once()
 
 
+def test_local_provider_prefers_the_calls_own_usage(monkeypatch):
+    """/stats counts only uncached tokens of the server's last request (#4003)."""
+    adapter = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+    get_stats = MagicMock(
+        return_value={"input_tokens": 89, "cache_tokens": 6553, "output_tokens": 7}
+    )
+    monkeypatch.setattr(adapter._backend, "get_stats", get_stats)
+    adapter._last_model = "Gemma-4-E4B-it-GGUF"
+    adapter._last_usage = {
+        "prompt_tokens": 6642,
+        "completion_tokens": 7,
+        "total_tokens": 6649,
+        "tokens_per_second": 25.0,
+    }
+
+    assert adapter.get_performance_stats() == adapter._last_usage
+    get_stats.assert_not_called()
+
+
 def test_model_availability_failure_emits_diagnostic(client, monkeypatch, caplog):
     monkeypatch.setattr(
         client,

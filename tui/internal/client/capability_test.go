@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,16 +30,16 @@ func TestSubprocessProbeCapabilitiesIsANoOp(t *testing.T) {
 }
 
 // SSEClient must never block or probe from Supports -- paletteFiltered and
-// syncPalette call it synchronously, per keystroke.
-func TestSSESupportsIsUnknownBeforeAnyProbe(t *testing.T) {
+// syncPalette call it synchronously, per keystroke. An unrecognized capability
+// is the case that still has to answer "unknown" without reaching the peer.
+func TestSSESupportsNeverProbesEvenForAnUnknownCapability(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
-	supported, known := c.Supports(CapabilityMemory)
-	if known {
-		t.Fatalf("Supports must be unknown before ProbeCapabilities/negotiate ever ran, got (%t, %t)", supported, known)
+	if _, known := c.Supports(Capability("not-a-real-capability")); known {
+		t.Error("an unrecognized capability must answer unknown, not a confident unsupported")
 	}
 	if n := f.versionProbes(); n != 0 {
 		t.Errorf("Supports triggered %d /version probes, want 0 (must never probe)", n)
@@ -48,7 +49,7 @@ func TestSSESupportsIsUnknownBeforeAnyProbe(t *testing.T) {
 func TestSSESupportsIsTrueOncePeerIsProbedAndNewEnough(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -63,10 +64,14 @@ func TestSSESupportsIsTrueOncePeerIsProbedAndNewEnough(t *testing.T) {
 	}
 }
 
-func TestSSESupportsIsFalseOncePeerIsProbedAndTooOld(t *testing.T) {
+// The version gate lives on the ATTEMPT, not on whether the command is
+// offered: a 2.12 flagship still has memory, so FetchMemory is what refuses,
+// naming the floor. See TestSupportsMemoryStaysTrueForAnOutdatedFlagship for
+// the offering half.
+func TestSSEFetchMemoryStillEnforcesTheFloorAfterA212Probe(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.12" // predates memory (2.13)
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -75,9 +80,9 @@ func TestSSESupportsIsFalseOncePeerIsProbedAndTooOld(t *testing.T) {
 		t.Fatalf("ProbeCapabilities: %v", err)
 	}
 
-	supported, known := c.Supports(CapabilityMemory)
-	if !known || supported {
-		t.Errorf("Supports(CapabilityMemory) = (%t, %t), want (false, true) after a 2.12 probe", supported, known)
+	var tooOld *ErrMemoryContractTooOld
+	if _, err := c.FetchMemory(ctx); !errors.As(err, &tooOld) {
+		t.Errorf("FetchMemory against a 2.12 peer = %v, want ErrMemoryContractTooOld", err)
 	}
 }
 
@@ -86,7 +91,7 @@ func TestSSESupportsIsFalseOncePeerIsProbedAndTooOld(t *testing.T) {
 func TestSSEProbeCapabilitiesSharesTheCacheWithNegotiate(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -102,14 +107,14 @@ func TestSSEProbeCapabilitiesSharesTheCacheWithNegotiate(t *testing.T) {
 	}
 }
 
-// A probe that never got an answer from the peer (relay error, timeout, 401,
-// 503) must stay unknown, not collapse into "known and unsupported" -- that
-// is exactly what hid /memory behind one flaky probe (#3978 A1).
-func TestSSESupportsIsUnknownAfterAFailedProbe(t *testing.T) {
+// A probe that never got an answer (relay error, timeout, 401, 503) must not
+// take /memory off the palette -- that is what hid it behind one flaky probe
+// (#3978 A1). Now structural: the answer never depended on the probe.
+func TestSSESupportsMemorySurvivesAFailedProbe(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.versionStatus = http.StatusServiceUnavailable
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -119,18 +124,18 @@ func TestSSESupportsIsUnknownAfterAFailedProbe(t *testing.T) {
 	}
 
 	supported, known := c.Supports(CapabilityMemory)
-	if known {
-		t.Errorf("Supports(CapabilityMemory) = (%t, %t), want known == false after a failed probe", supported, known)
+	if !supported || !known {
+		t.Errorf("Supports(CapabilityMemory) = (%t, %t) after a failed probe, want (true, true): a flaky probe must not hide the command", supported, known)
 	}
 }
 
-// A 404 on /version is a real answer -- the route does not exist, which
-// itself means "old enough to predate every contract this file tracks" --
-// and must keep meaning "known and unsupported", never "unknown".
-func TestSSESupportsIsKnownFalseWhenVersionRouteIs404(t *testing.T) {
+// A 404 on /version is a real answer -- the route does not exist, so the peer
+// predates every contract this file tracks. The command still belongs on the
+// palette (the agent has memory); the attempt is what reports the floor.
+func TestSSEA404VersionPeerStillOffersMemoryButTheFetchRefuses(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "" // 404s /version, like a sidecar old enough to lack it
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -139,9 +144,12 @@ func TestSSESupportsIsKnownFalseWhenVersionRouteIs404(t *testing.T) {
 		t.Fatalf("ProbeCapabilities: %v", err)
 	}
 
-	supported, known := c.Supports(CapabilityMemory)
-	if !known || supported {
-		t.Errorf("Supports(CapabilityMemory) = (%t, %t), want (false, true) for a 404 /version", supported, known)
+	if supported, known := c.Supports(CapabilityMemory); !supported || !known {
+		t.Errorf("Supports(CapabilityMemory) = (%t, %t), want (true, true)", supported, known)
+	}
+	var tooOld *ErrMemoryContractTooOld
+	if _, err := c.FetchMemory(ctx); !errors.As(err, &tooOld) {
+		t.Errorf("FetchMemory against a 404-version peer = %v, want ErrMemoryContractTooOld", err)
 	}
 }
 
@@ -152,7 +160,7 @@ func TestSSEFetchMemoryAfterFailedProbeIsNotContractTooOld(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.versionStatus = http.StatusServiceUnavailable
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,7 +182,7 @@ func TestSSEFailedProbeIsCachedNotRetried(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.versionStatus = http.StatusServiceUnavailable
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -196,7 +204,7 @@ func TestSSEAgentVersionBeforeAndAfterProbe(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	f.agentReleaseVersion = "0.2.0"
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	if got := c.AgentVersion(); got != "" {
@@ -218,7 +226,7 @@ func TestSSEAgentVersionEmptyWhenPeerOmitsIt(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.13"
 	// agentReleaseVersion left "" -- an old peer that predates the field.
-	c := f.client(t)
+	c := f.clientFor(t, "gaia")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -229,5 +237,185 @@ func TestSSEAgentVersionEmptyWhenPeerOmitsIt(t *testing.T) {
 
 	if got := c.AgentVersion(); got != "" {
 		t.Errorf("AgentVersion() = %q, want \"\" when the peer never reported one", got)
+	}
+}
+
+// A sidecar numbering its own contract past the memory floor does NOT thereby
+// gain a memory route. `email` reports 2.14 today and has none, so a
+// version-only gate would offer /memory there and then 404 — the
+// advertised-then-refused shape #3978 exists to remove.
+func TestSupportsMemoryIsScopedToTheAgentThatHasTheRoute(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14" // numerically past the memory floor
+	c := f.clientFor(t, "email")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.ProbeCapabilities(ctx); err != nil {
+		t.Fatalf("ProbeCapabilities: %v", err)
+	}
+
+	supported, known := c.Supports(CapabilityMemory)
+	if supported {
+		t.Error("an agent with no memory route must not report the memory capability, whatever its contract number")
+	}
+	if !known {
+		t.Error("this is a definite answer, not an unresolved probe")
+	}
+}
+
+// ...and the refusal must say the agent has no store, never "your agent is out
+// of date" — it is current, it simply is not the one that keeps memory.
+func TestFetchMemoryOnAnAgentWithoutAStoreIsNotAContractComplaint(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14"
+	c := f.clientFor(t, "email")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := c.FetchMemory(ctx)
+	if err == nil {
+		t.Fatal("expected a refusal for an agent that keeps no memory store")
+	}
+	var tooOld *ErrMemoryContractTooOld
+	if errors.As(err, &tooOld) {
+		t.Fatalf("refusal must not blame the agent's version: %v", err)
+	}
+	if !strings.Contains(err.Error(), "does not keep a memory store") {
+		t.Errorf("refusal does not name the real reason: %v", err)
+	}
+}
+
+// An unrecognized capability is unknown, never a confident "unsupported" —
+// otherwise the next capability added is hidden by whichever transport was not
+// taught about it, silently.
+func TestSupportsAnUnknownCapabilityIsUnknownNotUnsupported(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.13"
+	sse := f.clientFor(t, "gaia")
+	defer sse.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sse.ProbeCapabilities(ctx); err != nil {
+		t.Fatalf("ProbeCapabilities: %v", err)
+	}
+
+	sub := NewSubprocessClient("", nil, false)
+	defer sub.Close()
+
+	for name, c := range map[string]CapabilityReporter{"sse": sse, "subprocess": sub} {
+		if _, known := c.Supports(Capability("not-a-real-capability")); known {
+			t.Errorf("%s claims to know about a capability it has never heard of", name)
+		}
+	}
+}
+
+// The two sidecars spell the release version differently: gaia's
+// /v1/gaia/version says "version", email's says "agentVersion". Decoding one
+// leaves the header permanently blank for the other.
+func TestAgentVersionAcceptsBothWireSpellings(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"version", `{"apiVersion":"2.13","version":"0.2.0","agent":"gaia"}`},
+		{"agentVersion", `{"apiVersion":"2.14","agentVersion":"0.2.0"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.versionBody = tc.body
+			c := f.clientFor(t, "gaia")
+			defer c.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := c.ProbeCapabilities(ctx); err != nil {
+				t.Fatalf("ProbeCapabilities: %v", err)
+			}
+			if got := c.AgentVersion(); got != "0.2.0" {
+				t.Errorf("AgentVersion() = %q, want 0.2.0", got)
+			}
+		})
+	}
+}
+
+// The "this agent keeps no memory" answer needs nothing from the peer, so it
+// must not spawn a sidecar or probe just to refuse — and a probe that then
+// failed would report a version problem for a situation with no version in it.
+func TestFetchMemoryOnAnAgentWithoutAStoreCostsNoRoundTrip(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.14"
+	c := f.clientFor(t, "email")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := c.FetchMemory(ctx); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if got := f.versionProbes(); got != 0 {
+		t.Errorf("refusing an agent with no memory store cost %d /version probe(s), want 0", got)
+	}
+}
+
+// A flagship whose installed build predates the memory route still HAS memory,
+// so the command must stay offered and let the attempt explain the version.
+// Hiding it left the user staring at a missing feature on an agent that owns
+// it, with nothing on screen saying why.
+func TestSupportsMemoryStaysTrueForAnOutdatedFlagship(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.12" // predates the memory route
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.ProbeCapabilities(ctx); err != nil {
+		t.Fatalf("ProbeCapabilities: %v", err)
+	}
+
+	supported, known := c.Supports(CapabilityMemory)
+	if !supported || !known {
+		t.Errorf("Supports(CapabilityMemory) = (%t, %t), want (true, true): the agent has memory, its build is merely old", supported, known)
+	}
+
+	// ...and the attempt is what refuses, naming the floor.
+	var tooOld *ErrMemoryContractTooOld
+	if _, err := c.FetchMemory(ctx); !errors.As(err, &tooOld) {
+		t.Errorf("FetchMemory on a 2.12 flagship = %v, want ErrMemoryContractTooOld", err)
+	}
+}
+
+// The palette asks per keystroke and cannot wait on a probe, so the answer
+// must not depend on one having completed.
+func TestSupportsMemoryNeedsNoProbe(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.13"
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	supported, known := c.Supports(CapabilityMemory)
+	if !supported || !known {
+		t.Errorf("Supports = (%t, %t) before any probe, want (true, true)", supported, known)
+	}
+	if n := f.versionProbes(); n != 0 {
+		t.Errorf("Supports triggered %d /version probes, want 0", n)
+	}
+}
+
+// The too-old notice must not tell the user to reinstall: `gaia hub install`
+// fetches the PUBLISHED artifact, so when the floor is newer than the latest
+// release the same build comes back and the advice sends them in a circle.
+func TestMemoryTooOldNoticeDoesNotPromiseAReinstallFixesIt(t *testing.T) {
+	msg := noticeForMissingMemory("gaia", "2.12")
+	for _, want := range []string{"gaia", "2.12", "2.13"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("notice does not name %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, updateCommand("uninstall", "gaia")) {
+		t.Errorf("notice still recommends an uninstall/reinstall cycle that changes nothing: %s", msg)
 	}
 }

@@ -19,6 +19,10 @@ const (
 	// RoleCard is a typed `tool_result.render` card, drawn inline in the
 	// transcript at the point the tool returned so work and results stay in order.
 	RoleCard MessageRole = "card"
+	// RoleToolError is one tool's own failure text, drawn as an inline aside
+	// rather than RoleError's bordered panel: the agent frequently retries and
+	// still answers, and a panel per failed attempt reads as a failed turn.
+	RoleToolError MessageRole = "tool_error"
 )
 
 type Message struct {
